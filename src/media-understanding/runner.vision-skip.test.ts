@@ -199,6 +199,8 @@ describe("runCapability image skip", () => {
           config: {
             models: [{ provider: "openrouter", model: "google/gemini-2.5-flash" }],
           },
+          // Explicit config.models overrides native vision skip — image understanding
+          // still runs even when the active model is vision-capable.
           activeModel: { provider: "openai", model: "gpt-4.1" },
         });
 
@@ -214,7 +216,55 @@ describe("runCapability image skip", () => {
     );
   });
 
-  it("lets per-request image prompts override entry prompts", async () => {
+  it("skips image understanding for vision-capable model even when agents.defaults.imageModel is configured", async () => {
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-defaults-imagemodel",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, media, cache }) => {
+        const cfg = {
+          agents: {
+            defaults: {
+              imageModel: {
+                primary: "google/gemini-2.5-flash",
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "image",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          agentDir: "/tmp",
+          providerRegistry: new Map([
+            [
+              "openrouter",
+              {
+                id: "openrouter",
+                capabilities: ["image"],
+                describeImage: async (req) => ({ text: "should not run", model: req.model }),
+              },
+            ],
+          ]),
+          // gpt-4.1 is in the mock catalog with input: ["text", "image"],
+          // so the native vision skip should apply even though imageModel is configured.
+          activeModel: { provider: "openai", model: "gpt-4.1" },
+        });
+
+        // agents.defaults.imageModel should NOT block native vision skip;
+        // per docs it is only used when the primary model can't accept images.
+        expect(result.decision.outcome).toBe("skipped");
+      },
+    );
+  });
+
+  it("lets per-request image prompts override entry prompts for non-vision model", async () => {
     await withMediaFixture(
       {
         filePrefix: "openclaw-image-request-prompt",
@@ -256,7 +306,8 @@ describe("runCapability image skip", () => {
               },
             ],
           },
-          activeModel: { provider: "openai", model: "gpt-4.1" },
+          // Not in the mock vision catalog — image understanding runs
+          activeModel: { provider: "openai", model: "gpt-3.5-turbo" },
         });
 
         expect(result.decision.outcome).toBe("success");
@@ -285,7 +336,7 @@ describe("runCapability image skip", () => {
     });
   });
 
-  it("runs providerless configured imageModel fallbacks on the unique configured provider", async () => {
+  it("runs providerless configured imageModel fallbacks for non-vision active model", async () => {
     await withMediaFixture(
       {
         filePrefix: "openclaw-image-providerless-fallbacks",
@@ -343,7 +394,8 @@ describe("runCapability image skip", () => {
               } satisfies MediaUnderstandingProvider,
             ],
           ]),
-          activeModel: { provider: "openai", model: "gpt-4.1" },
+          // Not in the mock vision catalog — image understanding runs
+          activeModel: { provider: "openai", model: "gpt-3.5-turbo" },
         });
 
         expect(result.decision.outcome).toBe("success");

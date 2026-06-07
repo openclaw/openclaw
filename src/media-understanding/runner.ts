@@ -714,20 +714,6 @@ function resolveImageModelFromAgentDefaults(params: {
   return entries;
 }
 
-function hasExplicitImageUnderstandingConfig(params: {
-  cfg: OpenClawConfig;
-  config?: MediaUnderstandingConfig;
-  agentId?: string;
-}): boolean {
-  return (
-    (params.config?.models?.length ?? 0) > 0 ||
-    resolveImageModelFromAgentDefaults({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    }).length > 0
-  );
-}
-
 async function resolveAutoEntries(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -1036,16 +1022,16 @@ export async function runCapability(params: {
 
   // Skip image understanding when the primary model supports vision natively.
   // The image will be injected directly into the model context instead.
+  // Per docs, agents.defaults.imageModel is only used when the primary model
+  // can't accept images. However, explicit tools.media.image.models still
+  // forces image understanding as an intentional user override.
   const activeProvider = params.activeModel?.provider?.trim();
+  const hasExplicitMediaModels = (config?.models?.length ?? 0) > 0;
   if (
     capability === "image" &&
     activeProvider &&
     !isMinimaxVlmProvider(activeProvider) &&
-    !hasExplicitImageUnderstandingConfig({
-      cfg,
-      config,
-      agentId: params.agentId,
-    })
+    !hasExplicitMediaModels
   ) {
     const { findModelInCatalog, loadModelCatalog, modelSupportsVision } =
       await loadModelCatalogApi();
