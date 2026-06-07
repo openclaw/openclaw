@@ -33,6 +33,10 @@ export type DailySessionResetExpectedEntry = {
   updatedAt: number;
 };
 
+export type DailySessionResetContext = {
+  agentId?: string;
+};
+
 export async function resetStaleDailySessions(params: {
   cfg: OpenClawConfig;
   nowMs?: number;
@@ -41,14 +45,20 @@ export async function resetStaleDailySessions(params: {
   performReset?: (
     key: string,
     expectedEntry?: DailySessionResetExpectedEntry,
+    context?: DailySessionResetContext,
   ) => Promise<{ ok: boolean; skipped?: boolean }>;
 }): Promise<DailySessionResetResult> {
   const now = params.nowMs ?? Date.now();
   const performReset =
     params.performReset ??
-    (async (key: string, expectedEntry?: DailySessionResetExpectedEntry) => {
+    (async (
+      key: string,
+      expectedEntry?: DailySessionResetExpectedEntry,
+      context?: DailySessionResetContext,
+    ) => {
       const result = await performGatewaySessionReset({
         key,
+        agentId: context?.agentId,
         reason: "daily",
         commandSource: "daily-session-reset-scheduler",
         expectedDailySession: expectedEntry,
@@ -187,10 +197,16 @@ export async function resetStaleDailySessions(params: {
       ) {
         continue;
       }
-      const result = await performReset(resetSessionKey, {
-        sessionId: latestEntry.sessionId,
-        updatedAt: latestEntry.updatedAt,
-      });
+      const result = await performReset(
+        resetSessionKey,
+        {
+          sessionId: latestEntry.sessionId,
+          updatedAt: latestEntry.updatedAt,
+        },
+        {
+          agentId: sessionTarget.agentId,
+        },
+      );
       if (result.ok) {
         reset += 1;
         params.onSuccessfulReset?.({
@@ -239,7 +255,11 @@ export function startDailySessionResetScheduler(params: {
   getNowMs?: () => number;
   getActiveSessionKeys?: () => ReadonlySet<string>;
   onSuccessfulReset?: (payload: { sessionKey: string; agentId?: string }) => void;
-  performReset?: (key: string) => Promise<{ ok: boolean }>;
+  performReset?: (
+    key: string,
+    expectedEntry?: DailySessionResetExpectedEntry,
+    context?: DailySessionResetContext,
+  ) => Promise<{ ok: boolean }>;
 }): ReturnType<typeof setInterval> {
   let inFlight = false;
   const run = () => {
