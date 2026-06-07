@@ -384,6 +384,62 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("falls back and clears the foreground gateway when it is the only listener after /Run (#91144)", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      fastForwardTaskStartWait();
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5555]);
+      addAcceptedRunNeverStartsResponses();
+
+      await installGatewayScheduledTask(env);
+
+      expectGatewayTermination(5555);
+      expectStartupFallbackSpawn();
+    });
+  });
+
+  it("does not fall back when a new listener PID appears after /Run, ignoring the pre-existing one (#91144)", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      findVerifiedGatewayListenerPidsOnPortSync
+        .mockReturnValueOnce([5555]) // pre-snapshot before /Run
+        .mockReturnValue([5555, 9999]); // new PID 9999 appears after /Run
+      addStartupFallbackMissingResponses();
+
+      await installGatewayScheduledTask(env);
+
+      expect(spawn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("falls back and clears foreground gateway found only in Win32 process snapshot (#91144)", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      fastForwardTaskStartWait();
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5555]);
+      spawnSync.mockImplementation((command, args) => {
+        if (
+          command === "powershell" &&
+          Array.isArray(args) &&
+          args.includes(
+            "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+          )
+        ) {
+          return makeSpawnSyncResult({
+            stdout: JSON.stringify([
+              { ProcessId: 5555, CommandLine: "openclaw gateway --port 18789" },
+            ]),
+          });
+        }
+        return makeSpawnSyncResult();
+      });
+      addAcceptedRunNeverStartsResponses();
+
+      await installGatewayScheduledTask(env);
+
+      expectTaskkillPid(5555);
+      expectStartupFallbackSpawn();
+    });
+  });
+
   it("does not treat a gateway listener as node Scheduled Task launch evidence", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       fastForwardTaskStartWait();
