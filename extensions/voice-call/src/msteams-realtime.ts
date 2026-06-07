@@ -116,7 +116,7 @@ const MSTEAMS_LOOK_TOOL: RealtimeVoiceTool = {
 
 /** Returned when the caller asks the agent to look but no video frame has arrived yet. */
 const MSTEAMS_LOOK_NO_FRAME = {
-  text: "I can't see anything yet — make sure your camera or screen-share is on, then ask again.",
+  text: "I can't see anything yet — make sure your camera or screen-share is on. It can take a few seconds after you start sharing; then ask again.",
 };
 
 /** Spoken acknowledgement returned to the model when a background task is accepted. */
