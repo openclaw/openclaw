@@ -81,20 +81,33 @@ const FIELD_TYPE_NAMES: Record<number, string> = {
 
 // ============ Core Functions ============
 
-/** Parse bitable URL and extract tokens */
-function parseBitableUrl(url: string): { token: string; tableId?: string; isWiki: boolean } | null {
+/**
+ * Parse bitable URL and extract tokens.
+ *
+ * Accepts both formats:
+ * - /wiki/<token>?table=<tableId>
+ * - /base/<token>?table=<tableId>
+ *
+ * The token character class is permissive (`[A-Za-z0-9_-]`) so any future
+ * token shape (Lark base64 short tokens, IDs with separators) won't be
+ * silently truncated; URLs that contain a recognizable path segment are
+ * forwarded unchanged to the underlying API for validation.
+ */
+export function parseBitableUrl(
+  url: string,
+): { token: string; tableId?: string; isWiki: boolean } | null {
   try {
     const u = new URL(url);
     const tableId = u.searchParams.get("table") ?? undefined;
 
-    // Wiki format: /wiki/XXXXX?table=YYY
-    const wikiMatch = u.pathname.match(/\/wiki\/([A-Za-z0-9]+)/);
+    // Wiki format: /wiki/<token>?table=<tableId>
+    const wikiMatch = u.pathname.match(/\/wiki\/([A-Za-z0-9_-]+)/);
     if (wikiMatch) {
       return { token: wikiMatch[1], tableId, isWiki: true };
     }
 
-    // Base format: /base/XXXXX?table=YYY
-    const baseMatch = u.pathname.match(/\/base\/([A-Za-z0-9]+)/);
+    // Base format: /base/<token>?table=<tableId>
+    const baseMatch = u.pathname.match(/\/base\/([A-Za-z0-9_-]+)/);
     if (baseMatch) {
       return { token: baseMatch[1], tableId, isWiki: false };
     }
@@ -124,10 +137,12 @@ async function getAppTokenFromWiki(client: Lark.Client, nodeToken: string): Prom
 }
 
 /** Get bitable metadata from URL (handles both /base/ and /wiki/ URLs) */
-async function getBitableMeta(client: Lark.Client, url: string) {
+export async function getBitableMeta(client: Lark.Client, url: string) {
   const parsed = parseBitableUrl(url);
   if (!parsed) {
-    throw new Error("Invalid URL format. Expected /base/XXX or /wiki/XXX URL");
+    throw new Error(
+      `Invalid bitable URL: "${url}". Expected a /base/<token> or /wiki/<token> URL.`,
+    );
   }
 
   let appToken: string;

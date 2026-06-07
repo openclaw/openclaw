@@ -10,7 +10,7 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-import { registerFeishuBitableTools } from "./bitable.js";
+import { registerFeishuBitableTools, getBitableMeta, parseBitableUrl } from "./bitable.js";
 
 type MockRecord = {
   record_id?: string;
@@ -170,5 +170,78 @@ describe("feishu bitable create app cleanup", () => {
       "page_size must be a positive integer between 1 and 500",
     );
     expect(client.bitable.appTableRecord.list).toHaveBeenCalledTimes(1);
+  });
+});
+
+function createMockLarkClient(): Lark.Client {
+  return {
+    bitable: {
+      app: {
+        get: vi.fn(async () => ({
+          code: 0,
+          msg: "ok",
+          data: { app: { name: "Mock Bitable" } },
+        })),
+      },
+      appTable: {
+        list: vi.fn(async () => ({ code: 0, msg: "ok", data: { items: [] } })),
+      },
+    },
+    wiki: {
+      space: {
+        getNode: vi.fn(async () => ({ code: 0, msg: "ok", data: { node: null } })),
+      },
+    },
+  } as unknown as Lark.Client;
+}
+
+describe("parseBitableUrl", () => {
+  it("parses a /base/ URL with an alphanumeric token", () => {
+    expect(parseBitableUrl("https://example.feishu.cn/base/abc123def456")).toEqual({
+      token: "abc123def456",
+      tableId: undefined,
+      isWiki: false,
+    });
+  });
+
+  it("parses a /wiki/ URL with a table query parameter", () => {
+    expect(parseBitableUrl("https://my.feishu.cn/wiki/wikiTok123?table=tblABC")).toEqual({
+      token: "wikiTok123",
+      tableId: "tblABC",
+      isWiki: true,
+    });
+  });
+
+  it("preserves tokens that contain hyphens or underscores", () => {
+    // Current Lark tokens are alphanumeric, but the character class is
+    // deliberately permissive so future token shapes are not silently
+    // truncated. Any unrecognized characters are passed through unchanged
+    // and surfaced via the upstream API call instead of being lost here.
+    expect(parseBitableUrl("https://example.feishu.cn/base/abc-123_xyz")).toEqual({
+      token: "abc-123_xyz",
+      tableId: undefined,
+      isWiki: false,
+    });
+  });
+
+  it("returns null for a URL that is not a /base/ or /wiki/ path", () => {
+    expect(parseBitableUrl("https://example.feishu.cn/docs/abc123")).toBeNull();
+    expect(parseBitableUrl("https://example.feishu.cn/sheets/abc123")).toBeNull();
+  });
+
+  it("returns null for a syntactically invalid URL", () => {
+    expect(parseBitableUrl("not a url")).toBeNull();
+    expect(parseBitableUrl("")).toBeNull();
+  });
+});
+
+describe("getBitableMeta error context", () => {
+  it("includes the offending URL in the thrown error message", async () => {
+    const client = createMockLarkClient();
+    const badUrl = "https://example.feishu.cn/docs/not-a-bitable";
+
+    await expect(getBitableMeta(client, badUrl)).rejects.toThrow(
+      /Invalid bitable URL: "https:\/\/example\.feishu\.cn\/docs\/not-a-bitable"/,
+    );
   });
 });
