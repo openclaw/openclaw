@@ -140,11 +140,11 @@ export async function flushNativeHookRelayProcessStreams(
 export async function exitNativeHookRelayProcess(
   exitCode: number,
   deps: NativeHookRelayProcessExitDeps = {},
-): Promise<never> {
+): Promise<void> {
   const stdout = deps.stdout ?? process.stdout;
   const stderr = deps.stderr ?? process.stderr;
-  const exit = deps.exit ?? process.exit;
   await flushNativeHookRelayProcessStreams(stdout, stderr);
+  const exit = deps.exit ?? ((code: number): never => process.exit(code));
   exit(exitCode);
 }
 
@@ -212,7 +212,7 @@ async function writeTextAsync(
 
 function writeChunkAsync(stream: NodeJS.WritableStream, chunk: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    if ((stream as NodeJS.WriteStream).destroyed || stream.writable === false) {
+    if ((stream as NodeJS.WriteStream).destroyed || !stream.writable) {
       resolve();
       return;
     }
@@ -231,13 +231,13 @@ function writeChunkAsync(stream: NodeJS.WritableStream, chunk: string): Promise<
         });
       }
     } catch (err) {
-      reject(err);
+      reject(err instanceof Error ? err : new Error(String(err)));
     }
   });
 }
 
 async function flushWritableStream(stream: NodeJS.WritableStream): Promise<void> {
-  if ((stream as NodeJS.WriteStream).destroyed || stream.writable === false) {
+  if ((stream as NodeJS.WriteStream).destroyed || !stream.writable) {
     return;
   }
   await new Promise<void>((resolve) => {
