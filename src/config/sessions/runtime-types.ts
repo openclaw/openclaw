@@ -25,6 +25,7 @@ export type ResolvedSessionMaintenanceConfigRuntime = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
   maxEntries: number;
+  modelRunPruneAfterMs: number | null;
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
@@ -34,6 +35,7 @@ export type SessionMaintenanceApplyReportRuntime = {
   mode: SessionMaintenanceMode;
   beforeCount: number;
   afterCount: number;
+  modelRunPruned: number;
   pruned: number;
   capped: number;
   diskBudget: Record<string, unknown> | null;
