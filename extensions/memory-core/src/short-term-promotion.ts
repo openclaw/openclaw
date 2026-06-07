@@ -612,7 +612,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
         : [];
       const recallDays = Array.isArray(entry.recallDays)
         ? entry.recallDays
-            .map((valueValue) => normalizeIsoDay(String(valueValue)))
+            .map((recallDay) => (typeof recallDay === "string" ? normalizeIsoDay(recallDay) : null))
             .filter((valueLocal): valueLocal is string => valueLocal !== null)
         : [];
       const conceptTags = Array.isArray(entry.conceptTags)

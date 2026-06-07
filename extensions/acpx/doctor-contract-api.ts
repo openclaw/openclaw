@@ -47,7 +47,7 @@ async function readLegacyGatewayInstanceId(filePath: string): Promise<string | n
 async function readLegacyOpenProcessLeases(filePath: string): Promise<AcpxProcessLease[]> {
   try {
     const leaseFile = normalizeAcpxProcessLeaseFile(
-      JSON.parse(await fs.readFile(filePath, "utf8")) as unknown,
+      JSON.parse(await fs.readFile(filePath, "utf8")),
     );
     return leaseFile.leases.filter((lease) => lease.state === "open" || lease.state === "closing");
   } catch {
