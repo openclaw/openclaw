@@ -549,8 +549,6 @@ export class QmdMemoryManager implements MemorySearchManager {
     // fall back to best-effort idempotent `qmd collection add`.
     const existing = await this.listCollectionsBestEffort();
 
-    await this.migrateLegacyUnscopedCollections(existing);
-
     for (const collection of this.qmd.collections) {
       const listed = existing.get(collection.name);
       if (listed && !this.shouldRebindCollection(collection, listed)) {
@@ -758,68 +756,6 @@ export class QmdMemoryManager implements MemorySearchManager {
       );
       return false;
     }
-  }
-
-  private async migrateLegacyUnscopedCollections(
-    existing: Map<string, ListedCollection>,
-  ): Promise<void> {
-    for (const collection of this.qmd.collections) {
-      if (existing.has(collection.name)) {
-        continue;
-      }
-      const legacyName = this.deriveLegacyCollectionName(collection.name);
-      if (!legacyName) {
-        continue;
-      }
-      const listedLegacy = existing.get(legacyName);
-      if (!listedLegacy) {
-        continue;
-      }
-      if (!this.canMigrateLegacyCollection(collection, listedLegacy)) {
-        log.debug(
-          `qmd legacy collection migration skipped for ${legacyName} (path/pattern mismatch)`,
-        );
-        continue;
-      }
-      try {
-        await this.removeCollection(legacyName);
-        existing.delete(legacyName);
-      } catch (err) {
-        const message = formatErrorMessage(err);
-        if (!this.isCollectionMissingError(message)) {
-          log.warn(`qmd collection remove failed for ${legacyName}: ${message}`);
-        }
-      }
-    }
-  }
-
-  private deriveLegacyCollectionName(scopedName: string): string | null {
-    const agentSuffix = `-${this.sanitizeCollectionNameSegment(this.agentId)}`;
-    if (!scopedName.endsWith(agentSuffix)) {
-      return null;
-    }
-    const legacyName = scopedName.slice(0, -agentSuffix.length).trim();
-    return legacyName || null;
-  }
-
-  private canMigrateLegacyCollection(
-    collection: ManagedCollection,
-    listedLegacy: ListedCollection,
-  ): boolean {
-    if (listedLegacy.path && !this.pathsMatch(listedLegacy.path, collection.path)) {
-      return false;
-    }
-    if (
-      typeof listedLegacy.pattern === "string" &&
-      !this.patternsMatchForManagedCollection(
-        collection.path,
-        listedLegacy.pattern,
-        collection.pattern,
-      )
-    ) {
-      return false;
-    }
-    return true;
   }
 
   private async ensureCollectionPath(collection: {
@@ -2435,23 +2371,16 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private pickSessionCollectionName(): string {
     const existing = new Set(this.qmd.collections.map((collection) => collection.name));
-    const base = `sessions-${this.sanitizeCollectionNameSegment(this.agentId)}`;
-    if (!existing.has(base)) {
-      return base;
+    if (!existing.has("sessions")) {
+      return "sessions";
     }
     let counter = 2;
-    let candidate = `${base}-${counter}`;
+    let candidate = `sessions-${counter}`;
     while (existing.has(candidate)) {
       counter += 1;
-      candidate = `${base}-${counter}`;
+      candidate = `sessions-${counter}`;
     }
     return candidate;
-  }
-
-  private sanitizeCollectionNameSegment(input: string): string {
-    const lower = normalizeLowercaseStringOrEmpty(input).replace(/[^a-z0-9-]+/g, "-");
-    const trimmed = lower.replace(/^-+|-+$/g, "");
-    return trimmed || "agent";
   }
 
   private async resolveDocLocation(
