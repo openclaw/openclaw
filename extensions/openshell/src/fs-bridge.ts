@@ -239,6 +239,10 @@ class OpenShellFsBridge implements SandboxFsBridge {
       workspaceContainerRoot,
       ...MATERIALIZED_SKILLS_CONTAINER_PARTS,
     );
+    const workspaceSkillsShadowRoot = path.resolve(
+      workspaceRoot,
+      ...MATERIALIZED_SKILLS_CONTAINER_PARTS,
+    );
     const input = params.filePath.trim();
 
     if (skillsRoot && this.sandbox.workspaceAccess === "rw") {
@@ -289,6 +293,18 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
     const cwd = params.cwd ? path.resolve(params.cwd) : workspaceRoot;
     const hostPath = path.isAbsolute(input) ? path.resolve(input) : path.resolve(cwd, input);
+
+    if (skillsRoot && this.sandbox.workspaceAccess === "rw") {
+      const protectedSkillShadowTarget = resolveProtectedSkillShadowTarget({
+        hostPath,
+        workspaceSkillsShadowRoot,
+        skillsRoot,
+        skillsContainerRoot,
+      });
+      if (protectedSkillShadowTarget) {
+        return protectedSkillShadowTarget;
+      }
+    }
 
     if (isPathInside(workspaceRoot, hostPath)) {
       const relative = path.relative(workspaceRoot, hostPath).split(path.sep).join(path.posix.sep);
@@ -361,6 +377,37 @@ function resolveProtectedSkillTarget(params: {
   const hostPath = safeRelative
     ? path.resolve(params.skillsRoot, ...safeRelative.split("/"))
     : params.skillsRoot;
+  return {
+    hostPath,
+    relativePath: safeRelative ? path.posix.join(relativeRoot, safeRelative) : relativeRoot,
+    containerPath: safeRelative
+      ? path.posix.join(params.skillsContainerRoot, safeRelative)
+      : params.skillsContainerRoot,
+    mountHostRoot: params.skillsRoot,
+    writable: false,
+    source: "protectedSkill",
+  };
+}
+
+function resolveProtectedSkillShadowTarget(params: {
+  hostPath: string;
+  workspaceSkillsShadowRoot: string;
+  skillsRoot: string;
+  skillsContainerRoot: string;
+}): ResolvedMountPath | null {
+  if (!isPathInside(params.workspaceSkillsShadowRoot, params.hostPath)) {
+    return null;
+  }
+
+  const relative = path
+    .relative(params.workspaceSkillsShadowRoot, params.hostPath)
+    .split(path.sep)
+    .join(path.posix.sep);
+  const safeRelative = relative === "." ? "" : relative;
+  const hostPath = safeRelative
+    ? path.resolve(params.skillsRoot, ...safeRelative.split("/"))
+    : params.skillsRoot;
+  const relativeRoot = path.posix.join(...MATERIALIZED_SKILLS_CONTAINER_PARTS);
   return {
     hostPath,
     relativePath: safeRelative ? path.posix.join(relativeRoot, safeRelative) : relativeRoot,

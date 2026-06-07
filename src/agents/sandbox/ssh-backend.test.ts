@@ -341,7 +341,7 @@ describe("ssh sandbox backend", () => {
     expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
   });
 
-  it("refreshes materialized skills when reusing an existing remote runtime", async () => {
+  it("refreshes materialized skills before each exec and remote fs command", async () => {
     const skillsWorkspaceDir = await createTempDir("openclaw-ssh-skills-");
     await fs.mkdir(path.join(skillsWorkspaceDir, "skills"), { recursive: true });
     const backend = await createSshSandboxBackend({
@@ -355,16 +355,36 @@ describe("ssh sandbox backend", () => {
       }),
     });
 
-    await backend.buildExecSpec({
+    const firstExec = await backend.buildExecSpec({
       command: "pwd",
       env: {},
       usePty: false,
     });
+    const secondExec = await backend.buildExecSpec({
+      command: "pwd",
+      env: {},
+      usePty: false,
+    });
+    await backend.runRemoteShellScript?.({
+      script: "printf ok",
+    });
 
-    expect(sshMocks.uploadDirectoryToSshTarget).toHaveBeenCalledTimes(1);
+    expect(sshMocks.uploadDirectoryToSshTarget).toHaveBeenCalledTimes(3);
     const skillsUploadParams = requireSshUploadParams(0, "skills upload params");
     expect(skillsUploadParams.localDir).toBe(skillsWorkspaceDir);
     expect(skillsUploadParams.remoteDir).toContain("/workspace/.openclaw/sandbox-skills");
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: firstExec.finalizeToken,
+    });
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: secondExec.finalizeToken,
+    });
   });
 
   it("filters blocked secrets from exec subprocess env", async () => {

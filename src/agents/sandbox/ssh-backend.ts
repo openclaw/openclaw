@@ -160,6 +160,7 @@ class SshSandboxBackendImpl {
         });
         await this.ensureRuntime();
         const sshSession = await this.createSession();
+        await this.refreshRemoteSkillsWorkspace(sshSession);
         return {
           argv: buildSshSandboxArgv({
             session: sshSession,
@@ -223,7 +224,6 @@ class SshSandboxBackendImpl {
         ]),
       });
       if (exists.stdout.toString("utf8").trim() === "1") {
-        await this.refreshRemoteSkillsWorkspace(session);
         return;
       }
       await this.replaceRemoteDirectoryFromLocal(
@@ -242,7 +242,6 @@ class SshSandboxBackendImpl {
           this.params.runtimePaths.remoteAgentWorkspaceDir,
         );
       }
-      await this.refreshRemoteSkillsWorkspace(session);
     } finally {
       await disposeSshSandboxSession(session);
     }
@@ -293,6 +292,7 @@ class SshSandboxBackendImpl {
     await this.ensureRuntime();
     const session = await this.createSession();
     try {
+      await this.refreshRemoteSkillsWorkspace(session);
       return await runSshSandboxCommand({
         session,
         remoteCommand: buildRemoteCommand([

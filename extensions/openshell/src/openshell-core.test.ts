@@ -565,6 +565,12 @@ describe("openshell fs bridges", () => {
         data: "owned",
       }),
     ).rejects.toThrow(/read-only/);
+    await expect(
+      bridge.writeFile({
+        filePath: shadowFile,
+        data: "owned",
+      }),
+    ).rejects.toThrow(/read-only/);
     expect(await fs.readFile(shadowFile, "utf8")).toContain("workspace shadow");
     expect(backend["syncLocalPathToRemote"]).not.toHaveBeenCalled();
   });
