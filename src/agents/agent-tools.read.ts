@@ -36,7 +36,6 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
-import { resolveReadPath } from "./sessions/tools/path-utils.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -804,7 +803,9 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           sandboxPath = workspaceMapping.filePath;
         }
         const additionalRoots =
-          guardedRoot === root && !workspaceMapping?.matched ? (options?.additionalRoots ?? []) : [];
+          guardedRoot === root && !workspaceMapping?.matched
+            ? (options?.additionalRoots ?? [])
+            : [];
         let sandboxResult: Awaited<ReturnType<typeof assertSandboxPathWithinAnyRoot>>;
         try {
           sandboxResult = await assertSandboxPathWithinAnyRoot({
@@ -909,12 +910,11 @@ export function createOpenClawReadTool(
 
 function createSandboxReadOperations(params: SandboxToolParams) {
   return {
-    resolvePath: (filePath: string, cwd: string) => {
+    resolvePath: (filePath: string) => {
       const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
-      const resolvedPath = classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl
+      return classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl
         ? resolveMediaReferenceSandboxPath(normalizedMediaSource, "media/inbound").resolved
         : filePath;
-      return resolveReadPath(resolvedPath, cwd);
     },
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
