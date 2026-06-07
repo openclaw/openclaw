@@ -11,11 +11,13 @@ const {
   extractDeliveryInfoMock,
   formatDoctorNonInteractiveHintMock,
   isRestartEnabledMock,
+  callGatewayToolMock,
   removeRestartSentinelFileMock,
   scheduleGatewaySigusr1RestartMock,
   writeRestartSentinelMock,
 } = vi.hoisted(() => ({
   isRestartEnabledMock: vi.fn(() => true),
+  callGatewayToolMock: vi.fn(async () => ({ ok: true })),
   extractDeliveryInfoMock: vi.fn(() => ({
     deliveryContext: {
       channel: "slack",
@@ -73,7 +75,7 @@ vi.mock("../../logging/subsystem.js", () => ({
 }));
 
 vi.mock("./gateway.js", () => ({
-  callGatewayTool: vi.fn(),
+  callGatewayTool: callGatewayToolMock,
   readGatewayCallOptions: vi.fn(() => ({})),
 }));
 
@@ -126,6 +128,8 @@ describe("gateway tool restart continuation", () => {
       cooldownMsApplied: 0,
       emitHooksQueued: true,
     });
+    callGatewayToolMock.mockReset();
+    callGatewayToolMock.mockResolvedValue({ ok: true });
   });
 
   it("does not expose system-event continuations to the agent tool", async () => {
@@ -345,5 +349,31 @@ describe("gateway tool restart continuation", () => {
     await scheduledArgs.emitHooks?.afterEmitRejected?.();
 
     expect(removeRestartSentinelFileMock).toHaveBeenCalledWith("/tmp/restart");
+  });
+
+  it("uses the runtime session for update.run continuation routing (#86742)", async () => {
+    const tool = createGatewayTool({
+      agentSessionKey: "agent:main:session-A",
+      config: {},
+    });
+
+    await tool.execute?.("tool-call-update", {
+      action: "update.run",
+      sessionKey: "agent:main:session-B",
+      continuationMessage: "Reply after update restart",
+      note: "Updating now",
+      restartDelayMs: 0,
+    });
+
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "update.run",
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      expect.objectContaining({
+        sessionKey: "agent:main:session-A",
+        continuationMessage: "Reply after update restart",
+        note: "Updating now",
+        restartDelayMs: 0,
+      }),
+    );
   });
 });
