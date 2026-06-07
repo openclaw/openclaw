@@ -223,7 +223,10 @@ class OpenShellSandboxBackendImpl {
     if (this.params.execContext.config.mode === "mirror") {
       await this.syncWorkspaceToRemote();
     } else {
-      await this.maybeSeedRemoteWorkspace();
+      const seeded = await this.maybeSeedRemoteWorkspace();
+      if (!seeded) {
+        await this.syncSkillsWorkspaceToRemote();
+      }
     }
     const sshSession = await createOpenShellSshSession({
       context: this.params.execContext,
@@ -259,7 +262,10 @@ class OpenShellSandboxBackendImpl {
     params: SandboxBackendCommandParams,
   ): Promise<SandboxBackendCommandResult> {
     await this.ensureSandboxExists();
-    await this.maybeSeedRemoteWorkspace();
+    const seeded = await this.maybeSeedRemoteWorkspace();
+    if (!seeded) {
+      await this.syncSkillsWorkspaceToRemote();
+    }
     return await this.runRemoteShellScriptInternal(params);
   }
 
@@ -501,13 +507,14 @@ class OpenShellSandboxBackendImpl {
     );
   }
 
-  private async maybeSeedRemoteWorkspace(): Promise<void> {
+  private async maybeSeedRemoteWorkspace(): Promise<boolean> {
     if (!this.remoteSeedPending) {
-      return;
+      return false;
     }
     this.remoteSeedPending = false;
     try {
       await this.syncWorkspaceToRemote();
+      return true;
     } catch (error) {
       this.remoteSeedPending = true;
       throw error;
