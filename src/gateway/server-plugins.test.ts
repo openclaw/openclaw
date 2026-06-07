@@ -804,6 +804,62 @@ describe("loadGatewayPlugins", () => {
     ).resolves.toEqual({ status: "accepted", runId: "run-accepted" });
   });
 
+  test("uses one timeout budget across accepted and final in-process responses", async () => {
+    vi.useFakeTimers();
+    try {
+      serverPluginsModule.setFallbackGatewayContext(createTestContext("single-final-deadline"));
+      handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        setTimeout(() => {
+          opts.respond(true, { status: "accepted", runId: "run-deadline" });
+        }, 7);
+        setTimeout(() => {
+          opts.respond(true, { status: "ok", runId: "run-deadline" });
+        }, 13);
+        await new Promise((resolve) => setTimeout(resolve, 13));
+      });
+
+      const result = expect(
+        serverPluginsModule.dispatchGatewayMethodInProcess(
+          "agent",
+          { sessionKey: "s-deadline" },
+          { expectFinal: true, timeoutMs: 10 },
+        ),
+      ).rejects.toThrow("gateway request timeout for agent");
+
+      await vi.advanceTimersByTimeAsync(10);
+      await result;
+      await vi.advanceTimersByTimeAsync(10);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("clears final-response timeout when handler rejects after accepted response", async () => {
+    vi.useFakeTimers();
+    try {
+      serverPluginsModule.setFallbackGatewayContext(createTestContext("accepted-then-error"));
+      handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        opts.respond(true, { status: "accepted", runId: "run-error-after-accepted" });
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        throw new Error("handler failed after accepted");
+      });
+
+      const result = expect(
+        serverPluginsModule.dispatchGatewayMethodInProcess(
+          "agent",
+          { sessionKey: "s-error-after-accepted" },
+          { expectFinal: true, timeoutMs: 1_000 },
+        ),
+      ).rejects.toThrow("handler failed after accepted");
+
+      await vi.advanceTimersByTimeAsync(5);
+      await result;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("filters connected plugin nodes locally without sending unsupported node.list params", async () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     loadGatewayStartupPluginsForTest();

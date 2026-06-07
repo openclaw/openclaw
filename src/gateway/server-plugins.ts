@@ -340,13 +340,24 @@ function resolveInProcessDispatchTimeoutMs(timeoutMs?: number): number | undefin
     : undefined;
 }
 
+function resolveInProcessDispatchDeadlineMs(timeoutMs?: number): number | undefined {
+  const safeTimeoutMs = resolveInProcessDispatchTimeoutMs(timeoutMs);
+  return safeTimeoutMs === undefined ? undefined : Date.now() + safeTimeoutMs;
+}
+
+function resolveRemainingInProcessDispatchTimeoutMs(deadlineMs?: number): number | undefined {
+  return deadlineMs === undefined
+    ? undefined
+    : resolveSafeTimeoutDelayMs(deadlineMs - Date.now(), { minMs: 0 });
+}
+
 async function waitForInProcessDispatch<T>(
   method: string,
   promise: Promise<T>,
-  timeoutMs?: number,
+  deadlineMs?: number,
 ): Promise<T> {
-  const safeTimeoutMs = resolveInProcessDispatchTimeoutMs(timeoutMs);
-  if (safeTimeoutMs === undefined) {
+  const remainingTimeoutMs = resolveRemainingInProcessDispatchTimeoutMs(deadlineMs);
+  if (remainingTimeoutMs === undefined) {
     return await promise;
   }
   let timeout: NodeJS.Timeout | undefined;
@@ -356,7 +367,7 @@ async function waitForInProcessDispatch<T>(
       new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => {
           reject(new Error(`gateway request timeout for ${method}`));
-        }, safeTimeoutMs);
+        }, remainingTimeoutMs);
       }),
     ]);
   } finally {
@@ -396,6 +407,7 @@ export async function dispatchGatewayMethodInProcessRaw(
     resolveFirstResponse = resolve;
     rejectFirstResponse = reject;
   });
+  const deadlineMs = resolveInProcessDispatchDeadlineMs(options?.timeoutMs);
   const { handleGatewayRequest } = await import("./server-methods.js");
   const pluginRuntimeOwnerId =
     typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
@@ -462,7 +474,7 @@ export async function dispatchGatewayMethodInProcessRaw(
       rejectFinalResponse?.(error);
     });
 
-  firstResponse = await waitForInProcessDispatch(method, firstResponsePromise, options?.timeoutMs);
+  firstResponse = await waitForInProcessDispatch(method, firstResponsePromise, deadlineMs);
   const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
   if (options?.expectFinal !== true || firstPayload?.status !== "accepted") {
     return firstResponse;
@@ -474,32 +486,33 @@ export async function dispatchGatewayMethodInProcessRaw(
     finalResponse ??
     (await new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
       resolveFinalResponse = resolve;
-      rejectFinalResponse = reject;
-      const timeoutMs = resolveInProcessDispatchTimeoutMs(options.timeoutMs);
+      const timeoutMs = resolveRemainingInProcessDispatchTimeoutMs(deadlineMs);
       const timeout =
         timeoutMs === undefined
           ? undefined
           : setTimeout(() => {
               reject(new Error(`gateway request timeout for ${method}`));
             }, timeoutMs);
-      if (postFirstResponseError) {
+      const clearFinalTimeout = () => {
         if (timeout) {
           clearTimeout(timeout);
         }
-        reject(postFirstResponseError);
+      };
+      rejectFinalResponse = (err) => {
+        clearFinalTimeout();
+        reject(err);
+      };
+      if (postFirstResponseError) {
+        rejectFinalResponse(postFirstResponseError);
         return;
       }
       if (finalResponse) {
-        if (timeout) {
-          clearTimeout(timeout);
-        }
+        clearFinalTimeout();
         resolve(finalResponse);
         return;
       }
       resolveFinalResponse = (response) => {
-        if (timeout) {
-          clearTimeout(timeout);
-        }
+        clearFinalTimeout();
         resolve(response);
       };
     }));
