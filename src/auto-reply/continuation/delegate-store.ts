@@ -28,8 +28,10 @@ import {
   deleteTaskFlowRecordById,
   failFlow,
   finishFlow,
+  getTaskFlowById,
   listTaskFlowRecords,
   listTaskFlowsForOwnerKey,
+  updateFlowRecordByIdExpectedRevision,
 } from "../../tasks/task-flow-runtime-internal.js";
 import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
@@ -78,6 +80,8 @@ const PendingDelegateStateSchema = z
     targetSessionKeys: z.array(z.string().min(1)).optional(),
     fanoutMode: z.enum(CONTINUATION_DELEGATE_FANOUT_MODES).optional(),
     traceparent: TraceparentStateSchema,
+    releasedAt: z.number().int().nonnegative().optional(),
+    childSessionKey: z.string().min(1).optional(),
   })
   .superRefine((state, ctx) => {
     const hasSilent = state.silent === true;
@@ -171,6 +175,27 @@ function isPostCompactionDelegateFlow(flow: TaskFlowRecord): boolean {
 
 function isContinuationDelegateFlow(flow: TaskFlowRecord): boolean {
   return isPendingDelegateFlow(flow) || isPostCompactionDelegateFlow(flow);
+}
+
+function isRecoverablePendingFlow(flow: TaskFlowRecord): boolean {
+  return isPendingDelegateFlow(flow) && (flow.status === "queued" || flow.status === "running");
+}
+
+function listRecoverablePendingFlows(
+  sessionKey: string,
+  options: { includeRunning?: boolean; includeRunningUpdatedAtOrBefore?: number } = {},
+): TaskFlowRecord[] {
+  return listTaskFlowsForOwnerKey(sessionKey)
+    .filter((flow) =>
+      options.includeRunning
+        ? isPendingDelegateFlow(flow) &&
+          (flow.status === "queued" ||
+            (flow.status === "running" &&
+              (options.includeRunningUpdatedAtOrBefore === undefined ||
+                flow.updatedAt <= options.includeRunningUpdatedAtOrBefore)))
+        : isPendingDelegateFlow(flow) && flow.status === "queued",
+    )
+    .toSorted((a, b) => a.createdAt - b.createdAt);
 }
 
 function listQueuedPendingFlows(sessionKey: string): TaskFlowRecord[] {
@@ -422,7 +447,7 @@ export function enqueuePendingDelegate(
  * whose horizon has not yet matured).
  *
  * Skips corrupt payloads via `failFlow`. Only pushes delegates where
- * `finishFlow` was applied (concurrency-safe).
+ * the queued/running claim was applied (concurrency-safe).
  *
  * Callers that need to know when to retry the consume cycle in a quiet channel
  * should call `peekSoonestUnmaturedDelegateDueAt(sessionKey)` immediately after
@@ -435,11 +460,21 @@ export function enqueuePendingDelegate(
  * Re-arming a `setTimeout(delayMs)` against a consumed delegate charges the
  * wait twice and drifts recipient drains by approximately the original delay.
  */
-export function consumePendingDelegates(sessionKey: string): PendingContinuationDelegate[] {
+export function listPendingDelegateSessionKeysForRecovery(): string[] {
+  const sessionKeys = listTaskFlowRecords()
+    .filter(isRecoverablePendingFlow)
+    .map((flow) => flow.ownerKey);
+  return [...new Set(sessionKeys)].toSorted();
+}
+
+export function consumePendingDelegates(
+  sessionKey: string,
+  options: { includeRunning?: boolean; includeRunningUpdatedAtOrBefore?: number } = {},
+): PendingContinuationDelegate[] {
   const delegates: PendingContinuationDelegate[] = [];
   const now = Date.now();
 
-  for (const flow of listQueuedPendingFlows(sessionKey)) {
+  for (const flow of listRecoverablePendingFlows(sessionKey, options)) {
     const state = decodeDelegateState(flow);
     if (!state) {
       // Schema-drift / corrupt payload needs a live breadcrumb. failFlow
@@ -466,20 +501,65 @@ export function consumePendingDelegates(sessionKey: string): PendingContinuation
       continue;
     }
 
-    const finished = finishFlow({
+    const releasedAt = Date.now();
+    const claimed = updateFlowRecordByIdExpectedRevision({
       flowId: flow.flowId,
       expectedRevision: flow.revision,
-      currentStep: "Released to continuation scheduler",
-      stateJson: { ...state, releasedAt: Date.now() },
+      patch: {
+        status: "running",
+        currentStep:
+          flow.status === "running"
+            ? "Re-driving continuation delegate spawn"
+            : "Released to continuation scheduler",
+        stateJson: { ...state, releasedAt },
+        waitJson: null,
+        blockedTaskId: null,
+        blockedSummary: null,
+        endedAt: null,
+        updatedAt: releasedAt,
+      },
     });
-    if (!finished.applied || !finished.flow) {
+    if (!claimed.applied || !claimed.flow) {
       continue;
     }
 
-    delegates.push(flowToDelegate(finished.flow, state));
+    delegates.push(flowToDelegate(claimed.flow, { ...state, releasedAt }));
   }
 
   return delegates;
+}
+
+export function markPendingDelegateSpawnAccepted(
+  delegate: Pick<PendingContinuationDelegate, "flowId" | "expectedRevision" | "task">,
+  childSessionKey: string,
+): boolean {
+  if (!delegate.flowId || delegate.expectedRevision === undefined) {
+    log.warn(
+      "[continuation:delegate-accept-missing-flow] cannot commit accepted delegate because flow metadata is missing",
+    );
+    return false;
+  }
+  const current = getTaskFlowById(delegate.flowId);
+  const state = current ? decodeDelegateState(current) : undefined;
+  const now = Date.now();
+  const expectedRevision = delegate.expectedRevision;
+  const finished = finishFlow({
+    flowId: delegate.flowId,
+    expectedRevision,
+    currentStep: "Accepted by continuation subagent",
+    stateJson: {
+      ...(state ?? { kind: "continuation_delegate", task: delegate.task }),
+      childSessionKey,
+    },
+    updatedAt: now,
+    endedAt: now,
+  });
+  if (!finished.applied) {
+    log.warn(
+      `[continuation:delegate-accept-not-committed] flowId=${delegate.flowId} expectedRevision=${expectedRevision} acceptance was not committed`,
+    );
+  }
+  return finished.applied;
 }
 
 export function markPendingDelegateFailed(

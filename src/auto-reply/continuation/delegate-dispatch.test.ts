@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock TaskFlow registry — delegate-store resolves it transitively.
@@ -7,9 +8,25 @@ const loggerRecords: Array<{ level: string; message: string }> = [];
 const spawnSubagentDirectMock = vi.fn();
 let flowIdCounter = 0;
 let listTaskFlowsShouldThrow = false;
+const activeRegistryChildSessionKeys = new Set<string>();
+const staleRegistryChildSessionKeys = new Set<string>();
+const acceptedChildSessionKeys = new Set<string>();
 
 vi.mock("../../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
+}));
+
+vi.mock("../../agents/subagent-registry-read.js", () => ({
+  getSubagentRunByChildSessionKey: (childSessionKey: string) =>
+    activeRegistryChildSessionKeys.has(childSessionKey)
+      ? { runId: "run-active", childSessionKey }
+      : staleRegistryChildSessionKeys.has(childSessionKey)
+        ? { runId: "run-stale", childSessionKey }
+        : null,
+  hasLiveContinuationDelegateChildRun: (params: { childSessionKey: string }) =>
+    acceptedChildSessionKeys.has(params.childSessionKey),
+  isSubagentRunLive: (entry: { runId?: string } | null | undefined) =>
+    entry?.runId === "run-active",
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
@@ -63,15 +80,43 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
     }
     return [...mockFlows.values()].filter((f) => f.ownerKey === ownerKey);
   }),
-  finishFlow: vi.fn((params: { flowId: string; expectedRevision: number }) => {
-    const flow = mockFlows.get(params.flowId);
-    if (!flow || flow.revision !== params.expectedRevision) {
-      return { applied: false, reason: flow ? "revision_conflict" : "not_found" };
-    }
-    flow.status = "succeeded";
-    flow.revision = flow.revision + 1;
-    return { applied: true, flow: { ...flow } };
-  }),
+  listTaskFlowRecords: vi.fn(() => [...mockFlows.values()]),
+  getTaskFlowById: vi.fn((flowId: string) => mockFlows.get(flowId)),
+  updateFlowRecordByIdExpectedRevision: vi.fn(
+    (params: { flowId: string; expectedRevision: number; patch: Record<string, unknown> }) => {
+      const flow = mockFlows.get(params.flowId);
+      if (!flow || flow.revision !== params.expectedRevision) {
+        return {
+          applied: false,
+          reason: flow ? "revision_conflict" : "not_found",
+          current: flow ? { ...flow } : undefined,
+        };
+      }
+      Object.assign(flow, params.patch);
+      flow.revision = flow.revision + 1;
+      return { applied: true, flow: { ...flow } };
+    },
+  ),
+  finishFlow: vi.fn(
+    (params: {
+      flowId: string;
+      expectedRevision: number;
+      stateJson?: unknown;
+      updatedAt?: number;
+      endedAt?: number;
+    }) => {
+      const flow = mockFlows.get(params.flowId);
+      if (!flow || flow.revision !== params.expectedRevision) {
+        return { applied: false, reason: flow ? "revision_conflict" : "not_found" };
+      }
+      flow.status = "succeeded";
+      flow.stateJson = params.stateJson ?? flow.stateJson;
+      flow.endedAt = params.endedAt ?? params.updatedAt ?? Date.now();
+      flow.updatedAt = params.updatedAt ?? flow.endedAt;
+      flow.revision = flow.revision + 1;
+      return { applied: true, flow: { ...flow } };
+    },
+  ),
   failFlow: vi.fn((params: { flowId: string }) => {
     const flow = mockFlows.get(params.flowId);
     if (flow) {
@@ -90,7 +135,11 @@ import {
   resetContinuationTracer,
   setContinuationTracer,
 } from "../../infra/continuation-tracer.js";
-import { dispatchToolDelegates, resetDelegateDispatchHedgesForTests } from "./delegate-dispatch.js";
+import {
+  dispatchToolDelegates,
+  recoverPendingContinuationDelegates,
+  resetDelegateDispatchHedgesForTests,
+} from "./delegate-dispatch.js";
 import { cancelPendingDelegates, enqueuePendingDelegate } from "./delegate-store.js";
 import { hasLiveContinuationTimerRefs, resetContinuationStateForTests } from "./state.js";
 
@@ -101,6 +150,9 @@ beforeEach(() => {
   spawnSubagentDirectMock.mockReset().mockResolvedValue({ status: "accepted" });
   flowIdCounter = 0;
   listTaskFlowsShouldThrow = false;
+  activeRegistryChildSessionKeys.clear();
+  staleRegistryChildSessionKeys.clear();
+  acceptedChildSessionKeys.clear();
   vi.useFakeTimers();
 });
 
@@ -111,6 +163,9 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
   mockFlows.clear();
   listTaskFlowsShouldThrow = false;
+  activeRegistryChildSessionKeys.clear();
+  staleRegistryChildSessionKeys.clear();
+  acceptedChildSessionKeys.clear();
   vi.useRealTimers();
 });
 
@@ -265,6 +320,48 @@ describe("hedge timer ref/handle cleanup", () => {
 });
 
 describe("tool delegate dispatch contract", () => {
+  it("recovers a running delegate by reconciling the deterministic live child", async () => {
+    const sessionKey = "agent:main:root";
+    enqueuePendingDelegate(sessionKey, { task: "recover already spawned child" });
+    const flowId = [...mockFlows.keys()][0];
+    const digest = crypto.createHash("sha256").update(flowId).digest("hex").slice(0, 32);
+    activeRegistryChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);
+
+    const first = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      recoverRunningDelegates: true,
+    });
+
+    expect(first.dispatched).toBe(1);
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get(flowId)?.status).toBe("succeeded");
+    expect(mockFlows.get(flowId)?.stateJson).toMatchObject({
+      childSessionKey: `agent:main:subagent:continuation-${digest}`,
+    });
+  });
+
+  it("derives deterministic child session keys from canonical agent session parsing", async () => {
+    const sessionKey = "AGENT:Work:root";
+    enqueuePendingDelegate(sessionKey, { task: "mixed-case parent key" });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    const expectedChildSessionKey =
+      "agent:work:subagent:continuation-" +
+      crypto.createHash("sha256").update("flow-1").digest("hex").slice(0, 32);
+    expect(mockFlows.get("flow-1")?.stateJson).toMatchObject({
+      childSessionKey: expectedChildSessionKey,
+    });
+  });
+
   it("caps dispatch at maxDelegatesPerTurn and surfaces over-limit delegates", async () => {
     const sessionKey = "session-delegate-cap";
     for (let index = 0; index < 6; index++) {
@@ -842,5 +939,142 @@ describe("dispatchToolDelegates — nonexistent target session", () => {
     });
 
     expect(mockFlows.get(flowId)?.status).toBe("succeeded");
+  });
+});
+
+describe("recoverPendingContinuationDelegates", () => {
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 5,
+          },
+        },
+      },
+    });
+  });
+
+  it("uses the recovered session key even when caller ctx has a stale sessionKey", async () => {
+    const sessionKey = "session-recovered-ctx";
+    enqueuePendingDelegate(sessionKey, { task: "recover ctx" });
+
+    await recoverPendingContinuationDelegates({
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey: "stale-session" },
+      maxChainLength: 10,
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ agentSessionKey: sessionKey }),
+    );
+  });
+
+  it("respawns when the subagent registry row is stale", async () => {
+    const sessionKey = "agent:main:stale-registry-parent";
+    enqueuePendingDelegate(sessionKey, { task: "stale registry recovery" });
+    const deterministicChildKey =
+      "agent:main:subagent:continuation-" +
+      crypto.createHash("sha256").update("flow-1").digest("hex").slice(0, 32);
+    staleRegistryChildSessionKeys.add(deterministicChildKey);
+
+    await recoverPendingContinuationDelegates({
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      maxChainLength: 10,
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "succeeded" });
+  });
+
+  it("replays a claimed delegate after a crash before accept exactly once", async () => {
+    const sessionKey = "agent:main:boot-replay-parent";
+    enqueuePendingDelegate(sessionKey, { task: "boot replay once" });
+    const flow = mockFlows.get("flow-1");
+    expect(flow).toBeDefined();
+    flow!.status = "running";
+    flow!.currentStep = "Released to continuation scheduler";
+    flow!.revision = 1;
+
+    await recoverPendingContinuationDelegates({
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      maxChainLength: 10,
+    });
+
+    const deterministicChildKey =
+      "agent:main:subagent:continuation-" +
+      crypto.createHash("sha256").update("flow-1").digest("hex").slice(0, 32);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({ continuationDelegateFlowId: "flow-1" }),
+      expect.objectContaining({ agentSessionKey: sessionKey }),
+    );
+    expect(mockFlows.get("flow-1")).toMatchObject({
+      status: "succeeded",
+      stateJson: expect.objectContaining({ childSessionKey: deterministicChildKey }),
+    });
+  });
+
+  it("reconciles a claimed continuation child accepted before registry registration", async () => {
+    const sessionKey = "agent:main:parent";
+    enqueuePendingDelegate(sessionKey, { task: "recover without duplicate spawn" });
+    const flow = [...mockFlows.values()].find((entry) => entry.ownerKey === sessionKey);
+    expect(flow?.flowId).toBe("flow-1");
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+
+    // Simulate a crash after gateway accept but before registerSubagentRun/finishFlow:
+    // TaskFlow remains running at the claimed revision, while the deterministic
+    // child session already has a live agent-run context. Recovery must commit
+    // acceptance and skip a second spawn.
+    const runningFlow = mockFlows.get("flow-1");
+    expect(runningFlow?.status).toBe("succeeded");
+    runningFlow!.status = "running";
+    runningFlow!.endedAt = undefined;
+    runningFlow!.revision = 1;
+    const deterministicChildKey =
+      "agent:main:subagent:continuation-" +
+      crypto.createHash("sha256").update("flow-1").digest("hex").slice(0, 32);
+    acceptedChildSessionKeys.add(deterministicChildKey);
+
+    await recoverPendingContinuationDelegates({
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      maxChainLength: 10,
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(mockFlows.get("flow-1")).toMatchObject({
+      status: "succeeded",
+      stateJson: expect.objectContaining({ childSessionKey: deterministicChildKey }),
+    });
+  });
+
+  it("does not replay running delegates claimed after recovery starts", async () => {
+    const sessionKey = "agent:main:recovery-race";
+    enqueuePendingDelegate(sessionKey, { task: "skip live-claimed running row" });
+    const flow = mockFlows.get("flow-1");
+    expect(flow).toBeDefined();
+    flow!.status = "running";
+    flow!.currentStep = "Released to continuation scheduler";
+    flow!.revision = 1;
+    flow!.updatedAt = Date.now() + 2_000;
+
+    await recoverPendingContinuationDelegates({
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      maxChainLength: 10,
+    });
+
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")?.status).toBe("running");
   });
 });

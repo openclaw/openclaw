@@ -32,6 +32,12 @@ vi.mock("../../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
 }));
 
+vi.mock("../../agents/subagent-registry-read.js", () => ({
+  getSubagentRunByChildSessionKey: () => null,
+  hasLiveContinuationDelegateChildRun: () => false,
+  isSubagentRunLive: () => false,
+}));
+
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: (text: string, options: unknown) => enqueueSystemEventMock(text, options),
 }));
@@ -80,15 +86,42 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
   listTaskFlowsForOwnerKey: vi.fn((ownerKey: string) => {
     return [...mockFlows.values()].filter((f) => f.ownerKey === ownerKey);
   }),
-  finishFlow: vi.fn((params: { flowId: string; expectedRevision: number }) => {
-    const flow = mockFlows.get(params.flowId);
-    if (!flow || flow.revision !== params.expectedRevision) {
-      return { applied: false, reason: flow ? "revision_conflict" : "not_found" };
-    }
-    flow.status = "succeeded";
-    flow.revision = flow.revision + 1;
-    return { applied: true, flow: { ...flow } };
-  }),
+  getTaskFlowById: vi.fn((flowId: string) => mockFlows.get(flowId)),
+  updateFlowRecordByIdExpectedRevision: vi.fn(
+    (params: { flowId: string; expectedRevision: number; patch: Record<string, unknown> }) => {
+      const flow = mockFlows.get(params.flowId);
+      if (!flow || flow.revision !== params.expectedRevision) {
+        return {
+          applied: false,
+          reason: flow ? "revision_conflict" : "not_found",
+          current: flow ? { ...flow } : undefined,
+        };
+      }
+      Object.assign(flow, params.patch);
+      flow.revision = flow.revision + 1;
+      return { applied: true, flow: { ...flow } };
+    },
+  ),
+  finishFlow: vi.fn(
+    (params: {
+      flowId: string;
+      expectedRevision: number;
+      stateJson?: unknown;
+      updatedAt?: number;
+      endedAt?: number;
+    }) => {
+      const flow = mockFlows.get(params.flowId);
+      if (!flow || flow.revision !== params.expectedRevision) {
+        return { applied: false, reason: flow ? "revision_conflict" : "not_found" };
+      }
+      flow.status = "succeeded";
+      flow.stateJson = params.stateJson ?? flow.stateJson;
+      flow.endedAt = params.endedAt ?? params.updatedAt ?? Date.now();
+      flow.updatedAt = params.updatedAt ?? flow.endedAt;
+      flow.revision = flow.revision + 1;
+      return { applied: true, flow: { ...flow } };
+    },
+  ),
   failFlow: vi.fn((params: { flowId: string }) => {
     const flow = mockFlows.get(params.flowId);
     if (flow) {

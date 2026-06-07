@@ -103,6 +103,22 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
   listTaskFlowsForOwnerKey: vi.fn((ownerKey: string) => {
     return [...mockFlows.values()].filter((f) => f.ownerKey === ownerKey);
   }),
+  getTaskFlowById: vi.fn((flowId: string) => mockFlows.get(flowId)),
+  updateFlowRecordByIdExpectedRevision: vi.fn(
+    (params: { flowId: string; expectedRevision: number; patch: Record<string, unknown> }) => {
+      const flow = mockFlows.get(params.flowId);
+      if (!flow || flow.revision !== params.expectedRevision) {
+        return {
+          applied: false,
+          reason: flow ? "revision_conflict" : "not_found",
+          current: flow ? { ...flow } : undefined,
+        };
+      }
+      Object.assign(flow, params.patch);
+      flow.revision = flow.revision + 1;
+      return { applied: true, flow: { ...flow } };
+    },
+  ),
   finishFlow: vi.fn((params: { flowId: string; expectedRevision: number }) => {
     const flow = mockFlows.get(params.flowId);
     if (!flow || flow.revision !== params.expectedRevision) {

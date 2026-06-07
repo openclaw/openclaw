@@ -356,7 +356,10 @@ function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined
   return location;
 }
 
-export function resolveGoogleVertexBaseOrigin(model: GoogleTransportModel, location: string): string {
+export function resolveGoogleVertexBaseOrigin(
+  model: GoogleTransportModel,
+  location: string,
+): string {
   const configured = normalizeOptionalString(model.baseUrl);
   if (configured && !configured.includes("{location}")) {
     try {

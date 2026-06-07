@@ -76,6 +76,22 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
     [...mockFlows.values()].filter((f) => f.ownerKey === ownerKey),
   ),
   listTaskFlowRecords: vi.fn(() => [...mockFlows.values()]),
+  getTaskFlowById: vi.fn((flowId: string) => mockFlows.get(flowId)),
+  updateFlowRecordByIdExpectedRevision: vi.fn(
+    (params: { flowId: string; expectedRevision: number; patch: Record<string, unknown> }) => {
+      const flow = mockFlows.get(params.flowId);
+      if (!flow || flow.revision !== params.expectedRevision) {
+        return {
+          applied: false,
+          reason: flow ? "revision_conflict" : "not_found",
+          current: flow ? { ...flow } : undefined,
+        };
+      }
+      Object.assign(flow, params.patch);
+      flow.revision = flow.revision + 1;
+      return { applied: true, flow: { ...flow } };
+    },
+  ),
   finishFlow: vi.fn(
     (params: {
       flowId: string;
@@ -120,6 +136,7 @@ import {
   consumeStagedPostCompactionDelegates,
   enqueuePendingDelegate,
   markPendingDelegateFailed,
+  markPendingDelegateSpawnAccepted,
   pendingDelegateCount,
   resetDelegateStoreForTests,
   stagePostCompactionDelegate,
@@ -148,6 +165,7 @@ function queueRawPendingFlow(sessionKey: string, stateJson: Record<string, unkno
 
 beforeEach(() => {
   mockFlows.clear();
+  loggerRecords.length = 0;
   flowIdCounter = 0;
   resetDelegateStoreForTests();
 });
@@ -167,6 +185,21 @@ describe("delegate store — TaskFlow-backed", () => {
     expect(delegates).toHaveLength(1);
     expect(delegates[0].task).toBe("check CI");
     expect(pendingDelegateCount("session-1")).toBe(0);
+  });
+
+  it("logs when acceptance cannot be committed after a claim", () => {
+    enqueuePendingDelegate("session-accept-conflict", { task: "accept conflict" });
+    const [delegate] = consumePendingDelegates("session-accept-conflict");
+    expect(delegate).toBeDefined();
+    const flow = mockFlows.get(delegate.flowId!);
+    expect(flow).toBeDefined();
+    flow!.revision = flow!.revision + 1;
+
+    expect(markPendingDelegateSpawnAccepted(delegate, "agent:main:subagent:child")).toBe(false);
+    expect(loggerRecords).toContainEqual({
+      level: "warn",
+      message: `[continuation:delegate-accept-not-committed] flowId=${delegate.flowId} expectedRevision=${delegate.expectedRevision} acceptance was not committed`,
+    });
   });
 
   it("handles multi-delegate fan-out (FIFO order)", () => {
@@ -268,7 +301,7 @@ describe("delegate store — TaskFlow-backed", () => {
         mode: "silent-wake",
       }),
     ]);
-    expect(mockFlows.get(flowId)?.status).toBe("succeeded");
+    expect(mockFlows.get(flowId)?.status).toBe("running");
   });
 
   it("rejects malformed multi-flag rows instead of choosing precedence", () => {
@@ -360,9 +393,9 @@ describe("delegate store — TaskFlow-backed", () => {
       stagedPostCompaction: 1,
       invalidQueued: 1,
       enqueuedSinceLastSample: 0,
-      drainedSinceLastSample: 1,
+      drainedSinceLastSample: 0,
       failedSinceLastSample: 0,
-      drainRatePerMinute: 60,
+      drainRatePerMinute: 0,
     });
     expect(second?.queueDepthHistory.map((point) => point.totalQueued)).toEqual([4, 3]);
   });

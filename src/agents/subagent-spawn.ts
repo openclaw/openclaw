@@ -63,6 +63,10 @@ import {
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
+import {
+  deriveContinuationDelegateChildRunId,
+  deriveContinuationDelegateChildSessionKey,
+} from "./subagent-continuation-ids.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import {
@@ -201,6 +205,8 @@ export type SpawnSubagentParams = {
   continuationTargetSessionKeys?: string[];
   continuationFanoutMode?: "tree" | "all";
   traceparent?: string;
+  /** Durable continuation delegate flow id; used to derive idempotent child session/run keys. */
+  continuationDelegateFlowId?: string;
 };
 
 export type SpawnSubagentContext = {
@@ -1243,7 +1249,9 @@ export async function spawnSubagentDirect(
       error: targetPolicy.error,
     };
   }
-  const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
+  const childSessionKey = params.continuationDelegateFlowId
+    ? deriveContinuationDelegateChildSessionKey(targetAgentId, params.continuationDelegateFlowId)
+    : `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg,
     sessionKey: requesterInternalKey,
@@ -1573,7 +1581,9 @@ export async function spawnSubagentDirect(
   }
   const contextEnginePreparation = contextEnginePrepareResult.preparation;
 
-  const childIdem = crypto.randomUUID();
+  const childIdem = params.continuationDelegateFlowId
+    ? deriveContinuationDelegateChildRunId(params.continuationDelegateFlowId)
+    : crypto.randomUUID();
   let childRunId: string = childIdem;
   const deliverInitialChildRunDirectly =
     requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
