@@ -41,6 +41,13 @@ function createHarness(params?: {
       finalized: false,
       activeChunkIndex: 0,
     },
+    assistant: {
+      stream: undefined,
+      lastPartialText: "",
+      hasStreamedMessage: false,
+      finalized: false,
+      activeChunkIndex: 0,
+    },
   };
   const sendPayload = vi.fn().mockResolvedValue(true);
   const flushDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {

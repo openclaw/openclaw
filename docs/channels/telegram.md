@@ -320,6 +320,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
     - `streaming.preview.commandText` controls command/exec detail inside those tool-progress lines: `raw` (default, preserves released behavior) or `status` (tool label only)
     - `streaming.progress.commentary` (default: `false`) opts into assistant commentary/preamble text in the temporary progress draft
+    - `streaming.progress.assistantPreview` (default: `false`) shows assistant answer partials in a separate temporary preview lane while progress mode keeps its status draft; the preview is cleared before normal final delivery
     - legacy `channels.telegram.streamMode` and boolean `streaming` values are detected; run `openclaw doctor --fix` to migrate them to `channels.telegram.streaming.mode`
 
     Tool-progress preview updates are the short status lines shown while tools run, for example command execution, file reads, planning updates, patch summaries, or Codex preamble/commentary text in Codex app-server mode. Telegram keeps these enabled by default to match released OpenClaw behavior from `v2026.4.22` and later.
@@ -394,6 +395,25 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
       }
     }
     ```
+
+    To keep the progress draft visible while also previewing assistant answer text in a separate temporary lane, opt in to `assistantPreview`:
+
+    ```json
+    {
+      "channels": {
+        "telegram": {
+          "streaming": {
+            "mode": "progress",
+            "progress": {
+              "assistantPreview": true
+            }
+          }
+        }
+      }
+    }
+    ```
+
+    The assistant preview lane is temporary: OpenClaw clears it before sending the final answer normally. Leave it unset or `false` for released progress-mode behavior with one status draft plus final delivery only.
 
     Use `streaming.mode: "off"` only when you want final-only delivery: Telegram preview edits are disabled and generic tool/progress chatter is suppressed instead of being sent as standalone status messages. Approval prompts, media payloads, and errors still route through normal final delivery. Use `streaming.preview.toolProgress: false` when you only want to keep answer preview edits while hiding the tool-progress status lines.
 

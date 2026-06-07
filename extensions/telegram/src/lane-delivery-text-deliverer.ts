@@ -16,7 +16,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 
-export type LaneName = "answer" | "reasoning";
+export type LaneName = "answer" | "reasoning" | "assistant";
 
 export type DraftLaneState = {
   stream: TelegramDraftStream | undefined;
