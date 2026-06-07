@@ -7,7 +7,7 @@ Providers:
 - **Twilio** (Programmable Voice + Media Streams)
 - **Telnyx** (Call Control v2)
 - **Plivo** (Voice API + XML transfer + GetInput speech)
-- **Microsoft Teams** (`msteams`) — bridges Teams calls via an external Windows worker over an HMAC-authenticated WebSocket (inbound-only). See [Microsoft Teams provider](#microsoft-teams-provider-msteams).
+- **Microsoft Teams** (`msteams`) — bridges Teams calls via an external Windows worker over an HMAC-authenticated WebSocket (inbound + outbound, with vision + group-call gating). See [Microsoft Teams provider](#microsoft-teams-provider-msteams).
 - **Mock** (dev/no network)
 
 Docs: `https://docs.openclaw.ai/plugins/voice-call`
@@ -98,7 +98,17 @@ Put under `plugins.entries.voice-call.config`:
 
 ## Microsoft Teams provider (`msteams`)
 
-Teams calls do not arrive on the webhook/media-stream plane. An **external Windows worker** (not part of this repo) owns the Graph Calling notification endpoint and the `Microsoft.Skype.Bots.Media` AudioSocket; when a call is answered it opens a **per-call WebSocket** to OpenClaw and relays PCM 16 kHz audio in both directions. The provider is **inbound-only** (`initiateCall` throws).
+Teams calls do not arrive on the webhook/media-stream plane. An **external Windows worker** (not part of this repo) owns the Graph Calling notification endpoint and the `Microsoft.Skype.Bots.Media` AudioSocket; when a call is answered it opens a **per-call WebSocket** to OpenClaw and relays PCM 16 kHz audio in both directions, plus sampled `video.frame`s (caller camera / screen-share) and the live `participants` count.
+
+Supports **inbound and outbound** calls:
+
+- **Inbound** — a caller dials the bot.
+- **Outbound (call me back)** — `initiateCall` asks the worker to place a Teams call (e.g. `openclaw_agent_task deliverVia:"call"` so a background job calls the caller back with its result). Configured under `msteams.outbound`.
+
+Capabilities:
+
+- **Vision** — the agent can "see" the caller's camera / shared screen: `look_at_screen` (realtime) and automatic frame attachment (streaming), recording-gated. In meetings each frame is attributed to the participant it came from.
+- **Group/meeting gate** — in a group call (2+ humans) the assistant stays silent until addressed by name (`msteams.groupCall.wakePhrases`), mirroring the chat @mention gate; 1:1 calls respond to everything. Deterministic on streaming; instruction-based on realtime.
 
 Two modes:
 

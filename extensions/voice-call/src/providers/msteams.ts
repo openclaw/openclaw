@@ -562,7 +562,13 @@ export class MsteamsProvider implements VoiceCallProvider {
       : this.realtimeDeps.greetingInstructions;
     const realtimeCall = createMsteamsRealtimeCall({
       session,
-      deps: { ...this.realtimeDeps, greetingInstructions },
+      deps: {
+        ...this.realtimeDeps,
+        greetingInstructions,
+        // Wire vision on outbound realtime too (parity with inbound) so look_at_screen works if the
+        // callee shares video on the call-back.
+        getLatestFrame: (source) => this.getLatestVideoFrame(providerCallId, source),
+      },
     });
     this.realtimeCalls.set(providerCallId, realtimeCall);
     this.outboundRealtimeInternalIds.set(providerCallId, pending.internalCallId);
@@ -615,7 +621,13 @@ export class MsteamsProvider implements VoiceCallProvider {
     }
   }
 
-  /** Roster size changed: track the human count so the group-call gate knows 1:1 vs meeting. */
+  /**
+   * Roster size changed: track the human count so the streaming group-call gate knows 1:1 vs
+   * meeting. NOTE: this only updates the streaming call state. The realtime path's gate is
+   * instruction-based (the bridge exposes no response-suppress hook) and its instructions are fixed
+   * at session start, so it can't act on a live count mid-call — by design it relies on the model's
+   * "stay silent unless addressed" instruction rather than the roster size. Streaming is deterministic.
+   */
   private handleParticipants(info: { callId: string; count: number }): void {
     const state = this.calls.get(info.callId);
     if (state) {
