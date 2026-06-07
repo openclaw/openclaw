@@ -3000,7 +3000,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
   });
 
   it("hydrates contextual DM follow-ups from agent-hub linked history", async () => {
-    const { storePath } = makeTmpStorePath();
+    const { storePath } = storeFixture.makeTmpStorePath();
     const cfg = {
       session: { store: storePath },
       channels: {
@@ -3085,7 +3085,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
   });
 
   it("falls back to live Slack history when agent-hub linked retrieval is unavailable", async () => {
-    const { storePath } = makeTmpStorePath();
+    const { storePath } = storeFixture.makeTmpStorePath();
     const cfg = {
       session: { store: storePath },
       channels: {
@@ -3119,7 +3119,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
         messages: [
           { text: "memory timeout is fixed", bot_id: "B1", ts: "399.000" },
           { text: "retry the agent hub history path", user: "U1", ts: "398.000" },
-          { text: "current question", user: "U1", ts: "400.000" },
+          { text: "what were we working on", user: "U1", ts: "400.000" },
         ],
         response_metadata: { next_cursor: "" },
       });
@@ -3139,7 +3139,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
           replyToModeByChatType: { direct: "off" },
         }),
         createSlackMessage({
-          text: "current question",
+          text: "what were we working on",
           ts: "400.000",
         }),
       );

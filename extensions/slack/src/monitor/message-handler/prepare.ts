@@ -1254,9 +1254,6 @@ export async function prepareSlackMessage(params: {
           envelopeOptions,
         })
       : { historyBody: undefined, label: undefined };
-  const supplementalHistoryBody = threadHistoryBody ?? directContextData.historyBody;
-  const supplementalThreadLabel = threadLabel ?? directContextData.label;
-
   // Use direct media (including forwarded attachment media) if available, else thread starter media
   const effectiveMedia = effectiveDirectMedia ?? threadStarterMedia;
   const inboundHistory =
@@ -1268,7 +1265,10 @@ export async function prepareSlackMessage(params: {
       : dmHistoryContext.inboundHistory;
   const commandBody = textForCommandDetection.trim();
   const supplementalThreadHistoryBody =
-    directThreadRoutedToDmSession && !threadHistoryBody ? threadStarterBody : threadHistoryBody;
+    directThreadRoutedToDmSession && !threadHistoryBody
+      ? threadStarterBody
+      : (threadHistoryBody ?? directContextData.historyBody);
+  const supplementalThreadLabel = threadLabel ?? directContextData.label;
   const effectiveMessageThreadId =
     assistantThreadContext?.threadTs ?? threadContext.messageThreadId;
 
@@ -1335,7 +1335,7 @@ export async function prepareSlackMessage(params: {
             ? threadStarterBody
             : undefined,
         historyBody: supplementalThreadHistoryBody,
-        label: directThreadRoutedToDmSession ? undefined : threadLabel,
+        label: directThreadRoutedToDmSession ? undefined : supplementalThreadLabel,
       },
       groupSystemPrompt,
     },

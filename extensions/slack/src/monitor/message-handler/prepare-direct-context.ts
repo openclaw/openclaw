@@ -93,10 +93,6 @@ function shouldHydrateSlackDirectHistory(params: {
   if (!normalized || normalized.startsWith("/")) {
     return false;
   }
-  const wordCount = normalized.split(/\s+/).filter(Boolean).length;
-  if (wordCount <= 3) {
-    return true;
-  }
   return normalized.length <= 80 && CONTEXTUAL_FOLLOW_UP_RE.test(normalized);
 }
 
