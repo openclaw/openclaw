@@ -1008,6 +1008,11 @@ describe("update-cli", () => {
     const entryPath = path.join(root, "dist", "index.js");
     mockPackageInstallStatus(root);
     serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
     pathExists.mockImplementation(async (candidate: string) => candidate === entryPath);
     spawn.mockImplementationOnce((_command: unknown, _argv: unknown, options: unknown) => {
       const resultPath = (options as { env?: NodeJS.ProcessEnv }).env
@@ -2316,6 +2321,11 @@ describe("update-cli", () => {
   it("refuses package updates from inside the active gateway process tree", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-update"));
     serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
     mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid, 4242]));
 
     await updateCommand({ yes: true });
@@ -5070,6 +5080,11 @@ describe("update-cli", () => {
         }),
     });
     serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
     probeGateway.mockResolvedValue({
       ok: true,
       close: null,
@@ -5286,6 +5301,11 @@ describe("update-cli", () => {
     });
     prepareRestartScript.mockResolvedValue(null);
     serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
     probeGateway.mockResolvedValue({
       ok: true,
       close: null,
