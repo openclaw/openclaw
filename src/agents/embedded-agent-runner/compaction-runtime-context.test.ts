@@ -397,4 +397,85 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
     expect(result.provider).toBe("anthropic");
   });
+
+  it("resolves compaction.model alias to canonical provider/model (#90340)", () => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4-mini": { alias: "gpt54mini" },
+            },
+            compaction: { model: "gpt54mini" },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:p1",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+    });
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.4-mini");
+    // Auth profile preserved because provider didn't change
+    expect(result.authProfileId).toBe("openai:p1");
+  });
+
+  it("preserves bare model-id when it collides with a configured alias key (#90340)", () => {
+    // When the bare compaction.model value is already a configured model id
+    // for the current provider, shipped literal behavior takes precedence over
+    // alias resolution to avoid a silent model/provider switch on upgrade.
+    const result = resolveEmbeddedCompactionTarget({
+      config: {
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.4" }, { id: "gpt-5.4-special" }] },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4-special": { alias: "gpt-5.4" },
+            },
+            compaction: { model: "gpt-5.4" },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:p1",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+    });
+    // Bare model-id "gpt-5.4" is a configured model for openai, so it
+    // should NOT be resolved through the alias that shares the same key.
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.4");
+    expect(result.authProfileId).toBe("openai:p1");
+  });
+
+  it("resolves cross-provider compaction.model alias (#90340)", () => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": { alias: "opus46" },
+            },
+            compaction: { model: "opus46" },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:p1",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+    });
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-6");
+    // Auth profile dropped because provider changed
+    expect(result.authProfileId).toBeUndefined();
+  });
 });

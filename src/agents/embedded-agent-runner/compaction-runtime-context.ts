@@ -123,20 +123,46 @@ export function resolveEmbeddedCompactionTarget(params: {
   // Resolve alias-only compaction model overrides through the model alias index.
   // Without this, an alias like "gpt54mini" is passed to resolveModelAsync as-is,
   // resulting in "Unknown model: openai/gpt54mini" (#90340).
+  //
+  // Safety: preserve bare model-id precedence. A bare override that is already a
+  // configured model id for the current provider must keep shipped literal behavior
+  // even when it collides with a configured alias key. Only non-colliding bare
+  // values (true aliases) are resolved through the alias index.
   const defaultProvider = params.defaultProvider ?? provider;
+  const aliasIndex = defaultProvider
+    ? buildModelAliasIndex({
+        cfg: params.config as OpenClawConfig,
+        defaultProvider,
+      })
+    : null;
   const resolvedAlias = defaultProvider
     ? resolveModelRefFromString({
         cfg: params.config,
         raw: override,
         defaultProvider,
-        aliasIndex: buildModelAliasIndex({
-          cfg: params.config as OpenClawConfig,
-          defaultProvider,
-        }),
+        aliasIndex: aliasIndex ?? undefined,
       })
     : null;
   const authProfileId = params.authProfileId ?? undefined;
-  if (resolvedAlias) {
+  const hasAliasMatch = Boolean(resolvedAlias?.alias);
+  if (hasAliasMatch && resolvedAlias && aliasIndex) {
+    // The override matched a configured alias. Check whether the bare value also
+    // collides with a known model id for the current provider — if it does, the
+    // shipped bare-model-id behavior takes precedence to avoid a silent switch.
+    const isKnownModelId = isBareModelConfiguredForProvider({
+      config: params.config,
+      provider: provider ?? "",
+      modelId: override,
+    });
+    if (isKnownModelId) {
+      // Bare model-id takes precedence over the alias to preserve existing behavior.
+      return {
+        provider,
+        ...resolveTargetProviders(provider, authProfileId),
+        model: override,
+        authProfileId,
+      };
+    }
     const aliasProvider = resolvedAlias.ref.provider;
     const aliasModel = resolvedAlias.ref.model;
     const aliasAuthProfileId =
@@ -170,6 +196,26 @@ function shouldUseCodexRuntimeProviderForCompaction(params: {
     return false;
   }
   return true;
+}
+
+/**
+ * Check whether a bare model id is already configured for the given provider.
+ * When true, the bare model-id takes precedence over any alias that shares the
+ * same key, preserving upgrade-safe shipped-config behavior (#90340).
+ */
+function isBareModelConfiguredForProvider(params: {
+  config?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+}): boolean {
+  const providerEntry = params.config?.models?.providers?.[params.provider];
+  if (!providerEntry?.models?.length) {
+    return false;
+  }
+  const normalized = params.modelId.toLowerCase();
+  return providerEntry.models.some(
+    (m) => typeof m.id === "string" && m.id.toLowerCase() === normalized,
+  );
 }
 
 export function buildEmbeddedCompactionRuntimeContext(params: {
