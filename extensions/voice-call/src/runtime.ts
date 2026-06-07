@@ -212,7 +212,11 @@ function createRuntimeResourceLifecycle(params: {
   };
 }
 
-async function resolveProvider(config: VoiceCallConfig, log: Logger): Promise<VoiceCallProvider> {
+async function resolveProvider(
+  config: VoiceCallConfig,
+  log: Logger,
+  fullConfig: OpenClawConfig,
+): Promise<VoiceCallProvider> {
   const allowNgrokFreeTierLoopbackBypass =
     config.tunnel?.provider === "ngrok" &&
     isLoopbackHost(config.serve?.bind ?? "") &&
@@ -269,12 +273,23 @@ async function resolveProvider(config: VoiceCallConfig, log: Logger): Promise<Vo
     }
     case "msteams": {
       const { MsteamsProvider } = await loadMsteamsProvider();
+      // tenantId is canonically the msteams CHAT channel's tenant (channels.msteams.tenantId),
+      // which is required for the msteams voice provider anyway — fall back to it so it need not be
+      // duplicated under voice-call.config.msteams.outbound.tenantId.
+      const channelTenantId = (fullConfig.channels?.msteams as { tenantId?: string } | undefined)
+        ?.tenantId;
+      const outbound = config.msteams?.outbound
+        ? {
+            ...config.msteams.outbound,
+            tenantId: config.msteams.outbound.tenantId ?? channelTenantId,
+          }
+        : undefined;
       return new MsteamsProvider({
         port: config.msteams?.port,
         bindAddress: config.msteams?.bindAddress,
         path: config.msteams?.path,
         sharedSecret: resolveMsteamsSharedSecret(config),
-        outbound: config.msteams?.outbound,
+        outbound,
         logger: log,
       });
     }
@@ -338,7 +353,7 @@ export async function createVoiceCallRuntime(params: {
     throw new Error(`Invalid voice-call config: ${validation.errors.join("; ")}`);
   }
 
-  const provider = await resolveProvider(config, log);
+  const provider = await resolveProvider(config, log, cfg);
   if (stateRuntime) {
     setVoiceCallStateRuntime({ state: stateRuntime });
   }
