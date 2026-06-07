@@ -465,16 +465,18 @@ function isFiniteNumber(value) {
 }
 
 function validateCounter(counter, reportPath, fieldName, index = null) {
-  const label = index === null ? fieldName : `${fieldName}[${index}]`;
+  const fieldLabel = String(fieldName);
+  const label = index === null ? fieldLabel : `${fieldLabel}[${String(index)}]`;
+  const displayPath = String(reportPath);
   if (!counter || typeof counter !== "object" || Array.isArray(counter)) {
     throw new Error(
-      `[test-group-report] invalid grouped report ${reportPath}: ${label} must be an object`,
+      `[test-group-report] invalid grouped report ${displayPath}: ${label} must be an object`,
     );
   }
   for (const key of ["durationMs", "fileCount", "testCount"]) {
     if (!isFiniteNumber(counter[key])) {
       throw new Error(
-        `[test-group-report] invalid grouped report ${reportPath}: ${label}.${key} must be a finite number`,
+        `[test-group-report] invalid grouped report ${displayPath}: ${label}.${key} must be a finite number`,
       );
     }
   }
