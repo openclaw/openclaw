@@ -135,6 +135,27 @@ describe("qa agentic parity report", () => {
     });
   });
 
+  it("uses scenario rows rather than stale summary counts for parity metrics", () => {
+    const summary: QaParitySuiteSummary = {
+      counts: {
+        total: 2,
+        passed: 2,
+        failed: 0,
+      },
+      scenarios: [
+        { name: "Approval turn tool followthrough", status: "pass" },
+        { name: "Compaction retry after mutating tool", status: "fail" },
+      ],
+    };
+
+    const metrics = computeQaAgenticParityMetrics(summary);
+
+    expect(metrics.totalScenarios).toBe(2);
+    expect(metrics.passedScenarios).toBe(1);
+    expect(metrics.failedScenarios).toBe(1);
+    expect(metrics.completionRate).toBe(0.5);
+  });
+
   it("keeps non-tool scenarios out of the valid-tool-call metric", () => {
     const summary: QaParitySuiteSummary = {
       scenarios: [

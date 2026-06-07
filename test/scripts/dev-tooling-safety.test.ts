@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as promptProbeTesting } from "../../scripts/anthropic-prompt-probe.ts";
 import { testing as claudeUsageTesting } from "../../scripts/debug-claude-usage.ts";
@@ -340,6 +341,16 @@ describe("script-specific dev tooling hardening", () => {
     ).toThrow(/refusing non-origin proxy request URL/u);
   });
 
+  it("bounds Anthropic capture proxy request bodies", async () => {
+    const request = Readable.from([Buffer.alloc(8), Buffer.alloc(8)]) as never;
+    const destroy = vi.spyOn(request, "destroy");
+
+    await expect(promptProbeTesting.readRequestBody(request, 12)).rejects.toThrow(
+      "Anthropic capture proxy request body exceeded 12 bytes",
+    );
+    expect(destroy).toHaveBeenCalled();
+  });
+
   it("cleans Anthropic prompt probe temp dirs unless explicitly kept", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-probe-test-"));
     const keepRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-probe-test-"));
@@ -420,6 +431,42 @@ describe("script-specific dev tooling hardening", () => {
     expect(stopped).toBe(false);
     expect(signals).toEqual(["SIGINT", "SIGKILL"]);
     expect(closeCalls).toBe(1);
+  });
+
+  it("waits for Anthropic prompt gateway log writes before closing the log file", async () => {
+    let resolveWrite: (() => void) | undefined;
+    const order: string[] = [];
+    const pendingWrite = new Promise<void>((resolve) => {
+      resolveWrite = () => {
+        order.push("write");
+        resolve();
+      };
+    });
+    const stop = promptProbeTesting.stopGatewayPromptChild(
+      {
+        exitCode: 0,
+        signalCode: null,
+        kill: () => true,
+        once(_event: "exit", _listener: () => void) {},
+      },
+      {
+        close: async () => {
+          order.push("close");
+        },
+      },
+      1,
+      1,
+      [pendingWrite],
+    );
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    expect(order).toEqual([]);
+
+    resolveWrite?.();
+    await expect(stop).resolves.toBe(true);
+    expect(order).toEqual(["write", "close"]);
   });
 
   it("uses exact Claude cookie host matchers instead of broad substring matches", () => {

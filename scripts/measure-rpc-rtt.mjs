@@ -487,7 +487,7 @@ function toText(data) {
   return Buffer.from(data).toString("utf8");
 }
 
-function createGatewayClient({ WebSocket, url }) {
+export function createGatewayClient({ WebSocket, openTimeoutMs = 8_000, url }) {
   const ws = new WebSocket(url, { handshakeTimeout: 8_000 });
   const pending = new Map();
   const rejectPending = (error) => {
@@ -522,15 +522,28 @@ function createGatewayClient({ WebSocket, url }) {
   });
   const waitOpen = async () =>
     await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("gateway websocket open timeout")), 8_000);
-      ws.once("open", () => {
+      let settled = false;
+      const settle = (callback) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         clearTimeout(timer);
-        resolve();
-      });
-      ws.once("error", (error) => {
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      });
+        ws.off?.("open", onOpen);
+        ws.off?.("error", onError);
+        callback();
+      };
+      const onOpen = () => settle(resolve);
+      const onError = (error) =>
+        settle(() => reject(error instanceof Error ? error : new Error(String(error))));
+      const timer = setTimeout(() => {
+        settle(() => {
+          ws.close();
+          reject(new Error("gateway websocket open timeout"));
+        });
+      }, openTimeoutMs);
+      ws.once("open", onOpen);
+      ws.once("error", onError);
     });
   const request = async (method, params, timeoutMs = 10_000) =>
     await new Promise((resolve, reject) => {
@@ -622,6 +635,7 @@ async function main() {
   const stdoutPath = path.join(tempRoot, "gateway.stdout.log");
   const stderrPath = path.join(tempRoot, "gateway.stderr.log");
   let gatewayChild;
+  let client;
   let removeGatewayParentCleanup = () => {};
   let status = "fail";
   let details = "";
@@ -663,7 +677,7 @@ async function main() {
     const protocol = await import(
       pathToFileURL(path.join(repoRoot, "packages/gateway-protocol/src/version.ts")).href
     );
-    const client = createGatewayClient({ WebSocket, url: `ws://127.0.0.1:${port}` });
+    client = createGatewayClient({ WebSocket, url: `ws://127.0.0.1:${port}` });
     await client.waitOpen();
     const connectStarted = performance.now();
     const connect = await client.request(
@@ -722,7 +736,6 @@ async function main() {
         });
       }
     }
-    client.close();
     const sampleStats = summarizeRttSamples(samples.map((sample) => sample.durationMs));
     const byMethod = Object.fromEntries(
       args.methods.map((method) => [
@@ -749,6 +762,7 @@ async function main() {
     details = error instanceof Error ? (error.stack ?? error.message) : String(error);
   } finally {
     try {
+      client?.close();
       if (gatewayChild) {
         await stopGateway(gatewayChild).catch(() => {});
       }

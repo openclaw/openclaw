@@ -475,6 +475,8 @@ describeLive("gateway live (cli backend)", () => {
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
       process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
       const deviceIdentity = await ensurePairedTestGatewayClientIdentity();
+      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+      let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
       logCliBackendLiveStep("config-written", {
         tempConfigPath,
         stateDir,
@@ -482,20 +484,21 @@ describeLive("gateway live (cli backend)", () => {
         cliArgs,
       });
 
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
-      logCliBackendLiveStep("server-started");
-      const client = await connectTestGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        token,
-        deviceIdentity,
-      });
-      logCliBackendLiveStep("client-connected");
-
       try {
+        server = await startGatewayServer(port, {
+          bind: "loopback",
+          auth: { mode: "token", token },
+          controlUiEnabled: false,
+        });
+        logCliBackendLiveStep("server-started");
+        client = await connectTestGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token,
+          deviceIdentity,
+        });
+        logCliBackendLiveStep("client-connected");
+        const activeClient = client;
+
         const sessionKey = "agent:dev:live-cli-backend";
         const nonce = randomBytes(3).toString("hex").toUpperCase();
         const memoryNonce = randomBytes(3).toString("hex").toUpperCase();
@@ -505,7 +508,7 @@ describeLive("gateway live (cli backend)", () => {
           providerId,
           "agent request",
           (timeouts) =>
-            client.request(
+            activeClient.request(
               "agent",
               {
                 sessionKey,
@@ -562,7 +565,7 @@ describeLive("gateway live (cli backend)", () => {
             switchNonce,
             memoryToken,
           });
-          const patchPayload = await client.request("sessions.patch", {
+          const patchPayload = await activeClient.request("sessions.patch", {
             key: sessionKey,
             model: modelSwitchTarget,
           });
@@ -575,7 +578,7 @@ describeLive("gateway live (cli backend)", () => {
             providerId,
             "agent model-switch request",
             (timeouts) =>
-              client.request(
+              activeClient.request(
                 "agent",
                 {
                   sessionKey,
@@ -611,7 +614,7 @@ describeLive("gateway live (cli backend)", () => {
             providerId,
             "agent resume request",
             (timeouts) =>
-              client.request(
+              activeClient.request(
                 "agent",
                 {
                   sessionKey,
@@ -650,7 +653,7 @@ describeLive("gateway live (cli backend)", () => {
               : sessionKey;
           logCliBackendLiveStep("image-probe:start", { sessionKey: imageSessionKey });
           await verifyCliBackendImageProbe({
-            client,
+            client: activeClient,
             providerId,
             sessionKey: imageSessionKey,
             tempDir,
@@ -681,7 +684,7 @@ describeLive("gateway live (cli backend)", () => {
           } else {
             logCliBackendLiveStep("cron-mcp-probe:start", { sessionKey });
             await verifyCliCronMcpProbe({
-              client,
+              client: activeClient,
               providerId,
               sessionKey,
               port,
@@ -692,13 +695,19 @@ describeLive("gateway live (cli backend)", () => {
           }
         }
       } finally {
-        logCliBackendLiveStep("cleanup:start");
-        clearRuntimeConfigSnapshot();
-        await client.stopAndWait();
-        await server.close();
-        await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-        restoreCliBackendLiveEnv(previousEnv);
-        logCliBackendLiveStep("cleanup:done");
+        try {
+          logCliBackendLiveStep("cleanup:start");
+          clearRuntimeConfigSnapshot();
+          try {
+            await client?.stopAndWait();
+          } finally {
+            await server?.close();
+          }
+        } finally {
+          await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+          restoreCliBackendLiveEnv(previousEnv);
+          logCliBackendLiveStep("cleanup:done");
+        }
       }
     },
     CLI_BACKEND_LIVE_TIMEOUT_MS,

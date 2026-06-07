@@ -34,6 +34,7 @@ describe("gateway cli backend live helpers", () => {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
     delete process.env.OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP;
+    delete process.env.OPENCLAW_LIVE_CLI_BACKEND_ADVISORY;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY_OLD;
   });
@@ -155,6 +156,7 @@ describe("gateway cli backend live helpers", () => {
 
   it("requires provider results by default for explicit CLI backend live probes", async () => {
     const {
+      CLI_BACKEND_LIVE_ADVISORY_ENV,
       CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV,
       resolveCliBackendLiveProviderSkipDecision,
       shouldAllowCliBackendLiveProviderSkip,
@@ -171,11 +173,17 @@ describe("gateway cli backend live helpers", () => {
     ).toEqual({
       action: "fail",
       message:
-        'agent request for provider "claude-cli" was blocked by auth drift. Set OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1 only for advisory live probes.',
+        'agent request for provider "claude-cli" was blocked by auth drift. Set OPENCLAW_LIVE_CLI_BACKEND_ADVISORY=1 and OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1 only for advisory live probes.',
     });
 
     expect(
       shouldAllowCliBackendLiveProviderSkip({ [CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV]: "1" }),
+    ).toBe(false);
+    expect(
+      shouldAllowCliBackendLiveProviderSkip({
+        [CLI_BACKEND_LIVE_ADVISORY_ENV]: "1",
+        [CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV]: "1",
+      }),
     ).toBe(true);
     expect(
       resolveCliBackendLiveProviderSkipDecision({
