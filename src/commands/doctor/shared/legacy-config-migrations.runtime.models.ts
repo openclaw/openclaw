@@ -8,7 +8,8 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
-import { isModelThinkingFormat } from "../../../config/types.models.js";
+import { isModelThinkingFormat, type ModelDefinitionConfig } from "../../../config/types.models.js";
+import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 
 const STALE_CONTEXT_WINDOW_FIXES: Record<string, { stale: number; correct: number }> = {
   "deepseek/deepseek-v4-flash": { stale: 200_000, correct: 1_000_000 },
@@ -1053,6 +1054,15 @@ function buildMergedLegacyOpenAIModel(
   }
   if (legacyAgentRuntime && modelRecord.agentRuntime === undefined) {
     patch.agentRuntime = legacyAgentRuntime;
+  }
+  if (
+    modelRecord.metadataSource === undefined &&
+    isLegacyModelsAddCodexMetadataModel({
+      provider: LEGACY_OPENAI_CODEX_PROVIDER_ID,
+      model: modelRecord as Partial<ModelDefinitionConfig>,
+    })
+  ) {
+    patch.metadataSource = "models-add";
   }
   return Object.keys(patch).length > 0 ? Object.assign({}, modelRecord, patch) : model;
 }

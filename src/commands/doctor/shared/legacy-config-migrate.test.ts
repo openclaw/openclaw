@@ -244,6 +244,54 @@ describe("legacy memory search config migrate", () => {
     ]);
   });
 
+  it("preserves legacy models-add metadata marker when merging codex models", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          openai: {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "text-embedding-3-small" }],
+          },
+          "openai-codex": {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            models: [
+              {
+                id: "gpt-5.5",
+                api: "openai-chatgpt-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                contextWindow: 400_000,
+                contextTokens: 272_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const openai = res.config?.models?.providers?.openai as Record<string, unknown> | undefined;
+    expect(openai?.models).toEqual([
+      { id: "text-embedding-3-small" },
+      {
+        id: "gpt-5.5",
+        api: "openai-chatgpt-responses",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+        contextWindow: 400_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+        baseUrl: "https://chatgpt.com/backend-api",
+        metadataSource: "models-add",
+      },
+    ]);
+    expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
+  });
+
   it("keeps legacy codex provider when existing openai defaults would leak into merged models", () => {
     const res = migrateLegacyConfigForTest({
       models: {
