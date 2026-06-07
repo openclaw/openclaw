@@ -6,7 +6,7 @@ function numericCount(value) {
   if (typeof value !== "number") {
     return undefined;
   }
-  const count = Number(value);
+  const count = value;
   return Number.isFinite(count) ? count : undefined;
 }
 

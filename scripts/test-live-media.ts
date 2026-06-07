@@ -353,7 +353,9 @@ export async function buildRunPlan(
       (
         await Promise.all(
           options.suites.flatMap((suiteId) =>
-            MEDIA_SUITES[suiteId].providers.map((provider) => getProviderEnvVarsImpl(provider)),
+            MEDIA_SUITES[suiteId].providers.map((provider) =>
+              Promise.resolve(getProviderEnvVarsImpl(provider)),
+            ),
           ),
         )
       ).flat(),
