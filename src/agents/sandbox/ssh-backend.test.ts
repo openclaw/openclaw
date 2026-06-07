@@ -365,7 +365,7 @@ describe("ssh sandbox backend", () => {
       env: {},
       usePty: false,
     });
-    await backend.runRemoteShellScript?.({
+    await backend.runShellCommand({
       script: "printf ok",
     });
 
