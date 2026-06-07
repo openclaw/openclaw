@@ -11,6 +11,7 @@ import {
   type ActiveProcessSessionReference,
 } from "../bash-process-references.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
+import { buildModelAliasIndex, resolveModelRefFromString } from "../model-selection-shared.js";
 import {
   openAIProviderUsesCodexRuntimeByDefault,
   resolveSelectedOpenAIRuntimeProvider,
@@ -119,7 +120,36 @@ export function resolveEmbeddedCompactionTarget(params: {
       authProfileId,
     };
   }
+  // Resolve alias-only compaction model overrides through the model alias index.
+  // Without this, an alias like "gpt54mini" is passed to resolveModelAsync as-is,
+  // resulting in "Unknown model: openai/gpt54mini" (#90340).
+  const defaultProvider = params.defaultProvider ?? provider;
+  const resolvedAlias = defaultProvider
+    ? resolveModelRefFromString({
+        cfg: params.config,
+        raw: override,
+        defaultProvider,
+        aliasIndex: buildModelAliasIndex({
+          cfg: params.config as OpenClawConfig,
+          defaultProvider,
+        }),
+      })
+    : null;
   const authProfileId = params.authProfileId ?? undefined;
+  if (resolvedAlias) {
+    const aliasProvider = resolvedAlias.ref.provider;
+    const aliasModel = resolvedAlias.ref.model;
+    const aliasAuthProfileId =
+      aliasProvider !== (params.provider ?? "")?.trim()
+        ? undefined
+        : (params.authProfileId ?? undefined);
+    return {
+      provider: aliasProvider,
+      ...resolveTargetProviders(aliasProvider, aliasAuthProfileId),
+      model: aliasModel,
+      authProfileId: aliasAuthProfileId,
+    };
+  }
   return {
     provider,
     ...resolveTargetProviders(provider, authProfileId),
