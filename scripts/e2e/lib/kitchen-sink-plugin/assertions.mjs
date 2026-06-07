@@ -75,12 +75,12 @@ function scanTextFileLines(file, onLine) {
       while (currentLine.length > LOG_SCAN_MAX_LINE_CHARS) {
         const segment = currentLine.slice(0, LOG_SCAN_MAX_LINE_CHARS);
         currentLine = currentLine.slice(LOG_SCAN_MAX_LINE_CHARS - LOG_SCAN_SEGMENT_OVERLAP_CHARS);
-        if (emitLine(segment, { truncated: true }) === false) {
+        if (!emitLine(segment, { truncated: true })) {
           return false;
         }
       }
       if (complete) {
-        if (emitLine(currentLine) === false) {
+        if (!emitLine(currentLine)) {
           return false;
         }
         currentLine = "";
@@ -97,11 +97,11 @@ function scanTextFileLines(file, onLine) {
       const text = buffer.subarray(0, bytesRead).toString("utf8");
       const lines = text.split(/\r?\n/u);
       for (let index = 0; index < lines.length - 1; index += 1) {
-        if (appendLineText(lines[index], true) === false) {
+        if (!appendLineText(lines[index], true)) {
           return;
         }
       }
-      if (appendLineText(lines.at(-1) ?? "", false) === false) {
+      if (!appendLineText(lines.at(-1) ?? "", false)) {
         return;
       }
     }
@@ -164,7 +164,7 @@ function scanLogFiles(roots, onFile) {
       if (scannedFiles > LOG_SCAN_MAX_FILES) {
         throw new Error(`kitchen-sink log scan exceeded ${LOG_SCAN_MAX_FILES} candidate files`);
       }
-      if (onFile(entry, scannedFiles) === false) {
+      if (!onFile(entry, scannedFiles)) {
         return scannedFiles;
       }
     }
@@ -449,7 +449,7 @@ function assertInstalled() {
   if (inspect.plugin?.id !== pluginId) {
     throw new Error(`unexpected inspected kitchen-sink plugin id: ${inspect.plugin?.id}`);
   }
-  if (inspect.plugin?.enabled !== true || inspect.plugin?.status !== "loaded") {
+  if (!inspect.plugin?.enabled || inspect.plugin?.status !== "loaded") {
     throw new Error(
       `expected enabled loaded kitchen-sink plugin, got enabled=${inspect.plugin?.enabled} status=${inspect.plugin?.status}`,
     );
