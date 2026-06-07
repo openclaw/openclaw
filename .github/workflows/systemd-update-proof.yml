@@ -72,7 +72,7 @@ jobs:
           node - <<'NODE'
           const fs = require('fs');
           const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-          pkg.version = '2026.6.1-pr91044.1';
+          pkg.version = '2026.6.1';
           fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           NODE
           node scripts/package-openclaw-for-docker.mjs \
@@ -81,7 +81,7 @@ jobs:
           node - <<'NODE'
           const fs = require('fs');
           const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-          pkg.version = '2026.6.2-pr91044.1';
+          pkg.version = '2026.6.2';
           fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           NODE
           node scripts/package-openclaw-for-docker.mjs \
