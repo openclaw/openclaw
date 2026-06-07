@@ -912,9 +912,10 @@ function createSandboxReadOperations(params: SandboxToolParams) {
   return {
     resolvePath: (filePath: string) => {
       const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
-      return classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl
-        ? resolveMediaReferenceSandboxPath(normalizedMediaSource, "media/inbound").resolved
-        : filePath;
+      if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
+        return resolveMediaReferenceSandboxPath(normalizedMediaSource, "media/inbound").resolved;
+      }
+      return resolveContainerPathCandidate(filePath) ?? filePath;
     },
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),

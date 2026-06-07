@@ -206,6 +206,11 @@ describe("tools.fs.workspaceOnly", () => {
         });
         expect(getTextContent(relativeReadResult)).toContain("materialized");
         expect(getTextContent(relativeReadResult)).not.toContain("user-owned shadow");
+        const fileUrlReadResult = await readTool?.execute("t3", {
+          path: "file:///workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+        });
+        expect(getTextContent(fileUrlReadResult)).toContain("materialized");
+        expect(getTextContent(fileUrlReadResult)).not.toContain("user-owned shadow");
         expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toContain(
           "materialized",
         );
