@@ -1524,6 +1524,29 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("emits warning-only channel stale cleanup diagnostics", async () => {
+    const channelDoctor = await import("./doctor/shared/channel-doctor.js");
+    vi.mocked(channelDoctor.collectChannelDoctorStaleConfigMutations).mockResolvedValueOnce([
+      {
+        changes: [],
+        config: {
+          channels: {
+            matrix: {},
+          },
+        },
+        warnings: ["- channels.matrix: channel stale cleanup failed."],
+      },
+    ]);
+
+    const warnings = await collectDoctorWarnings({
+      channels: {
+        matrix: {},
+      },
+    });
+
+    expect(warnings).toContain("- channels.matrix: channel stale cleanup failed.");
+  });
+
   it("reloads gateway secrets and refreshes auth status after auth profile repairs", async () => {
     runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
       state: params.state,

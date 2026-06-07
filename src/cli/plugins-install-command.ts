@@ -551,6 +551,11 @@ async function loadConfigFromSnapshotForInstall(
   for (const mutation of await collectChannelDoctorStaleConfigMutations(snapshot.config, {
     env: process.env,
   })) {
+    if (mutation.warnings?.length) {
+      throw buildInvalidPluginInstallConfigError(
+        `${mutation.warnings.join("\n")} Run \`openclaw doctor --fix\` before reinstalling plugins.`,
+      );
+    }
     nextConfig = mutation.config;
   }
   return {

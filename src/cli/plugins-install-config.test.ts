@@ -239,6 +239,33 @@ describe("loadConfigForInstall", () => {
     expect(result.config).toBe(snapshotCfg);
   });
 
+  it("rejects plugin install recovery when stale channel cleanup reports warnings", async () => {
+    const snapshotCfg = {
+      plugins: { installs: { discord: { source: "path", installPath: "/gone" } } },
+    } as unknown as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        parsed: { plugins: { installs: { discord: {} } } },
+        config: snapshotCfg,
+        issues: [
+          { path: "channels.discord", message: "unknown channel id: discord" },
+          { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
+        ],
+      }),
+    );
+    collectChannelDoctorStaleConfigMutationsMock.mockResolvedValueOnce([
+      {
+        changes: [],
+        config: snapshotCfg,
+        warnings: ["- channels.discord: channel stale cleanup failed."],
+      },
+    ]);
+
+    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
+      "channels.discord: channel stale cleanup failed",
+    );
+  });
+
   it("rejects unrelated invalid config even during bundled-plugin reinstall recovery", async () => {
     readConfigFileSnapshotMock.mockResolvedValue(
       makeSnapshot({

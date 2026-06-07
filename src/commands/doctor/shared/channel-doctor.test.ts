@@ -4,8 +4,11 @@ import {
   collectChannelDoctorCompatibilityMutations,
   collectChannelDoctorEmptyAllowlistExtraWarnings,
   collectChannelDoctorMutableAllowlistWarnings,
+  collectChannelDoctorPreviewWarnings,
+  collectChannelDoctorRepairMutations,
   collectChannelDoctorStaleConfigMutations,
   createChannelDoctorEmptyAllowlistPolicyHooks,
+  runChannelDoctorConfigSequences,
 } from "./channel-doctor.js";
 
 const mocks = vi.hoisted(() => ({
@@ -386,5 +389,146 @@ describe("channel doctor compatibility mutations", () => {
     });
     expect(collectEmptyAllowlistExtraWarnings).toHaveBeenCalledTimes(3);
     expect(shouldSkipDefaultEmptyGroupAllowlistWarning).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports throwing empty allowlist doctor extra-warning hooks", () => {
+    const collectEmptyAllowlistExtraWarnings = vi.fn(() => {
+      throw new Error("channel doctor extra hook exploded");
+    });
+    const shouldSkipDefaultEmptyGroupAllowlistWarning = vi.fn(() => {
+      throw new Error("channel doctor skip hook exploded");
+    });
+    const cfg = createMatrixEnabledConfig();
+    mockReadOnlyMatrixPlugin({
+      collectEmptyAllowlistExtraWarnings,
+      shouldSkipDefaultEmptyGroupAllowlistWarning,
+    });
+
+    const hooks = createChannelDoctorEmptyAllowlistPolicyHooks({ cfg: cfg as never });
+
+    expect(
+      hooks.extraWarningsForAccount({
+        account: {},
+        channelName: "matrix",
+        prefix: "channels.matrix",
+      }),
+    ).toEqual([
+      "- channels.matrix: channel plugin doctor hook collectEmptyAllowlistExtraWarnings failed (channel doctor extra hook exploded). Fix or disable this channel plugin before relying on channel doctor diagnostics.",
+    ]);
+    expect(
+      hooks.shouldSkipDefaultEmptyGroupAllowlistWarning({
+        account: {},
+        channelName: "matrix",
+        prefix: "channels.matrix",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps healthy preview warnings when another channel doctor hook throws", async () => {
+    const collectPreviewWarnings = vi.fn(() => {
+      throw new Error("channel doctor preview hook exploded");
+    });
+    mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
+      plugins: [
+        {
+          id: "matrix",
+          doctor: {
+            collectPreviewWarnings,
+          },
+        },
+        {
+          id: "slack",
+          doctor: {
+            collectPreviewWarnings: () => ["slack preview warning"],
+          },
+        },
+      ],
+    });
+
+    const warnings = await collectChannelDoctorPreviewWarnings({
+      cfg: {
+        channels: {
+          matrix: {},
+          slack: {},
+        },
+      } as never,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      "- channels.matrix: channel plugin doctor hook collectPreviewWarnings failed (channel doctor preview hook exploded). Fix or disable this channel plugin before relying on channel doctor diagnostics.",
+      "slack preview warning",
+    ]);
+  });
+
+  it("reports throwing channel doctor repair and mutation hooks", async () => {
+    const cfg = createMatrixEnabledConfig();
+    mockReadOnlyMatrixPlugin({
+      cleanStaleConfig: () => {
+        throw new Error("channel doctor stale hook exploded");
+      },
+      collectMutableAllowlistWarnings: () => {
+        throw new Error("channel doctor mutable hook exploded");
+      },
+      normalizeCompatibilityConfig: () => {
+        throw new Error("channel doctor compat hook exploded");
+      },
+      repairConfig: () => {
+        throw new Error("channel doctor repair hook exploded");
+      },
+      runConfigSequence: () => {
+        throw new Error("channel doctor sequence hook exploded");
+      },
+    });
+
+    expect(collectChannelDoctorCompatibilityMutations(cfg as never)).toEqual([
+      {
+        changes: [],
+        config: cfg,
+        warnings: [
+          "- channels.matrix: channel plugin doctor hook normalizeCompatibilityConfig failed (channel doctor compat hook exploded). Fix or disable this channel plugin before relying on channel doctor diagnostics.",
+        ],
+      },
+    ]);
+    await expect(collectChannelDoctorStaleConfigMutations(cfg as never)).resolves.toEqual([
+      {
+        changes: [],
+        config: cfg,
+        warnings: [
+          "- channels.matrix: channel plugin doctor hook cleanStaleConfig failed (channel doctor stale hook exploded). Fix or disable this channel plugin before relying on channel doctor diagnostics.",
+        ],
+      },
+    ]);
+    await expect(
+      collectChannelDoctorMutableAllowlistWarnings({ cfg: cfg as never }),
+    ).resolves.toEqual([
+      "- channels.matrix: channel plugin doctor hook collectMutableAllowlistWarnings failed (channel doctor mutable hook exploded). Fix or disable this channel plugin before relying on channel doctor diagnostics.",
+    ]);
+    await expect(
+      runChannelDoctorConfigSequences({
+        cfg: cfg as never,
+        env: {},
+        shouldRepair: false,
+      }),
+    ).resolves.toEqual({
+      changeNotes: [],
+      warningNotes: [
+        "- channels.matrix: channel plugin doctor hook runConfigSequence failed (channel doctor sequence hook exploded). Fix or disable this channel plugin before relying on channel doctor diagnostics.",
+      ],
+    });
+    await expect(
+      collectChannelDoctorRepairMutations({
+        cfg: cfg as never,
+        doctorFixCommand: "openclaw doctor --fix",
+      }),
+    ).resolves.toEqual([
+      {
+        changes: [],
+        config: cfg,
+        warnings: [
+          "- channels.matrix: channel plugin doctor hook repairConfig failed (channel doctor repair hook exploded). Fix or disable this channel plugin before relying on channel doctor diagnostics.",
+        ],
+      },
+    ]);
   });
 });
