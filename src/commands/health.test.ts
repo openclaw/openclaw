@@ -111,8 +111,8 @@ vi.mock("../config/sessions/store.js", () => ({
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: (...args: Parameters<typeof import("../channels/plugins/read-only.js").listReadOnlyChannelPluginsForConfig>) =>
-    listReadOnlyChannelPluginsForConfigMock(...args),
+  listReadOnlyChannelPluginsForConfig: (...args: [unknown, ...unknown[]]) =>
+    Reflect.apply(listReadOnlyChannelPluginsForConfigMock, undefined, args),
 }));
 
 beforeEach(() => {
