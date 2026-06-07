@@ -222,16 +222,7 @@ Treat this as a deliberate operational choice, not a default. If your threat mod
 
    This was confirmed with a controlled before/after on macOS 26.5.1 (Apple Silicon): with the plist, the dylib maps into `Messages.app` and the bridge comes up; remove the plist and reboot, and `imsg launch` produces the timeout failure above with the dylib not mapped.
 
-   **Last resort (rarely needed, unsupported):** if SIP-off plus the `DisableLibraryValidation` plist still is not enough on a specific host (some bare-metal or beta configurations have reported needing more), you can disable AMFI signature enforcement system-wide via boot-args. This weakens code-signing across the whole OS, so treat it as a last resort, not a routine Tahoe step:
-
-   ```bash
-   sudo nvram boot-args="amfi_get_out_of_my_way=1 -arm64e_preview_abi"
-   # reboot, then re-sign the helper and launch
-   codesign -f -s - "$(brew --prefix)/opt/imsg/libexec/imsg-bridge-helper.dylib"
-   imsg launch
-   ```
-
-   - If `imsg launch` injection or specific `selectors` start returning false after a macOS upgrade, this gate is the usual cause. Check your SIP and library-validation state before assuming the SIP step itself failed.
+   If `imsg launch` injection or specific `selectors` start returning false after a macOS upgrade, this gate is the usual cause. Check your SIP and library-validation state before assuming the SIP step itself failed. If those settings are correct and the bridge still cannot inject, collect `imsg status --json` plus the `imsg launch` output and report it to the `imsg` project instead of weakening additional system-wide security controls.
 
    Follow Apple's Recovery-mode flow for your Mac to disable SIP before running `imsg launch`.
 
