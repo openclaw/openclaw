@@ -1591,7 +1591,7 @@ process.on("SIGINT", shutdown);`,
           activeLeases += 1;
           return () => {
             activeLeases -= 1;
-            lastUsedAt = now;
+            // mirrors production behaviour: release does NOT reset lastUsedAt
           };
         },
         dispose: async () => {
@@ -1624,6 +1624,74 @@ process.on("SIGINT", shutdown);`,
     expect(disposed).toEqual(["session-idle"]);
     expect(manager.listSessionIds()).toStrictEqual([]);
     expect(manager.resolveSessionId("agent:test:session-idle")).toBeUndefined();
+  });
+
+  it("evicts idle runtime even after repeated acquire/release cycles (regression #91075)", async () => {
+    // Before the fix, acquireLease()'s release callback reset lastUsedAt = Date.now().
+    // This meant runtimes that were leased and released repeatedly (e.g. cron jobs every
+    // 5–15 min) would never be evicted: every release bumped lastUsedAt back to now,
+    // restarting the idle TTL countdown from zero.  The fix removes the lastUsedAt
+    // assignment from the release callback so only markUsed() advances the clock.
+    let now = 1_000;
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      let lastUsedAt = now;
+      let activeLeases = 0;
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        get lastUsedAt() {
+          return lastUsedAt;
+        },
+        get activeLeases() {
+          return activeLeases;
+        },
+        markUsed: () => {
+          lastUsedAt = now;
+        },
+        acquireLease: () => {
+          activeLeases += 1;
+          return () => {
+            activeLeases -= 1;
+            // No lastUsedAt reset — mirrors the post-fix production behaviour.
+          };
+        },
+        dispose: async () => {
+          disposed.push(params.sessionId);
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => now,
+      enableIdleSweepTimer: false,
+    });
+
+    const runtime = await manager.getOrCreate({
+      sessionId: "session-cron",
+      sessionKey: "agent:test:session-cron",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {}, sessionIdleTtlMs: 100 } },
+    });
+
+    // Simulate 3 acquire/release cycles without advancing markUsed (cron pattern).
+    // Each cycle represents a new cron invocation that borrows the runtime briefly.
+    for (let i = 0; i < 3; i++) {
+      now += 20; // time passes between cron runs, but stays under idle TTL
+      const release = runtime.acquireLease?.();
+      now += 5;  // work is done quickly
+      release?.();
+    }
+    // Total time elapsed: 75ms — under the 100ms TTL.
+    // With the old bug, lastUsedAt would be reset to ~now on each release,
+    // so sweep would see lastUsedAt = ~now and refuse to evict.
+    // With the fix, lastUsedAt = 1_000 (creation time, never advanced by release).
+    now = 1_000 + 200; // advance past idle TTL from creation
+    await expect(manager.sweepIdleRuntimes()).resolves.toBe(1);
+    expect(disposed).toEqual(["session-cron"]);
   });
 
   it("keeps idle runtime eviction disabled when the TTL is zero", async () => {

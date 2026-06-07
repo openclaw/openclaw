@@ -765,7 +765,11 @@ export function createSessionMcpRuntime(params: {
         }
         released = true;
         activeLeases = Math.max(0, activeLeases - 1);
-        lastUsedAt = Date.now();
+        // NOTE: do NOT reset lastUsedAt here — releasing a lease is not the same
+        // as using the runtime.  Resetting the timer on every release defeated the
+        // idle sweep: frequently-used runtimes (e.g. cron jobs every 5 min) would
+        // never be evicted because `lastUsedAt` was always bumped on each release.
+        // `markUsed()` is the correct call site for intentional "I just used this".
       };
     },
     getCatalog,
