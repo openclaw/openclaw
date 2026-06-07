@@ -167,6 +167,19 @@ describe("ChatLog", () => {
     expect(rendered).not.toContain("prop\\_name");
   });
 
+  it("preserves underscore identifiers in tool result output", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.startTool("tool-1", "read_file", { path: "a.py" });
+    chatLog.updateToolResult("tool-1", {
+      content: [{ type: "text", text: "def __init__(self):\n    self.is_ready = False" }],
+    });
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("def __init__(self):");
+    expect(rendered).toContain("self.is_ready = False");
+    expect(rendered).not.toContain("def init(self)");
+  });
+
   it("reserves assistant position without clearing existing streamed text", () => {
     const chatLog = new ChatLog(40);
     chatLog.startAssistant("partial", "run-active");

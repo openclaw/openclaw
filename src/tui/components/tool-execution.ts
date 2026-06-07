@@ -3,6 +3,7 @@ import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
 import { markdownTheme, theme } from "../theme/theme.js";
 import { sanitizeRenderableText } from "../tui-formatters.js";
+import { escapeUnderscoreIdentifiers } from "./hyperlink-markdown.js";
 
 // Rendering model for live tool calls in the chat log.
 type ToolResultContent = {
@@ -134,13 +135,14 @@ export class ToolExecutionComponent extends Container {
 
     const raw = extractText(this.result);
     const text = raw || (this.isPartial ? "…" : "");
-    if (!this.expanded && text) {
-      const lines = text.split("\n");
+    const escaped = escapeUnderscoreIdentifiers(text);
+    if (!this.expanded && escaped) {
+      const lines = escaped.split("\n");
       const preview =
-        lines.length > PREVIEW_LINES ? `${lines.slice(0, PREVIEW_LINES).join("\n")}\n…` : text;
+        lines.length > PREVIEW_LINES ? `${lines.slice(0, PREVIEW_LINES).join("\n")}\n…` : escaped;
       this.output.setText(preview);
     } else {
-      this.output.setText(text);
+      this.output.setText(escaped);
     }
   }
 }
