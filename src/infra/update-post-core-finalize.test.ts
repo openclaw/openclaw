@@ -41,6 +41,20 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
     expect(spawnFinalize).not.toHaveBeenCalled();
   });
 
+  it("skips a no-op git update with no core change", async () => {
+    const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>();
+    const outcome = await runPostCoreFinalizeAfterGatewayUpdate({
+      result: gitOkResult({
+        before: { sha: "same", version: "2026.6.1" },
+        after: { sha: "same", version: "2026.6.1" },
+      }),
+      resolveEntrypoint: resolveEntrypointOk,
+      spawnFinalize,
+    });
+    expect(outcome).toEqual({ status: "skipped", reason: "not-git-update" });
+    expect(spawnFinalize).not.toHaveBeenCalled();
+  });
+
   it("skips when no built entrypoint is found", async () => {
     const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>();
     const outcome = await runPostCoreFinalizeAfterGatewayUpdate({
@@ -63,7 +77,7 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
     });
     expect(outcome).toEqual({ status: "ok", entrypoint: ENTRYPOINT });
     expect(spawnFinalize).toHaveBeenCalledTimes(1);
-    const call = spawnFinalize.mock.calls[0]![0];
+    const call = spawnFinalize.mock.calls[0][0];
     // Reconcile runs through the designed finalizer; never restarts (RPC owns restart).
     expect(call.argv).toEqual([
       expect.any(String),
@@ -82,6 +96,26 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
     expect(call.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.6.1");
   });
 
+  it("strips the gateway service identity from the finalizer child env", async () => {
+    const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({ code: 0 }));
+    await runPostCoreFinalizeAfterGatewayUpdate({
+      result: gitOkResult(),
+      resolveEntrypoint: resolveEntrypointOk,
+      spawnFinalize,
+      env: {
+        PATH: "/usr/bin",
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_GATEWAY_SERVICE_PID: "4242",
+      },
+    });
+    const { env } = spawnFinalize.mock.calls[0][0];
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.OPENCLAW_SERVICE_MARKER).toBeUndefined();
+    expect(env.OPENCLAW_SERVICE_KIND).toBeUndefined();
+    expect(env.OPENCLAW_GATEWAY_SERVICE_PID).toBeUndefined();
+  });
+
   it("omits channel/timeout flags when not provided", async () => {
     const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({ code: 0 }));
     await runPostCoreFinalizeAfterGatewayUpdate({
@@ -89,7 +123,7 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
       resolveEntrypoint: resolveEntrypointOk,
       spawnFinalize,
     });
-    const argv = spawnFinalize.mock.calls[0]![0].argv;
+    const argv = spawnFinalize.mock.calls[0][0].argv;
     expect(argv).not.toContain("--channel");
     expect(argv).not.toContain("--timeout");
   });
