@@ -623,6 +623,31 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[1]?.text).toContain("Exec");
   });
 
+  it("shows bash warnings for degraded orphan native command errors when assistant reply omits missing proof", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["The requested publish command was denied before execution."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "bash",
+        meta: "node scripts/report.js --publish (workspace)",
+        error:
+          "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed. toolCallId=cmd-denied; toolName=bash",
+        mutatingAction: true,
+        actionFingerprint: JSON.stringify({
+          type: "commandExecution",
+          command: "node scripts/report.js --publish",
+          cwd: "/workspace",
+        }),
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("The requested publish command was denied before execution.");
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("node scripts/report.js --publish (workspace)");
+    expect(payloads[1]?.text).not.toContain("without a matching tool.result");
+  });
+
   it("shows exec tool errors when assistant output claims success", () => {
     const payloads = buildPayloads({
       assistantTexts: ["The script is ready to use and saved in your workspace."],
