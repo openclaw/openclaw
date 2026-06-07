@@ -1,13 +1,14 @@
-// MiniMax stream wrapper tests cover streamed text and reasoning conversion.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { createMinimaxFastModeWrapper, createMinimaxThinkingDisabledWrapper } from "./minimax.js";
 
 function captureThinkingPayload(params: {
   provider: string;
   api: string;
   modelId: string;
+  thinkingLevel?: ThinkLevel;
 }): unknown {
   let capturedThinking: unknown = undefined;
   const baseStreamFn: StreamFn = (model, context, options) => {
@@ -17,7 +18,7 @@ function captureThinkingPayload(params: {
     return {} as ReturnType<StreamFn>;
   };
 
-  const wrapped = createMinimaxThinkingDisabledWrapper(baseStreamFn);
+  const wrapped = createMinimaxThinkingDisabledWrapper(baseStreamFn, params.thinkingLevel);
   void wrapped(
     {
       api: params.api,
@@ -117,6 +118,31 @@ describe("createMinimaxThinkingDisabledWrapper", () => {
     );
 
     expect(capturedThinking).toBeUndefined();
+  });
+
+  it("preserves explicit off thinking for MiniMax-M3", () => {
+    let capturedThinking: unknown = undefined;
+    const baseStreamFn: StreamFn = (model, context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "disabled" },
+      };
+      options?.onPayload?.(payload, model);
+      capturedThinking = payload.thinking;
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = createMinimaxThinkingDisabledWrapper(baseStreamFn, "off");
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "minimax",
+        id: "MiniMax-M3",
+      } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedThinking).toEqual({ type: "disabled" });
   });
 
   it("preserves explicit enabled thinking for MiniMax-M3", () => {
