@@ -17,6 +17,7 @@
 // and `runPostCorePluginConvergence`). Finalization never restarts, so the RPC
 // handler keeps ownership of the gateway restart.
 import path from "node:path";
+import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
@@ -24,6 +25,22 @@ import type { UpdateChannel } from "./update-channels.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
 const DEFAULT_FINALIZE_TIMEOUT_MS = 30 * 60_000;
+
+// Strip the running gateway's service identity from the finalizer child so it is
+// not mistaken for the managed service process (matches the CLI post-core spawn).
+function buildFinalizeEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  compatHostVersion?: string,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  delete env.OPENCLAW_SERVICE_MARKER;
+  delete env.OPENCLAW_SERVICE_KIND;
+  delete env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
+  if (compatHostVersion) {
+    env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatHostVersion;
+  }
+  return env;
+}
 
 export type PostCoreFinalizeOutcome =
   | { status: "skipped"; reason: "not-git-update" | "entrypoint-missing" }
@@ -50,6 +67,25 @@ const defaultFinalizeSpawner: PostCoreFinalizeSpawner = async ({ argv, cwd, time
   return { code: res.code, ...(res.stderr ? { stderr: res.stderr } : {}) };
 };
 
+function normalizeOptionalString(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+// A no-op git update (same SHA and version) has nothing new to converge against,
+// so skip finalize to avoid an unnecessary doctor/convergence run. Mirrors the
+// CLI's `shouldResumePostCoreUpdateInFreshProcess` git resume gate.
+function gitCoreChanged(result: UpdateRunResult): boolean {
+  const beforeSha = normalizeOptionalString(result.before?.sha);
+  const afterSha = normalizeOptionalString(result.after?.sha);
+  if (beforeSha && afterSha && beforeSha !== afterSha) {
+    return true;
+  }
+  const beforeVersion = normalizeOptionalString(result.before?.version);
+  const afterVersion = normalizeOptionalString(result.after?.version);
+  return Boolean(beforeVersion && afterVersion && beforeVersion !== afterVersion);
+}
+
 // Only git/source updates routed through `runGatewayUpdate` defer-and-drop
 // plugin convergence. Package-manager/global installs already converge because
 // the RPC routes them through `startManagedServiceUpdateHandoff`, which
@@ -61,7 +97,8 @@ function isGitUpdateNeedingFinalize(
     result.status === "ok" &&
     result.mode === "git" &&
     typeof result.root === "string" &&
-    result.root.length > 0
+    result.root.length > 0 &&
+    gitCoreChanged(result)
   );
 }
 
@@ -123,10 +160,7 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
   // Pin the finalizer's host-compat resolution to the just-installed core
   // version so plugins reconcile against the new core, not the running process.
   const compatHostVersion = result.after?.version ?? undefined;
-  const baseEnv = params.env ?? process.env;
-  const env: NodeJS.ProcessEnv = compatHostVersion
-    ? { ...baseEnv, OPENCLAW_COMPATIBILITY_HOST_VERSION: compatHostVersion }
-    : { ...baseEnv };
+  const env = buildFinalizeEnv(params.env ?? process.env, compatHostVersion);
 
   try {
     const spawnResult = await spawnFinalize({
