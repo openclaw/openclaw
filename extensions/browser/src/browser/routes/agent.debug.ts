@@ -1,3 +1,9 @@
+/**
+ * Browser debug and trace routes.
+ *
+ * Exposes console messages, page errors, network requests, dialog state, and
+ * Playwright tracing scoped to the selected browser tab.
+ */
 import crypto from "node:crypto";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -44,6 +50,7 @@ async function sendPlaywrightDebugCollection(params: {
   });
 }
 
+/** Register browser debug endpoints on the control server. */
 export function registerBrowserAgentDebugRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -86,10 +93,10 @@ export function registerBrowserAgentDebugRoutes(
         ctx,
         targetId,
         feature: "page errors",
-        collect: async ({ cdpUrl, targetId, pw }) =>
+        collect: async ({ cdpUrl, targetId: targetIdValue, pw }) =>
           await pw.getPageErrorsViaPlaywright({
             cdpUrl,
-            targetId,
+            targetId: targetIdValue,
             clear,
           }),
       });
@@ -109,10 +116,10 @@ export function registerBrowserAgentDebugRoutes(
         ctx,
         targetId,
         feature: "network requests",
-        collect: async ({ cdpUrl, targetId, pw }) =>
+        collect: async ({ cdpUrl, targetId: targetIdLocal, pw }) =>
           await pw.getNetworkRequestsViaPlaywright({
             cdpUrl,
-            targetId,
+            targetId: targetIdLocal,
             filter: normalizeOptionalString(filter),
             clear,
           }),

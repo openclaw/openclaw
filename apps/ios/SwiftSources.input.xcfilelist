@@ -1,6 +1,7 @@
 Sources/Calendar/CalendarService.swift
 Sources/Camera/CameraController.swift
 Sources/Capabilities/NodeCapabilityRouter.swift
+Sources/Chat/AppleReviewDemoChatTransport.swift
 Sources/Chat/IOSGatewayChatTransport.swift
 Sources/Contacts/ContactsService.swift
 Sources/Device/DeviceInfoHelper.swift
@@ -13,6 +14,7 @@ Sources/Design/AgentProNodesDestination.swift
 Sources/Design/AgentProTab.swift
 Sources/Design/ChatProTab.swift
 Sources/Design/CommandCenterTab.swift
+Sources/Design/TalkProTab.swift
 Sources/Design/OpenClawProComponents.swift
 Sources/Design/OpenClawProScreens.swift
 Sources/Design/SettingsProTab.swift

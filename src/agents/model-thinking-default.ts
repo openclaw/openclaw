@@ -1,9 +1,14 @@
-import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+/**
+ * Resolves default thinking levels for provider/model pairs. It combines
+ * explicit per-model config, global defaults, catalog metadata, and model
+ * family fallbacks.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { legacyModelKey, modelKey, normalizeProviderId } from "./model-selection-normalize.js";
 import { normalizeModelSelection } from "./model-selection-resolve.js";
@@ -11,6 +16,7 @@ import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 
 type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
 
+/** Resolves the default thinking level for a provider/model pair. */
 export function resolveThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -41,6 +47,14 @@ export function resolveThinkingDefault(params: {
   const perModelThinking =
     configuredModels?.[canonicalKey]?.params?.thinking ??
     (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
+  // Accept boolean false and common disable aliases as "off".
+  if (
+    perModelThinking === false ||
+    perModelThinking === "disabled" ||
+    perModelThinking === "none"
+  ) {
+    return "off";
+  }
   if (
     perModelThinking === "off" ||
     perModelThinking === "minimal" ||
@@ -90,6 +104,7 @@ export function resolveThinkingDefault(params: {
   });
 }
 
+/** Resolves thinking default after loading runtime catalog only when needed. */
 export async function resolveThinkingDefaultWithRuntimeCatalog(params: {
   cfg: OpenClawConfig;
   provider: string;

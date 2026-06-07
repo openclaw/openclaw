@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements import runs behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -114,8 +115,9 @@ export async function listMemoryWikiImportRuns(
   const importRunsDir = resolveImportRunsDir(config.vault.path);
   const entries = await fs
     .readdir(importRunsDir, { withFileTypes: true })
-    .catch((error: NodeJS.ErrnoException) => {
-      if (error?.code === "ENOENT") {
+    .catch((error: unknown) => {
+      const code = asRecord(error)?.code;
+      if (code === "ENOENT") {
         return [];
       }
       throw error;

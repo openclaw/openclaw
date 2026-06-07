@@ -1,13 +1,18 @@
+/**
+ * Normalizes model-facing tool parameter schemas across provider quirks.
+ * Handles local JSON Schema refs, OpenAPI nullable syntax, top-level unions,
+ * and provider-specific unsupported keyword stripping.
+ */
+import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import type { TSchema } from "typebox";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import {
   resolveUnsupportedToolSchemaKeywords,
   shouldOmitEmptyArrayItems,
 } from "../plugins/provider-model-compat.js";
-import { isRecord as isSchemaRecord } from "../shared/record-coerce.js";
 import { stripUnsupportedSchemaKeywords } from "../shared/schema-keyword-strip.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { uniqueValues } from "../shared/string-normalization.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
 
 export type ToolParameterSchemaOptions = {
@@ -426,7 +431,7 @@ function resolveJsonPointerPath(value: unknown, segments: string[]): unknown {
       continue;
     }
     const record = current as Record<string, unknown>;
-    if (!Object.prototype.hasOwnProperty.call(record, key)) {
+    if (!Object.hasOwn(record, key)) {
       return undefined;
     }
     current = record[key];
@@ -589,6 +594,7 @@ function inlineLocalSchemaRefsWithDefs(
   return result;
 }
 
+/** Inline local $ref pointers so providers receive self-contained tool schemas. */
 export function inlineLocalToolSchemaRefs(schema: unknown): TSchema {
   if (!schema || typeof schema !== "object") {
     return schema as TSchema;
@@ -881,6 +887,7 @@ function normalizeToolParameterSchemaUncached(
   return applyProviderCleaning(flattenedSchema);
 }
 
+/** Return a provider-compatible JSON schema for a model-facing tool. */
 export function normalizeToolParameterSchema(
   schema: unknown,
   options?: ToolParameterSchemaOptions,

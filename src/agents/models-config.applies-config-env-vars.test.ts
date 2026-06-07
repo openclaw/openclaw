@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest";
+// Verifies models.json planning applies config env vars and discovery scope.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import {
   planOpenClawModelsJsonWithDeps,
@@ -32,6 +37,8 @@ function createImplicitOpenRouterProvider(): ProviderConfig {
 }
 
 function createImplicitOpenAiProvider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
+  // Minimal implicit OpenAI provider used to verify write planning without live
+  // discovery or real credentials.
   return {
     baseUrl: "https://api.openai.com/v1",
     api: "openai-responses",
@@ -50,10 +57,30 @@ function createImplicitOpenAiProvider(overrides: Partial<ProviderConfig> = {}): 
   };
 }
 
+function createImplicitGoogleVertexProvider(): ProviderConfig {
+  return {
+    baseUrl: "https://{location}-aiplatform.googleapis.com",
+    api: "google-vertex",
+    models: [
+      {
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+      },
+    ],
+  };
+}
+
 async function resolveProvidersForConfigEnvTest(params: {
   cfg: OpenClawConfig;
   onResolveImplicitProviders: (env: NodeJS.ProcessEnv) => void;
 }) {
+  // Config env vars are materialized into the discovery env before implicit
+  // provider resolution.
   const env = createConfigRuntimeEnv(params.cfg);
   return await resolveProvidersForModelsJsonWithDeps(
     {
@@ -94,6 +121,39 @@ async function resolveProvidersAndCaptureDiscoveryEnv(cfg: OpenClawConfig) {
   });
   return { discoveryEnv, providers };
 }
+
+let unauthenticatedProviderWritePlan: Awaited<ReturnType<typeof planOpenClawModelsJsonWithDeps>>;
+let unauthenticatedProviderParsed: { providers?: Record<string, unknown> };
+
+beforeAll(async () => {
+  // Reused no-auth write plan proves generated providers stay serializable
+  // even when discovery returns auth-only provider shells.
+  unauthenticatedProviderWritePlan = await planOpenClawModelsJsonWithDeps(
+    {
+      cfg: { models: { providers: {} } },
+      agentDir: "/tmp/openclaw-models-config-env-vars-test",
+      env: {},
+      existingRaw: "",
+      existingParsed: null,
+    },
+    {
+      resolveImplicitProviders: async () => ({
+        openai: createImplicitOpenAiProvider(),
+        "auth-only": createImplicitOpenAiProvider({
+          baseUrl: "https://auth.example/v1",
+          api: "openai-responses",
+          models: [],
+        }),
+      }),
+    },
+  );
+  if (unauthenticatedProviderWritePlan.action !== "write") {
+    throw new Error("Expected models.json write plan");
+  }
+  unauthenticatedProviderParsed = JSON.parse(unauthenticatedProviderWritePlan.contents) as {
+    providers?: Record<string, unknown>;
+  };
+});
 
 describe("models-config", () => {
   it("threads plugin metadata snapshots into implicit provider discovery", async () => {
@@ -211,33 +271,9 @@ describe("models-config", () => {
   });
 
   it("does not write unauthenticated model providers that would invalidate models.json", async () => {
-    const plan = await planOpenClawModelsJsonWithDeps(
-      {
-        cfg: { models: { providers: {} } },
-        agentDir: "/tmp/openclaw-models-config-env-vars-test",
-        env: {},
-        existingRaw: "",
-        existingParsed: null,
-      },
-      {
-        resolveImplicitProviders: async () => ({
-          openai: createImplicitOpenAiProvider(),
-          "auth-only": createImplicitOpenAiProvider({
-            baseUrl: "https://auth.example/v1",
-            api: "openai-responses",
-            models: [],
-          }),
-        }),
-      },
-    );
-
-    expect(plan.action).toBe("write");
-    if (plan.action !== "write") {
-      throw new Error("Expected models.json write plan");
-    }
-    const parsed = JSON.parse(plan.contents) as { providers?: Record<string, unknown> };
-    expect(parsed.providers?.openai).toBeUndefined();
-    expect(parsed.providers?.["auth-only"]).toBeDefined();
+    expect(unauthenticatedProviderWritePlan.action).toBe("write");
+    expect(unauthenticatedProviderParsed.providers?.openai).toBeUndefined();
+    expect(unauthenticatedProviderParsed.providers?.["auth-only"]).toBeDefined();
   });
 
   it("treats empty replace-mode provider sets as authoritative", async () => {
@@ -394,6 +430,123 @@ describe("models-config", () => {
     expect(parsed.providers?.google?.models?.map((model) => model.id)).toEqual([
       "gemini-3.1-pro-preview",
     ]);
+  });
+
+  it("keeps google-vertex static catalog rows when an auth profile supplies the API key", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-models-"));
+    try {
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "google-vertex:default": {
+              type: "api_key",
+              provider: "google-vertex",
+              keyRef: { source: "env", provider: "default", id: "GOOGLE_CLOUD_API_KEY" },
+            },
+          },
+        },
+        agentDir,
+        { filterExternalAuthProfiles: false, syncExternalCli: false },
+      );
+
+      const plan = await planOpenClawModelsJsonWithDeps(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                models: {
+                  "google-vertex/gemini-2.5-pro": {},
+                },
+                model: { primary: "google-vertex/gemini-2.5-pro" },
+              },
+            },
+            models: { providers: {} },
+          },
+          agentDir,
+          env: {},
+          existingRaw: "",
+          existingParsed: null,
+        },
+        {
+          resolveImplicitProviders: async () => ({
+            "google-vertex": createImplicitGoogleVertexProvider(),
+          }),
+        },
+      );
+
+      expect(plan.action).toBe("write");
+      if (plan.action !== "write") {
+        throw new Error("Expected models.json write plan");
+      }
+      const parsed = JSON.parse(plan.contents) as {
+        providers?: Record<
+          string,
+          { apiKey?: string; api?: string; models?: Array<{ id?: string }> }
+        >;
+      };
+      expect(parsed.providers?.["google-vertex"]?.api).toBe("google-vertex");
+      expect(parsed.providers?.["google-vertex"]?.apiKey).toBe("GOOGLE_CLOUD_API_KEY");
+      expect(parsed.providers?.["google-vertex"]?.models?.map((model) => model.id)).toEqual([
+        "gemini-2.5-pro",
+      ]);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps google-vertex static catalog rows when ADC auth evidence supplies the marker", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-models-"));
+    const credentialsPath = path.join(agentDir, "application_default_credentials.json");
+    await fs.writeFile(credentialsPath, JSON.stringify({ type: "authorized_user" }), "utf8");
+    try {
+      const plan = await planOpenClawModelsJsonWithDeps(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                models: {
+                  "google-vertex/gemini-2.5-pro": {},
+                },
+                model: { primary: "google-vertex/gemini-2.5-pro" },
+              },
+            },
+            models: { providers: {} },
+          },
+          agentDir,
+          env: {
+            GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+            GOOGLE_CLOUD_PROJECT: "vertex-project",
+            GOOGLE_CLOUD_LOCATION: "global",
+          } as NodeJS.ProcessEnv,
+          existingRaw: "",
+          existingParsed: null,
+        },
+        {
+          resolveImplicitProviders: async () => ({
+            "google-vertex": createImplicitGoogleVertexProvider(),
+          }),
+        },
+      );
+
+      expect(plan.action).toBe("write");
+      if (plan.action !== "write") {
+        throw new Error("Expected models.json write plan");
+      }
+      const parsed = JSON.parse(plan.contents) as {
+        providers?: Record<
+          string,
+          { apiKey?: string; api?: string; models?: Array<{ id?: string }> }
+        >;
+      };
+      expect(parsed.providers?.["google-vertex"]?.api).toBe("google-vertex");
+      expect(parsed.providers?.["google-vertex"]?.apiKey).toBe("gcp-vertex-credentials");
+      expect(parsed.providers?.["google-vertex"]?.models?.map((model) => model.id)).toEqual([
+        "gemini-2.5-pro",
+      ]);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {

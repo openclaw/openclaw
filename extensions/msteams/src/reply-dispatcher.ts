@@ -1,3 +1,4 @@
+// Msteams plugin module implements reply dispatcher behavior.
 import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
@@ -344,7 +345,7 @@ export function createMSTeamsReplyDispatcher(params: {
 
   const markDispatchIdle = (): Promise<void> => {
     return flushPendingMessages()
-      .catch((err) => {
+      .catch((err: unknown) => {
         const errMsg = formatUnknownError(err);
         const classification = classifyMSTeamsSendError(err);
         const hint = formatMSTeamsSendErrorHint(classification);
@@ -356,7 +357,7 @@ export function createMSTeamsReplyDispatcher(params: {
         });
       })
       .then(async () => {
-        const fallbackPayload = await streamController.finalize().catch((err) => {
+        const fallbackPayload = await streamController.finalize().catch((err: unknown) => {
           params.log.debug?.("stream finalize failed", { error: formatUnknownError(err) });
           return undefined;
         });

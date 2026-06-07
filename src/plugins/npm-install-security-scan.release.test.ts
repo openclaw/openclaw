@@ -1,10 +1,11 @@
+/** Release-lane coverage for npm plugin install security scanning. */
 import { execFile, spawnSync } from "node:child_process";
 import fs, { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { beforeAll, describe, expect, it, test } from "vitest";
-import { isScannable, scanDirectoryWithSummary } from "../security/skill-scanner.js";
+import { isScannable, scanDirectoryWithSummary } from "../skills/security/scanner.js";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoPath, toRepoRelativePath } from "../test-utils/repo-files.js";
 

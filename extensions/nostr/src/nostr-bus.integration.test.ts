@@ -1,3 +1,4 @@
+// Nostr tests cover nostr bus.integration plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMetrics, createNoopMetrics, type MetricEvent } from "./metrics.js";
 import { createSeenTracker } from "./seen-tracker.js";
@@ -164,6 +165,19 @@ describe("SeenTracker", () => {
       // So id4 and id3 get added first, then we're at capacity
       expect(tracker.peek("id3")).toBe(true);
       expect(tracker.peek("id4")).toBe(true);
+
+      tracker.stop();
+    });
+
+    it("keeps non-positive capacities usable", () => {
+      const tracker = createTracker({ maxEntries: 0 });
+
+      tracker.add("id1");
+      tracker.add("id2");
+
+      expect(tracker.size()).toBe(1);
+      expect(tracker.peek("id1")).toBe(false);
+      expect(tracker.peek("id2")).toBe(true);
 
       tracker.stop();
     });

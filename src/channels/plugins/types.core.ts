@@ -1,3 +1,8 @@
+/**
+ * Core channel plugin public types.
+ *
+ * Defines channel metadata, capabilities, action discovery, setup, status, and runtime contexts.
+ */
 import type { TSchema } from "typebox";
 import type {
   GatewayClientMode,
@@ -172,7 +177,13 @@ export type ChannelLegacyStateMigrationPlan =
       scopeKey: string;
       stateDir?: string;
       cleanupSource?: "rename";
+      cleanupWhenEmpty?: boolean;
       preview?: string;
+      shouldReplaceExistingEntry?: (params: {
+        key: string;
+        existingValue: unknown;
+        incomingValue: unknown;
+      }) => boolean | Promise<boolean>;
       readEntries: () =>
         | Array<{ key: string; value: unknown; ttlMs?: number }>
         | Promise<Array<{ key: string; value: unknown; ttlMs?: number }>>;
@@ -538,6 +549,7 @@ export type ChannelMessagingAdapter = {
     to?: string;
     conversationId?: string;
     threadId?: string | number;
+    threadParentId?: string | number;
     isGroup: boolean;
   }) => {
     conversationId?: string;

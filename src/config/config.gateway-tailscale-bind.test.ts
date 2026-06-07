@@ -1,3 +1,4 @@
+// Verifies gateway Tailscale bind config parsing and defaults.
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
@@ -18,6 +19,33 @@ describe("gateway tailscale bind validation", () => {
       },
     });
     expect(funnelRes.ok).toBe(true);
+  });
+
+  it("validates Tailscale service names", () => {
+    const validRes = validateConfigObject({
+      gateway: {
+        bind: "loopback",
+        tailscale: { mode: "serve", serviceName: "svc:openclaw-gateway" },
+      },
+    });
+    expect(validRes.ok).toBe(true);
+
+    for (const serviceName of ["openclaw", "svc:", "svc:-openclaw", "svc:OpenClaw"]) {
+      const res = validateConfigObject({
+        gateway: {
+          bind: "loopback",
+          tailscale: { mode: "serve", serviceName },
+        },
+      });
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.issues).toContainEqual({
+          path: "gateway.tailscale.serviceName",
+          message:
+            'Tailscale serviceName must use the "svc:<dns-label>" format, for example "svc:openclaw"',
+        });
+      }
+    }
   });
 
   it("rejects explicit no-auth when tailscale serve or funnel exposes the gateway", () => {

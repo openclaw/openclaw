@@ -1,3 +1,6 @@
+/**
+ * Manages reusable Claude CLI stdio sessions for CLI-backed agent turns.
+ */
 import crypto from "node:crypto";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
@@ -117,6 +120,7 @@ function sha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
+/** Closes all live Claude CLI sessions and clears creation promises for tests. */
 export function resetClaudeLiveSessionsForTest(): void {
   for (const session of liveSessions.values()) {
     closeLiveSession(session, "restart");
@@ -145,6 +149,7 @@ async function waitForManagedRunExit(managedRun: ManagedRun): Promise<void> {
   }
 }
 
+/** Closes the live Claude session associated with a prepared run context, if one exists. */
 export async function closeClaudeLiveSessionForContext(
   context: PreparedCliRunContext,
 ): Promise<void> {
@@ -157,6 +162,7 @@ export async function closeClaudeLiveSessionForContext(
   liveSessionCreates.delete(key);
 }
 
+/** Returns whether a prepared backend context is eligible for Claude live stdio reuse. */
 export function shouldUseClaudeLiveSession(context: PreparedCliRunContext): boolean {
   return (
     context.backendResolved.id === "claude-cli" &&
@@ -215,6 +221,7 @@ function stripLiveProcessArgs(
   return stripped;
 }
 
+/** Builds Claude CLI args for stream-json live sessions, stripping one-shot session flags. */
 export function buildClaudeLiveArgs(params: {
   args: string[];
   backend: CliBackendConfig;
@@ -242,6 +249,8 @@ export function buildClaudeLiveArgs(params: {
     ),
     "--replay-user-messages",
   );
+  // Live sessions always speak stream-json over stdin/stdout. Strip stale one-shot args above, then
+  // force the live protocol flags so resume and non-resume turns share the same process contract.
   return params.permissionMode
     ? upsertArgValue(liveArgs, "--permission-mode", params.permissionMode)
     : liveArgs;
@@ -456,12 +465,17 @@ function scheduleIdleClose(session: ClaudeLiveSession): void {
   }, CLAUDE_LIVE_IDLE_TIMEOUT_MS);
 }
 
-function createTimeoutError(session: ClaudeLiveSession, message: string): FailoverError {
+function createTimeoutError(
+  session: ClaudeLiveSession,
+  message: string,
+  code?: string,
+): FailoverError {
   return new FailoverError(message, {
     reason: "timeout",
     provider: session.providerId,
     model: session.modelId,
     status: resolveFailoverStatus("timeout"),
+    code,
   });
 }
 
@@ -1089,7 +1103,7 @@ async function createClaudeLiveSession(params: {
   };
   void managedRun.wait().then(
     (exit) => handleClaudeExit(session, exit.exitCode),
-    (error) => {
+    (error: unknown) => {
       if (session) {
         closeLiveSession(session, "abort", error);
       }
@@ -1146,6 +1160,7 @@ function createTurn(params: {
       createTimeoutError(
         params.session,
         `CLI produced no output for ${Math.round(params.noOutputTimeoutMs / 1000)}s and was terminated.`,
+        "cli_no_output_timeout",
       ),
     );
   }, params.noOutputTimeoutMs);
@@ -1191,6 +1206,7 @@ function ensureLiveSessionCapacity(key: string, context: PreparedCliRunContext):
   });
 }
 
+/** Runs one prompt through a reusable Claude CLI live session. */
 export async function runClaudeLiveSessionTurn(params: {
   context: PreparedCliRunContext;
   args: string[];
@@ -1232,6 +1248,8 @@ export async function runClaudeLiveSessionTurn(params: {
   };
   let session = liveSessions.get(key) ?? null;
   if (session && resumeCapable && !params.useResume) {
+    // Non-resume turns must start from a fresh process when the backend supports resume; otherwise
+    // Claude could inherit conversation state from the previous live turn.
     closeLiveSession(session, "restart");
     session = null;
   }

@@ -1,3 +1,4 @@
+// Imessage tests cover approval reactions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendIMessageApprovalReactionHintForOutboundMessage,
@@ -156,6 +157,49 @@ describe("iMessage approval reactions", () => {
           handle: "+15551230000",
         },
         messageId: "p:0/msg-1",
+      }),
+    ]);
+  });
+
+  it("does not keep pending poll targets when the process clock is invalid", () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      expect(
+        registerIMessageApprovalReactionTarget({
+          accountId: "default",
+          conversation: { handle: "+15551230000" },
+          messageId: "msg-invalid-clock",
+          approvalId: "exec-invalid-clock",
+          allowedDecisions: ["allow-once", "deny"],
+        }),
+      ).toBeNull();
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    expect(listPendingIMessageApprovalReactionPollTargets({ accountId: "default" })).toEqual([]);
+  });
+
+  it("falls back to the default pending poll target ttl for invalid explicit ttl values", () => {
+    const nowMs = 1_800_000_000_000;
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+    try {
+      registerIMessageApprovalReactionTarget({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "msg-invalid-ttl",
+        approvalId: "exec-invalid-ttl",
+        allowedDecisions: ["allow-once", "deny"],
+        ttlMs: Number.NaN,
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    expect(listPendingIMessageApprovalReactionPollTargets({ accountId: "default" })).toEqual([
+      expect.objectContaining({
+        approvalId: "exec-invalid-ttl",
+        expiresAtMs: nowMs + 24 * 60 * 60 * 1000,
       }),
     ]);
   });

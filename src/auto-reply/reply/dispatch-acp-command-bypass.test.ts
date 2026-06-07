@@ -1,3 +1,4 @@
+// Tests ACP command bypass detection before normal dispatch.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -66,6 +67,30 @@ describe("shouldBypassAcpDispatchForCommand", () => {
       Provider: "discord",
       Surface: "discord",
       CommandBody: "/status",
+      BodyForCommands: "/status",
+      BodyForAgent: "/status",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("returns true for registry-backed local help commands", () => {
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      CommandBody: "/help",
+      BodyForCommands: "/help",
+      BodyForAgent: "/help",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("prefers clean command text over channel envelopes", () => {
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      CommandBody: "[WhatsApp +15551234567 +1m Fri 2026-05-08 16:12 UTC] /status",
       BodyForCommands: "/status",
       BodyForAgent: "/status",
     });

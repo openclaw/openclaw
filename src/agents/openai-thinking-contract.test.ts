@@ -1,3 +1,4 @@
+// Verifies session thinking levels reach OpenAI and Codex Responses transports.
 import { Agent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   createAssistantMessageEventStream,
@@ -9,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 
-type ResponsesModel = Model<"openai-responses"> | Model<"openai-codex-responses">;
+type ResponsesModel = Model<"openai-responses"> | Model<"openai-chatgpt-responses">;
 
 const openaiModel = {
   api: "openai-responses",
@@ -20,13 +21,13 @@ const openaiModel = {
 } as Model<"openai-responses">;
 
 const codexModel = {
-  api: "openai-codex-responses",
-  provider: "openai-codex",
+  api: "openai-chatgpt-responses",
+  provider: "openai",
   id: "gpt-5.5",
   input: ["text"],
   reasoning: true,
   baseUrl: "https://chatgpt.com/backend-api",
-} as Model<"openai-codex-responses">;
+} as Model<"openai-chatgpt-responses">;
 
 const codexTestToken = [
   "eyJhbGciOiJub25lIn0",
@@ -119,6 +120,7 @@ function createCapturingStreamFn(
   model: ResponsesModel,
   capturedOptions: SimpleStreamOptions[],
 ): StreamFn {
+  // Captures Agent -> stream options while returning a complete assistant event.
   return (_model, _context, options) => {
     capturedOptions.push({ ...options });
     const stream = createAssistantMessageEventStream();
@@ -154,7 +156,7 @@ function createAssistantMessage(model: ResponsesModel): AssistantMessage {
 }
 
 async function captureProviderPayload<
-  TApi extends "openai-responses" | "openai-codex-responses",
+  TApi extends "openai-responses" | "openai-chatgpt-responses",
 >(params: {
   model: Model<TApi>;
   streamFn: (
@@ -164,6 +166,7 @@ async function captureProviderPayload<
   ) => ReturnType<StreamFn>;
   options: SimpleStreamOptions;
 }): Promise<Record<string, unknown>> {
+  // Stop at onPayload so transport serialization can be asserted without HTTP.
   const payloadPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error(`provider payload callback was not invoked for ${params.model.api}`)),
@@ -175,7 +178,7 @@ async function captureProviderPayload<
         messages: [{ role: "user", content: "hello", timestamp: 0 }],
       },
       {
-        apiKey: params.model.api === "openai-codex-responses" ? codexTestToken : "test-api-key",
+        apiKey: params.model.api === "openai-chatgpt-responses" ? codexTestToken : "test-api-key",
         cacheRetention: "none",
         ...params.options,
         onPayload: (payload) => {

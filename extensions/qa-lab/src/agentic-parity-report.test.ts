@@ -1,3 +1,4 @@
+// Qa Lab tests cover agentic parity report plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildQaAgenticParityComparison,
@@ -132,6 +133,27 @@ describe("qa agentic parity report", () => {
       validToolCallRate: 0.5,
       fakeSuccessCount: 0,
     });
+  });
+
+  it("uses scenario rows rather than stale summary counts for parity metrics", () => {
+    const summary: QaParitySuiteSummary = {
+      counts: {
+        total: 2,
+        passed: 2,
+        failed: 0,
+      },
+      scenarios: [
+        { name: "Approval turn tool followthrough", status: "pass" },
+        { name: "Compaction retry after mutating tool", status: "fail" },
+      ],
+    };
+
+    const metrics = computeQaAgenticParityMetrics(summary);
+
+    expect(metrics.totalScenarios).toBe(2);
+    expect(metrics.passedScenarios).toBe(1);
+    expect(metrics.failedScenarios).toBe(1);
+    expect(metrics.completionRate).toBe(0.5);
   });
 
   it("keeps non-tool scenarios out of the valid-tool-call metric", () => {
@@ -860,6 +882,27 @@ status=done`,
       "Approval turn tool followthrough missing live assistant-message usage (openclaw=0, codex=0).",
     );
     expect(report.scenarios[0]?.status).toBe("fail");
+  });
+
+  it("fails runtime parity reports with no executed scenarios", () => {
+    const report = buildQaRuntimeParityReport({
+      summary: {
+        scenarios: [],
+        counts: {
+          total: 0,
+          passed: 0,
+          failed: 0,
+        },
+        run: {
+          providerMode: "live-frontier",
+          runtimePair: ["openclaw", "codex"],
+        },
+      },
+      comparedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.failures).toContain("Runtime parity report has no executed scenarios.");
   });
 
   it("renders a readable runtime parity markdown report", () => {

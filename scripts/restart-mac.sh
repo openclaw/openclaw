@@ -15,7 +15,7 @@ LOCK_KEY="$(printf '%s' "${ROOT_DIR}" | shasum -a 256 | cut -c1-8)"
 LOCK_DIR="${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}"
 LOCK_PID_FILE="${LOCK_DIR}/pid"
 WAIT_FOR_LOCK=0
-LOG_PATH="${OPENCLAW_RESTART_LOG:-/tmp/openclaw-restart.log}"
+LOG_PATH="${OPENCLAW_RESTART_LOG:-${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}.log}"
 NO_SIGN=0
 SIGN=0
 AUTO_DETECT_SIGNING=1
@@ -133,26 +133,27 @@ kill_all_openclaw() {
     pkill -f "${DEBUG_PROCESS_PATTERN}" 2>/dev/null || true
     pkill -f "${LOCAL_PROCESS_PATTERN}" 2>/dev/null || true
     pkill -f "${RELEASE_PROCESS_PATTERN}" 2>/dev/null || true
-    pkill -x "OpenClaw" 2>/dev/null || true
     if ! pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1 \
        && ! pgrep -f "${DEBUG_PROCESS_PATTERN}" >/dev/null 2>&1 \
        && ! pgrep -f "${LOCAL_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -f "${RELEASE_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -x "OpenClaw" >/dev/null 2>&1; then
+       && ! pgrep -f "${RELEASE_PROCESS_PATTERN}" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.3
   done
+  return 1
 }
 
 stop_launch_agent() {
   launchctl bootout gui/"$UID"/ai.openclaw.mac 2>/dev/null || true
 }
 
-# 1) Kill all running instances first.
-log "==> Killing existing OpenClaw instances"
-kill_all_openclaw
+# 1) Stop launchd supervision, then kill all running instances.
 stop_launch_agent
+log "==> Killing existing OpenClaw instances"
+if ! kill_all_openclaw; then
+  fail "OpenClaw instances did not exit after cleanup attempts"
+fi
 
 # Bundle Gateway-hosted plugin assets.
 run_step "bundle plugin assets" bash -lc "cd '${ROOT_DIR}' && pnpm plugins:assets:build"

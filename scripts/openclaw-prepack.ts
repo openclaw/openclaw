@@ -1,10 +1,12 @@
 #!/usr/bin/env -S node --import tsx
+// Openclaw Prepack script supports OpenClaw repository automation.
 
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { writePackageDistInventory } from "../src/infra/package-dist-inventory.ts";
+import { preparePackageChangelog } from "./package-changelog.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 const requiredPreparedPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
@@ -94,11 +96,17 @@ function ensurePreparedArtifacts(): void {
 
 function positiveEnvInt(name: string, env: NodeJS.ProcessEnv, fallback: number): number {
   const raw = env[name]?.trim();
-  if (raw === undefined || raw === "" || !/^[0-9]+$/u.test(raw)) {
+  if (raw === undefined || raw === "") {
     return fallback;
   }
-  const value = Number.parseInt(raw, 10);
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+  if (!/^[1-9]\d*$/u.test(raw)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  return value;
 }
 
 export function resolvePrepackCommandTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
@@ -158,6 +166,7 @@ async function main(): Promise<void> {
   ensurePreparedArtifacts();
   await writeDistInventory();
   runBuildSmoke();
+  await preparePackageChangelog();
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

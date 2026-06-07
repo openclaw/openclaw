@@ -1,8 +1,15 @@
-import { describe, expect, it } from "vitest";
+// Dev Tooling Safety tests cover dev tooling safety script behavior.
+import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { Readable } from "node:stream";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as promptProbeTesting } from "../../scripts/anthropic-prompt-probe.ts";
 import { testing as claudeUsageTesting } from "../../scripts/debug-claude-usage.ts";
 import { testing as discordSmokeTesting } from "../../scripts/dev/discord-acp-plain-language-smoke.ts";
 import { testing as realtimeSmokeTesting } from "../../scripts/dev/realtime-talk-live-smoke.ts";
+import { testing as tuiPtyWatchTesting } from "../../scripts/dev/tui-pty-test-watch.ts";
 import {
   maskIdentifier,
   parseBooleanEnv,
@@ -11,6 +18,10 @@ import {
   redactHomePath,
   redactJsonValueForDevToolLog,
 } from "../../scripts/lib/dev-tooling-safety.ts";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("dev tooling safety helpers", () => {
   it("redacts secrets before truncating script log previews", () => {
@@ -64,10 +75,10 @@ describe("script-specific dev tooling hardening", () => {
 
   it("redacts Discord webhook tokens from API paths", () => {
     const token = "webhook-secret-token-abcdef123456"; // pragma: allowlist secret
-    const path = `/webhooks/123/${token}?wait=true`;
+    const apiPath = `/webhooks/123/${token}?wait=true`;
 
-    expect(discordSmokeTesting.redactDiscordApiPath(path)).not.toContain(token);
-    expect(discordSmokeTesting.redactDiscordApiPath(path)).toContain("/webhooks/123/");
+    expect(discordSmokeTesting.redactDiscordApiPath(apiPath)).not.toContain(token);
+    expect(discordSmokeTesting.redactDiscordApiPath(apiPath)).toContain("/webhooks/123/");
   });
 
   it("computes the remaining Discord smoke timeout budget", () => {
@@ -97,12 +108,12 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("times out stalled Discord smoke response body reads", async () => {
-    const response = {
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      json: () => new Promise(() => {}),
-    } as Response;
+    const response = new Response(
+      new ReadableStream({
+        start() {},
+      }),
+      { status: 200, statusText: "OK" },
+    );
     const request = discordSmokeTesting.requestDiscordJson({
       method: "GET",
       path: "/channels/123/messages",
@@ -115,6 +126,51 @@ describe("script-specific dev tooling hardening", () => {
 
     await expect(request).rejects.toThrow(
       /Discord API GET \/channels\/123\/messages exceeded timeout/u,
+    );
+  });
+
+  it("bounds Discord smoke response bodies by content-length", async () => {
+    const response = new Response("{}", {
+      headers: { "content-length": "6" },
+    });
+    const request = discordSmokeTesting.requestDiscordJson({
+      method: "GET",
+      path: "/channels/123/messages",
+      headers: {},
+      retries: 0,
+      timeoutMs: 50,
+      responseBodyMaxBytes: 5,
+      errorPrefix: "Discord API",
+      fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
+    });
+
+    await expect(request).rejects.toThrow(
+      "Discord API GET /channels/123/messages response body exceeded 5 bytes",
+    );
+  });
+
+  it("bounds Discord smoke response bodies by streamed bytes", async () => {
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(6));
+          controller.close();
+        },
+      }),
+    );
+    const request = discordSmokeTesting.requestDiscordJson({
+      method: "GET",
+      path: "/channels/123/messages",
+      headers: {},
+      retries: 0,
+      timeoutMs: 50,
+      responseBodyMaxBytes: 5,
+      errorPrefix: "Discord API",
+      fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
+    });
+
+    await expect(request).rejects.toThrow(
+      "Discord API GET /channels/123/messages response body exceeded 5 bytes",
     );
   });
 
@@ -144,6 +200,66 @@ describe("script-specific dev tooling hardening", () => {
     expect(calls).toBe(1);
   });
 
+  it("escalates stalled TUI PTY watch children after interrupt cleanup", async () => {
+    vi.useFakeTimers();
+    const signals: NodeJS.Signals[] = [];
+    const stopper = tuiPtyWatchTesting.createChildStopper(
+      { kill: () => true },
+      {
+        signalChild(_child, signal: NodeJS.Signals): void {
+          signals.push(signal);
+        },
+        sigkillGraceMs: 20,
+        sigtermGraceMs: 10,
+      },
+    );
+
+    stopper.stop();
+    expect(signals).toEqual(["SIGINT"]);
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(signals).toEqual(["SIGINT", "SIGTERM"]);
+
+    await vi.advanceTimersByTimeAsync(20);
+    expect(signals).toEqual(["SIGINT", "SIGTERM", "SIGKILL"]);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "signals the TUI PTY watch process group before falling back to the child",
+    () => {
+      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+      const childKill = vi.fn(() => true);
+
+      try {
+        tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM");
+        expect(kill).toHaveBeenCalledWith(-123, "SIGTERM");
+        expect(childKill).not.toHaveBeenCalled();
+      } finally {
+        kill.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "falls back to direct TUI PTY watch child signaling when the process group is gone",
+    () => {
+      const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+        const error = new Error("missing process group") as NodeJS.ErrnoException;
+        error.code = "ESRCH";
+        throw error;
+      });
+      const childKill = vi.fn(() => true);
+
+      try {
+        tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM");
+        expect(kill).toHaveBeenCalledWith(-123, "SIGTERM");
+        expect(childKill).toHaveBeenCalledWith("SIGTERM");
+      } finally {
+        kill.mockRestore();
+      }
+    },
+  );
+
   it("aborts stalled OpenAI realtime smoke fetches at the request timeout", async () => {
     let signal: AbortSignal | undefined;
     const request = realtimeSmokeTesting.createOpenAIClientSecret("test-key", {
@@ -161,12 +277,11 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("times out stalled OpenAI realtime smoke response body reads", async () => {
-    const response = {
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      json: () => new Promise(() => {}),
-    } as Response;
+    const response = new Response(
+      new ReadableStream({
+        start() {},
+      }),
+    );
     const request = realtimeSmokeTesting.createOpenAIClientSecret("test-key", {
       timeoutMs: 5,
       fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
@@ -184,6 +299,33 @@ describe("script-specific dev tooling hardening", () => {
     );
   });
 
+  it("bounds OpenAI realtime smoke response body reads by content-length", async () => {
+    const maxBytes = realtimeSmokeTesting.OPENAI_HTTP_RESPONSE_MAX_BYTES;
+    const response = new Response("{}", {
+      headers: { "content-length": String(maxBytes + 1) },
+    });
+
+    await expect(
+      realtimeSmokeTesting.readBoundedText(response, "OpenAI Realtime test", maxBytes),
+    ).rejects.toThrow(`OpenAI Realtime test response body exceeded ${maxBytes} bytes`);
+  });
+
+  it("bounds OpenAI realtime smoke response body reads by streamed bytes", async () => {
+    const maxBytes = realtimeSmokeTesting.OPENAI_HTTP_RESPONSE_MAX_BYTES;
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(maxBytes + 1));
+          controller.close();
+        },
+      }),
+    );
+
+    await expect(
+      realtimeSmokeTesting.readBoundedText(response, "OpenAI Realtime test", maxBytes),
+    ).rejects.toThrow(`OpenAI Realtime test response body exceeded ${maxBytes} bytes`);
+  });
+
   it("rejects absolute-form URLs in the Anthropic capture proxy", () => {
     expect(
       promptProbeTesting.resolveAnthropicUpstreamUrl(
@@ -197,6 +339,134 @@ describe("script-specific dev tooling hardening", () => {
         "https://api.anthropic.com",
       ),
     ).toThrow(/refusing non-origin proxy request URL/u);
+  });
+
+  it("bounds Anthropic capture proxy request bodies", async () => {
+    const request = Readable.from([Buffer.alloc(8), Buffer.alloc(8)]) as never;
+    const destroy = vi.spyOn(request, "destroy");
+
+    await expect(promptProbeTesting.readRequestBody(request, 12)).rejects.toThrow(
+      "Anthropic capture proxy request body exceeded 12 bytes",
+    );
+    expect(destroy).toHaveBeenCalled();
+  });
+
+  it("cleans Anthropic prompt probe temp dirs unless explicitly kept", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-probe-test-"));
+    const keepRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-probe-test-"));
+
+    expect(promptProbeTesting.promptProbeTmpResult(tempRoot, false)).toEqual({});
+    expect(promptProbeTesting.promptProbeTmpResult(keepRoot, true)).toEqual({ tmpDir: keepRoot });
+
+    await promptProbeTesting.cleanupPromptProbeTmpDir(tempRoot, false);
+    await promptProbeTesting.cleanupPromptProbeTmpDir(keepRoot, true);
+
+    await expect(fs.stat(tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(keepRoot)).resolves.toBeTruthy();
+    await fs.rm(keepRoot, { force: true, recursive: true });
+  });
+
+  it("waits for the Anthropic prompt gateway child after SIGKILL cleanup", async () => {
+    const events = new EventEmitter();
+    const signals: NodeJS.Signals[] = [];
+    let closeCalls = 0;
+    const child = {
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      kill(signal: NodeJS.Signals) {
+        signals.push(signal);
+        if (signal === "SIGKILL") {
+          setTimeout(() => {
+            child.signalCode = "SIGKILL";
+            events.emit("exit");
+          }, 1);
+        }
+        return true;
+      },
+      once(event: "exit", listener: () => void) {
+        events.once(event, listener);
+      },
+    };
+
+    const stopped = await promptProbeTesting.stopGatewayPromptChild(
+      child,
+      {
+        close: async () => {
+          closeCalls += 1;
+        },
+      },
+      1,
+      50,
+    );
+
+    expect(stopped).toBe(true);
+    expect(signals).toEqual(["SIGINT", "SIGKILL"]);
+    expect(closeCalls).toBe(1);
+  });
+
+  it("bounds Anthropic prompt gateway cleanup when the child never exits", async () => {
+    const signals: NodeJS.Signals[] = [];
+    let closeCalls = 0;
+    const child = {
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      kill(signal: NodeJS.Signals) {
+        signals.push(signal);
+        return false;
+      },
+      once(_event: "exit", _listener: () => void) {},
+    };
+
+    const stopped = await promptProbeTesting.stopGatewayPromptChild(
+      child,
+      {
+        close: async () => {
+          closeCalls += 1;
+        },
+      },
+      1,
+      1,
+    );
+
+    expect(stopped).toBe(false);
+    expect(signals).toEqual(["SIGINT", "SIGKILL"]);
+    expect(closeCalls).toBe(1);
+  });
+
+  it("waits for Anthropic prompt gateway log writes before closing the log file", async () => {
+    let resolveWrite: (() => void) | undefined;
+    const order: string[] = [];
+    const pendingWrite = new Promise<void>((resolve) => {
+      resolveWrite = () => {
+        order.push("write");
+        resolve();
+      };
+    });
+    const stop = promptProbeTesting.stopGatewayPromptChild(
+      {
+        exitCode: 0,
+        signalCode: null,
+        kill: () => true,
+        once(_event: "exit", _listener: () => void) {},
+      },
+      {
+        close: async () => {
+          order.push("close");
+        },
+      },
+      1,
+      1,
+      [pendingWrite],
+    );
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    expect(order).toEqual([]);
+
+    resolveWrite?.();
+    await expect(stop).resolves.toBe(true);
+    expect(order).toEqual(["write", "close"]);
   });
 
   it("uses exact Claude cookie host matchers instead of broad substring matches", () => {
@@ -220,12 +490,12 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("times out stalled Claude usage response body reads", async () => {
-    const response = {
-      ok: true,
-      status: 200,
-      headers: new Headers({ "content-type": "application/json" }),
-      text: () => new Promise(() => {}),
-    } as Response;
+    const response = new Response(
+      new ReadableStream({
+        start() {},
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
     const request = claudeUsageTesting.fetchAnthropicOAuthUsage("test-token", {
       timeoutMs: 5,
       fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
@@ -239,5 +509,44 @@ describe("script-specific dev tooling hardening", () => {
     expect(() => claudeUsageTesting.resolveFetchTimeoutMs("1.5")).toThrow(
       /OPENCLAW_DEBUG_CLAUDE_USAGE_FETCH_TIMEOUT_MS must be an integer/u,
     );
+  });
+
+  it("bounds Claude usage response body reads by content-length", async () => {
+    const maxBytes = claudeUsageTesting.FETCH_RESPONSE_MAX_BYTES;
+    const response = new Response("{}", {
+      headers: { "content-length": String(maxBytes + 1) },
+    });
+    const controller = new AbortController();
+
+    await expect(
+      claudeUsageTesting.readBoundedResponseText(
+        response,
+        "Claude usage test",
+        controller.signal,
+        maxBytes,
+      ),
+    ).rejects.toThrow(`Claude usage test response body exceeded ${maxBytes} bytes`);
+  });
+
+  it("bounds Claude usage response body reads by streamed bytes", async () => {
+    const maxBytes = claudeUsageTesting.FETCH_RESPONSE_MAX_BYTES;
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(maxBytes + 1));
+          controller.close();
+        },
+      }),
+    );
+    const controller = new AbortController();
+
+    await expect(
+      claudeUsageTesting.readBoundedResponseText(
+        response,
+        "Claude usage test",
+        controller.signal,
+        maxBytes,
+      ),
+    ).rejects.toThrow(`Claude usage test response body exceeded ${maxBytes} bytes`);
   });
 });

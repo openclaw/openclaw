@@ -1,3 +1,4 @@
+// Imessage plugin module implements channel behavior.
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
@@ -112,11 +113,16 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
         text: ctx.text,
         mediaUrl: ctx.mediaUrl,
         mediaLocalRoots: ctx.mediaLocalRoots,
+        audioAsVoice: ctx.audioAsVoice,
         accountId: ctx.accountId ?? undefined,
         deps: (ctx as typeof ctx & IMessageMessageContextExtras).deps,
         replyToId: ctx.replyToId ?? undefined,
       });
-      return toIMessageMessageSendResult(result, "media", ctx.replyToId);
+      return toIMessageMessageSendResult(
+        result,
+        ctx.audioAsVoice ? "voice" : "media",
+        ctx.replyToId,
+      );
     },
   },
 });
@@ -142,6 +148,14 @@ function resolveIMessageOutboundSessionRoute(params: {
     if (!handle) {
       return null;
     }
+    const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId });
+    const service =
+      parsed.serviceExplicit || parsed.service !== "auto"
+        ? parsed.service
+        : account.config.service === "sms"
+          ? "sms"
+          : "imessage";
+    const directTarget = `${service}:${handle}`;
     const peer: RoutePeer = { kind: "direct", id: handle };
     const baseSessionKey = buildIMessageBaseSessionKey({
       cfg: params.cfg,
@@ -154,8 +168,8 @@ function resolveIMessageOutboundSessionRoute(params: {
       baseSessionKey,
       peer,
       chatType: "direct" as const,
-      from: `imessage:${handle}`,
-      to: `imessage:${handle}`,
+      from: directTarget,
+      to: directTarget,
     };
   }
 
@@ -353,6 +367,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
           text,
           mediaUrl,
           mediaLocalRoots,
+          audioAsVoice,
           accountId,
           deps,
           replyToId,
@@ -365,6 +380,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             text,
             mediaUrl,
             mediaLocalRoots,
+            audioAsVoice,
             accountId: accountId ?? undefined,
             deps,
             replyToId: replyToId ?? undefined,

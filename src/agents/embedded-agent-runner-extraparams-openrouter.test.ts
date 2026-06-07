@@ -1,3 +1,4 @@
+// Covers OpenRouter-specific extra-params payload and header behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -12,6 +13,8 @@ import {
 } from "./embedded-agent-runner/extra-params.js";
 
 beforeEach(() => {
+  // OpenRouter behavior is supplied through the provider-runtime seam so tests
+  // exercise the same wrapper boundary as production.
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: ({ context }) => context.extraParams,
     resolveProviderExtraParamsForTransport: () => undefined,
@@ -44,6 +47,7 @@ beforeEach(() => {
       const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
       return createOpenRouterSystemCacheWrapper(
         createOpenRouterWrapper(streamFn, thinkingLevel, params.context.extraParams),
+        params.context.extraParams,
       );
     },
   });
@@ -110,6 +114,8 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
   });
 
   it("honors narrower camelCase response cache params over wider snake_case aliases", () => {
+    // Model-level camelCase config is narrower than broad defaults and should
+    // override snake_case aliases from defaults.
     const calls: Array<{ headers?: Record<string, string> }> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       calls.push({ headers: options?.headers });
@@ -159,6 +165,59 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
     expect(headers?.["X-OpenRouter-Cache-TTL"]).toBe("600");
   });
 
+  it("uses configured long retention for OpenRouter Anthropic cache markers", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
+      modelId: "anthropic/claude-sonnet-4-6",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/anthropic/claude-sonnet-4-6": {
+                params: { cacheRetention: "long" },
+              },
+            },
+          },
+        },
+      },
+      payload: {
+        messages: [{ role: "system", content: "cache me" }],
+      },
+    });
+
+    expect(payload.messages).toEqual([
+      {
+        role: "system",
+        content: [
+          { type: "text", text: "cache me", cache_control: { type: "ephemeral", ttl: "1h" } },
+        ],
+      },
+    ]);
+  });
+
+  it("uses configured none retention for OpenRouter Anthropic cache markers", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
+      modelId: "anthropic/claude-sonnet-4-6",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/anthropic/claude-sonnet-4-6": {
+                params: { cacheRetention: "none" },
+              },
+            },
+          },
+        },
+      },
+      payload: {
+        messages: [{ role: "system", content: "do not cache me" }],
+      },
+    });
+
+    expect(payload.messages).toEqual([{ role: "system", content: "do not cache me" }]);
+  });
+
   it("injects reasoning.effort when thinkingLevel is non-off for OpenRouter", () => {
     const payload = runExtraParamsPayloadCase({
       provider: "openrouter",
@@ -182,6 +241,8 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
   });
 
   it("does not inject effort when payload already has reasoning.max_tokens", () => {
+    // max_tokens and effort are mutually exclusive in OpenRouter reasoning
+    // payloads; caller-provided max_tokens must stay intact.
     const payload = runExtraParamsPayloadCase({
       provider: "openrouter",
       modelId: "openrouter/auto",

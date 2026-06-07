@@ -1,3 +1,4 @@
+// Codex plugin module implements source behavior.
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -388,22 +389,24 @@ async function withPluginMigrationEligibility(params: {
     return evaluated;
   }
 
-  const snapshot = await refreshSourceAppInventory(params.requestOptions).catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    for (const { plugin, apps } of pending) {
-      evaluated.push({
-        ...plugin,
-        migratable: false,
-        migrationBlock: {
-          code: "app_inventory_unavailable",
-          apps,
-          error: message,
-        },
-        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but source app inventory could not be read: ${message}`,
-      });
-    }
-    return undefined;
-  });
+  const snapshot = await refreshSourceAppInventory(params.requestOptions).catch(
+    (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      for (const { plugin, apps } of pending) {
+        evaluated.push({
+          ...plugin,
+          migratable: false,
+          migrationBlock: {
+            code: "app_inventory_unavailable",
+            apps,
+            error: message,
+          },
+          message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but source app inventory could not be read: ${message}`,
+        });
+      }
+      return undefined;
+    },
+  );
   if (!snapshot) {
     return evaluated;
   }

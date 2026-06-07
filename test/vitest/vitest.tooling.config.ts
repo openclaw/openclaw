@@ -1,3 +1,4 @@
+// Vitest tooling config wires the tooling test shard.
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
@@ -14,6 +15,7 @@ export function createToolingVitestConfig(env?: Record<string, string | undefine
     {
       env,
       exclude: [...boundaryTestFiles, "test/scripts/openclaw-e2e-instance.test.ts"],
+      fileParallelism: false,
       name: "tooling",
       passWithNoTests: true,
     },

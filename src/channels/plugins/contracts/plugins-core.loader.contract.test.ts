@@ -1,3 +1,4 @@
+// Plugins core loader contract tests cover channel plugin loader setup and teardown behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import {
@@ -170,7 +171,6 @@ describe("channel plugin loader", () => {
         return;
       case "missing-outbound":
         await expectOutboundAdapterMissingCase(testCase.registry);
-        return;
     }
   });
 });

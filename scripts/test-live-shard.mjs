@@ -1,12 +1,18 @@
 #!/usr/bin/env node
+// Runs one named live-test shard with OPENCLAW_LIVE_TEST enabled.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
+import {
+  installVitestProcessGroupCleanup,
+  shouldUseDetachedVitestProcessGroup,
+} from "./vitest-process-group.mjs";
 
 const LIVE_TEST_SUFFIX = ".live.test.ts";
 
+/** Live-test shards included in release validation. */
 export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
   "native-live-src-agents",
   "native-live-src-gateway-core",
@@ -26,6 +32,7 @@ export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
   "native-live-extensions-media-video",
 ]);
 
+/** All live-test shards, including broader local-only shard aliases. */
 export const LIVE_TEST_SHARDS = Object.freeze([
   ...RELEASE_LIVE_TEST_SHARDS,
   "native-live-extensions-o-z",
@@ -64,6 +71,9 @@ function walkFiles(rootDir) {
   return files;
 }
 
+/**
+ * Lists all live test files from git/find fallback paths.
+ */
 export function collectAllLiveTestFiles(repoRoot = process.cwd()) {
   const externalFiles = listExternalLiveTestFiles(repoRoot);
   if (externalFiles) {
@@ -207,6 +217,9 @@ function isMoonshotLiveTest(file) {
   return file.startsWith("extensions/moonshot/");
 }
 
+/**
+ * Selects the live test files belonging to one shard name.
+ */
 export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
   switch (shard) {
     case "native-live-src-agents":
@@ -273,8 +286,6 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
       return files.filter(isExtensionMediaMusicLiveTest);
     case "native-live-extensions-media-video":
       return files.filter(isExtensionMediaVideoLiveTest);
-    case "native-live-extensions-l-z":
-      return files.filter((file) => isExtensionInRange(file, "l", "z"));
     default:
       throw new Error(
         `Unknown live test shard '${shard}'. Expected one of: ${LIVE_TEST_SHARDS.join(", ")}`,
@@ -288,6 +299,9 @@ function usage(stream = process.stderr) {
   );
 }
 
+/**
+ * Parses live-shard CLI args into shard name and Vitest passthrough args.
+ */
 export function parseLiveShardArgs(args) {
   const separatorIndex = args.indexOf("--");
   const optionArgs = separatorIndex >= 0 ? args.slice(0, separatorIndex) : args;
@@ -308,6 +322,135 @@ export function parseLiveShardArgs(args) {
     shard = arg;
   }
   return { shard, listOnly, passthroughArgs };
+}
+
+/**
+ * Builds pnpm/vitest args for selected live test files.
+ */
+export function buildLiveShardPnpmArgs(files, passthroughArgs) {
+  return ["test:live", "--", ...files, ...passthroughArgs];
+}
+
+/**
+ * Builds the Vitest JSON report path used to prove that a live shard ran tests.
+ */
+export function buildLiveShardReportPath(shard, env = process.env) {
+  const reportDir = env.OPENCLAW_LIVE_SHARD_REPORT_DIR || ".artifacts/live-shards";
+  return path.join(reportDir, `${shard}.vitest.json`);
+}
+
+/**
+ * Adds reporters needed for both operator logs and machine-readable evidence.
+ */
+export function addLiveShardReportArgs(passthroughArgs, reportPath) {
+  return [
+    ...passthroughArgs,
+    "--reporter=default",
+    "--reporter=json",
+    `--outputFile.json=${reportPath}`,
+  ];
+}
+
+function readNonNegativeInt(value, label) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Vitest report ${label} must be a non-negative integer.`);
+  }
+  return value;
+}
+
+function normalizeReportFilePath(value, repoRoot = process.cwd()) {
+  const text = typeof value === "string" ? value : String(value ?? "");
+  const repoRelative = path.isAbsolute(text) ? path.relative(repoRoot, path.resolve(text)) : text;
+  if (path.isAbsolute(repoRelative) || repoRelative.startsWith("..") || repoRelative === "") {
+    return text.split(path.sep).join("/");
+  }
+  return repoRelative.split(path.sep).join("/");
+}
+
+function collectReportedLiveTestFiles(payload, repoRoot = process.cwd()) {
+  if (!Array.isArray(payload?.testResults)) {
+    return null;
+  }
+  return new Set(
+    payload.testResults
+      .map((result) => normalizeReportFilePath(result?.name, repoRoot))
+      .filter((name) => name.length > 0),
+  );
+}
+
+/**
+ * Removes a previous JSON report before a shard run so stale success cannot be reused.
+ */
+export function removeLiveShardReportFile(reportPath) {
+  fs.rmSync(reportPath, { force: true });
+}
+
+/**
+ * Validates a Vitest JSON payload for live-shard proof.
+ */
+export function validateLiveShardReportPayload(
+  payload,
+  expectedFiles = [],
+  repoRoot = process.cwd(),
+) {
+  if (!payload || typeof payload !== "object") {
+    return { ok: false, reason: "Vitest report is not an object." };
+  }
+  let passed;
+  let total;
+  try {
+    passed = readNonNegativeInt(payload.numPassedTests, "numPassedTests");
+    total = readNonNegativeInt(payload.numTotalTests, "numTotalTests");
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+  }
+  if (passed > total) {
+    return { ok: false, reason: "Vitest report numPassedTests exceeds numTotalTests." };
+  }
+  if (passed < 1) {
+    return { ok: false, reason: "Vitest report has no passing live tests." };
+  }
+  if (expectedFiles.length > 0) {
+    const reportedFiles = collectReportedLiveTestFiles(payload, repoRoot);
+    if (!reportedFiles) {
+      return { ok: false, reason: "Vitest report is missing testResults file evidence." };
+    }
+    const missingFiles = expectedFiles
+      .map((file) => normalizeReportFilePath(file, repoRoot))
+      .filter((file) => !reportedFiles.has(file));
+    if (missingFiles.length > 0) {
+      return {
+        ok: false,
+        reason: `Vitest report missing selected live test file evidence: ${missingFiles.join(", ")}`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * Reads and validates the live-shard Vitest JSON report.
+ */
+export function validateLiveShardReport(reportPath, expectedFiles = []) {
+  let payload;
+  try {
+    payload = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, reason: `Unable to read Vitest report ${reportPath}: ${message}` };
+  }
+  return validateLiveShardReportPayload(payload, expectedFiles);
+}
+
+/**
+ * Builds spawn options for the live-shard Vitest child.
+ */
+export function buildLiveShardSpawnParams(env = process.env, platform = process.platform) {
+  return {
+    detached: shouldUseDetachedVitestProcessGroup(platform),
+    env,
+    stdio: "inherit",
+  };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -354,19 +497,41 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   }
 
   console.log(`[test:live:shard] ${shard}: ${files.length} file(s)`);
+  const reportPath = buildLiveShardReportPath(shard, process.env);
+  fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+  removeLiveShardReportFile(reportPath);
   const child = spawnPnpmRunner({
-    stdio: "inherit",
-    pnpmArgs: ["test:live", "--", ...files, ...passthroughArgs],
-    env: process.env,
+    pnpmArgs: buildLiveShardPnpmArgs(files, addLiveShardReportArgs(passthroughArgs, reportPath)),
+    ...buildLiveShardSpawnParams(process.env),
+  });
+  let forwardedSignal = null;
+  const teardown = installVitestProcessGroupCleanup({
+    child,
+    onSignal: (signal) => {
+      forwardedSignal ??= signal;
+    },
   });
   child.on("exit", (code, signal) => {
+    teardown();
     if (signal) {
       process.kill(process.pid, signal);
       return;
     }
+    if (forwardedSignal) {
+      process.kill(process.pid, forwardedSignal);
+      return;
+    }
+    if ((code ?? 1) === 0) {
+      const validation = validateLiveShardReport(reportPath, files);
+      if (!validation.ok) {
+        process.stderr.write(`[test:live:shard] ${validation.reason}\n`);
+        process.exit(1);
+      }
+    }
     process.exit(code ?? 1);
   });
   child.on("error", (error) => {
+    teardown();
     console.error(error);
     process.exit(1);
   });

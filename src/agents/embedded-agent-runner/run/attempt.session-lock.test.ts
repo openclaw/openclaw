@@ -1,3 +1,5 @@
+// Coverage for embedded attempt session-file ownership and write locks.
+import { appendFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,11 +10,16 @@ import {
   runWithOwnedSessionTranscriptWritePublication,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
-import { SessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
+import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import {
+  SessionWriteLockStaleError,
+  SessionWriteLockTimeoutError,
+} from "../../session-write-lock-error.js";
 import {
   acquireSessionWriteLock,
   resetSessionWriteLockStateForTest,
 } from "../../session-write-lock.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import {
   acquireEmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
@@ -31,6 +38,7 @@ const lockOptions = {
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   resetEmbeddedAttemptSessionFileOwnersForTest();
   resetSessionWriteLockStateForTest();
   for (const dir of tempDirs.splice(0)) {
@@ -39,6 +47,8 @@ afterEach(async () => {
 });
 
 async function createTempSessionFile(): Promise<string> {
+  // Use a real file so owner normalization can exercise realpath/symlink
+  // behavior.
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-session-lock-"));
   tempDirs.push(dir);
   const sessionFile = path.join(dir, "session.jsonl");
@@ -93,13 +103,13 @@ describe("embedded attempt session lock lifecycle", () => {
 
   it("releases the coarse attempt lock before prompt submission and reacquires for cleanup", async () => {
     const releases: string[] = [];
-    const acquireSessionWriteLock = vi
+    const acquireSessionWriteLockLocal28 = vi
       .fn()
       .mockResolvedValueOnce({ release: vi.fn(async () => releases.push("prep")) })
       .mockResolvedValueOnce({ release: vi.fn(async () => releases.push("cleanup")) });
 
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal28,
       lockOptions,
     });
 
@@ -107,20 +117,22 @@ describe("embedded attempt session lock lifecycle", () => {
     const cleanupLock = await controller.acquireForCleanup();
     await cleanupLock.release();
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
-    expect(acquireSessionWriteLock).toHaveBeenNthCalledWith(1, lockOptions);
-    expect(acquireSessionWriteLock).toHaveBeenNthCalledWith(2, lockOptions);
+    expect(acquireSessionWriteLockLocal28).toHaveBeenCalledTimes(2);
+    expect(acquireSessionWriteLockLocal28).toHaveBeenNthCalledWith(1, lockOptions);
+    expect(acquireSessionWriteLockLocal28).toHaveBeenNthCalledWith(2, lockOptions);
     expect(releases).toEqual(["prep", "cleanup"]);
   });
 
   it("releases the eagerly-held attempt lock on dispose when cleanup is skipped (#86014)", async () => {
+    // Exceptions after prompt submission can skip cleanup acquisition; dispose
+    // still owns the original eager lock.
     const releases: string[] = [];
-    const acquireSessionWriteLock = vi
+    const acquireSessionWriteLockLocal27 = vi
       .fn()
       .mockResolvedValueOnce({ release: vi.fn(async () => releases.push("held")) });
 
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal27,
       lockOptions,
     });
 
@@ -129,15 +141,43 @@ describe("embedded attempt session lock lifecycle", () => {
     await controller.dispose();
     await controller.dispose(); // idempotent
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(1);
+    expect(acquireSessionWriteLockLocal27).toHaveBeenCalledTimes(1);
     expect(releases).toEqual(["held"]);
+  });
+
+  it("releases the eagerly-held lock when the fence read throws during prompt release", async () => {
+    // A filesystem error can occur after the controller clears its in-memory
+    // lock reference; the underlying lease still must be released.
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocalFad845 = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocalFad845,
+      lockOptions,
+    });
+
+    // Simulate a transient, non-ENOENT filesystem error (e.g. EIO/EMFILE) while the
+    // prompt-release path reads the session-file fence. This fires AFTER the controller
+    // has cleared its in-memory `heldLock` reference but BEFORE the underlying file lock
+    // is released, which is the window that orphans the lock.
+    const statError = Object.assign(new Error("simulated I/O failure"), { code: "EIO" });
+    const statSpy = vi.spyOn(fs, "stat").mockRejectedValueOnce(statError);
+
+    try {
+      await expect(controller.releaseForPrompt()).rejects.toThrow();
+
+      // The underlying file lock must still be released so later turns do not wait for
+      // the full maxHoldMs watchdog before the stale lease is reclaimed.
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      statSpy.mockRestore();
+    }
   });
 
   it("releaseHeldLockForAbort and dispose are idempotent in succession (#86816)", async () => {
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal26 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal26,
       lockOptions,
     });
 
@@ -146,7 +186,7 @@ describe("embedded attempt session lock lifecycle", () => {
     await controller.dispose();
     await controller.dispose();
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(1);
+    expect(acquireSessionWriteLockLocal26).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -163,9 +203,9 @@ describe("embedded attempt session lock lifecycle", () => {
       markHeldReleaseStarted();
       await heldReleaseCanFinish;
     });
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal25 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal25,
       lockOptions,
     });
 
@@ -199,9 +239,9 @@ describe("embedded attempt session lock lifecycle", () => {
       markHeldReleaseStarted();
       await heldReleaseCanFinish;
     });
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal24 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal24,
       lockOptions,
     });
 
@@ -232,7 +272,7 @@ describe("embedded attempt session lock lifecycle", () => {
     const heldReleaseCanFinish = new Promise<void>((resolve) => {
       unblockHeldRelease = resolve;
     });
-    const acquireSessionWriteLock = vi
+    const acquireSessionWriteLockLocal23 = vi
       .fn()
       .mockResolvedValueOnce({
         release: vi.fn(async () => {
@@ -248,7 +288,7 @@ describe("embedded attempt session lock lifecycle", () => {
         }),
       });
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal23,
       lockOptions,
     });
 
@@ -257,22 +297,22 @@ describe("embedded attempt session lock lifecycle", () => {
     const reacquire = controller.reacquireAfterPrompt();
     await Promise.resolve();
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(1);
+    expect(acquireSessionWriteLockLocal23).toHaveBeenCalledTimes(1);
 
     unblockHeldRelease();
     await abortRelease;
     await reacquire;
     await controller.dispose();
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(acquireSessionWriteLockLocal23).toHaveBeenCalledTimes(2);
     expect(events).toEqual(["held-release-start", "held-release-end", "reacquired-release"]);
   });
 
   it("waits for active retained-lock writes before abort release (#86816)", async () => {
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal22 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal22,
       lockOptions,
     });
     let finishWrite!: () => void;
@@ -303,15 +343,15 @@ describe("embedded attempt session lock lifecycle", () => {
     await activeWrite;
     await abortRelease;
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(1);
+    expect(acquireSessionWriteLockLocal22).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("marks retained-lock use before the retained acquisition resolves (#86816)", async () => {
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal21 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal21,
       lockOptions,
     });
     let finishWrite!: () => void;
@@ -340,9 +380,9 @@ describe("embedded attempt session lock lifecycle", () => {
 
   it("waits for active retained-lock writes before cleanup takes the lock (#86816)", async () => {
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal20 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal20,
       lockOptions,
     });
     let finishWrite!: () => void;
@@ -388,7 +428,7 @@ describe("embedded attempt session lock lifecycle", () => {
     const heldReleaseCanFinish = new Promise<void>((resolve) => {
       unblockHeldRelease = resolve;
     });
-    const acquireSessionWriteLock = vi
+    const acquireSessionWriteLockLocal19 = vi
       .fn()
       .mockResolvedValueOnce({
         release: vi.fn(async () => {
@@ -404,7 +444,7 @@ describe("embedded attempt session lock lifecycle", () => {
         }),
       });
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal19,
       lockOptions,
     });
 
@@ -413,14 +453,14 @@ describe("embedded attempt session lock lifecycle", () => {
     const cleanupLockPromise = controller.acquireForCleanup();
     await Promise.resolve();
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(1);
+    expect(acquireSessionWriteLockLocal19).toHaveBeenCalledTimes(1);
 
     unblockHeldRelease();
     await abortRelease;
     const cleanupLock = await cleanupLockPromise;
     await cleanupLock.release();
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(acquireSessionWriteLockLocal19).toHaveBeenCalledTimes(2);
     expect(events).toEqual(["held-release-start", "held-release-end", "cleanup-release"]);
   });
 
@@ -442,7 +482,7 @@ describe("embedded attempt session lock lifecycle", () => {
     const heldReleaseCanFinish = new Promise<void>((resolve) => {
       unblockHeldRelease = resolve;
     });
-    const acquireSessionWriteLock = vi
+    const acquireSessionWriteLockLocal18 = vi
       .fn()
       .mockResolvedValueOnce({
         release: vi.fn(async () => {
@@ -458,7 +498,7 @@ describe("embedded attempt session lock lifecycle", () => {
         }),
       });
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal18,
       lockOptions,
     });
 
@@ -475,7 +515,7 @@ describe("embedded attempt session lock lifecycle", () => {
     await heldReleaseStarted;
     await Promise.resolve();
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(1);
+    expect(acquireSessionWriteLockLocal18).toHaveBeenCalledTimes(1);
     expect(events).toEqual(["held-release-start"]);
 
     unblockHeldRelease();
@@ -483,18 +523,18 @@ describe("embedded attempt session lock lifecycle", () => {
     const cleanupLock = await cleanupLockPromise;
     await cleanupLock.release();
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(acquireSessionWriteLockLocal18).toHaveBeenCalledTimes(2);
     expect(events).toEqual(["held-release-start", "held-release-end", "cleanup-release"]);
   });
 
   it("dispose does not double-release a lock already handed to cleanup", async () => {
     const releases: string[] = [];
-    const acquireSessionWriteLock = vi
+    const acquireSessionWriteLockLocal17 = vi
       .fn()
       .mockResolvedValueOnce({ release: vi.fn(async () => releases.push("held")) });
 
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal17,
       lockOptions,
     });
 
@@ -502,19 +542,19 @@ describe("embedded attempt session lock lifecycle", () => {
     await cleanupLock.release();
     await controller.dispose();
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(1);
+    expect(acquireSessionWriteLockLocal17).toHaveBeenCalledTimes(1);
     expect(releases).toEqual(["held"]);
   });
 
   it("defensively releases the coarse attempt lock on sessions_yield abort cleanup", async () => {
     const events: string[] = [];
-    const acquireSessionWriteLock = vi
+    const acquireSessionWriteLockLocal16 = vi
       .fn()
       .mockResolvedValueOnce({ release: vi.fn(async () => events.push("prep-release")) })
       .mockResolvedValueOnce({ release: vi.fn(async () => events.push("cleanup-release")) });
 
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal16,
       lockOptions,
     });
 
@@ -523,16 +563,16 @@ describe("embedded attempt session lock lifecycle", () => {
       events.push("yield-cleanup-write");
     });
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(acquireSessionWriteLockLocal16).toHaveBeenCalledTimes(2);
     expect(events).toEqual(["prep-release", "yield-cleanup-write", "cleanup-release"]);
   });
 
   it("keeps the session fence active after releasing for sessions_yield abort cleanup", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal15 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal15,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
@@ -543,19 +583,19 @@ describe("embedded attempt session lock lifecycle", () => {
       EmbeddedAttemptSessionTakeoverError,
     );
     expect(controller.hasSessionTakeover()).toBe(true);
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(acquireSessionWriteLockLocal15).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledTimes(2);
   });
 
   it("runs post-prompt transcript writes under a short reacquired lock", async () => {
     const events: string[] = [];
-    const acquireSessionWriteLock = vi
+    const acquireSessionWriteLockLocal14 = vi
       .fn()
       .mockResolvedValueOnce({ release: vi.fn(async () => events.push("prep-release")) })
       .mockResolvedValueOnce({ release: vi.fn(async () => events.push("post-release")) });
 
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal14,
       lockOptions,
     });
 
@@ -564,14 +604,14 @@ describe("embedded attempt session lock lifecycle", () => {
       events.push("post-write");
     });
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(acquireSessionWriteLockLocal14).toHaveBeenCalledTimes(2);
     expect(events).toEqual(["prep-release", "post-write", "post-release"]);
   });
 
   it("reuses its active post-prompt lock for nested session writes", async () => {
     const events: string[] = [];
     const sessionFile = await createTempSessionFile();
-    const acquireSessionWriteLock = vi
+    const acquireSessionWriteLockLocal13 = vi
       .fn()
       .mockResolvedValueOnce({ release: vi.fn(async () => events.push("prep-release")) })
       .mockResolvedValueOnce({ release: vi.fn(async () => events.push("post-release")) })
@@ -584,7 +624,7 @@ describe("embedded attempt session lock lifecycle", () => {
       );
 
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal13,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
@@ -598,7 +638,7 @@ describe("embedded attempt session lock lifecycle", () => {
       events.push("outer-end");
     });
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(acquireSessionWriteLockLocal13).toHaveBeenCalledTimes(2);
     expect(events).toEqual([
       "prep-release",
       "outer-start",
@@ -611,9 +651,9 @@ describe("embedded attempt session lock lifecycle", () => {
   it("rejects post-prompt writes when another owner advances the session file", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal12 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal12,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
@@ -634,9 +674,9 @@ describe("embedded attempt session lock lifecycle", () => {
   it("allows delivery mirror appends while the prompt lock is released", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal11 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal11,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
@@ -671,9 +711,9 @@ describe("embedded attempt session lock lifecycle", () => {
       "utf8",
     );
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal10 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal10,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
@@ -699,9 +739,9 @@ describe("embedded attempt session lock lifecycle", () => {
   it("refreshes the prompt fence after an owned write throws", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal9 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal9,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
@@ -715,7 +755,7 @@ describe("embedded attempt session lock lifecycle", () => {
     await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
 
     expect(controller.hasSessionTakeover()).toBe(false);
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(3);
+    expect(acquireSessionWriteLockLocal9).toHaveBeenCalledTimes(3);
     expect(release).toHaveBeenCalledTimes(3);
   });
 
@@ -726,9 +766,9 @@ describe("embedded attempt session lock lifecycle", () => {
       resumeDetached = resolve;
     });
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal8 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal8,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
@@ -748,16 +788,16 @@ describe("embedded attempt session lock lifecycle", () => {
     await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
 
     expect(controller.hasSessionTakeover()).toBe(false);
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(4);
+    expect(acquireSessionWriteLockLocal8).toHaveBeenCalledTimes(4);
     expect(release).toHaveBeenCalledTimes(4);
   });
 
   it("keeps post-provider transcript writes owned after prompt stream returns", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal7 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal7,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
@@ -770,16 +810,16 @@ describe("embedded attempt session lock lifecycle", () => {
     await cleanupLock.release();
 
     expect(controller.hasSessionTakeover()).toBe(false);
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(acquireSessionWriteLockLocal7).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledTimes(2);
   });
 
   it("still rejects external edits before the prompt stream lock is reacquired", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal6 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal6,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
@@ -790,16 +830,16 @@ describe("embedded attempt session lock lifecycle", () => {
       EmbeddedAttemptSessionTakeoverError,
     );
     expect(controller.hasSessionTakeover()).toBe(true);
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(acquireSessionWriteLockLocal6).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledTimes(2);
   });
 
   it("still rejects external edits after the prompt stream lock is reacquired", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal5 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal5,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
@@ -815,16 +855,16 @@ describe("embedded attempt session lock lifecycle", () => {
     await cleanupLock.release();
 
     expect(controller.hasSessionTakeover()).toBe(true);
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(acquireSessionWriteLockLocal5).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes the prompt fence after an owned transcript mirror append", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal4 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal4,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
@@ -846,16 +886,16 @@ describe("embedded attempt session lock lifecycle", () => {
     await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
 
     expect(controller.hasSessionTakeover()).toBe(false);
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(3);
+    expect(acquireSessionWriteLockLocal4).toHaveBeenCalledTimes(3);
     expect(release).toHaveBeenCalledTimes(3);
   });
 
   it("refreshes the prompt fence after an owned session manager append", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
-    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const acquireSessionWriteLockLocal3 = vi.fn(async () => ({ release }));
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal3,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
@@ -867,23 +907,290 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(controller.hasSessionTakeover()).toBe(false);
   });
 
+  it("refreshes the prompt fence after an owned session manager compaction append", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal2 = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal2,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const sessionManager = guardSessionManager(SessionManager.open(sessionFile), {
+      withCompactionPersistence: (append, validateAppend) =>
+        controller.withOwnedSessionFileWrite(append, validateAppend),
+    });
+    const firstKeptEntryId = sessionManager.appendMessage({
+      role: "user",
+      content: "old question",
+      timestamp: 1,
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "old answer" }],
+      api: "messages",
+      provider: "openclaw",
+      model: "session-lock-test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+
+    await controller.releaseForPrompt();
+    sessionManager.appendCompaction("threshold summary", firstKeptEntryId, 160_001);
+
+    await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
+    expect(controller.hasSessionTakeover()).toBe(false);
+  });
+
+  it("still rejects unowned external compaction appends before the prompt stream lock is reacquired", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal1 = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal1,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await fs.appendFile(
+      sessionFile,
+      JSON.stringify({
+        type: "compaction",
+        id: "external-compaction",
+        parentId: "session",
+        timestamp: new Date().toISOString(),
+        summary: "external summary",
+        firstKeptEntryId: "session",
+        tokensBefore: 160_001,
+      }) + "\n",
+      "utf8",
+    );
+
+    await expect(controller.withSessionWriteLock(() => "finalize")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
+  it("still rejects an external edit that happens before an owned session manager compaction append", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal0 = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal0,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const sessionManager = guardSessionManager(SessionManager.open(sessionFile), {
+      withCompactionPersistence: (append, validateAppend) =>
+        controller.withOwnedSessionFileWrite(append, validateAppend),
+    });
+    const firstKeptEntryId = sessionManager.appendMessage({
+      role: "user",
+      content: "old question",
+      timestamp: 1,
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "old answer" }],
+      api: "messages",
+      provider: "openclaw",
+      model: "session-lock-test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+
+    await controller.releaseForPrompt();
+    await fs.appendFile(sessionFile, '{"type":"message","id":"external-edit"}\n', "utf8");
+    sessionManager.appendCompaction("threshold summary", firstKeptEntryId, 160_001);
+
+    await expect(controller.withSessionWriteLock(() => "finalize")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
+  it("still rejects an external edit interleaved inside an owned session manager compaction append", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal30 = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal30,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const sessionManager = guardSessionManager(SessionManager.open(sessionFile), {
+      withCompactionPersistence: (append, validateAppend) =>
+        controller.withOwnedSessionFileWrite(() => {
+          appendFileSync(sessionFile, '{"type":"message","id":"external-edit"}\n', "utf8");
+          return append();
+        }, validateAppend),
+    });
+    const firstKeptEntryId = sessionManager.appendMessage({
+      role: "user",
+      content: "old question",
+      timestamp: 1,
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "old answer" }],
+      api: "messages",
+      provider: "openclaw",
+      model: "session-lock-test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+
+    await controller.releaseForPrompt();
+    sessionManager.appendCompaction("threshold summary", firstKeptEntryId, 160_001);
+
+    await expect(controller.withSessionWriteLock(() => "finalize")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
+  it("allows owned session manager compaction after a later controller advances the prompt fence", async () => {
+    const sessionFile = await createTempSessionFile();
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    await firstController.releaseForPrompt();
+    await firstController.dispose();
+
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal29 = vi.fn(async () => ({ release }));
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal29,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const sessionManager = guardSessionManager(SessionManager.open(sessionFile), {
+      withCompactionPersistence: (append, validateAppend) =>
+        secondController.withOwnedSessionFileWrite(append, validateAppend),
+    });
+    const firstKeptEntryId = await secondController.withSessionWriteLock(() => {
+      const entryId = sessionManager.appendMessage({
+        role: "user",
+        content: "new question",
+        timestamp: 1,
+      });
+      sessionManager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "new answer" }],
+        api: "messages",
+        provider: "openclaw",
+        model: "session-lock-test",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 2,
+      });
+      return entryId;
+    });
+
+    await secondController.releaseForPrompt();
+    sessionManager.appendCompaction("threshold summary", firstKeptEntryId, 160_001);
+
+    await expect(secondController.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
+    expect(secondController.hasSessionTakeover()).toBe(false);
+  });
+
+  it("allows owned session manager compaction after another controller publishes an owned write", async () => {
+    const sessionFile = await createTempSessionFile();
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const sessionManager = guardSessionManager(SessionManager.open(sessionFile), {
+      withCompactionPersistence: (append, validateAppend) =>
+        firstController.withOwnedSessionFileWrite(append, validateAppend),
+    });
+    const firstKeptEntryId = sessionManager.appendMessage({
+      role: "user",
+      content: "old question",
+      timestamp: 1,
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "old answer" }],
+      api: "messages",
+      provider: "openclaw",
+      model: "session-lock-test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    await firstController.releaseForPrompt();
+
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    await secondController.releaseForPrompt();
+    await secondController.withSessionWriteLock(
+      async () => {
+        await fs.appendFile(sessionFile, '{"type":"message","id":"owned-other"}\n', "utf8");
+      },
+      { publishOwnedWrite: true },
+    );
+    sessionManager.appendCompaction("threshold summary", firstKeptEntryId, 160_001);
+
+    await expect(firstController.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
+    expect(firstController.hasSessionTakeover()).toBe(false);
+  });
+
   it("allows post-prompt writes after the prompt context publishes an owned transcript write", async () => {
     const sessionFile = await createTempSessionFile();
     const releases: string[] = [];
-    const acquireSessionWriteLock = vi.fn(async () => ({
+    const acquireSessionWriteLockLocal2 = vi.fn(async () => ({
       release: vi.fn(async () => {
         releases.push("release");
       }),
     }));
     const firstController = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal2,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
     await firstController.releaseForPrompt();
 
     const secondController = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockLocal2,
       lockOptions: { ...lockOptions, sessionFile },
     });
     const promptActiveSession = async (run: () => Promise<void>): Promise<void> =>
@@ -915,27 +1222,96 @@ describe("embedded attempt session lock lifecycle", () => {
     ).resolves.toBe("post-write");
 
     expect(firstController.hasSessionTakeover()).toBe(false);
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(3);
+    expect(acquireSessionWriteLockLocal2).toHaveBeenCalledTimes(3);
     expect(releases).toEqual(["release", "release", "release"]);
+  });
+
+  it("allows prompt-stream announcement writes from another controller but still rejects external edits", async () => {
+    const sessionFile = await createTempSessionFile();
+    const acquireSessionWriteLockAnnouncement = vi.fn(async () => ({ release: vi.fn() }));
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockAnnouncement,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await firstController.releaseForPrompt();
+
+    const sessionKey = "agent:main:imessage:requester";
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockAnnouncement,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const forwardedOptions: Array<{ publishOwnedWrite?: boolean } | undefined> = [];
+    const announceSession = {
+      agent: {
+        streamFn: vi.fn(async () => {
+          await runWithOwnedSessionTranscriptWritePublication(
+            { sessionFile, sessionKey },
+            async () => {
+              await fs.appendFile(
+                sessionFile,
+                '{"type":"message","id":"announcement-complete"}\n',
+                "utf8",
+              );
+            },
+          );
+        }),
+      },
+    };
+
+    installPromptSubmissionLockRelease({
+      session: announceSession,
+      waitForSessionEvents: (sessionToDrain) =>
+        secondController.waitForSessionEvents(sessionToDrain),
+      releaseForPrompt: () => secondController.releaseForPrompt(),
+      reacquireAfterPrompt: () => secondController.reacquireAfterPrompt(),
+      sessionFile,
+      sessionKey,
+      withSessionWriteLock: (run, options) => {
+        forwardedOptions.push(options);
+        return secondController.withSessionWriteLock(run, options);
+      },
+    });
+
+    await announceSession.agent.streamFn();
+    await expect(
+      firstController.withSessionWriteLock(async () => {
+        await fs.appendFile(sessionFile, '{"type":"message","id":"post-announcement"}\n', "utf8");
+        return "post-announcement";
+      }),
+    ).resolves.toBe("post-announcement");
+    expect(firstController.hasSessionTakeover()).toBe(false);
+
+    await fs.appendFile(
+      sessionFile,
+      '{"type":"message","id":"external-after-announcement"}\n',
+      "utf8",
+    );
+    await expect(firstController.withSessionWriteLock(() => "late")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+
+    expect(firstController.hasSessionTakeover()).toBe(true);
+    expect(forwardedOptions).toContainEqual({ publishOwnedWrite: true });
   });
 
   it("rejects external edits interleaved while another controller holds cleanup lock", async () => {
     const sessionFile = await createTempSessionFile();
     const releases: string[] = [];
-    const acquireSessionWriteLock = vi.fn(async () => ({
+    const acquireSessionWriteLockInner = vi.fn(async () => ({
       release: vi.fn(async () => {
         releases.push("release");
       }),
     }));
     const firstController = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockInner,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
     await firstController.releaseForPrompt();
 
     const secondController = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockInner,
       lockOptions: { ...lockOptions, sessionFile },
     });
     await secondController.releaseForPrompt();
@@ -951,27 +1327,27 @@ describe("embedded attempt session lock lifecycle", () => {
     ).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
 
     expect(firstController.hasSessionTakeover()).toBe(true);
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(4);
+    expect(acquireSessionWriteLockInner).toHaveBeenCalledTimes(4);
     expect(releases).toEqual(["release", "release", "release", "release"]);
   });
 
   it("rejects external edits interleaved inside a broad owned transcript lock", async () => {
     const sessionFile = await createTempSessionFile();
     const releases: string[] = [];
-    const acquireSessionWriteLock = vi.fn(async () => ({
+    const acquireSessionWriteLockScoped = vi.fn(async () => ({
       release: vi.fn(async () => {
         releases.push("release");
       }),
     }));
     const firstController = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockScoped,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
     await firstController.releaseForPrompt();
 
     const secondController = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockScoped,
       lockOptions: { ...lockOptions, sessionFile },
     });
     await withOwnedSessionTranscriptWrites(
@@ -1012,27 +1388,27 @@ describe("embedded attempt session lock lifecycle", () => {
     ).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
 
     expect(firstController.hasSessionTakeover()).toBe(true);
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(3);
+    expect(acquireSessionWriteLockScoped).toHaveBeenCalledTimes(3);
     expect(releases).toEqual(["release", "release", "release"]);
   });
 
   it("rejects external edits interleaved during a broad same-process locked callback", async () => {
     const sessionFile = await createTempSessionFile();
     const releases: string[] = [];
-    const acquireSessionWriteLock = vi.fn(async () => ({
+    const acquireSessionWriteLockItem = vi.fn(async () => ({
       release: vi.fn(async () => {
         releases.push("release");
       }),
     }));
     const firstController = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockItem,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
     await firstController.releaseForPrompt();
 
     const secondController = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockItem,
       lockOptions: { ...lockOptions, sessionFile },
     });
     await secondController.withSessionWriteLock(async () => {
@@ -1048,20 +1424,20 @@ describe("embedded attempt session lock lifecycle", () => {
     ).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
 
     expect(firstController.hasSessionTakeover()).toBe(true);
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(3);
+    expect(acquireSessionWriteLockItem).toHaveBeenCalledTimes(3);
     expect(releases).toEqual(["release", "release", "release"]);
   });
 
   it("rejects external session edits even when another controller releases for prompt afterward", async () => {
     const sessionFile = await createTempSessionFile();
     const releases: string[] = [];
-    const acquireSessionWriteLock = vi.fn(async () => ({
+    const acquireSessionWriteLockCandidate = vi.fn(async () => ({
       release: vi.fn(async () => {
         releases.push("release");
       }),
     }));
     const firstController = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockCandidate,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
@@ -1069,7 +1445,7 @@ describe("embedded attempt session lock lifecycle", () => {
     await fs.appendFile(sessionFile, '{"type":"message","id":"external"}\n', "utf8");
 
     const secondController = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockCandidate,
       lockOptions: { ...lockOptions, sessionFile },
     });
     await secondController.releaseForPrompt();
@@ -1081,20 +1457,20 @@ describe("embedded attempt session lock lifecycle", () => {
     ).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
 
     expect(firstController.hasSessionTakeover()).toBe(true);
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(3);
+    expect(acquireSessionWriteLockCandidate).toHaveBeenCalledTimes(3);
     expect(releases).toEqual(["release", "release", "release"]);
   });
 
   it("rejects external session edits even when another controller appends under lock afterward", async () => {
     const sessionFile = await createTempSessionFile();
     const releases: string[] = [];
-    const acquireSessionWriteLock = vi.fn(async () => ({
+    const acquireSessionWriteLockEntry = vi.fn(async () => ({
       release: vi.fn(async () => {
         releases.push("release");
       }),
     }));
     const firstController = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockEntry,
       lockOptions: { ...lockOptions, sessionFile },
     });
 
@@ -1102,7 +1478,7 @@ describe("embedded attempt session lock lifecycle", () => {
     await fs.appendFile(sessionFile, '{"type":"message","id":"external"}\n', "utf8");
 
     const secondController = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockEntry,
       lockOptions: { ...lockOptions, sessionFile },
     });
     await secondController.withSessionWriteLock(async () => {
@@ -1117,13 +1493,13 @@ describe("embedded attempt session lock lifecycle", () => {
     ).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
 
     expect(firstController.hasSessionTakeover()).toBe(true);
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(3);
+    expect(acquireSessionWriteLockEntry).toHaveBeenCalledTimes(3);
     expect(releases).toEqual(["release", "release", "release"]);
   });
 
   it("returns a no-op cleanup lock after prompt lock reacquisition times out", async () => {
     const releases: string[] = [];
-    const acquireSessionWriteLock = vi
+    const acquireSessionWriteLockResult = vi
       .fn()
       .mockResolvedValueOnce({ release: vi.fn(async () => releases.push("prep")) })
       .mockRejectedValueOnce(
@@ -1135,7 +1511,7 @@ describe("embedded attempt session lock lifecycle", () => {
       );
 
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockResult,
       lockOptions,
     });
 
@@ -1143,14 +1519,14 @@ describe("embedded attempt session lock lifecycle", () => {
     const cleanupLock = await controller.acquireForCleanup();
     await cleanupLock.release();
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(acquireSessionWriteLockResult).toHaveBeenCalledTimes(2);
     expect(controller.hasSessionTakeover()).toBe(true);
     expect(releases).toEqual(["prep"]);
   });
 
   it("skips cleanup lock reacquisition after a post-prompt lock timeout", async () => {
     const releases: string[] = [];
-    const acquireSessionWriteLock = vi
+    const acquireSessionWriteLockValue = vi
       .fn()
       .mockResolvedValueOnce({ release: vi.fn(async () => releases.push("prep")) })
       .mockRejectedValueOnce(
@@ -1162,7 +1538,7 @@ describe("embedded attempt session lock lifecycle", () => {
       );
 
     const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
+      acquireSessionWriteLock: acquireSessionWriteLockValue,
       lockOptions,
     });
 
@@ -1173,7 +1549,37 @@ describe("embedded attempt session lock lifecycle", () => {
     const cleanupLock = await controller.acquireForCleanup();
     await cleanupLock.release();
 
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(acquireSessionWriteLockValue).toHaveBeenCalledTimes(2);
+    expect(controller.hasSessionTakeover()).toBe(true);
+    expect(releases).toEqual(["prep"]);
+  });
+
+  it("skips cleanup lock reacquisition after a post-prompt stale lock", async () => {
+    const releases: string[] = [];
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({ release: vi.fn(async () => releases.push("prep")) })
+      .mockRejectedValueOnce(
+        new SessionWriteLockStaleError({
+          owner: "pid=789 alive=true ageMs=1800001",
+          lockPath: `${lockOptions.sessionFile}.lock`,
+          staleReasons: ["too-old"],
+        }),
+      );
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions,
+    });
+
+    await controller.releaseForPrompt();
+    await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+      SessionWriteLockStaleError,
+    );
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+
+    expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(2);
     expect(controller.hasSessionTakeover()).toBe(true);
     expect(releases).toEqual(["prep"]);
   });
@@ -1363,7 +1769,9 @@ describe("embedded attempt session lock lifecycle", () => {
         }),
     );
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
     releaseHookAppend();
     await Promise.all([hookAppend, promptAppend]);
 

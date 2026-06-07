@@ -1,9 +1,10 @@
+// Rtt Harness tests cover rtt harness script behavior.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -27,6 +28,7 @@ const CREDENTIAL_SCRIPT_PATH = path.resolve(
   "../../scripts/e2e/npm-telegram-rtt-credentials.mjs",
 );
 const CONFIG_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-rtt-config.mjs");
+const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
 
@@ -169,6 +171,14 @@ describe("RTT harness", () => {
       "OPENCLAW_QA_CREDENTIAL_HTTP_MAX_BODY_BYTES",
       installEnvSnapshotIndex,
     );
+    const payloadByteLimitForwardIndex = script.indexOf(
+      "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES",
+      installEnvSnapshotIndex,
+    );
+    const payloadChunkLimitForwardIndex = script.indexOf(
+      "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS",
+      installEnvSnapshotIndex,
+    );
     const packageInstallIndex = script.indexOf("npm install -g");
     const credentialAcquireIndex = script.indexOf(
       "node /app/scripts/e2e/npm-telegram-rtt-credentials.mjs acquire",
@@ -181,6 +191,8 @@ describe("RTT harness", () => {
     expect(installEnvSnapshotIndex).toBeGreaterThanOrEqual(0);
     expect(convexSecretForwardIndex).toBeGreaterThan(installEnvSnapshotIndex);
     expect(bodyLimitForwardIndex).toBeGreaterThan(installEnvSnapshotIndex);
+    expect(payloadByteLimitForwardIndex).toBeGreaterThan(installEnvSnapshotIndex);
+    expect(payloadChunkLimitForwardIndex).toBeGreaterThan(installEnvSnapshotIndex);
     expect(packageInstallIndex).toBeLessThan(credentialAcquireIndex);
     expect(script).toContain(
       '-e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"',
@@ -207,7 +219,50 @@ describe("RTT harness", () => {
     expect(script).toContain("start_credential_heartbeat() {\n  (\n    set +e");
     expect(script).toContain("Convex credential heartbeat exited with status");
     expect(script).toContain('kill -TERM "$rtt_shell_pid"');
+    expect(script).toContain("const controller = new AbortController();");
+    expect(script).toContain("const timer = setTimeout(() => controller.abort(), 1000);");
+    expect(script).toContain('if [ "$mock_ready" != "1" ]; then');
+    expect(script).toContain("Mock OpenAI server did not become ready");
+    expect(script).not.toContain("fetch('http://127.0.0.1:${mock_port}/health')");
     expect(script).not.toContain('export TELEGRAM_BOT_TOKEN="$OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN"');
+  });
+
+  it("rejects oversized chunked RTT credential markers before hydration", async () => {
+    const credentialModule = (await import(
+      `${pathToFileURL(CREDENTIAL_SCRIPT_PATH).href}?case=chunk-marker-${Date.now()}`
+    )) as {
+      parseChunkedPayloadMarker(payload: unknown): unknown;
+    };
+
+    expect(() =>
+      credentialModule.parseChunkedPayloadMarker({
+        [CHUNKED_PAYLOAD_MARKER]: true,
+        byteLength: 1,
+        chunkCount: 4097,
+      }),
+    ).toThrow("Chunked credential payload exceeds 4096 chunks.");
+    expect(() =>
+      credentialModule.parseChunkedPayloadMarker({
+        [CHUNKED_PAYLOAD_MARKER]: true,
+        byteLength: 64 * 1024 * 1024 + 1,
+        chunkCount: 1,
+      }),
+    ).toThrow("Chunked credential payload exceeds 67108864 bytes.");
+  });
+
+  it("keeps RTT Docker artifacts isolated by default", async () => {
+    const script = await fs.readFile(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain(
+      'RUN_ID="${OPENCLAW_NPM_TELEGRAM_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"',
+    );
+    expect(script).toContain(
+      'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-rtt/$RUN_ID}"',
+    );
+    expect(script).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"');
+    expect(script).not.toContain(
+      'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-rtt}"',
+    );
   });
 
   it("keeps broker helper heartbeat handling aligned with QA leases", async () => {
@@ -252,6 +307,108 @@ describe("RTT harness", () => {
         "credential broker acquire response body exceeded 16 bytes",
       );
       expect(execError.stderr).not.toContain("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("does not start another credential acquire after retry delay exhausts the deadline", async () => {
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests += 1;
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          status: "error",
+          code: "POOL_EXHAUSTED",
+          message: "credential pool exhausted",
+          retryAfterMs: 1_000,
+        }),
+      );
+    });
+    const { port } = await listenOnLoopback(server);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-credentials-retry-"));
+    tempDirs.push(tempDir);
+    const startedAt = Date.now();
+
+    try {
+      await execFileAsync(
+        process.execPath,
+        [
+          CREDENTIAL_SCRIPT_PATH,
+          "acquire",
+          "--lease-file",
+          path.join(tempDir, "lease.json"),
+          "--credential-env-file",
+          path.join(tempDir, "credentials.env"),
+        ],
+        {
+          env: {
+            ...credentialBrokerEnv(port),
+            OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "75",
+            OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: "250",
+          },
+          maxBuffer: 128 * 1024,
+        },
+      );
+      throw new Error("Expected credential acquire to fail.");
+    } catch (error) {
+      const execError = error as Error & { stderr?: string };
+      expect(execError.stderr).toContain("credential broker acquire timed out after 75ms");
+      expect(Date.now() - startedAt).toBeLessThan(500);
+      expect(requests).toBe(1);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("caps credential acquire HTTP retries to the remaining acquire deadline", async () => {
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests += 1;
+      if (requests === 1) {
+        response.writeHead(503, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            status: "error",
+            code: "POOL_EXHAUSTED",
+            message: "credential pool exhausted",
+            retryAfterMs: 1,
+          }),
+        );
+      }
+    });
+    const { port } = await listenOnLoopback(server);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-credentials-cap-"));
+    tempDirs.push(tempDir);
+    const startedAt = Date.now();
+
+    try {
+      await execFileAsync(
+        process.execPath,
+        [
+          CREDENTIAL_SCRIPT_PATH,
+          "acquire",
+          "--lease-file",
+          path.join(tempDir, "lease.json"),
+          "--credential-env-file",
+          path.join(tempDir, "credentials.env"),
+        ],
+        {
+          env: {
+            ...credentialBrokerEnv(port),
+            OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "100",
+            OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: "900",
+          },
+          maxBuffer: 128 * 1024,
+        },
+      );
+      throw new Error("Expected credential acquire to fail.");
+    } catch (error) {
+      const execError = error as Error & { stderr?: string };
+      expect(execError.stderr).toContain("credential broker acquire timed out after");
+      expect(Date.now() - startedAt).toBeLessThan(500);
+      expect(requests).toBe(2);
     } finally {
       await closeServer(server);
     }
@@ -403,6 +560,48 @@ describe("RTT harness", () => {
     expect(result.rtt).toEqual({ canaryMs: 5948, mentionReplyMs: undefined });
   });
 
+  it("marks malformed RTT summaries as failed results", () => {
+    const baseParams = {
+      artifacts: {
+        rawObservedMessagesPath: "runs/run/raw/telegram-qa-observed-messages.json",
+        rawReportPath: "runs/run/raw/telegram-qa-report.md",
+        rawSummaryPath: "runs/run/raw/telegram-qa-summary.json",
+        resultPath: "runs/run/result.json",
+      },
+      finishedAt: new Date("2026-05-01T00:00:12.000Z"),
+      providerMode: "mock-openai" as const,
+      runId: "run",
+      scenarios: ["telegram-mentioned-message-reply"],
+      spec: "openclaw@latest",
+      startedAt: new Date("2026-05-01T00:00:00.000Z"),
+      version: "2026.4.29",
+    };
+
+    for (const rawSummary of [
+      { scenarios: [] },
+      { scenarios: [{ id: "telegram-canary", rttMs: 5948, status: "pass" }] },
+      {
+        scenarios: [
+          { id: "telegram-canary", rttMs: 5948, status: "pass" },
+          { id: "telegram-mentioned-message-reply", status: "skipped" },
+        ],
+      },
+      {
+        scenarios: [
+          { id: "telegram-canary", rttMs: 5948, status: "pass" },
+          {
+            id: "telegram-mentioned-message-reply",
+            samples: [],
+            stats: { failed: 0, passed: 0, total: 0 },
+            status: "pass",
+          },
+        ],
+      },
+    ]) {
+      expect(buildRttResult({ ...baseParams, rawSummary }).run.status).toBe("fail");
+    }
+  });
+
   it("appends JSONL rows", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-test-"));
     tempDirs.push(tempDir);
@@ -452,5 +651,17 @@ describe("RTT harness", () => {
       scenarios: ["telegram-mentioned-message-reply"],
       timeoutMs: 240_000,
     });
+  });
+
+  it("rejects missing CLI path option values", () => {
+    for (const [flag, next] of [
+      ["--package-tgz", "--runs"],
+      ["--harness-root", "--output"],
+      ["--output", "--samples"],
+    ] as const) {
+      expect(() => cliTesting.parseArgs(["openclaw@latest", flag, next])).toThrow(
+        `${flag} requires a path.`,
+      );
+    }
   });
 });

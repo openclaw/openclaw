@@ -1,3 +1,4 @@
+// Twitch plugin module implements twitch client behavior.
 import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -200,7 +201,6 @@ export class TwitchClientManager {
       let settled = false;
       let authRetryPending = false;
       const listeners: Array<{ unbind: () => void }> = [];
-      let timeout: NodeJS.Timeout | undefined;
       const finish = (error?: Error) => {
         if (settled) {
           return;
@@ -248,7 +248,7 @@ export class TwitchClientManager {
           );
         }),
       );
-      timeout = setTimeout(
+      const timeout: NodeJS.Timeout | undefined = setTimeout(
         () => finish(new Error(`Timed out connecting to Twitch as ${account.username}`)),
         connectTimeoutMs,
       );

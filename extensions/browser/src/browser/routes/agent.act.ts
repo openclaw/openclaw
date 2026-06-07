@@ -1,3 +1,9 @@
+/**
+ * Browser agent action route registration and existing-session execution.
+ *
+ * Dispatches normalized actions to either Playwright-backed OpenClaw browser
+ * control or Chrome MCP existing-session operations with navigation guards.
+ */
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   clickChromeMcpElement,
@@ -40,12 +46,14 @@ import {
 } from "./agent.shared.js";
 import { resolveTargetIdAfterNavigate } from "./agent.snapshot-target.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
-import { readRoutePositiveInteger } from "./route-numeric.js";
+import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { asyncBrowserRoute, jsonError, toStringOrEmpty } from "./utils.js";
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 const EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS = [0, 250, 500] as const;
@@ -176,7 +184,7 @@ async function runExistingSessionActionWithNavigationGuard<T>(params: {
   }
 
   if (actionError) {
-    throw actionError;
+    throw toLintErrorObject(actionError, "Non-Error thrown");
   }
 
   return result as T;
@@ -348,6 +356,7 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
   throw new Error("Unsupported browser act kind");
 }
 
+/** Register browser action endpoints, including hook and download subroutes. */
 export function registerBrowserAgentActRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -701,7 +710,7 @@ export function registerBrowserAgentActRoutes(
       let timeoutMs: number | undefined;
       let maxChars: number | undefined;
       try {
-        timeoutMs = readRoutePositiveInteger(body.timeoutMs, "timeoutMs");
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
         maxChars = readRoutePositiveInteger(body.maxChars, "maxChars");
       } catch (err) {
         return jsonError(res, 400, formatErrorMessage(err));
@@ -806,4 +815,18 @@ export function registerBrowserAgentActRoutes(
       });
     }),
   );
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

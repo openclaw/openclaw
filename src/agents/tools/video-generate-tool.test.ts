@@ -1,6 +1,8 @@
+// video_generate tool tests cover provider/model selection, plugin metadata,
+// background task handling, input media, and saved video output.
+import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { MAX_VIDEO_BYTES } from "../../media/constants.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import {
@@ -141,6 +143,8 @@ function createVideoProviderSnapshot(params: {
   referenceAudioInputs?: boolean;
   workspaceDir?: string;
 }): PluginMetadataSnapshot {
+  // Plugin-backed provider snapshots are synthesized here so tool behavior can
+  // be tested without loading plugin manifests from disk.
   const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
   const plugin: PluginManifestRecord = {
     id: params.id,
@@ -345,15 +349,15 @@ describe("createVideoGenerateTool", () => {
     expect(emptyConfigTool).toBeNull();
   });
 
-  it("does not treat model aliases as video-generation auth profiles", () => {
+  it("treats legacy OpenAI-Codex auth profiles as canonical OpenAI video auth", () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
 
-    expect(
+    expectVideoGenerateTool(
       createVideoGenerateTool({
         config: asConfig({}),
-        authProfileStore: createAuthStore(["openai-codex"]),
+        authProfileStore: createAuthStore(["openai"]),
       }),
-    ).toBeNull();
+    );
   });
 
   it("registers when video-generation config is present", () => {
@@ -415,7 +419,7 @@ describe("createVideoGenerateTool", () => {
         config: asConfig({
           agents: {
             defaults: {
-              videoGenerationModel: { primary: "openai-codex/sora-2" },
+              videoGenerationModel: { primary: "openai/sora-2" },
             },
           },
         }),
@@ -571,7 +575,7 @@ describe("createVideoGenerateTool", () => {
       },
       {
         id: "openai",
-        aliases: ["openai-codex"],
+        aliases: ["openai"],
         defaultModel: "sora-2",
         models: ["sora-2"],
         capabilities: {},
@@ -586,7 +590,7 @@ describe("createVideoGenerateTool", () => {
           agents: {
             defaults: {
               model: {
-                primary: "openai-codex/gpt-5.5",
+                primary: "openai/gpt-5.5",
               },
             },
           },
@@ -716,7 +720,7 @@ describe("createVideoGenerateTool", () => {
     });
 
     expect((firstMockCallArg(generateSpy) as { timeoutMs?: number }).timeoutMs).toBe(180_000);
-    expect((generateSpy.mock.calls.at(1)?.[0] as { timeoutMs?: number }).timeoutMs).toBe(12_345);
+    expect((generateSpy.mock.calls.at(1)![0] as { timeoutMs?: number }).timeoutMs).toBe(12_345);
     expect(resultDetails(defaultResult).timeoutMs).toBe(180_000);
     expect(resultDetails(overrideResult).timeoutMs).toBe(12_345);
   });
@@ -933,7 +937,7 @@ describe("createVideoGenerateTool", () => {
     expect(details.async).toBe(true);
     expect(details.status).toBe("started");
     expect((details.task as { taskId?: string }).taskId).toBe("task-123");
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     if (!scheduledWork) {
       throw new Error("expected scheduled video generation work");
     }
@@ -1513,6 +1517,30 @@ describe("createVideoGenerateTool", () => {
     expect(call.inputImages).toHaveLength(2);
     expect(call.inputImages?.[0]?.role).toBe("first_frame");
     expect(call.inputImages?.[1]?.role).toBe("last_frame");
+  });
+
+  it("passes direct remote reference URLs to the provider without local media loading", async () => {
+    mockVideoPluginProvider({
+      imageToVideo: { enabled: true, maxInputImages: 1 },
+    });
+    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    const generateSpy = mockSavedVideoResult();
+    const tool = createVideoPluginTool();
+
+    await tool.execute("call-1", {
+      prompt: "lobster",
+      image: "https://example.test/reference.png",
+    });
+
+    expect(loadWebMedia).not.toHaveBeenCalled();
+    const call = firstMockCallArg(generateSpy) as {
+      inputImages?: Array<{ url?: string }>;
+    };
+    expect(call.inputImages).toEqual([{ url: "https://example.test/reference.png" }]);
   });
 
   it("passes web_fetch SSRF policy when loading reference assets", async () => {

@@ -1,3 +1,4 @@
+// Feishu plugin module implements bot content behavior.
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
@@ -92,7 +93,7 @@ export function resolveFeishuGroupSession(params: {
         (replyInThread ? messageId : null))
       : null;
 
-  let peerId = chatId;
+  let peerId;
   switch (groupSessionScope) {
     case "group_sender":
       peerId = buildFeishuConversationId({ chatId, scope: "group_sender", senderOpenId });
@@ -112,7 +113,6 @@ export function resolveFeishuGroupSession(params: {
           })
         : buildFeishuConversationId({ chatId, scope: "group_sender", senderOpenId });
       break;
-    case "group":
     default:
       peerId = chatId;
       break;

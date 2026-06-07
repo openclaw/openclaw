@@ -1,4 +1,5 @@
-import { type MemorySourceFileStateRow } from "./manager-source-state.js";
+// Memory Core plugin module implements manager session sync state behavior.
+import type { MemorySourceFileStateRow } from "./manager-source-state.js";
 
 export type MemorySessionStartupFileState = {
   absPath: string;

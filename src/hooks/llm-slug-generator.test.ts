@@ -1,3 +1,4 @@
+// LLM slug generator tests cover generated hook names and collision behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -54,6 +55,16 @@ describe("generateSlugViaLLM", () => {
     expect(options.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
+  it("marks the run lane-local so internal-helper failures do not poison shared profile health (#71709)", async () => {
+    await generateSlugViaLLM({
+      sessionContent: "hello",
+      cfg: {} as OpenClawConfig,
+    });
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(requireFirstRunOptions().authProfileFailurePolicy).toBe("local");
+  });
+
   it("honors configured agent timeoutSeconds for slow local providers", async () => {
     await generateSlugViaLLM({
       sessionContent: "hello",
@@ -81,7 +92,7 @@ describe("generateSlugViaLLM", () => {
         },
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               baseUrl: "https://chatgpt.com/backend-api/codex",
               models: [
                 {
@@ -102,7 +113,7 @@ describe("generateSlugViaLLM", () => {
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     const options = requireFirstRunOptions();
-    expect(options.provider).toBe("openai-codex");
+    expect(options.provider).toBe("openai");
     expect(options.model).toBe("gpt-5.5");
   });
 });

@@ -1,3 +1,8 @@
+/**
+ * Tests provider-native tool collision policy.
+ * Protects OpenClaw web_search routing when provider/model compatibility also
+ * advertises native search support.
+ */
 import { describe, expect, it } from "vitest";
 import { testing } from "./agent-tools.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -60,7 +65,7 @@ describe("applyModelProviderToolPolicy", () => {
         },
       },
       modelProvider: "gateway",
-      modelApi: "openai-codex-responses",
+      modelApi: "openai-chatgpt-responses",
       modelId: "gpt-5.4",
     });
 
@@ -80,7 +85,7 @@ describe("applyModelProviderToolPolicy", () => {
         },
       },
       modelProvider: "gateway",
-      modelApi: "openai-codex-responses",
+      modelApi: "openai-chatgpt-responses",
       modelId: "gpt-5.4",
       suppressManagedWebSearch: false,
     });
@@ -101,15 +106,15 @@ describe("applyModelProviderToolPolicy", () => {
         },
         auth: {
           profiles: {
-            "openai-codex:default": {
-              provider: "openai-codex",
+            "openai:default": {
+              provider: "openai",
               mode: "oauth",
             },
           },
         },
       },
-      modelProvider: "openai-codex",
-      modelApi: "openai-codex-responses",
+      modelProvider: "openai",
+      modelApi: "openai-chatgpt-responses",
       modelId: "gpt-5.4",
     });
 
@@ -128,8 +133,8 @@ describe("applyModelProviderToolPolicy", () => {
           },
         },
       },
-      modelProvider: "openai-codex",
-      modelApi: "openai-codex-responses",
+      modelProvider: "openai",
+      modelApi: "openai-chatgpt-responses",
       modelId: "gpt-5.4",
     });
 

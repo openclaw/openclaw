@@ -1,3 +1,5 @@
+// Shared argument parsing helpers for repository scripts.
+/** Read a finite number from an environment variable, returning null when unset or invalid. */
 export function readEnvNumber(name, env = process.env) {
   const raw = env[name]?.trim();
   if (!raw) {
@@ -7,6 +9,7 @@ export function readEnvNumber(name, env = process.env) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/** Read a flag value from `--flag value` or `--flag=value` arguments. */
 export function readFlagValue(args, name) {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -20,10 +23,25 @@ export function readFlagValue(args, name) {
   return undefined;
 }
 
-function consumeStringFlag(argv, index, flag) {
+/** Remove the leading `--` separator inserted by package-manager script invocations. */
+export function stripLeadingPackageManagerSeparator(argv) {
+  return argv[0] === "--" ? argv.slice(1) : argv;
+}
+
+function isMissingStringFlagValue(value, options = {}) {
+  if (!value) {
+    return true;
+  }
+  if (value.startsWith("--")) {
+    return true;
+  }
+  return options.rejectShortOptions === true && value.startsWith("-");
+}
+
+function consumeStringFlag(argv, index, flag, options = {}) {
   const inlineValue = readInlineFlagValue(argv[index], flag);
   if (inlineValue !== null) {
-    if (!inlineValue) {
+    if (isMissingStringFlagValue(inlineValue, options)) {
       throw new Error(`${flag} requires a value`);
     }
     return {
@@ -35,7 +53,7 @@ function consumeStringFlag(argv, index, flag) {
     return null;
   }
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (isMissingStringFlagValue(value, options)) {
     throw new Error(`${flag} requires a value`);
   }
   return {
@@ -96,7 +114,7 @@ function readFlagOptionValue(argv, index, flag) {
     return null;
   }
   const value = argv[index + 1];
-  if (!value) {
+  if (!value || value.startsWith("--")) {
     throw new Error(`${flag} requires a value`);
   }
   return { nextIndex: index + 1, value };
@@ -126,10 +144,11 @@ function parseFloatFlagValue(raw, flag) {
   return parsed;
 }
 
-export function stringFlag(flag, key) {
+/** Create a flag spec that assigns one string value to the parsed args object. */
+export function stringFlag(flag, key, options = {}) {
   return {
     consume(argv, index) {
-      const option = consumeStringFlag(argv, index, flag);
+      const option = consumeStringFlag(argv, index, flag, options);
       if (!option) {
         return null;
       }
@@ -137,6 +156,25 @@ export function stringFlag(flag, key) {
         nextIndex: option.nextIndex,
         apply(target) {
           target[key] = option.value;
+        },
+      };
+    },
+  };
+}
+
+/** Create a flag spec that appends repeated string values to an array field. */
+export function stringListFlag(flag, key, options = {}) {
+  return {
+    consume(argv, index) {
+      const option = consumeStringFlag(argv, index, flag, options);
+      if (!option) {
+        return null;
+      }
+      return {
+        nextIndex: option.nextIndex,
+        apply(target) {
+          target[key] ??= [];
+          target[key].push(option.value);
         },
       };
     },
@@ -160,6 +198,7 @@ function createAssignedValueFlag(consumeOption) {
   };
 }
 
+/** Create a flag spec that parses and assigns a safe integer value. */
 export function intFlag(flag, key, options) {
   return createAssignedValueFlag((argv, index) => {
     const option = consumeIntFlag(argv, index, flag, options);
@@ -167,6 +206,7 @@ export function intFlag(flag, key, options) {
   });
 }
 
+/** Create a flag spec that parses and assigns a finite floating-point value. */
 export function floatFlag(flag, key, options) {
   return createAssignedValueFlag((argv, index) => {
     const option = consumeFloatFlag(argv, index, flag, options);
@@ -174,6 +214,7 @@ export function floatFlag(flag, key, options) {
   });
 }
 
+/** Create a flag spec that assigns a fixed boolean-like value when present. */
 export function booleanFlag(flag, key, value = true) {
   return {
     consume(argv, index) {
@@ -190,6 +231,7 @@ export function booleanFlag(flag, key, value = true) {
   };
 }
 
+/** Apply flag specs to argv and return the mutated parsed args object. */
 export function parseFlagArgs(argv, args, specs, options = {}) {
   const ignoreDoubleDash = options.ignoreDoubleDash ?? true;
   for (let i = 0; i < argv.length; i += 1) {

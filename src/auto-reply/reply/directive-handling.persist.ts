@@ -1,13 +1,14 @@
+// Persists directive-derived session preferences such as model and auth choices.
 import {
   resolveAgentDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveCliRuntimeModelBackendBinding } from "../../agents/cli-backends.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { normalizeProviderId, type ModelAliasIndex } from "../../agents/model-selection.js";
-import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-routing.js";
+import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -396,6 +397,7 @@ export async function persistInlineDirectives(params: {
           agentId: activeAgentId,
           sessionKey,
         }).runtime,
+        config: cfg,
       }),
       model,
     }),

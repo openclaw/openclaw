@@ -1,6 +1,7 @@
+// Text formatter for plugin list rows and verbose plugin details.
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { PluginRecord } from "../plugins/registry.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
-import { theme } from "../terminal/theme.js";
 import { shortenHomeInString } from "../utils.js";
 
 export function formatPluginLine(plugin: PluginRecord, verbose = false): string {

@@ -1,5 +1,9 @@
+// Assertions for live plugin tool E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
+import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import { readTextFileTail, tailText } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
@@ -23,6 +27,10 @@ const agentTurnTimeoutSeconds = readPositiveIntEnv(
 const SCAN_CHUNK_BYTES = 64 * 1024;
 const SCAN_CARRY_CHARS = 256;
 const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
+const AGENT_OUTPUT_MAX_BYTES = readPositiveIntEnv(
+  "OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_MAX_BYTES",
+  1024 * 1024,
+);
 const SESSION_FILE_LIST_LIMIT = 20;
 
 function requireEnv(name) {
@@ -49,45 +57,16 @@ function agentErrorPath() {
   return process.env.OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_ERROR_PATH || "/tmp/openclaw-agent.err";
 }
 
-function tailText(text, maxBytes = ERROR_DETAIL_TAIL_BYTES) {
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
-    return text;
-  }
-  return Buffer.from(text, "utf8").subarray(-maxBytes).toString("utf8");
-}
-
-function readTextFileTail(file, maxBytes = ERROR_DETAIL_TAIL_BYTES) {
+function scanFileForNeedles(file, needles) {
+  const pendingNeedles = new Set(needles);
   let stat;
   try {
     stat = fs.statSync(file);
   } catch {
-    return "";
-  }
-  if (!stat.isFile() || stat.size <= 0) {
-    return "";
-  }
-
-  const length = Math.min(maxBytes, stat.size);
-  const start = stat.size - length;
-  const fd = fs.openSync(file, "r");
-  try {
-    const buffer = Buffer.alloc(length);
-    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
-    return buffer.subarray(0, bytesRead).toString("utf8");
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-function scanFileForNeedles(file, pendingNeedles) {
-  let stat;
-  try {
-    stat = fs.statSync(file);
-  } catch {
-    return;
+    return pendingNeedles;
   }
   if (!stat.isFile() || stat.size <= 0 || pendingNeedles.size === 0) {
-    return;
+    return pendingNeedles;
   }
 
   const maxNeedleLength = Math.max(...Array.from(pendingNeedles, (needle) => needle.length));
@@ -115,6 +94,7 @@ function scanFileForNeedles(file, pendingNeedles) {
   } finally {
     fs.closeSync(fd);
   }
+  return pendingNeedles;
 }
 
 function scanSessionTranscripts(sessionsDir, needles) {
@@ -132,7 +112,7 @@ function scanSessionTranscripts(sessionsDir, needles) {
   }
 
   const pendingDirs = [sessionsDir];
-  while (pendingDirs.length > 0 && pendingNeedles.size > 0) {
+  while (pendingDirs.length > 0) {
     const dir = pendingDirs.pop();
     const entries = fs
       .readdirSync(dir, { withFileTypes: true })
@@ -150,9 +130,9 @@ function scanSessionTranscripts(sessionsDir, needles) {
       if (checkedFiles.length < SESSION_FILE_LIST_LIMIT) {
         checkedFiles.push(path.relative(sessionsDir, entryPath));
       }
-      scanFileForNeedles(entryPath, pendingNeedles);
-      if (pendingNeedles.size === 0) {
-        break;
+      if (scanFileForNeedles(entryPath, needles).size === 0) {
+        pendingNeedles.clear();
+        return { checkedFiles, filesChecked, missingDir: false, pendingNeedles };
       }
     }
   }
@@ -182,10 +162,12 @@ function writeJson(file, value) {
 }
 
 function installRecords() {
-  const indexPath = path.join(stateDir(), "plugins", "installs.json");
-  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
   const cfg = fs.existsSync(configPath()) ? readJson(configPath()) : {};
-  return index.installRecords || index.records || cfg.plugins?.installs || {};
+  return readPluginInstallRecords({
+    stateDir: stateDir(),
+    configPath: configPath(),
+    fallbackRecords: cfg.plugins?.installs ?? {},
+  });
 }
 
 function pluginInstallPath() {
@@ -377,13 +359,21 @@ function assertAgentTurn() {
   const toolName = requireEnv("TOOL_NAME");
   const outputPath = agentOutputPath();
   const errorPath = agentErrorPath();
+  const outputStat = fs.statSync(outputPath);
+  if (outputStat.isFile() && outputStat.size > AGENT_OUTPUT_MAX_BYTES) {
+    const stdoutTail = readTextFileTail(outputPath, ERROR_DETAIL_TAIL_BYTES);
+    const stderrTail = readTextFileTail(errorPath, ERROR_DETAIL_TAIL_BYTES);
+    throw new Error(
+      `live agent output exceeded ${AGENT_OUTPUT_MAX_BYTES} bytes:\nstdout tail=${stdoutTail}\nstderr tail=${stderrTail}`,
+    );
+  }
   const stdout = fs.readFileSync(outputPath, "utf8");
   const response = JSON.parse(stdout);
-  const text = (response.payloads || []).map((payload) => payload?.text || "").join("\n");
+  const text = extractAgentReplyTexts(JSON.stringify(response)).join("\n");
   if (!text.includes(expected)) {
-    const stderrTail = readTextFileTail(errorPath);
+    const stderrTail = readTextFileTail(errorPath, ERROR_DETAIL_TAIL_BYTES);
     throw new Error(
-      `live agent reply did not contain tool slug ${expected}:\nstdout tail=${tailText(stdout)}\nstderr tail=${stderrTail}`,
+      `live agent reply did not contain tool slug ${expected}:\nstdout tail=${tailText(stdout, ERROR_DETAIL_TAIL_BYTES)}\nstderr tail=${stderrTail}`,
     );
   }
   const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");

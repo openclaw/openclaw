@@ -1,3 +1,8 @@
+/** Collects and renders gateway health for channels, agents, plugins, and sessions. */
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-style.js";
+import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { inspectChannelAccount } from "../channels/account-inspection.js";
 import {
@@ -9,15 +14,17 @@ import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-on
 import { buildChannelAccountSnapshotFromAccount } from "../channels/plugins/status.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { withProgress } from "../cli/progress.js";
-import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listContextEngineQuarantines } from "../context-engine/registry.js";
 import {
   buildGatewayConnectionDetails,
+  buildGatewayProbeConnectionDetails,
   callGateway,
   formatGatewayTransportErrorJson,
+  isGatewayCredentialsRequiredError,
 } from "../gateway/call.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -35,10 +42,11 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { asNullableRecord } from "../shared/record-coerce.js";
-import { styleHealthChannelLine } from "../terminal/health-style.js";
-import { isRich } from "../terminal/theme.js";
+import {
+  buildCredentialsRequiredHealthDiagnostic,
+  GATEWAY_HEALTH_REACHABLE_LINE,
+  gatewayProbeResultSawGateway,
+} from "./gateway-health-auth-diagnostic.js";
 import { formatHealthChannelLines } from "./health-format.js";
 import type {
   AgentHealthSummary,
@@ -60,21 +68,13 @@ export type {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-type ConfigModule = typeof import("../config/config.js");
-
-const configModuleLoader = createLazyImportLoader<ConfigModule>(
-  () => import("../config/config.js"),
-);
-
-function loadConfigModule(): Promise<ConfigModule> {
-  return configModuleLoader.load();
-}
-
 const debugHealth = (...args: unknown[]) => {
   if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH)) {
     console.warn("[health:debug]", ...args);
   }
 };
+
+const loadConfigRuntime = async () => await import("../config/config.js");
 
 const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
   "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
@@ -102,6 +102,8 @@ const buildNonSensitiveProbeFailure = (
     return undefined;
   }
 
+  // Preserve the actionable Full Disk Access failure while stripping the local
+  // username path before health leaves the gateway.
   const error = redactIMessageProbeErrorMessage(record.error);
   if (
     !/\bimsg\b/i.test(error) ||
@@ -156,6 +158,7 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   }`;
 }
 
+/** Formats optional model-pricing cache degradation for text health output. */
 export function formatModelPricingHealthLine(summary: HealthSummary): string | null {
   const modelPricing = summary.modelPricing;
   if (!modelPricing || modelPricing.state === "disabled") {
@@ -185,6 +188,7 @@ function buildContextEngineHealthSummary(): ContextEngineHealthSummary | undefin
   return quarantined.length > 0 ? { quarantined } : undefined;
 }
 
+/** Formats context engine quarantine state for text health output. */
 export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
   const quarantined = summary.contextEngines?.quarantined ?? [];
   if (quarantined.length === 0) {
@@ -404,6 +408,7 @@ async function resolveHealthAccountContext(params: {
   };
 }
 
+/** Builds the gateway-side health snapshot for channels, agents, plugins, and sessions. */
 export async function getHealthSnapshot(params?: {
   timeoutMs?: number;
   probe?: boolean;
@@ -412,7 +417,7 @@ export async function getHealthSnapshot(params?: {
   eventLoop?: HealthSummary["eventLoop"];
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
-  const cfg = getRuntimeConfig();
+  const cfg = await readRuntimeHealthConfig();
   const { defaultAgentId, ordered } = resolveAgentOrder(cfg);
   const channelBindings = buildChannelAccountBindings(cfg);
   const sessionCache = new Map<string, HealthSummary["sessions"]>();
@@ -438,7 +443,7 @@ export async function getHealthSnapshot(params?: {
     (await buildSessionSummary(resolveStorePath(cfg.session?.store, { agentId: defaultAgentId })));
 
   const start = Date.now();
-  const cappedTimeout = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
+  const cappedTimeout = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS, 50);
   const doProbe = params?.probe !== false;
   const includeSensitive = params?.includeSensitive !== false;
   const channels: Record<string, ChannelHealthSummary> = {};
@@ -463,7 +468,7 @@ export async function getHealthSnapshot(params?: {
       boundAccounts,
     });
     const boundAccountIdsAll = Array.from(
-      new Set(Array.from(channelBindings.get(plugin.id)?.values() ?? []).flatMap((ids) => ids)),
+      new Set(Array.from(channelBindings.get(plugin.id)?.values() ?? []).flat()),
     );
     const accountIdsToProbe = Array.from(
       new Set(
@@ -472,6 +477,8 @@ export async function getHealthSnapshot(params?: {
         ),
       ),
     );
+    // Probe preferred/default/bound accounts first, but include all configured
+    // accounts so verbose health can explain account-specific failures.
     debugHealth("channel", {
       id: plugin.id,
       accountIds,
@@ -624,6 +631,7 @@ export async function getHealthSnapshot(params?: {
   return summary;
 }
 
+/** Runs the `openclaw health` command against the gateway and renders JSON or text. */
 export async function healthCommand(
   opts: {
     json?: boolean;
@@ -656,6 +664,36 @@ export async function healthCommand(
         }),
     );
   } catch (error) {
+    if (isGatewayCredentialsRequiredError(error)) {
+      const details = await buildGatewayProbeConnectionDetails({
+        config: cfg,
+        token: opts.token,
+        password: opts.password,
+      });
+      const probe = await probeGatewayStatus({
+        url: details.url,
+        token: opts.token,
+        password: opts.password,
+        tlsFingerprint: details.tlsFingerprint,
+        preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
+        timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        config: cfg,
+        json: opts.json,
+      });
+      if (gatewayProbeResultSawGateway(probe)) {
+        const diagnostic = buildCredentialsRequiredHealthDiagnostic();
+        if (opts.json) {
+          writeRuntimeJson(runtime, diagnostic);
+          runtime.exit(1);
+          return;
+        }
+        runtime.log(GATEWAY_HEALTH_REACHABLE_LINE);
+        runtime.log(diagnostic.error.message);
+        runtime.exit(1);
+        return;
+      }
+      throw error;
+    }
     if (opts.json) {
       const payload = formatGatewayTransportErrorJson(error);
       if (payload) {
@@ -914,6 +952,11 @@ export async function healthCommand(
 }
 
 async function readBestEffortHealthConfig(): Promise<OpenClawConfig> {
-  const { readBestEffortConfig } = await loadConfigModule();
+  const { readBestEffortConfig } = await loadConfigRuntime();
   return await readBestEffortConfig();
+}
+
+async function readRuntimeHealthConfig(): Promise<OpenClawConfig> {
+  const { getRuntimeConfig } = await loadConfigRuntime();
+  return getRuntimeConfig();
 }

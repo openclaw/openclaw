@@ -1,3 +1,6 @@
+/**
+ * Resolves and persists live-session model switch requests.
+ */
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -14,11 +17,11 @@ import {
 } from "./model-selection.js";
 export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 export type LiveSessionModelSelection = EmbeddedRunModelSwitchRequest;
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeProviderId } from "./provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const OPENAI_CODEX_PROVIDER_ID = "openai";
 
 export function resolveLiveSessionModelSelection(params: {
   cfg?: { session?: { store?: string } } | undefined;
@@ -42,7 +45,10 @@ export function resolveLiveSessionModelSelection(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId,
   });
-  const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+  const entry = loadSessionStore(storePath, {
+    hydrateSkillPromptRefs: false,
+    skipCache: true,
+  })[sessionKey];
   const normalizedSelection = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
@@ -95,7 +101,7 @@ function isAlreadyAppliedOpenAICodexRuntimePromotion(
   current: { provider: string; model: string },
   next: LiveSessionModelSelection,
 ): boolean {
-  // The embedded Codex runtime reports openai-codex after applying a canonical
+  // The embedded Codex runtime reports openai after applying a canonical
   // openai selection. Other runtime aliases remain real live-switch targets.
   return (
     normalizeProviderId(current.provider) === OPENAI_CODEX_PROVIDER_ID &&
@@ -179,7 +185,11 @@ export function shouldSwitchToLiveModel(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
-  const entry = loadSessionStore(storePath, { skipCache: true, clone: false })[sessionKey];
+  const entry = loadSessionStore(storePath, {
+    hydrateSkillPromptRefs: false,
+    skipCache: true,
+    clone: false,
+  })[sessionKey];
   if (!entry?.liveModelSwitchPending) {
     return undefined;
   }

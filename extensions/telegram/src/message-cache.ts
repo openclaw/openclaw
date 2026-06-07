@@ -1,14 +1,11 @@
+// Telegram plugin module implements message cache behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
-} from "openclaw/plugin-sdk/number-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { appendRegularFileSync, replaceFileAtomicSync } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTelegramPrimaryMedia } from "./bot/body-helpers.js";
 import {
@@ -17,6 +14,7 @@ import {
   getTelegramTextParts,
   normalizeForwardedContext,
 } from "./bot/helpers.js";
+import { parseTelegramMessageThreadId } from "./outbound-params.js";
 import { getOptionalTelegramRuntime } from "./runtime.js";
 
 export type TelegramReplyChainEntry = NonNullable<MsgContext["ReplyChain"]>[number];
@@ -57,23 +55,26 @@ export type TelegramMessageCache = {
     before: number;
     after: number;
   }) => Promise<TelegramCachedMessageNode[]>;
+  latestMatchingAtOrBefore: (params: {
+    accountId: string;
+    chatId: string | number;
+    messageId?: string;
+    threadId?: number;
+    matches: (node: TelegramCachedMessageNode) => boolean;
+  }) => Promise<TelegramCachedMessageNode | null>;
 };
 
 type MessageWithExternalReply = Message & { external_reply?: Message };
 
 type TelegramMessageCacheBucket = {
   messages: Map<string, TelegramCachedMessageNode>;
-  persistedEntryCount: number;
   hydrated: boolean;
   hydratePromise?: Promise<void>;
-  legacyPersistedPath?: string;
   persistentStore?: TelegramMessageCachePersistentStore;
 };
 
 type PersistedMessageReadResult = {
   messages: Map<string, TelegramCachedMessageNode>;
-  persistedEntryCount: number;
-  needsRewrite: boolean;
 };
 
 type TelegramMessageObservationMode = "authoritative" | "partial";
@@ -89,7 +90,6 @@ const DEFAULT_MAX_MESSAGES = 5000;
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES = 3000;
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cache";
 const PERSISTENT_BUCKET_KEY = `plugin-state:${TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE}`;
-const COMPACT_THRESHOLD_RATIO = 2;
 const persistedMessageCacheBuckets = new Map<string, TelegramMessageCacheBucket>();
 
 export type PersistedTelegramMessageCacheValue = {
@@ -129,6 +129,10 @@ export function resolveTelegramMessageCachePath(storePath: string): string {
   return `${storePath}.telegram-messages.json`;
 }
 
+export function resolveTelegramMessageCacheScope(storePath: string): string {
+  return resolveTelegramMessageCachePath(storePath);
+}
+
 function resolveReplyMessage(msg: Message): Message | undefined {
   const externalReply = (msg as MessageWithExternalReply).external_reply;
   return msg.reply_to_message ?? externalReply;
@@ -166,6 +170,7 @@ function normalizeMessageNode(
   const forwardedFrom = normalizeForwardedContext(msg);
   const replyMessage = resolveReplyMessage(msg);
   const body = resolveMessageBody(msg);
+  const threadId = normalizeTelegramCacheThreadId(params.threadId);
   return {
     sourceMessage: msg,
     messageId: String(msg.message_id),
@@ -181,7 +186,7 @@ function normalizeMessageNode(
     ...(forwardedFrom?.fromId ? { forwardedFromId: forwardedFrom.fromId } : {}),
     ...(forwardedFrom?.fromUsername ? { forwardedFromUsername: forwardedFrom.fromUsername } : {}),
     ...(forwardedFrom?.date ? { forwardedDate: forwardedFrom.date * 1000 } : {}),
-    ...(params.threadId != null ? { threadId: String(params.threadId) } : {}),
+    ...(threadId !== undefined ? { threadId: String(threadId) } : {}),
   };
 }
 
@@ -198,9 +203,7 @@ function normalizeRequiredMessageNode(
 
 function resolveMessageThreadId(msg: Message): number | undefined {
   const threadId = (msg as { message_thread_id?: unknown }).message_thread_id;
-  return typeof threadId === "number" && Number.isFinite(threadId)
-    ? Math.trunc(threadId)
-    : undefined;
+  return normalizeTelegramCacheThreadId(threadId);
 }
 
 function normalizeMessageNodes(
@@ -246,7 +249,11 @@ function parseSafeMessageId(value: string | undefined): number | undefined {
 }
 
 function parseCachedThreadId(value: unknown): number | undefined {
-  return parseStrictNonNegativeInteger(value);
+  return normalizeTelegramCacheThreadId(value);
+}
+
+function normalizeTelegramCacheThreadId(value: unknown): number | undefined {
+  return parseTelegramMessageThreadId(value);
 }
 
 function isTelegramSourceMessage(value: unknown): value is Message {
@@ -347,9 +354,8 @@ function findJsonArrayEnd(text: string): number {
   return -1;
 }
 
-function readPersistedEntryValues(raw: string): { values: unknown[]; needsRewrite: boolean } {
+function readPersistedEntryValues(raw: string): unknown[] {
   const values: unknown[] = [];
-  let needsRewrite = false;
   const readLines = (text: string) => {
     for (const line of text.split("\n")) {
       if (!line.trim()) {
@@ -359,7 +365,8 @@ function readPersistedEntryValues(raw: string): { values: unknown[]; needsRewrit
         const value: unknown = JSON.parse(line);
         values.push(value);
       } catch {
-        needsRewrite = true;
+        // Legacy cache files were best-effort append logs. Doctor imports every
+        // valid row and ignores torn/corrupt entries instead of keeping runtime fallback.
       }
     }
   };
@@ -368,20 +375,18 @@ function readPersistedEntryValues(raw: string): { values: unknown[]; needsRewrit
     const startOffset = raw.length - trimmedStart.length;
     const arrayEnd = findJsonArrayEnd(raw.slice(startOffset));
     if (arrayEnd === -1) {
-      needsRewrite = true;
       readLines(raw);
-      return { values, needsRewrite };
+      return values;
     }
     const legacyValue: unknown = JSON.parse(raw.slice(startOffset, startOffset + arrayEnd));
     if (Array.isArray(legacyValue)) {
       values.push(...legacyValue);
     }
-    needsRewrite = true;
     readLines(raw.slice(startOffset + arrayEnd));
-    return { values, needsRewrite };
+    return values;
   }
   readLines(raw);
-  return { values, needsRewrite };
+  return values;
 }
 
 function trimMessages(messages: Map<string, TelegramCachedMessageNode>, maxMessages: number): void {
@@ -450,17 +455,12 @@ function upsertCachedMessageNode(params: {
 
 function readPersistedMessages(filePath: string, maxMessages: number): PersistedMessageReadResult {
   const messages = new Map<string, TelegramCachedMessageNode>();
-  let persistedEntryCount = 0;
-  let needsRewrite = false;
   if (!fs.existsSync(filePath)) {
-    return { messages, persistedEntryCount, needsRewrite };
+    return { messages };
   }
   try {
-    const persisted = readPersistedEntryValues(fs.readFileSync(filePath, "utf-8"));
-    needsRewrite = persisted.needsRewrite;
-    for (const value of persisted.values) {
+    for (const value of readPersistedEntryValues(fs.readFileSync(filePath, "utf-8"))) {
       for (const entry of parsePersistedEntry(value)) {
-        persistedEntryCount++;
         upsertCachedMessageNode({
           messages,
           key: entry.key,
@@ -472,9 +472,8 @@ function readPersistedMessages(filePath: string, maxMessages: number): Persisted
     }
   } catch (error) {
     logVerbose(`telegram: failed to read message cache: ${String(error)}`);
-    needsRewrite = true;
   }
-  return { messages, persistedEntryCount, needsRewrite };
+  return { messages };
 }
 
 function toPersistedCacheValue(
@@ -484,52 +483,6 @@ function toPersistedCacheValue(
     sourceMessage: node.sourceMessage,
     ...(node.threadId ? { threadId: node.threadId } : {}),
   };
-}
-
-function serializePersistedEntry(key: string, node: TelegramCachedMessageNode): string {
-  return `${JSON.stringify({
-    key,
-    node: toPersistedCacheValue(node),
-  })}\n`;
-}
-
-function replaceLegacyPersistedMessages(params: {
-  messages: Map<string, TelegramCachedMessageNode>;
-  persistedPath?: string;
-}): number {
-  const { persistedPath, messages } = params;
-  if (!persistedPath) {
-    return messages.size;
-  }
-  if (messages.size === 0) {
-    fs.rmSync(persistedPath, { force: true });
-    return 0;
-  }
-  const serialized = Array.from(messages, ([key, node]) => serializePersistedEntry(key, node)).join(
-    "",
-  );
-  replaceFileAtomicSync({
-    filePath: persistedPath,
-    content: serialized,
-    tempPrefix: ".telegram-message-cache",
-  });
-  return messages.size;
-}
-
-function appendLegacyPersistedMessage(params: {
-  key: string;
-  node: TelegramCachedMessageNode;
-  persistedPath?: string;
-}): number {
-  const { persistedPath } = params;
-  if (!persistedPath) {
-    return 0;
-  }
-  appendRegularFileSync({
-    filePath: persistedPath,
-    content: serializePersistedEntry(params.key, params.node),
-  });
-  return 1;
 }
 
 function resolvePersistentScopeKey(scope: string): string {
@@ -572,7 +525,6 @@ function resolveDefaultPersistentStore(): TelegramMessageCachePersistentStore | 
 
 function resolveMessageCacheBucket(params: {
   bucketKey?: string;
-  legacyPersistedPath?: string;
   maxMessages: number;
   persistentStore?: TelegramMessageCachePersistentStore;
 }): TelegramMessageCacheBucket {
@@ -580,21 +532,17 @@ function resolveMessageCacheBucket(params: {
   if (!bucketKey) {
     return {
       messages: new Map<string, TelegramCachedMessageNode>(),
-      persistedEntryCount: 0,
       hydrated: true,
     };
   }
   const existing = persistedMessageCacheBuckets.get(bucketKey);
   if (existing) {
     existing.persistentStore = params.persistentStore ?? existing.persistentStore;
-    existing.legacyPersistedPath = params.legacyPersistedPath ?? existing.legacyPersistedPath;
     return existing;
   }
   const bucket = {
     messages: new Map<string, TelegramCachedMessageNode>(),
-    persistedEntryCount: 0,
     hydrated: false,
-    ...(params.legacyPersistedPath ? { legacyPersistedPath: params.legacyPersistedPath } : {}),
     ...(params.persistentStore ? { persistentStore: params.persistentStore } : {}),
   };
   persistedMessageCacheBuckets.set(bucketKey, bucket);
@@ -624,35 +572,8 @@ async function hydrateMessageCacheBucket(
       ? storeEntries.filter(({ key }) => key.startsWith(`${scopeKey}:`))
       : storeEntries;
 
-    const legacyPath = bucket.legacyPersistedPath;
-    if (legacyPath) {
-      const legacy = readPersistedMessages(legacyPath, maxMessages);
-      if (legacy.messages.size > 0) {
-        for (const [key, node] of legacy.messages) {
-          const cacheKey = bucket.persistentStore && scopeKey ? `${scopeKey}:${key}` : key;
-          upsertCachedMessageNode({
-            messages: bucket.messages,
-            key: cacheKey,
-            node,
-            mode: "authoritative",
-          });
-          trimMessages(bucket.messages, maxMessages);
-        }
-      }
-      if (!bucket.persistentStore && legacy.needsRewrite) {
-        try {
-          bucket.persistedEntryCount = replaceLegacyPersistedMessages({
-            messages: bucket.messages,
-            persistedPath: legacyPath,
-          });
-        } catch (error) {
-          logVerbose(`telegram: failed to compact message cache: ${String(error)}`);
-        }
-      }
-    }
     for (const { key, value } of scopedStoreEntries) {
       for (const entry of parsePersistedEntry(persistedValueToEntry(key, value))) {
-        bucket.persistedEntryCount++;
         upsertCachedMessageNode({
           messages: bucket.messages,
           key: entry.key,
@@ -672,31 +593,14 @@ async function hydrateMessageCacheBucket(
 async function persistCachedNode(params: {
   bucket: TelegramMessageCacheBucket;
   key: string;
-  maxMessages: number;
   node: TelegramCachedMessageNode;
 }): Promise<void> {
   const { persistentStore } = params.bucket;
   if (!persistentStore) {
-    try {
-      params.bucket.persistedEntryCount += appendLegacyPersistedMessage({
-        key: params.key,
-        node: params.node,
-        persistedPath: params.bucket.legacyPersistedPath,
-      });
-      if (params.bucket.persistedEntryCount > params.maxMessages * COMPACT_THRESHOLD_RATIO) {
-        params.bucket.persistedEntryCount = replaceLegacyPersistedMessages({
-          messages: params.bucket.messages,
-          persistedPath: params.bucket.legacyPersistedPath,
-        });
-      }
-    } catch (error) {
-      logVerbose(`telegram: failed to persist message cache: ${String(error)}`);
-    }
     return;
   }
   try {
     await persistentStore.register(params.key, toPersistedCacheValue(params.node));
-    params.bucket.persistedEntryCount++;
   } catch (error) {
     logVerbose(`telegram: failed to persist message cache: ${String(error)}`);
   }
@@ -704,8 +608,7 @@ async function persistCachedNode(params: {
 
 export function createTelegramMessageCache(params?: {
   maxMessages?: number;
-  legacyPersistedPath?: string;
-  persistedPath?: string;
+  scope?: string;
   persistentStore?: TelegramMessageCachePersistentStore;
   bucketKey?: string;
 }): TelegramMessageCache {
@@ -713,20 +616,13 @@ export function createTelegramMessageCache(params?: {
   const maxMessages =
     params?.maxMessages ??
     (persistentStore ? TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES : DEFAULT_MAX_MESSAGES);
-  const legacyPersistedPath = params?.legacyPersistedPath ?? params?.persistedPath;
   const scopeKey = persistentStore
-    ? resolvePersistentScopeKey(legacyPersistedPath ?? params?.bucketKey ?? "default")
+    ? resolvePersistentScopeKey(params?.scope ?? "default")
     : undefined;
   const bucketKey =
-    params?.bucketKey ??
-    (persistentStore
-      ? `${PERSISTENT_BUCKET_KEY}:${scopeKey}`
-      : legacyPersistedPath
-        ? `legacy:${legacyPersistedPath}`
-        : undefined);
+    params?.bucketKey ?? (persistentStore ? `${PERSISTENT_BUCKET_KEY}:${scopeKey}` : undefined);
   const bucket = resolveMessageCacheBucket({
     bucketKey,
-    legacyPersistedPath,
     maxMessages,
     ...(persistentStore ? { persistentStore } : {}),
   });
@@ -747,14 +643,18 @@ export function createTelegramMessageCache(params?: {
     return entry;
   };
 
-  const listChatMessages = async (params: {
+  const listChatMessages = async (paramsLocal: {
     accountId: string;
     chatId: string | number;
     threadId?: number;
   }) => {
     await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey);
-    const prefix = telegramMessageCacheKeyPrefix({ scopeKey, ...params });
-    const threadId = params.threadId != null ? String(params.threadId) : undefined;
+    const prefix = telegramMessageCacheKeyPrefix({ scopeKey, ...paramsLocal });
+    const normalizedThreadId = normalizeTelegramCacheThreadId(paramsLocal.threadId);
+    if (paramsLocal.threadId != null && normalizedThreadId === undefined) {
+      return [];
+    }
+    const threadId = normalizedThreadId !== undefined ? String(normalizedThreadId) : undefined;
     return Array.from(messages, ([key, node]) => ({ key, node }))
       .filter(({ key, node }) => {
         if (!key.startsWith(prefix)) {
@@ -786,7 +686,7 @@ export function createTelegramMessageCache(params?: {
           recordedEntry = cachedNode;
         }
         trimMessages(messages, maxMessages);
-        await persistCachedNode({ bucket, key, maxMessages, node: cachedNode });
+        await persistCachedNode({ bucket, key, node: cachedNode });
       }
       return recordedEntry ?? currentObservation.node;
     },
@@ -819,6 +719,40 @@ export function createTelegramMessageCache(params?: {
         Math.max(0, targetIndex - Math.max(0, before)),
         targetIndex + Math.max(0, after) + 1,
       );
+    },
+    latestMatchingAtOrBefore: async ({ accountId, chatId, messageId, threadId, matches }) => {
+      if (!messageId) {
+        return null;
+      }
+      const targetId = parseSafeMessageId(messageId);
+      if (targetId === undefined) {
+        return null;
+      }
+      await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey);
+      const prefix = telegramMessageCacheKeyPrefix({ scopeKey, accountId, chatId });
+      const normalizedThreadId = normalizeTelegramCacheThreadId(threadId);
+      if (threadId != null && normalizedThreadId === undefined) {
+        return null;
+      }
+      const normalizedThread =
+        normalizedThreadId !== undefined ? String(normalizedThreadId) : undefined;
+      let latest: TelegramCachedMessageNode | null = null;
+      for (const [key, entry] of messages) {
+        if (!key.startsWith(prefix)) {
+          continue;
+        }
+        if (normalizedThread !== undefined && entry.threadId !== normalizedThread) {
+          continue;
+        }
+        const entryId = parseSafeMessageId(entry.messageId);
+        if (entryId === undefined || entryId > targetId || !matches(entry)) {
+          continue;
+        }
+        if (!latest || compareCachedMessageNodes(entry, latest) > 0) {
+          latest = entry;
+        }
+      }
+      return latest;
     },
   };
 }
@@ -897,25 +831,15 @@ async function resolveSessionBoundaryNode(params: {
   if (!params.messageId) {
     return undefined;
   }
-  const { messageId } = params;
-  const candidates = (
-    await params.cache.recentBefore({
+  return (
+    (await params.cache.latestMatchingAtOrBefore({
       accountId: params.accountId,
       chatId: params.chatId,
-      messageId,
+      messageId: params.messageId,
       ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
-      limit: Number.MAX_SAFE_INTEGER,
-    })
-  ).filter(isSessionBoundaryCommandNode);
-  const current = await params.cache.get({
-    accountId: params.accountId,
-    chatId: params.chatId,
-    messageId,
-  });
-  if (current && isSessionBoundaryCommandNode(current)) {
-    candidates.push(current);
-  }
-  return candidates.toSorted(compareCachedMessageNodes).at(-1);
+      matches: isSessionBoundaryCommandNode,
+    })) ?? undefined
+  );
 }
 
 export async function buildTelegramReplyChain(params: {

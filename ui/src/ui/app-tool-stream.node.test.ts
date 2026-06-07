@@ -286,6 +286,34 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.chatModelOverrides?.main).toBeNull();
   });
 
+  it("tags stream segments with the tool they precede", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({
+      chatRunId: "run-1",
+      chatStream: "visible text before tool",
+      chatStreamStartedAt: TOOL_STREAM_TEST_NOW - 10,
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "call_1",
+      },
+    });
+
+    expect(host.chatStreamSegments).toEqual([
+      { text: "visible text before tool", ts: TOOL_STREAM_TEST_NOW, toolCallId: "call_1" },
+    ]);
+    expect(host.chatStream).toBeNull();
+    vi.useRealTimers();
+  });
+
   it("records tool activity summaries without storing raw argument values", () => {
     useToolStreamFakeTimers();
     const host = createHost();
@@ -323,6 +351,82 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(stored).not.toContain("cat /Users/buns/private-token.txt");
     expect(stored).not.toContain("sk-test-secret");
     vi.useRealTimers();
+  });
+
+  it("ignores selected-global tool events from another agent", () => {
+    const host = createHost({
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-main-global",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "global",
+      agentId: "main",
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-main-global",
+      },
+    });
+
+    expect(host.toolStreamOrder).toHaveLength(0);
+    expect(host.activityEntries).toHaveLength(0);
+  });
+
+  it("ignores selected-global lifecycle and fallback events from another agent", () => {
+    const host = createHost({
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-main-global",
+      seq: 1,
+      stream: "compaction",
+      ts: Date.now(),
+      sessionKey: "global",
+      agentId: "main",
+      data: { phase: "start" },
+    });
+    handleAgentEvent(host, {
+      runId: "run-main-global",
+      seq: 2,
+      stream: "lifecycle",
+      ts: Date.now(),
+      sessionKey: "global",
+      agentId: "main",
+      data: {
+        phase: "fallback",
+        selectedProvider: "fireworks",
+        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+        activeProvider: "deepinfra",
+        activeModel: "moonshotai/Kimi-K2.5",
+      },
+    });
+    handleAgentEvent(host, {
+      runId: "run-main-global",
+      seq: 3,
+      stream: "fallback",
+      ts: Date.now(),
+      sessionKey: "global",
+      agentId: "main",
+      data: {
+        phase: "fallback",
+        selectedProvider: "fireworks",
+        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+        activeProvider: "deepinfra",
+        activeModel: "moonshotai/Kimi-K2.5",
+      },
+    });
+
+    expect(host.compactionStatus).toBeNull();
+    expect(host.fallbackStatus).toBeNull();
   });
 
   it("stores only redacted truncated output previews in activity entries", () => {
@@ -562,6 +666,72 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     expect(host.compactionStatus).toBeNull();
     expect(host.compactionClearTimer).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it("ignores selected-global session operation compaction for another agent", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+
+    handleSessionOperationEvent(host, {
+      operationId: "operation-main",
+      operation: "compact",
+      phase: "start",
+      sessionKey: "global",
+      agentId: "main",
+      ts: TOOL_STREAM_TEST_NOW,
+    });
+
+    expect(host.compactionStatus).toBeNull();
+    expect(host.compactionClearTimer).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it("accepts canonical global live events for selected agent main aliases", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({
+      sessionKey: "agent:work:main",
+      agentsList: { defaultId: "main" },
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-work",
+      seq: 1,
+      stream: "compaction",
+      ts: TOOL_STREAM_TEST_NOW,
+      sessionKey: "global",
+      agentId: "work",
+      data: { phase: "start" },
+    });
+
+    expect(host.compactionStatus).toEqual({
+      phase: "active",
+      runId: "run-work",
+      startedAt: TOOL_STREAM_TEST_NOW,
+      completedAt: null,
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-main",
+      seq: 2,
+      stream: "fallback",
+      ts: TOOL_STREAM_TEST_NOW,
+      sessionKey: "global",
+      agentId: "main",
+      data: {
+        phase: "fallback_started",
+        selectedProvider: "openai",
+        selectedModel: "gpt-5",
+      },
+    });
+
+    expect(host.fallbackStatus).toBeNull();
 
     vi.useRealTimers();
   });

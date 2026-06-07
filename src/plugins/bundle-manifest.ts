@@ -1,13 +1,14 @@
+/** Reads Codex/Claude/Cursor bundle manifests into OpenClaw plugin manifest metadata. */
 import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
-import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
-import { readRootStructuredFileSync } from "../infra/json-files.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeUniqueSingleOrTrimmedStringList } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import JSON5 from "json5";
+import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
+import { readRootStructuredFileSync } from "../infra/json-files.js";
 import { isRecord } from "../utils.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import type { PluginManifestActivation } from "./manifest.js";
@@ -17,10 +18,12 @@ import {
   PLUGIN_MANIFEST_FILENAME,
 } from "./manifest.js";
 
+/** Relative manifest path for Codex-style plugin bundles. */
 export const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
 export const CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json";
 export const CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH = ".cursor-plugin/plugin.json";
 
+/** Normalized bundle manifest shape consumed by plugin discovery. */
 export type BundlePluginManifest = {
   id: string;
   name?: string;
@@ -43,6 +46,7 @@ type BundleManifestFileLoadResult =
   | { ok: true; raw: Record<string, unknown>; manifestPath: string }
   | { ok: false; error: string; manifestPath: string };
 
+/** Normalizes string-or-list path fields from bundle manifests. */
 export function normalizeBundlePathList(value: unknown): string[] {
   return normalizeUniqueSingleOrTrimmedStringList(value);
 }

@@ -1,3 +1,4 @@
+// Telegram plugin module implements action runtime behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
@@ -41,6 +42,7 @@ import {
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
+  editMessageReplyMarkupTelegram,
   editMessageTelegram,
   pinMessageTelegram,
   reactMessageTelegram,
@@ -57,6 +59,7 @@ export const telegramActionRuntime = {
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
+  editMessageReplyMarkupTelegram,
   editMessageTelegram,
   getCacheStats,
   pinMessageTelegram,
@@ -666,9 +669,13 @@ export async function handleTelegramAction(
     }
     const content =
       readStringParam(params, "content", { allowEmpty: false }) ??
-      readStringParam(params, "message", { required: true, allowEmpty: false });
+      readStringParam(params, "message", { allowEmpty: false });
+    const caption = readStringParam(params, "caption", { allowEmpty: false });
     const buttons = resolveTelegramButtonsFromParams(params);
-    if (buttons) {
+    if (content == null && caption == null && buttons === undefined) {
+      throw new Error("content required.");
+    }
+    if (buttons !== undefined) {
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
         accountId: accountId ?? undefined,
@@ -685,15 +692,34 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
+    if (content == null && caption == null && buttons !== undefined) {
+      const result = await telegramActionRuntime.editMessageReplyMarkupTelegram(
+        chatId ?? "",
+        messageId ?? 0,
+        buttons,
+        {
+          cfg,
+          token,
+          accountId: accountId ?? undefined,
+          gatewayClientScopes: options?.gatewayClientScopes,
+        },
+      );
+      return jsonResult({
+        ok: true,
+        messageId: result.messageId,
+        chatId: result.chatId,
+      });
+    }
     const result = await telegramActionRuntime.editMessageTelegram(
       chatId ?? "",
       messageId ?? 0,
-      content,
+      caption ?? content ?? "",
       {
         cfg,
         token,
         accountId: accountId ?? undefined,
         buttons,
+        editMode: caption != null ? "caption" : "auto",
         gatewayClientScopes: options?.gatewayClientScopes,
       },
     );

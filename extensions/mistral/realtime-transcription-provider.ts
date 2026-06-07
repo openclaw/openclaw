@@ -1,3 +1,4 @@
+// Mistral provider module implements model/runtime integration.
 import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionProviderConfig,
@@ -200,9 +201,8 @@ function createMistralRealtimeTranscriptionSession(
         return;
       case "error":
         config.onError?.(new Error(readErrorDetail(event)));
-        return;
+
       default:
-        return;
     }
   };
 

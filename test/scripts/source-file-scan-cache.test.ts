@@ -1,3 +1,4 @@
+// Source File Scan Cache tests cover source file scan cache script behavior.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -33,7 +34,9 @@ describe("source file scan cache", () => {
     const readFile = async (filePath: string) => {
       activeReads += 1;
       maxActiveReads = Math.max(maxActiveReads, activeReads);
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
+      });
       activeReads -= 1;
       return `content:${path.basename(filePath)}`;
     };

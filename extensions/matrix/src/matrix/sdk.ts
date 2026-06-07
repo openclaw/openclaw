@@ -1,3 +1,4 @@
+// Matrix plugin module implements sdk behavior.
 import { EventEmitter } from "node:events";
 import {
   ClientEvent,
@@ -9,6 +10,7 @@ import {
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
 } from "matrix-js-sdk/lib/matrix.js";
+import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
@@ -1077,7 +1079,9 @@ export class MatrixClient {
     relationType: string | null,
     eventType?: string | null,
     opts: {
+      dir?: Direction;
       from?: string;
+      limit?: number;
     } = {},
   ): Promise<MatrixRelationsPage> {
     const result = await this.client.relations(roomId, eventId, relationType, eventType, opts);
@@ -1357,7 +1361,7 @@ export class MatrixClient {
       return await fail("Matrix recovery key is required");
     }
 
-    let stagedKeyId: string | null = null;
+    let stagedKeyId: string | null;
     try {
       stagedKeyId = (await this.resolveDefaultSecretStorageKeyId(crypto)) ?? null;
       this.recoveryKeyStore.stageEncodedRecoveryKey({
@@ -2051,10 +2055,8 @@ export class MatrixClient {
       this.emitter.emit("room.event", roomId, raw);
       if (isEncryptedEvent) {
         this.emitter.emit("room.encrypted_event", roomId, raw);
-      } else {
-        if (decryptBridge.shouldEmitUnencryptedMessage(roomId, raw.event_id)) {
-          this.emitter.emit("room.message", roomId, raw);
-        }
+      } else if (decryptBridge.shouldEmitUnencryptedMessage(roomId, raw.event_id)) {
+        this.emitter.emit("room.message", roomId, raw);
       }
 
       const stateKey = raw.state_key ?? "";

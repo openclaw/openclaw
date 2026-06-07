@@ -1,3 +1,4 @@
+// Defines and sanitizes runtime diagnostic event payloads.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import {
@@ -768,7 +769,6 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.completed",
   "model.call.error",
   "run.progress",
-  "harness.run.started",
   "harness.run.completed",
   "harness.run.error",
   "context.assembled",
@@ -835,14 +835,17 @@ function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
   return state;
 }
 
+/** Returns whether diagnostics are enabled for a loaded config; missing config defaults enabled. */
 export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
   return config?.diagnostics?.enabled !== false;
 }
 
+/** Sets the process-wide diagnostic dispatcher enable flag. */
 export function setDiagnosticsEnabledForProcess(enabled: boolean): void {
   getDiagnosticEventsState().enabled = enabled;
 }
 
+/** Returns the current process-wide diagnostic dispatcher enable flag. */
 export function areDiagnosticsEnabledForProcess(): boolean {
   return getDiagnosticEventsState().enabled;
 }
@@ -1024,10 +1027,13 @@ function dispatchAsyncDiagnosticDropSummary(state: DiagnosticEventsGlobalState):
   dispatchDiagnosticEvent(state, event, createInternalDiagnosticMetadata(false));
 }
 
+/** Waits until queued async diagnostic events have been delivered to listeners. */
 export async function waitForDiagnosticEventsDrained(): Promise<void> {
   const state = getDiagnosticEventsState();
   while (state.asyncDrainScheduled || state.asyncQueue.length > 0) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   }
 }
 
@@ -1091,18 +1097,27 @@ function emitDiagnosticEventWithTrust(
   dispatchDiagnosticEvent(state, enriched, metadata, privateData);
 }
 
+/** Emits an untrusted diagnostic event from external/plugin-facing code. */
 export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, false);
 }
 
+/** Emits an untrusted diagnostic event tagged as internal dispatcher provenance. */
 export function emitInternalDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, false, { internal: true });
 }
 
+/** Returns the latest diagnostic event sequence number assigned in this process. */
+export function getInternalDiagnosticEventSequence(): number {
+  return getDiagnosticEventsState().seq;
+}
+
+/** Emits a trusted diagnostic event from core/runtime-owned instrumentation. */
 export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, true);
 }
 
+/** Emits a trusted diagnostic event with private listener-only payload data. */
 export function emitTrustedDiagnosticEventWithPrivateData(
   event: DiagnosticEventInput,
   privateData?: DiagnosticEventPrivateData,
@@ -1110,6 +1125,7 @@ export function emitTrustedDiagnosticEventWithPrivateData(
   emitDiagnosticEventWithTrust(event, true, { privateData });
 }
 
+/** Emits a trusted model failover diagnostic event. */
 export function emitFailoverEvent(event: Omit<DiagnosticFailoverEvent, "seq" | "ts" | "type">) {
   emitTrustedDiagnosticEvent({
     type: "model.failover",
@@ -1117,6 +1133,7 @@ export function emitFailoverEvent(event: Omit<DiagnosticFailoverEvent, "seq" | "
   });
 }
 
+/** Subscribes to all diagnostic events with dispatcher metadata. */
 export function onInternalDiagnosticEvent(listener: DiagnosticEventListener): () => void {
   const state = getDiagnosticEventsState();
   state.listeners.add(listener);
@@ -1125,6 +1142,7 @@ export function onInternalDiagnosticEvent(listener: DiagnosticEventListener): ()
   };
 }
 
+/** Subscribes to all diagnostic events plus trusted private payload data. */
 export function onTrustedInternalDiagnosticEvent(
   listener: TrustedDiagnosticEventListener,
 ): () => void {
@@ -1135,6 +1153,7 @@ export function onTrustedInternalDiagnosticEvent(
   };
 }
 
+/** Checks currently queued async diagnostic events without draining the queue. */
 export function hasPendingInternalDiagnosticEvent(
   predicate: (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => boolean,
 ): boolean {
@@ -1153,6 +1172,7 @@ export function hasPendingInternalDiagnosticEvent(
   return false;
 }
 
+/** Subscribes to public untrusted diagnostic events only. */
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
   return onInternalDiagnosticEvent((event, metadata) => {
     if (metadata.trusted || event.type === "log.record") {
@@ -1162,6 +1182,7 @@ export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => voi
   });
 }
 
+/** Formats traceparent only for trusted metadata created by the diagnostic dispatcher. */
 export function formatDiagnosticTraceparentForPropagation(
   event: { trace?: DiagnosticTraceContext },
   metadata: DiagnosticEventMetadata,
@@ -1172,10 +1193,12 @@ export function formatDiagnosticTraceparentForPropagation(
   return formatDiagnosticTraceparent(event.trace);
 }
 
+/** Returns whether listener metadata marks dispatcher-internal provenance. */
 export function isInternalDiagnosticEventMetadata(metadata: DiagnosticEventMetadata): boolean {
   return metadata.internal === true;
 }
 
+/** Resets dispatcher state between tests. */
 export function resetDiagnosticEventsForTest(): void {
   const state = getDiagnosticEventsState();
   state.enabled = true;

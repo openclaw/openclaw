@@ -1,3 +1,6 @@
+/**
+ * Gateway server session-key routing tests.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
@@ -25,6 +28,14 @@ vi.mock("./session-utils.js", async () => {
 const { resolveSessionKeyForRun, resetResolvedSessionKeyForRunCacheForTest } =
   await import("./server-session-key.js");
 
+function mockCombinedSessionStore(cfg: OpenClawConfig, store: Record<string, unknown>) {
+  hoisted.loadConfigMock.mockReturnValue(cfg);
+  hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    storePath: "(multiple)",
+    store,
+  });
+}
+
 describe("resolveSessionKeyForRun", () => {
   beforeEach(() => {
     hoisted.loadConfigMock.mockReset();
@@ -34,6 +45,7 @@ describe("resolveSessionKeyForRun", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     resetAgentRunContextForTest();
     resetResolvedSessionKeyForRunCacheForTest();
   });
@@ -44,12 +56,8 @@ describe("resolveSessionKeyForRun", () => {
         store: "/custom/root/agents/{agentId}/sessions/sessions.json",
       },
     };
-    hoisted.loadConfigMock.mockReturnValue(cfg);
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: {
-        "agent:main:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
-      },
+    mockCombinedSessionStore(cfg, {
+      "agent:main:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
     });
 
     expect(resolveSessionKeyForRun("run-1")).toBe("acp:run-1");
@@ -66,12 +74,8 @@ describe("resolveSessionKeyForRun", () => {
         store: "/custom/root/agents/{agentId}/sessions/sessions.json",
       },
     };
-    hoisted.loadConfigMock.mockReturnValue(cfg);
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: {
-        "agent:retired:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
-      },
+    mockCombinedSessionStore(cfg, {
+      "agent:retired:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
     });
 
     expect(resolveSessionKeyForRun("run-1", { agentId: "retired" })).toBe("acp:run-1");
@@ -86,12 +90,8 @@ describe("resolveSessionKeyForRun", () => {
         store: "/custom/root/agents/{agentId}/sessions/sessions.json",
       },
     };
-    hoisted.loadConfigMock.mockReturnValue(cfg);
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: {
-        "agent:retired:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
-      },
+    mockCombinedSessionStore(cfg, {
+      "agent:retired:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
     });
 
     expect(resolveSessionKeyForRun("run-1")).toBeUndefined();
@@ -126,12 +126,8 @@ describe("resolveSessionKeyForRun", () => {
         scope: "global",
       },
     };
-    hoisted.loadConfigMock.mockReturnValue(cfg);
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: {
-        global: { sessionId: "run-global", updatedAt: 123 },
-      },
+    mockCombinedSessionStore(cfg, {
+      global: { sessionId: "run-global", updatedAt: 123 },
     });
 
     expect(resolveSessionKeyForRun("run-global", { agentId: "work" })).toBe("global");
@@ -261,7 +257,21 @@ describe("resolveSessionKeyForRun", () => {
 
     expect(resolveSessionKeyForRun("missing-run")).toBeUndefined();
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(2);
-    vi.useRealTimers();
+  });
+
+  it("does not cache misses when miss expiry would exceed Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    hoisted.loadConfigMock.mockReturnValue({});
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(multiple)",
+      store: {},
+    });
+
+    expect(resolveSessionKeyForRun("missing-overflow")).toBeUndefined();
+    expect(resolveSessionKeyForRun("missing-overflow")).toBeUndefined();
+
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(2);
   });
 
   it("prefers the structurally matching session key when duplicate session ids exist", () => {
