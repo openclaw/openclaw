@@ -25,6 +25,8 @@ const log = createSubsystemLogger("continuation/work-dispatch");
 const HEDGE_DISPATCH_FAILURE_RETRY_MS = 30_000;
 const BUSY_RETRY_MS = 1_000;
 const CONTINUATION_TURN_BUSY_REASON = "requests-in-flight";
+const MAIN_COMMAND_LANE = "main";
+const RUNNING_WORK_RECOVERY_STALE_MS = 60_000;
 
 const workTimers = new Map<string, NodeJS.Timeout>();
 
@@ -96,6 +98,7 @@ async function driveContinuationTurn(
     { parseAgentSessionKey },
     { getReplyFromConfig },
     { replyRunRegistry },
+    { getQueueSize },
   ] = await Promise.all([
     import("../../config/config.js"),
     import("../../config/sessions/paths.js"),
@@ -103,12 +106,19 @@ async function driveContinuationTurn(
     import("../../sessions/session-key-utils.js"),
     import("../reply/get-reply.js"),
     import("../reply/reply-run-registry.js"),
+    import("../../process/command-queue.js"),
   ]);
 
   // Same-session continuations grant a normal turn directly. Do not route through
   // heartbeat wake registration/active-hours gates, which are agent-schedule policy
   // and can strand subagent sessions that are otherwise eligible for a turn.
   if (replyRunRegistry.isActive(work.sessionKey)) {
+    return { status: "skipped", reason: CONTINUATION_TURN_BUSY_REASON };
+  }
+  // Direct grants bypass heartbeat policy, but they must not jump ahead of
+  // already queued user/main-lane work. Requeue via TaskFlow instead of silently
+  // dropping the wake like the heartbeat path did.
+  if (getQueueSize(MAIN_COMMAND_LANE) > 0) {
     return { status: "skipped", reason: CONTINUATION_TURN_BUSY_REASON };
   }
 
@@ -179,7 +189,6 @@ export async function dispatchPendingContinuationWork(params: {
         `[continuation:work-wake] hop=${work.hop}/${work.maxChainLength} session=${work.sessionKey}`,
       );
       const wakeText = formatContinuationWakeText(work);
-      enqueueSystemEvent(wakeText, { sessionKey: work.sessionKey, trusted: true });
       const result = await driveContinuationTurn(work, wakeText);
       if (result.status === "ran") {
         markPendingWorkTurnGranted(work);
@@ -272,7 +281,11 @@ export async function scheduleContinuationWork(params: {
     traceparent: params.request.traceparent,
     log: (message) => params.log?.(message),
   });
-  await dispatchPendingContinuationWork({ sessionKey: params.sessionKey });
+  const soonestDueAt = peekSoonestUnmaturedWorkDueAt(params.sessionKey);
+  const fireAt = soonestDueAt === undefined ? dueAt : Math.min(dueAt, soonestDueAt);
+  // Let callers persist the advanced chain state before even zero-delay work
+  // can start the next turn; the timer fires on the next event-loop tick.
+  armWorkTimer(params.sessionKey, fireAt);
   return { scheduled: true, capped: false, chainState: nextState };
 }
 
@@ -286,7 +299,7 @@ export async function recoverPendingContinuationWork(): Promise<{
     return { sessions: 0, dispatched: 0, failed: 0 };
   }
   const sessionKeys = listPendingWorkSessionKeysForRecovery();
-  const includeRunningUpdatedAtOrBefore = Date.now();
+  const includeRunningUpdatedAtOrBefore = Date.now() - RUNNING_WORK_RECOVERY_STALE_MS;
   let dispatched = 0;
   let failed = 0;
   for (const sessionKey of sessionKeys) {

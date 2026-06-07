@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const turnGrants: unknown[] = [];
 const systemEvents: unknown[] = [];
 const activeSessions = new Set<string>();
+let mainQueueSize = 0;
 const mockSessionStore: Record<string, unknown> = {};
 
 vi.mock("../../config/config.js", () => ({
@@ -27,6 +28,10 @@ vi.mock("../reply/reply-run-registry.js", () => ({
   replyRunRegistry: {
     isActive: (sessionKey: string) => activeSessions.has(sessionKey),
   },
+}));
+
+vi.mock("../../process/command-queue.js", () => ({
+  getQueueSize: () => mainQueueSize,
 }));
 
 vi.mock("../reply/get-reply.js", () => ({
@@ -182,7 +187,10 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
   }),
 }));
 
-import { deleteSubagentSessionForCleanup } from "../../agents/subagent-session-cleanup.js";
+import {
+  deleteSubagentSessionForCleanup,
+  resetSubagentSessionCleanupForTests,
+} from "../../agents/subagent-session-cleanup.js";
 import type { ContinuationRuntimeConfig } from "./types.js";
 import {
   dispatchPendingContinuationWork,
@@ -214,16 +222,19 @@ describe("durable continuation_work dispatch", () => {
     turnGrants.length = 0;
     systemEvents.length = 0;
     activeSessions.clear();
+    mainQueueSize = 0;
     for (const key of Object.keys(mockSessionStore)) {
       delete mockSessionStore[key];
     }
     mockFlows.clear();
     flowCounter = 0;
     resetContinuationWorkDispatchForTests();
+    resetSubagentSessionCleanupForTests();
   });
 
   afterEach(() => {
     resetContinuationWorkDispatchForTests();
+    resetSubagentSessionCleanupForTests();
     vi.useRealTimers();
   });
 
@@ -262,6 +273,19 @@ describe("durable continuation_work dispatch", () => {
         options: expect.objectContaining({ continuationTrigger: "work-wake" }),
       }),
     ]);
+
+    await vi.advanceTimersByTimeAsync(65_000);
+    await flushTimers();
+
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: childSessionKey,
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
   });
 
   it("re-arms a delayed continue_work election after simulated gateway restart", async () => {
@@ -290,16 +314,17 @@ describe("durable continuation_work dispatch", () => {
 
     expect(turnGrants).toEqual([
       expect.objectContaining({
-        context: expect.objectContaining({ SessionKey: sessionKey }),
+        context: expect.objectContaining({
+          SessionKey: sessionKey,
+          Body: expect.stringContaining("restart proof"),
+        }),
         options: expect.objectContaining({
           continuationTrigger: "work-wake",
           parentRunId: "run-1",
         }),
       }),
     ]);
-    expect(systemEvents).toEqual([
-      expect.objectContaining({ text: expect.stringContaining("restart proof") }),
-    ]);
+    expect(systemEvents).toEqual([]);
   });
 
   it("requeues instead of losing a claimed continuation when the session is busy", async () => {
@@ -323,11 +348,11 @@ describe("durable continuation_work dispatch", () => {
     expect(flow).toMatchObject({ status: "queued" });
     expect(flow?.currentStep).toBe("Requeued same-session continuation wake");
     expect(systemEvents).toEqual([
-      expect.objectContaining({ text: expect.stringContaining("busy proof") }),
       expect.objectContaining({ text: expect.stringContaining("was not granted") }),
     ]);
 
     activeSessions.clear();
+    mainQueueSize = 0;
     await vi.advanceTimersByTimeAsync(1_000);
     await flushTimers();
 
@@ -338,6 +363,114 @@ describe("durable continuation_work dispatch", () => {
           Body: expect.stringContaining("busy proof"),
         }),
         options: expect.objectContaining({ continuationTrigger: "work-wake" }),
+      }),
+    ]);
+  });
+
+  it("arms zero-delay work for the next tick so callers can persist chain state first", async () => {
+    const sessionKey = "agent:main:immediate";
+    mockSessionStore[sessionKey] = { sessionKey };
+    const immediateConfig = {
+      ...config,
+      defaultDelayMs: 0,
+      minDelayMs: 0,
+    } satisfies ContinuationRuntimeConfig;
+
+    await scheduleContinuationWork({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 3,
+      },
+      request: { delaySeconds: 0, reason: "persist first" },
+      config: immediateConfig,
+    });
+
+    expect(turnGrants).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(0);
+    await flushTimers();
+
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({
+          SessionKey: sessionKey,
+          Body: expect.stringContaining("persist first"),
+        }),
+      }),
+    ]);
+  });
+
+  it("requeues instead of bypassing already queued main-lane work", async () => {
+    const sessionKey = "agent:main:queued-user-turn";
+    mockSessionStore[sessionKey] = { sessionKey };
+    mainQueueSize = 1;
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "queued user turn",
+    });
+
+    const result = await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(result).toEqual({ dispatched: 0, failed: 0 });
+    expect(turnGrants).toHaveLength(0);
+    expect([...mockFlows.values()][0]).toMatchObject({
+      status: "queued",
+      currentStep: "Requeued same-session continuation wake",
+    });
+
+    mainQueueSize = 0;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushTimers();
+
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({
+          SessionKey: sessionKey,
+          Body: expect.stringContaining("queued user turn"),
+        }),
+      }),
+    ]);
+  });
+
+  it("recovers only stale running continuation work", async () => {
+    const sessionKey = "agent:main:running-recovery";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "running recovery",
+    });
+    const flow = [...mockFlows.values()][0];
+    if (!flow) {
+      throw new Error("expected mock flow");
+    }
+    flow.status = "running";
+    flow.updatedAt = Date.now();
+
+    await recoverPendingContinuationWork();
+
+    expect(turnGrants).toHaveLength(0);
+
+    flow.updatedAt = Date.now() - 60_001;
+    await recoverPendingContinuationWork();
+
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({
+          SessionKey: sessionKey,
+          Body: expect.stringContaining("running recovery"),
+        }),
       }),
     ]);
   });
