@@ -73,6 +73,36 @@ function clearPendingScheduledRestart(): void {
   pendingRestartPreparing = false;
 }
 
+function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
+  pendingRestartTimer = setTimeout(
+    () => {
+      const scheduledReason = pendingRestartReason;
+      const scheduledSkipDeferral = pendingRestartSkipDeferral;
+      pendingRestartTimer = null;
+      pendingRestartDueAt = 0;
+      pendingRestartReason = undefined;
+      pendingRestartSkipDeferral = false;
+      pendingRestartPreparing = true;
+      const pendingCheck = preRestartCheck;
+      if (scheduledSkipDeferral || !pendingCheck) {
+        void emitPreparedGatewayRestart(undefined, scheduledReason);
+        return;
+      }
+      const cfg = getRuntimeConfig();
+      const deferralTimeoutMs = resolveGatewayRestartDeferralTimeoutMs(
+        cfg.gateway?.reload?.deferralTimeoutMs,
+      );
+      deferGatewayRestartUntilIdle({
+        getPendingCount: pendingCheck,
+        maxWaitMs: deferralTimeoutMs,
+        reason: scheduledReason,
+        timeoutIntent: { force: true, ...(scheduledReason ? { reason: scheduledReason } : {}) },
+      });
+    },
+    Math.max(0, requestedDueAt - nowMs),
+  );
+}
+
 function clearActiveDeferralPolls(): void {
   for (const poll of activeDeferralPolls) {
     clearInterval(poll);
@@ -849,11 +879,19 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         restartLog.warn(
           `restart continuation dropped: another session owns the pending restart (callerSessionKey=${opts?.sessionKey ?? "unspecified"} pendingSessionKey=${pendingRestartSessionKey ?? "unspecified"})`,
         );
+        if (pendingRestartTimer) {
+          clearTimeout(pendingRestartTimer);
+        }
+        pendingRestartTimer = null;
+        pendingRestartDueAt = requestedDueAt;
+        pendingRestartReason = reason;
+        pendingRestartSkipDeferral = pendingRestartSkipDeferral || skipDeferral;
+        armPendingRestartTimer(requestedDueAt, nowMs);
         return {
           ok: true,
           pid: process.pid,
           signal: "SIGUSR1",
-          delayMs: remainingMs,
+          delayMs: Math.max(0, requestedDueAt - nowMs),
           reason,
           mode,
           coalesced: true,
@@ -898,33 +936,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   pendingRestartEmitHooks = opts?.emitHooks;
   pendingRestartSessionKey = opts?.sessionKey;
   pendingRestartSkipDeferral = skipDeferral;
-  pendingRestartTimer = setTimeout(
-    () => {
-      const scheduledReason = pendingRestartReason;
-      const scheduledSkipDeferral = pendingRestartSkipDeferral;
-      pendingRestartTimer = null;
-      pendingRestartDueAt = 0;
-      pendingRestartReason = undefined;
-      pendingRestartSkipDeferral = false;
-      pendingRestartPreparing = true;
-      const pendingCheck = preRestartCheck;
-      if (scheduledSkipDeferral || !pendingCheck) {
-        void emitPreparedGatewayRestart(undefined, scheduledReason);
-        return;
-      }
-      const cfg = getRuntimeConfig();
-      const deferralTimeoutMs = resolveGatewayRestartDeferralTimeoutMs(
-        cfg.gateway?.reload?.deferralTimeoutMs,
-      );
-      deferGatewayRestartUntilIdle({
-        getPendingCount: pendingCheck,
-        maxWaitMs: deferralTimeoutMs,
-        reason: scheduledReason,
-        timeoutIntent: { force: true, ...(scheduledReason ? { reason: scheduledReason } : {}) },
-      });
-    },
-    Math.max(0, requestedDueAt - nowMs),
-  );
+  armPendingRestartTimer(requestedDueAt, nowMs);
   return {
     ok: true,
     pid: process.pid,

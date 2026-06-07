@@ -430,8 +430,9 @@ describe("infra runtime", () => {
         expect(first.emitHooksQueued).toBe(true);
         expect(second.coalesced).toBe(true);
         expect(second.emitHooksQueued).toBe(false);
+        expect(second.delayMs).toBe(0);
 
-        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(0);
 
         expect(sessionAHooks).toHaveBeenCalledTimes(1);
         expect(sessionBHooks).not.toHaveBeenCalled();
