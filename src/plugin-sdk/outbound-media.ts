@@ -253,11 +253,15 @@ export function createHostedOutboundMediaStore(
       try {
         for (let index = 0; index < chunkCount; index += 1) {
           const chunk = media.buffer.subarray(index * rawChunkBytes, (index + 1) * rawChunkBytes);
-          await options.chunkStore.register(buildHostedOutboundMediaChunkKey(id, index), {
-            id,
-            index,
-            dataBase64: chunk.toString("base64"),
-          });
+          await options.chunkStore.register(
+            buildHostedOutboundMediaChunkKey(id, index),
+            {
+              id,
+              index,
+              dataBase64: chunk.toString("base64"),
+            },
+            { ttlMs: options.ttlMs },
+          );
         }
         await options.metadataStore.register(
           buildHostedOutboundMediaMetaKey(id),
@@ -270,6 +274,7 @@ export function createHostedOutboundMediaStore(
             chunkCount,
             byteLength: media.buffer.byteLength,
           }),
+          { ttlMs: options.ttlMs },
         );
       } catch (error) {
         await deleteEntryRows(id, chunkCount);
