@@ -646,7 +646,7 @@ describe("applyGroupGating", () => {
 
     expect(result.shouldProcess).toBe(false);
     expect(verboseLogs).toContain(
-      'Dropping message from unregistered WhatsApp group 123@g.us. Add the group JID to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.',
+      'Dropping message from unregistered WhatsApp group 123@g.us. Add the group JID to channels.whatsapp.groups, or add "*" there to admit all groups. Exact group-name keys require channels.whatsapp.dangerouslyAllowGroupNameMatching=true. Sender authorization still applies.',
     );
   });
 });
