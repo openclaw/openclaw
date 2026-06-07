@@ -132,9 +132,9 @@ function summarizeLargeTrajectoryJson<T>(
   };
 }
 
-function summarizeTrajectoryTools<
-  T extends { name?: unknown; description?: unknown; parameters?: unknown },
->(tools: T[] | undefined): unknown {
+function summarizeTrajectoryTools(
+  tools: { name?: unknown; description?: unknown; parameters?: unknown }[] | undefined,
+): unknown {
   if (!tools) {
     return undefined;
   }

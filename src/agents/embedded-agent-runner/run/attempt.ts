@@ -639,7 +639,7 @@ function summarizeTrajectoryMessages(messages: AgentMessage[]): unknown {
   }));
 }
 
-function summarizeTrajectoryTools<T extends { name?: unknown }>(tools: T[]): unknown {
+function summarizeTrajectoryTools(tools: { name?: unknown }[]): unknown {
   return summarizeLargeTrajectoryJson(tools, (value) => ({
     count: value.length,
     names: value.map((tool) => (typeof tool.name === "string" ? tool.name : "unknown")),
