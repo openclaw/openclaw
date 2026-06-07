@@ -542,7 +542,7 @@ function calculateConsolidationComponent(recallDays: string[]): number {
     return 0.2;
   }
   const parsed = recallDays
-    .map((value) => Date.parse(`${value}T00:00:00.000Z`))
+    .map((recallDay) => Date.parse(recallDay + "T00:00:00.000Z"))
     .filter((value) => Number.isFinite(value))
     .toSorted((left, right) => left - right);
   if (parsed.length <= 1) {
