@@ -1020,7 +1020,12 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
 
       const { chatHandlers } = await import("./server-methods/chat.js");
-      const callSend = (id: string, idempotencyKey: string, systemProvenanceReceipt?: string) =>
+      const callSend = (
+        id: string,
+        idempotencyKey: string,
+        systemProvenanceReceipt?: string,
+        runtimePromptContext?: string,
+      ) =>
         chatHandlers["chat.send"]({
           req: {
             type: "req",
@@ -1031,6 +1036,7 @@ describe("gateway server chat", () => {
               message: "?",
               idempotencyKey,
               ...(systemProvenanceReceipt ? { systemProvenanceReceipt } : {}),
+              ...(runtimePromptContext ? { runtimePromptContext } : {}),
             },
           },
           params: {
@@ -1038,6 +1044,7 @@ describe("gateway server chat", () => {
             message: "?",
             idempotencyKey,
             ...(systemProvenanceReceipt ? { systemProvenanceReceipt } : {}),
+            ...(runtimePromptContext ? { runtimePromptContext } : {}),
           },
           client: {
             connect: {
@@ -1149,10 +1156,48 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expect(context.addChatRun).toHaveBeenCalledTimes(2);
 
+      const withRuntimeContext = Promise.resolve(
+        callSend(
+          "runtime-context",
+          "idem-active-d",
+          undefined,
+          "Talk Mode active. Reply in a concise, spoken tone.",
+        ),
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(responses.at(-1)).toEqual({
+            id: "runtime-context",
+            ok: true,
+            payload: expect.objectContaining({
+              runId: "idem-active-d",
+              status: "started",
+              serverTiming: {
+                receivedToAckMs: expect.any(Number),
+                loadSessionMs: expect.any(Number),
+              },
+            }),
+            error: undefined,
+          });
+        },
+        { timeout: 2_000, interval: 5 },
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(3);
+      expect(context.addChatRun).toHaveBeenCalledTimes(3);
+      const runtimeDispatch = dispatchInboundMessageMock.mock.calls.at(-1)?.[0] as
+        | { ctx?: { Body?: string; BodyForAgent?: string; RuntimePromptContext?: string } }
+        | undefined;
+      expect(runtimeDispatch?.ctx?.Body).toBe("?");
+      expect(runtimeDispatch?.ctx?.BodyForAgent).toBe("?");
+      expect(runtimeDispatch?.ctx?.RuntimePromptContext).toBe(
+        "Talk Mode active. Reply in a concise, spoken tone.",
+      );
+
       dispatchRelease.resolve();
-      await Promise.all([first, withSystemContext]);
+      await Promise.all([first, withSystemContext, withRuntimeContext]);
       await vi.waitFor(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(2);
+        expect(context.removeChatRun).toHaveBeenCalledTimes(3);
       }, FAST_WAIT_OPTS);
     } finally {
       dispatchRelease.resolve();

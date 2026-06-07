@@ -668,6 +668,7 @@ extension GatewayConnection {
     func chatSend(
         sessionKey: String,
         message: String,
+        runtimePromptContext: String? = nil,
         thinking: String?,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
@@ -684,6 +685,12 @@ extension GatewayConnection {
            !thinking.isEmpty
         {
             params["thinking"] = AnyCodable(thinking)
+        }
+        if let runtimePromptContext = runtimePromptContext?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !runtimePromptContext.isEmpty
+        {
+            params["runtimePromptContext"] = AnyCodable(runtimePromptContext)
         }
 
         if !attachments.isEmpty {

@@ -7034,6 +7034,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let timeoutms: Int?
     public let systeminputprovenance: [String: AnyCodable]?
     public let systemprovenancereceipt: String?
+    public let runtimepromptcontext: String?
     public let suppresscommandinterpretation: Bool?
     public let idempotencykey: String
 
@@ -7053,6 +7054,7 @@ public struct ChatSendParams: Codable, Sendable {
         timeoutms: Int?,
         systeminputprovenance: [String: AnyCodable]?,
         systemprovenancereceipt: String?,
+        runtimepromptcontext: String?,
         suppresscommandinterpretation: Bool?,
         idempotencykey: String)
     {
@@ -7071,6 +7073,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.timeoutms = timeoutms
         self.systeminputprovenance = systeminputprovenance
         self.systemprovenancereceipt = systemprovenancereceipt
+        self.runtimepromptcontext = runtimepromptcontext
         self.suppresscommandinterpretation = suppresscommandinterpretation
         self.idempotencykey = idempotencykey
     }
@@ -7091,6 +7094,7 @@ public struct ChatSendParams: Codable, Sendable {
         case timeoutms = "timeoutMs"
         case systeminputprovenance = "systemInputProvenance"
         case systemprovenancereceipt = "systemProvenanceReceipt"
+        case runtimepromptcontext = "runtimePromptContext"
         case suppresscommandinterpretation = "suppressCommandInterpretation"
         case idempotencykey = "idempotencyKey"
     }

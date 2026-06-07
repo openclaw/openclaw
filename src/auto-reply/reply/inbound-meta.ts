@@ -46,6 +46,19 @@ function normalizePromptMetadataStringArray(value: unknown): string[] | undefine
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeRuntimePromptContext(value: unknown): string[] {
+  if (typeof value === "string") {
+    const normalized = normalizePromptMetadataString(value);
+    return normalized ? [normalized] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) =>
+      typeof entry === "string" ? normalizeRuntimePromptContext(entry) : [],
+    );
+  }
+  return [];
+}
+
 function sanitizePromptBody(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -445,6 +458,10 @@ export function buildInboundUserContextPrefix(
   if (options?.sourceReplyDeliveryMode === "message_tool_only") {
     blocks.push(MESSAGE_TOOL_DELIVERY_HINT);
   }
+  // Runtime prompt context is trusted caller-generated guidance for this turn.
+  // It is injected through currentInboundContext instead of Body/BodyForAgent so
+  // it remains model-visible while staying out of user-visible transcripts.
+  blocks.push(...normalizeRuntimePromptContext(ctx.RuntimePromptContext));
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
   const directChannelValue = resolveInboundChannel(ctx);

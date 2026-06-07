@@ -450,19 +450,20 @@ actor TalkModeRuntime {
         let gen = self.lifecycleGeneration
         await self.reloadConfig()
         guard self.isCurrent(gen) else { return }
-        let prompt = self.buildPrompt(transcript: transcript)
+        let turn = self.buildTurn(transcript: transcript)
         let sessionKey = await self.currentTalkSessionKey()
         let runId = UUID().uuidString
         let startedAt = Date().timeIntervalSince1970
         self.logger.info(
             "talk send start runId=\(runId, privacy: .public) " +
                 "session=\(sessionKey, privacy: .public) " +
-                "chars=\(prompt.count, privacy: .public)")
+                "chars=\(turn.message.count, privacy: .public)")
 
         do {
             let response = try await GatewayConnection.shared.chatSend(
                 sessionKey: sessionKey,
-                message: prompt,
+                message: turn.message,
+                runtimePromptContext: turn.runtimePromptContext,
                 thinking: nil,
                 idempotencyKey: runId,
                 attachments: [])
@@ -517,10 +518,10 @@ actor TalkModeRuntime {
         await self.startRecognition()
     }
 
-    private func buildPrompt(transcript: String) -> String {
+    private func buildTurn(transcript: String) -> TalkPromptTurn {
         let interrupted = self.lastInterruptedAtSeconds
         self.lastInterruptedAtSeconds = nil
-        return TalkPromptBuilder.build(transcript: transcript, interruptedAtSeconds: interrupted)
+        return TalkPromptBuilder.buildTurn(transcript: transcript, interruptedAtSeconds: interrupted)
     }
 
     private func waitForAssistantEventText(

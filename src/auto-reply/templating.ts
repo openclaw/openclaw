@@ -235,6 +235,8 @@ export type MsgContext = {
   UntrustedStructuredContext?: UntrustedStructuredContextEntry[];
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
+  /** Trusted runtime-generated prompt context for this turn; not user-authored transcript text. */
+  RuntimePromptContext?: string | string[];
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;

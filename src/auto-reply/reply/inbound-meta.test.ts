@@ -308,6 +308,19 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toContain("Conversation info (untrusted metadata):");
   });
 
+  it("adds trusted runtime prompt context before untrusted inbound metadata", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:849985193",
+      MessageSid: "776",
+      RuntimePromptContext: "Talk Mode active. Reply in a concise, spoken tone.",
+    } as TemplateContext);
+
+    expect(text).toContain("Talk Mode active. Reply in a concise, spoken tone.");
+    expect(text.indexOf("Talk Mode active.")).toBeLessThan(text.indexOf("Conversation info"));
+  });
+
   it("does not add delivery guidance for automatic source delivery", () => {
     const text = buildInboundUserContextPrefix(
       {

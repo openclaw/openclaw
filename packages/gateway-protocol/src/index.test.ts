@@ -134,6 +134,25 @@ describe("lazy protocol validators", () => {
     ).toBe(true);
   });
 
+  it("validates trusted runtime prompt context on chat sends", () => {
+    expect(
+      validateChatSendParams({
+        sessionKey: "agent:main",
+        message: "Hello",
+        runtimePromptContext: "Reply in a concise spoken tone.",
+        idempotencyKey: "chat-run-runtime-context",
+      }),
+    ).toBe(true);
+    expect(
+      validateChatSendParams({
+        sessionKey: "agent:main",
+        message: "Hello",
+        runtimePromptContext: { text: "hidden" },
+        idempotencyKey: "chat-run-runtime-context",
+      }),
+    ).toBe(false);
+  });
+
   it("validates Skill Workshop revision request params", () => {
     expect(
       protocol.validateSkillsProposalRequestRevisionParams({

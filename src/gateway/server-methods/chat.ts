@@ -1119,6 +1119,23 @@ function normalizeOptionalChatSystemReceipt(
   return { ok: true, receipt: receipt || undefined };
 }
 
+function normalizeOptionalRuntimePromptContext(
+  value: unknown,
+): { ok: true; context?: string } | { ok: false; error: string } {
+  if (value == null) {
+    return { ok: true };
+  }
+  if (typeof value !== "string") {
+    return { ok: false, error: "runtimePromptContext must be a string" };
+  }
+  const sanitized = sanitizeChatSendMessageInput(value);
+  if (!sanitized.ok) {
+    return { ok: false, error: sanitized.error };
+  }
+  const context = sanitized.message.trim();
+  return { ok: true, context: context || undefined };
+}
+
 function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const info = client?.connect?.client;
   return (
@@ -2870,6 +2887,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       systemInputProvenance?: InputProvenance;
       systemProvenanceReceipt?: string;
+      runtimePromptContext?: string;
       suppressCommandInterpretation?: boolean;
       idempotencyKey: string;
     };
@@ -2887,6 +2905,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     if (
       (p.systemInputProvenance ||
         p.systemProvenanceReceipt ||
+        p.runtimePromptContext ||
         suppressCommandInterpretation ||
         explicitOriginResult.value) &&
       !canInjectSystemProvenance(client)
@@ -2896,8 +2915,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          p.systemInputProvenance || p.systemProvenanceReceipt || suppressCommandInterpretation
-            ? "system provenance fields require admin scope"
+          p.systemInputProvenance ||
+            p.systemProvenanceReceipt ||
+            p.runtimePromptContext ||
+            suppressCommandInterpretation
+            ? "trusted system fields require admin scope"
             : "originating route fields require admin scope",
         ),
       );
@@ -2917,12 +2939,28 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, systemReceiptResult.error));
       return;
     }
+    const runtimePromptContextResult = normalizeOptionalRuntimePromptContext(
+      p.runtimePromptContext,
+    );
+    if (!runtimePromptContextResult.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, runtimePromptContextResult.error),
+      );
+      return;
+    }
     const inboundMessage = sanitizedMessageResult.message;
     const systemInputProvenance = normalizeInputProvenance(p.systemInputProvenance);
     const systemProvenanceReceipt = systemReceiptResult.receipt;
+    const runtimePromptContext = runtimePromptContextResult.context;
     const systemDedupeScope =
-      systemInputProvenance || systemProvenanceReceipt
-        ? JSON.stringify([systemProvenanceReceipt ?? null, systemInputProvenance ?? null])
+      systemInputProvenance || systemProvenanceReceipt || runtimePromptContext
+        ? JSON.stringify([
+            systemProvenanceReceipt ?? null,
+            systemInputProvenance ?? null,
+            runtimePromptContext ?? null,
+          ])
         : undefined;
     const stopCommand = !suppressCommandInterpretation && isChatStopCommandText(inboundMessage);
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
@@ -3364,6 +3402,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         RawBody: parsedMessage,
         CommandBody: commandBody,
         InputProvenance: systemInputProvenance,
+        ...(runtimePromptContext ? { RuntimePromptContext: runtimePromptContext } : {}),
         SessionKey: sessionKey,
         AgentId: agentId,
         Provider: INTERNAL_MESSAGE_CHANNEL,

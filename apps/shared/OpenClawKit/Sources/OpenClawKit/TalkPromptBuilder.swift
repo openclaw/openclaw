@@ -1,8 +1,29 @@
+public struct TalkPromptTurn: Equatable, Sendable {
+    public let message: String
+    public let runtimePromptContext: String?
+
+    public init(message: String, runtimePromptContext: String?) {
+        self.message = message
+        self.runtimePromptContext = runtimePromptContext
+    }
+}
+
 public enum TalkPromptBuilder: Sendable {
-    public static func build(
+    public static func buildTurn(
         transcript: String,
         interruptedAtSeconds: Double?,
-        includeVoiceDirectiveHint: Bool = true) -> String
+        includeVoiceDirectiveHint: Bool = true) -> TalkPromptTurn
+    {
+        TalkPromptTurn(
+            message: transcript,
+            runtimePromptContext: self.buildRuntimePromptContext(
+                interruptedAtSeconds: interruptedAtSeconds,
+                includeVoiceDirectiveHint: includeVoiceDirectiveHint))
+    }
+
+    public static func buildRuntimePromptContext(
+        interruptedAtSeconds: Double?,
+        includeVoiceDirectiveHint: Bool = true) -> String?
     {
         var lines: [String] = [
             "Talk Mode active. Reply in a concise, spoken tone.",
@@ -18,8 +39,24 @@ public enum TalkPromptBuilder: Sendable {
             lines.append("Assistant speech interrupted at \(formatted)s.")
         }
 
-        lines.append("")
-        lines.append(transcript)
-        return lines.joined(separator: "\n")
+        let prompt = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return prompt.isEmpty ? nil : prompt
+    }
+
+    public static func build(
+        transcript: String,
+        interruptedAtSeconds: Double?,
+        includeVoiceDirectiveHint: Bool = true) -> String
+    {
+        let turn = self.buildTurn(
+            transcript: transcript,
+            interruptedAtSeconds: interruptedAtSeconds,
+            includeVoiceDirectiveHint: includeVoiceDirectiveHint)
+        return [
+            turn.runtimePromptContext,
+            turn.message,
+        ]
+        .compactMap { $0 }
+        .joined(separator: "\n\n")
     }
 }
