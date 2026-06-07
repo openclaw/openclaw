@@ -3,6 +3,7 @@ import {
   confirm as clackConfirm,
   intro as clackIntro,
   outro as clackOutro,
+  password as clackPassword,
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
@@ -92,6 +93,12 @@ export const text = (params: Parameters<typeof clackText>[0]) =>
 /** Styled confirm prompt wrapper. */
 export const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
   clackConfirm({
+    ...params,
+    message: stylePromptMessage(params.message),
+  });
+/** Styled password prompt wrapper that masks input with bullets. */
+export const password = (params: Parameters<typeof clackPassword>[0]) =>
+  clackPassword({
     ...params,
     message: stylePromptMessage(params.message),
   });

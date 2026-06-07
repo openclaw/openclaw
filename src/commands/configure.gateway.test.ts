@@ -5,6 +5,7 @@ import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   text: vi.fn(),
+  password: vi.fn(),
   select: vi.fn(),
   confirm: vi.fn(),
   resolveGatewayPort: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock("../config/config.js", async (importActual) => {
 
 vi.mock("./configure.shared.js", () => ({
   text: mocks.text,
+  password: mocks.password,
   select: mocks.select,
   confirm: mocks.confirm,
 }));
@@ -62,6 +64,7 @@ function makeRuntime(): RuntimeEnv {
 async function runGatewayPrompt(params: {
   selectQueue: string[];
   textQueue: Array<string | undefined>;
+  passwordQueue?: Array<string | undefined>;
   baseConfig?: OpenClawConfig;
   randomToken?: string;
   confirmResult?: boolean;
@@ -77,6 +80,9 @@ async function runGatewayPrompt(params: {
     return input.initialValue ?? input.options[0]?.value;
   });
   mocks.text.mockImplementation(async () => params.textQueue.shift());
+  mocks.password.mockImplementation(
+    async () => (params.passwordQueue ?? []).shift(),
+  );
   mocks.randomToken.mockReturnValue(params.randomToken ?? "generated-token");
   mocks.confirm.mockResolvedValue(params.confirmResult ?? true);
   mocks.buildGatewayAuthConfig.mockImplementation((input) =>
@@ -110,17 +116,32 @@ describe("promptGatewayConfig", () => {
   it("generates a token when the prompt returns undefined", async () => {
     const { result } = await runGatewayPrompt({
       selectQueue: ["loopback", "token", "off", "plaintext"],
-      textQueue: ["18789", undefined],
+      textQueue: [],
+      passwordQueue: [undefined],
       randomToken: "generated-token",
       authConfigFactory: ({ mode, token, password }) => ({ mode, token, password }),
     });
     expect(result.token).toBe("generated-token");
   });
 
+  it("uses password prompt for gateway token input", async () => {
+    await runGatewayPrompt({
+      selectQueue: ["loopback", "token", "off", "plaintext"],
+      textQueue: [],
+      passwordQueue: ["my-secret-token"],
+      authConfigFactory: ({ mode, token }) => ({ mode, token }),
+    });
+    expect(mocks.password).toHaveBeenCalled();
+    expect(mocks.text).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("token") }),
+    );
+  });
+
   it("does not set password to literal 'undefined' when prompt returns undefined", async () => {
     const { call } = await runGatewayPrompt({
       selectQueue: ["loopback", "password", "off"],
-      textQueue: ["18789", undefined],
+      textQueue: [],
+      passwordQueue: [undefined],
       randomToken: "unused",
       authConfigFactory: ({ mode, token, password }) => ({ mode, token, password }),
     });
@@ -176,9 +197,9 @@ describe("promptGatewayConfig", () => {
   it("adds Tailscale origin to controlUi.allowedOrigins when tailscale serve is enabled", async () => {
     mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
     const { result } = await runGatewayPrompt({
-      // bind=loopback, auth=token, tailscale=serve
       selectQueue: ["loopback", "token", "serve", "plaintext"],
-      textQueue: ["18789", "my-token"],
+      textQueue: [],
+      passwordQueue: ["my-token"],
       confirmResult: true,
       authConfigFactory: ({ mode, token }) => ({ mode, token }),
     });
@@ -190,9 +211,9 @@ describe("promptGatewayConfig", () => {
   it("adds Tailscale origin to controlUi.allowedOrigins when tailscale funnel is enabled", async () => {
     mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
     const { result } = await runGatewayPrompt({
-      // bind=loopback, auth=password (funnel requires password), tailscale=funnel
       selectQueue: ["loopback", "password", "funnel"],
-      textQueue: ["18789", "my-password"],
+      textQueue: [],
+      passwordQueue: ["my-password"],
       confirmResult: true,
       authConfigFactory: ({ mode, password }) => ({ mode, password }),
     });
@@ -205,7 +226,8 @@ describe("promptGatewayConfig", () => {
     mocks.getTailnetHostname.mockRejectedValue(new Error("not found"));
     const { result } = await runGatewayPrompt({
       selectQueue: ["loopback", "token", "serve", "plaintext"],
-      textQueue: ["18789", "my-token"],
+      textQueue: [],
+      passwordQueue: ["my-token"],
       confirmResult: true,
       authConfigFactory: ({ mode, token }) => ({ mode, token }),
     });
@@ -223,7 +245,8 @@ describe("promptGatewayConfig", () => {
         },
       },
       selectQueue: ["loopback", "token", "serve", "plaintext"],
-      textQueue: ["18789", "my-token"],
+      textQueue: [],
+      passwordQueue: ["my-token"],
       confirmResult: true,
       authConfigFactory: ({ mode, token }) => ({ mode, token }),
     });
@@ -238,7 +261,8 @@ describe("promptGatewayConfig", () => {
     mocks.getTailnetHostname.mockResolvedValue("fd7a:115c:a1e0::12");
     const { result } = await runGatewayPrompt({
       selectQueue: ["loopback", "token", "serve", "plaintext"],
-      textQueue: ["18789", "my-token"],
+      textQueue: [],
+      passwordQueue: ["my-token"],
       confirmResult: true,
       authConfigFactory: ({ mode, token }) => ({ mode, token }),
     });
