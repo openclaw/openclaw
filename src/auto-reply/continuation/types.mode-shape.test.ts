@@ -60,7 +60,7 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
         };
       }
       Object.assign(flow, params.patch);
-      flow.revision = (flow.revision as number) + 1;
+      flow.revision = flow.revision + 1;
       return { applied: true, flow: { ...flow } };
     },
   ),
@@ -80,7 +80,7 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
       flow.stateJson = params.stateJson ?? flow.stateJson;
       flow.endedAt = params.endedAt ?? params.updatedAt ?? Date.now();
       flow.updatedAt = params.updatedAt ?? flow.endedAt;
-      flow.revision = (flow.revision as number) + 1;
+      flow.revision = flow.revision + 1;
       return { applied: true, flow: { ...flow } };
     },
   ),

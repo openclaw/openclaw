@@ -88,7 +88,7 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
         };
       }
       Object.assign(flow, params.patch);
-      flow.revision = (flow.revision as number) + 1;
+      flow.revision = flow.revision + 1;
       return { applied: true, flow: { ...flow } };
     },
   ),

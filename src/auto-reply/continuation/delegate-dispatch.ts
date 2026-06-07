@@ -16,6 +16,9 @@ import crypto from "node:crypto";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagent-registry-read.js";
 import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import type { SpawnSubagentContext } from "../../agents/subagent-spawn.js";
+import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   emitContinuationDelegateFireSpan,
   emitContinuationDisabledSpan,
@@ -38,6 +41,7 @@ import {
   registerContinuationTimerHandle,
   retainContinuationTimerRef,
   unregisterContinuationTimerHandle,
+  loadContinuationChainState,
 } from "./state.js";
 import { hasCrossSessionDelegateTargeting } from "./targeting-pure.js";
 import type { ContinuationRuntimeConfig } from "./types.js";
@@ -472,21 +476,40 @@ export async function recoverPendingContinuationDelegates(
     chainState?: ChainState;
     ctx?: Partial<DelegateDispatchContext>;
     maxChainLength?: number;
+    /** Override the session-store path used to load persisted chain budgets. */
+    storePath?: string;
   } = {},
 ): Promise<{ sessions: number; dispatched: number; rejected: number }> {
+  const runtimeConfig = resolveContinuationRuntimeConfig();
+  // Honor the deny-gate across the restart seam: if continuation is disabled,
+  // recovery must NOT replay queued/running delegates — re-driving them here
+  // would override the user's explicit `continuation.enabled=false`.
+  if (!runtimeConfig.enabled) {
+    return { sessions: 0, dispatched: 0, rejected: 0 };
+  }
   const sessionKeys = listPendingDelegateSessionKeysForRecovery();
+  // Load the persisted session store once so recovery re-dispatches each
+  // delegate against its TRUE chain budget (depth/tokens/started/chainId),
+  // not a reset-to-zero synthetic state. Re-arming at 0/maxChainLength would
+  // launder the chain budget across the restart — a delegate at 199/200
+  // pre-restart could otherwise replay at 0/200 and dispatch past the cap.
+  const storePath = params.storePath ?? resolveDefaultSessionStorePath();
+  let sessionStore: Record<string, SessionEntry> = {};
+  try {
+    sessionStore = loadSessionStore(storePath);
+  } catch (err) {
+    log.warn(
+      `[continuation:delegate-recovery-store-load-failed] falling back to zero chain state: ${formatErrorMessage(err)}`,
+    );
+  }
   let dispatched = 0;
   let rejected = 0;
   for (const sessionKey of sessionKeys) {
     const result = await dispatchToolDelegates({
       sessionKey,
-      chainState: params.chainState ?? {
-        currentChainCount: 0,
-        chainStartedAt: Date.now(),
-        accumulatedChainTokens: 0,
-      },
+      chainState: params.chainState ?? loadContinuationChainState(sessionStore[sessionKey]),
       ctx: { sessionKey, ...params.ctx },
-      maxChainLength: params.maxChainLength ?? resolveContinuationRuntimeConfig().maxChainLength,
+      maxChainLength: params.maxChainLength ?? runtimeConfig.maxChainLength,
       recoverRunningDelegates: true,
     });
     dispatched += result.dispatched;
