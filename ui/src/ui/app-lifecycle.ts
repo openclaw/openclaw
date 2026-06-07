@@ -16,6 +16,7 @@ import {
   syncThemeWithSettings,
 } from "./app-settings.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
+import { installGatewaySsoPostMessageListener } from "./gateway-sso-postmessage.ts";
 import type { Tab } from "./navigation.ts";
 
 type LifecycleHost = {
@@ -50,11 +51,19 @@ type LifecycleHost = {
   logsEntries: unknown[];
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
+  gatewaySsoPostMessageCleanup?: (() => void) | null;
 };
 
 export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
+  host.gatewaySsoPostMessageCleanup?.();
+  host.gatewaySsoPostMessageCleanup = installGatewaySsoPostMessageListener(
+    host as unknown as Parameters<typeof installGatewaySsoPostMessageListener>[0],
+    {
+      reconnect: () => connectGateway(host as unknown as Parameters<typeof connectGateway>[0]),
+    },
+  );
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   const bootstrapReady = loadControlUiBootstrapConfig(host);
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
@@ -81,6 +90,8 @@ export function handleFirstUpdated(host: LifecycleHost) {
 
 export function handleDisconnected(host: LifecycleHost) {
   host.connectGeneration += 1;
+  host.gatewaySsoPostMessageCleanup?.();
+  host.gatewaySsoPostMessageCleanup = null;
   window.removeEventListener("popstate", host.popStateHandler);
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
