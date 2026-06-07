@@ -655,6 +655,12 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("suite_id: native-live-src-gateway-core");
     expect(workflow).toContain("suite_id: native-live-src-gateway-backends");
+    expect(workflow).toContain(
+      "command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core",
+    );
+    expect(workflow).toContain(
+      "command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends",
+    );
     expect(workflow).toContain("suite_id: native-live-src-infra");
     expect(workflow).toContain(
       "command: OPENCLAW_LIVE_APNS_REACHABILITY=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra",
@@ -1096,7 +1102,12 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("- live-e2e");
     expect(workflow).toContain("- qa-live");
-    expect(workflow).toContain("QA release-check lanes are advisory");
+    expect(workflow).toContain("disabled_required_lanes=()");
+    expect(workflow).toContain("live_suite_filter explicitly requested disabled QA live lane(s)");
+    expect(workflow).toContain("OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED");
+    expect(workflow).not.toContain(
+      "QA release-check lanes are advisory and do not block release validation.",
+    );
   });
 
   it("detects Matrix fail-fast support for older release refs", () => {
@@ -1133,6 +1144,9 @@ describe("package artifact reuse", () => {
       );
       expect(releaseWorkflow).toContain(`qa_live_${lower}_enabled="$qa_live_${lower}_ci_enabled"`);
       expect(releaseWorkflow).toContain(
+        `needs.resolve_target.outputs.qa_live_${lower}_enabled == 'true'`,
+      );
+      expect(releaseWorkflow).not.toContain(
         `vars.OPENCLAW_RELEASE_QA_${channel}_LIVE_CI_ENABLED == 'true'`,
       );
       expect(qaWorkflow).not.toContain(`OPENCLAW_QA_${channel}_LIVE_CI_ENABLED`);
@@ -1292,7 +1306,7 @@ describe("package artifact reuse", () => {
     expectTextToIncludeAll(fullReleaseDocs, [
       "pre-publish candidate",
       "cross_os_suite_filter",
-      "QA release-check lanes are advisory",
+      "QA release-check failures block normal release validation",
       "silently skip that",
       "Telegram package lane",
       "| `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`. |",
@@ -1391,7 +1405,7 @@ describe("package artifact reuse", () => {
     ]);
   });
 
-  it("keeps release QA advisory failures visible to the verifier", () => {
+  it("keeps release QA status artifacts blocking in the verifier", () => {
     const advisoryJobNames = [
       "qa_lab_parity_lane_release_checks",
       "qa_lab_parity_report_release_checks",
@@ -1438,8 +1452,12 @@ describe("package artifact reuse", () => {
       'elif [[ "$fallback" == "success" ]]; then',
       "advisory_status_override_allowed()",
       'if advisory_status_override_allowed "$name"; then',
-      "QA release-check lanes are advisory and do not block release validation.",
+      "::warning::${name} ended with ${result}; Tideclaw alpha treats non-package-safety release-check lanes as advisory.",
+      "::error::${name} ended with ${result}",
     ]);
+    expect(verifyStep.run).not.toContain(
+      "QA release-check lanes are advisory and do not block release validation.",
+    );
   });
 
   it("summarizes queue time separately from execution time in full validation", () => {

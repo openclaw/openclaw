@@ -20,12 +20,15 @@ import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../acp/policy.
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
-import { formatConversationTarget } from "../channels/conversation-delivery-target.js";
 import {
   resolveChannelDefaultBindingPlacement,
   resolveInboundConversationResolution,
 } from "../channels/conversation-resolution.js";
-import { routeFromBindingRecord, routeToDeliveryFields } from "../channels/route-projection.js";
+import {
+  formatConversationTarget,
+  routeFromBindingRecord,
+  routeToDeliveryFields,
+} from "../channels/route-projection.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,

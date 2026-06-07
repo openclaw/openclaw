@@ -9,6 +9,16 @@ function numericCount(value) {
   return Number.isFinite(value) ? value : undefined;
 }
 
+const rssMetricIds = ["peakRssMb", "resourcePeakGatewayRssMb"];
+const cpuMetricIds = ["cpuPercentMax"];
+
+function hasSampledMetric(group, metricIds) {
+  return metricIds.some((metricId) => {
+    const metric = group?.metrics?.[metricId];
+    return metric && Number(metric.count) > 0;
+  });
+}
+
 export function evaluateToleratedPartialKovaReport(report) {
   const gate = report?.gate;
   if (!gate || typeof gate !== "object" || Array.isArray(gate)) {
@@ -59,6 +69,24 @@ export function evaluateToleratedPartialKovaReport(report) {
         .map(([status, count]) => `${status}=${count}`)
         .join(", ")}`,
     };
+  }
+
+  const records = Array.isArray(report?.records) ? report.records : [];
+  if (records.length === 0) {
+    return { ok: false, reason: "missing selected scenario records" };
+  }
+
+  const groups = Array.isArray(report?.performance?.groups) ? report.performance.groups : [];
+  if (groups.length === 0) {
+    return { ok: false, reason: "missing performance groups" };
+  }
+
+  if (!groups.some((group) => hasSampledMetric(group, rssMetricIds))) {
+    return { ok: false, reason: "missing sampled RSS metric in performance groups" };
+  }
+
+  if (!groups.some((group) => hasSampledMetric(group, cpuMetricIds))) {
+    return { ok: false, reason: "missing sampled CPU metric in performance groups" };
   }
 
   return { ok: true };

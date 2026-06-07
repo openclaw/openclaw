@@ -145,15 +145,27 @@ function table(headers, rows) {
 
 function validateMockHelloSummary(summary, filePath) {
   const counts = summary?.counts;
+  const scenarios = Array.isArray(summary?.scenarios) ? summary.scenarios : null;
   if (
-    !finiteNumber(counts?.total) ||
-    !finiteNumber(counts?.passed) ||
-    !finiteNumber(counts?.failed) ||
+    !isNonNegativeInteger(counts?.total) ||
+    !isNonNegativeInteger(counts?.passed) ||
+    !isNonNegativeInteger(counts?.failed) ||
     counts.total <= 0 ||
     counts.failed !== 0 ||
     counts.passed !== counts.total
   ) {
     throw new Error(`[source-performance] invalid mock hello summary counts: ${filePath}`);
+  }
+  if (!scenarios || scenarios.length !== counts.total) {
+    throw new Error(`[source-performance] invalid mock hello scenario evidence: ${filePath}`);
+  }
+  const passedScenarios = scenarios.filter((scenario) => scenario?.status === "pass").length;
+  const failedScenarios = scenarios.filter((scenario) => scenario?.status === "fail").length;
+  const invalidScenario = scenarios.find(
+    (scenario) => !["pass", "fail", "skip"].includes(String(scenario?.status)),
+  );
+  if (invalidScenario || passedScenarios !== counts.passed || failedScenarios !== counts.failed) {
+    throw new Error(`[source-performance] invalid mock hello scenario evidence: ${filePath}`);
   }
   const metrics = summary?.metrics;
   const requiredMetrics = [
@@ -167,6 +179,10 @@ function validateMockHelloSummary(summary, filePath) {
   if (missingMetric) {
     throw new Error(`[source-performance] missing mock hello metric ${missingMetric}: ${filePath}`);
   }
+}
+
+function isNonNegativeInteger(value) {
+  return Number.isInteger(value) && value >= 0;
 }
 
 function loadMockHelloSummaries(sourceDir, { required = false } = {}) {

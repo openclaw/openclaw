@@ -53,6 +53,7 @@ const WATCH_GATEWAY_SKIP_ENV = {
 export const WATCH_LOG_CAPTURE_MAX_CHARS = 2 * 1024 * 1024;
 const WATCH_BUILD_DETECTION_MAX_CHARS = 4096;
 const NON_NEGATIVE_INTEGER_PATTERN = /^(0|[1-9]\d*)$/u;
+const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
 
 /**
  * Appends watch output while preserving only the diagnostic tail.
@@ -418,7 +419,8 @@ function readProcessTreeCpuMs(rootPid) {
  * Reports whether gateway watch output contains a ready marker.
  */
 export function hasGatewayReadyLog(text) {
-  return /\[gateway\] (?:http server listening|ready \()/.test(text);
+  const normalized = text.replaceAll(ANSI_ESCAPE_PATTERN, "");
+  return /\[gateway\] (?:http server listening|ready(?:\b|\s*\())/.test(normalized);
 }
 
 async function waitForGatewayReady(readText, timeoutMs) {

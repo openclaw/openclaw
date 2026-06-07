@@ -1918,7 +1918,7 @@ jobs:
             profiles: stable full
           - suite_id: native-live-src-gateway-core
             label: Native live gateway core
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core
+            command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core
             timeout_minutes: 60
             profile_env_only: false
             profiles: beta minimum stable full
@@ -2038,7 +2038,7 @@ jobs:
             profiles: full
           - suite_id: native-live-src-gateway-backends
             label: Native live gateway backends
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends
+            command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full

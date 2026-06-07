@@ -24,6 +24,9 @@ const DEFAULT_OUTPUT = ".artifacts/test-perf/group-report.json";
 const DEFAULT_COMPARE_OUTPUT = ".artifacts/test-perf/group-report-compare.json";
 const DEFAULT_RUN_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_TIMEOUT_KILL_GRACE_MS = 10_000;
+const DEFAULT_SPAWN_LOG_MAX_BYTES = 1024 * 1024 * 256;
+const DEFAULT_SPAWN_OUTPUT_MAX_BYTES = 1024 * 1024 * 64;
+const DEFAULT_SPAWN_OUTPUT_TAIL_BYTES = 1024 * 256;
 
 function usage() {
   return [
@@ -232,18 +235,29 @@ function formatSpawnError(error) {
  * Runs a command, captures text output, and terminates timed-out process groups.
  */
 export function spawnText(command, args, options) {
-  const maxBuffer = 1024 * 1024 * 64;
+  const maxBuffer = options.maxBufferBytes ?? DEFAULT_SPAWN_OUTPUT_MAX_BYTES;
+  const maxLogBytes = options.maxLogBytes ?? DEFAULT_SPAWN_LOG_MAX_BYTES;
+  const tailBytes = options.outputTailBytes ?? DEFAULT_SPAWN_OUTPUT_TAIL_BYTES;
   const timeoutMs = options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
   const killGraceMs = options.killGraceMs ?? DEFAULT_TIMEOUT_KILL_GRACE_MS;
   const useProcessGroup = process.platform !== "win32";
+  const logPath = options.logPath ?? null;
   return new Promise((resolve) => {
+    let logFd = null;
+    if (logPath) {
+      fs.mkdirSync(path.dirname(logPath), { recursive: true });
+      logFd = fs.openSync(logPath, "w");
+    }
     const child = spawn(command, args, {
       cwd: options.cwd,
       detached: useProcessGroup,
       env: options.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let output = "";
+    let outputBytes = 0;
+    let outputTail = Buffer.alloc(0);
+    let stderrTail = Buffer.alloc(0);
+    let streamedLogBytes = 0;
     let outputExceeded = false;
     let timedOut = false;
     let settled = false;
@@ -257,7 +271,9 @@ export function spawnText(command, args, options) {
           return;
         } catch (error) {
           if (error && error.code !== "ESRCH") {
-            output += `[test-group-report] failed to send ${signal} to process group: ${formatSpawnError(error)}\n`;
+            appendDiagnostic(
+              `[test-group-report] failed to send ${signal} to process group: ${formatSpawnError(error)}\n`,
+            );
           }
         }
       }
@@ -303,7 +319,7 @@ export function spawnText(command, args, options) {
       killTimer = setTimeout(() => {
         waitingForKillGrace = false;
         killTimer = null;
-        output += message;
+        appendDiagnostic(message);
         signalChild("SIGKILL");
         if (childClosedResult) {
           finish(childClosedResult);
@@ -313,7 +329,7 @@ export function spawnText(command, args, options) {
     };
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
-      output += `\n[test-group-report] command timed out after ${String(timeoutMs)}ms\n`;
+      appendDiagnostic(`\n[test-group-report] command timed out after ${String(timeoutMs)}ms\n`);
       signalChild("SIGTERM");
       scheduleKill(
         `[test-group-report] command did not exit after ${String(killGraceMs)}ms grace; sending SIGKILL\n`,
@@ -330,32 +346,110 @@ export function spawnText(command, args, options) {
       if (killTimer) {
         clearTimeout(killTimer);
       }
+      if (logFd !== null) {
+        fs.closeSync(logFd);
+        logFd = null;
+      }
       resolve(result);
     };
-    const appendOutput = (chunk) => {
+    function appendTail(chunk, target = "output") {
+      if (tailBytes < 1) {
+        return;
+      }
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+      const currentTail = target === "stderr" ? stderrTail : outputTail;
+      if (buffer.byteLength >= tailBytes) {
+        if (target === "stderr") {
+          stderrTail = buffer.subarray(buffer.byteLength - tailBytes);
+        } else {
+          outputTail = buffer.subarray(buffer.byteLength - tailBytes);
+        }
+        return;
+      }
+      let nextTail = Buffer.concat([currentTail, buffer]);
+      if (nextTail.byteLength > tailBytes) {
+        nextTail = nextTail.subarray(nextTail.byteLength - tailBytes);
+      }
+      if (target === "stderr") {
+        stderrTail = nextTail;
+      } else {
+        outputTail = nextTail;
+      }
+    }
+    function appendDiagnostic(message) {
+      const buffer = Buffer.from(message, "utf8");
+      if (logFd !== null) {
+        fs.writeSync(logFd, buffer);
+        appendTail(buffer);
+        return;
+      }
+      appendTail(buffer);
+    }
+    const appendOutput = (chunk, streamName) => {
+      if (logFd !== null) {
+        if (outputExceeded) {
+          return;
+        }
+        const remainingLogBytes = maxLogBytes - streamedLogBytes;
+        const chunkToWrite =
+          chunk.byteLength > remainingLogBytes ? chunk.subarray(0, remainingLogBytes) : chunk;
+        if (chunkToWrite.byteLength > 0) {
+          fs.writeSync(logFd, chunkToWrite);
+          streamedLogBytes += chunkToWrite.byteLength;
+          appendTail(chunkToWrite);
+          if (streamName === "stderr") {
+            appendTail(chunkToWrite, "stderr");
+          }
+        }
+        if (chunk.byteLength > remainingLogBytes) {
+          outputExceeded = true;
+          appendDiagnostic(
+            `\n[test-group-report] output log exceeded ${String(maxLogBytes)} bytes\n`,
+          );
+          signalChild("SIGTERM");
+          scheduleKill(
+            "[test-group-report] command did not exit after output log limit; sending SIGKILL\n",
+          );
+        }
+        return;
+      }
       if (outputExceeded) {
         return;
       }
-      output += chunk.toString("utf8");
-      if (Buffer.byteLength(output) > maxBuffer) {
+
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+      outputBytes += buffer.byteLength;
+      appendTail(buffer);
+      if (streamName === "stderr") {
+        appendTail(buffer, "stderr");
+      }
+      if (outputBytes > maxBuffer) {
         outputExceeded = true;
-        output += `\n[test-group-report] output exceeded ${String(maxBuffer)} bytes\n`;
+        appendDiagnostic(`\n[test-group-report] output exceeded ${String(maxBuffer)} bytes\n`);
         signalChild("SIGTERM");
         scheduleKill(
           "[test-group-report] command did not exit after output limit; sending SIGKILL\n",
         );
       }
     };
-    child.stdout?.on("data", appendOutput);
-    child.stderr?.on("data", appendOutput);
+    function streamedOutput() {
+      const tail = outputTail.toString("utf8");
+      const stderr = stderrTail.toString("utf8");
+      if (!stderr || tail.includes(stderr)) {
+        return tail;
+      }
+      return `${tail}\n${stderr}`;
+    }
+    child.stdout?.on("data", (chunk) => appendOutput(chunk, "stdout"));
+    child.stderr?.on("data", (chunk) => appendOutput(chunk, "stderr"));
     child.on("error", (error) => {
-      output += `${String(error)}\n`;
+      appendDiagnostic(`${String(error)}\n`);
     });
     child.on("close", (code, signal) => {
       const result = {
         status: outputExceeded || timedOut ? 1 : (code ?? 1),
         signal,
-        output,
+        output: streamedOutput(),
         timedOut,
       };
       if (waitingForKillGrace && processGroupIsAlive()) {
@@ -401,11 +495,11 @@ async function runVitestJsonReport(params) {
         .join(" "),
     },
     killGraceMs: params.killGraceMs,
+    logPath: params.logPath,
     timeoutMs: params.timeoutMs,
   });
   const elapsedMs = Number.parseFloat(String(process.hrtime.bigint() - startedAt)) / 1_000_000;
   const output = result.output;
-  fs.writeFileSync(params.logPath, output, "utf8");
   return {
     config: params.config,
     elapsedMs,
@@ -465,16 +559,18 @@ function isFiniteNumber(value) {
 }
 
 function validateCounter(counter, reportPath, fieldName, index = null) {
-  const label = index === null ? fieldName : `${fieldName}[${String(index)}]`;
+  const fieldLabel = String(fieldName);
+  const label = index === null ? fieldLabel : `${fieldLabel}[${String(index)}]`;
+  const displayPath = String(reportPath);
   if (!counter || typeof counter !== "object" || Array.isArray(counter)) {
     throw new Error(
-      `[test-group-report] invalid grouped report ${reportPath}: ${label} must be an object`,
+      `[test-group-report] invalid grouped report ${displayPath}: ${label} must be an object`,
     );
   }
   for (const key of ["durationMs", "fileCount", "testCount"]) {
     if (!isFiniteNumber(counter[key])) {
       throw new Error(
-        `[test-group-report] invalid grouped report ${reportPath}: ${label}.${key} must be a finite number`,
+        `[test-group-report] invalid grouped report ${displayPath}: ${label}.${key} must be a finite number`,
       );
     }
   }

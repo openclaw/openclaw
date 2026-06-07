@@ -4,6 +4,8 @@ import {
   assertToolSearchLaneResults,
   fetchJson,
   readToolSearchGatewayFetchLimits,
+  restoreToolSearchGatewayEnv,
+  snapshotToolSearchGatewayEnv,
 } from "../../scripts/tool-search-gateway-e2e.ts";
 
 describe("tool search gateway e2e fetch helper", () => {
@@ -87,6 +89,27 @@ describe("tool search gateway e2e fetch helper", () => {
   });
 });
 
+describe("tool search gateway e2e environment helpers", () => {
+  it("restores mutated gateway environment values", () => {
+    const env: NodeJS.ProcessEnv = {
+      OPENCLAW_CONFIG_PATH: "/before/openclaw.json",
+      OPENCLAW_STATE_DIR: "/before/state",
+    };
+    const snapshot = snapshotToolSearchGatewayEnv(env);
+
+    env.OPENCLAW_CONFIG_PATH = "/after/openclaw.json";
+    env.OPENCLAW_STATE_DIR = "/after/state";
+    env.OPENCLAW_TEST_FAST = "1";
+
+    restoreToolSearchGatewayEnv(snapshot, env);
+
+    expect(env).toEqual({
+      OPENCLAW_CONFIG_PATH: "/before/openclaw.json",
+      OPENCLAW_STATE_DIR: "/before/state",
+    });
+  });
+});
+
 describe("tool search gateway e2e lane assertions", () => {
   const targetTool = "fake_plugin_tool_17";
   const normal = {
@@ -135,5 +158,29 @@ describe("tool search gateway e2e lane assertions", () => {
         },
       }),
     ).toThrow(`code lane did not bridge-call ${targetTool}`);
+  });
+
+  it("rejects normal lane output that only echoes the target tool name", () => {
+    expect(() =>
+      assertToolSearchLaneResults({
+        targetTool,
+        normal: {
+          ...normal,
+          sessionLogToolMentions: {
+            [targetTool]: 0,
+          },
+        },
+        code: {
+          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+          providerDeclaredToolCount: 1,
+          providerPlannedTools: ["tool_search_code"],
+          providerRawBytes: 4_000,
+          sessionLogToolMentions: {
+            tool_search_code: 1,
+            [targetTool]: 1,
+          },
+        },
+      }),
+    ).toThrow(`normal lane did not call ${targetTool}`);
   });
 });

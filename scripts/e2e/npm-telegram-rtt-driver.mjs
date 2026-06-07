@@ -210,8 +210,8 @@ async function waitForSutReply(params) {
         continue;
       }
       const replyMatches = message.reply_to_message?.message_id === params.requestMessageId;
-      const anySutReplyMatches = params.allowAnySutReply;
-      if (replyMatches || anySutReplyMatches || params.matchText) {
+      const textMatches = params.matchText ? text.includes(params.matchText) : false;
+      if (replyMatches || textMatches) {
         return message;
       }
     }
@@ -371,7 +371,7 @@ async function main() {
 
   const scenarios = [];
   const canary = await runScenario({
-    allowAnySutReply: true,
+    allowAnySutReply: false,
     id: "telegram-canary",
     input: `/status@${sutMe.username}`,
     sutId: sutMe.id,
