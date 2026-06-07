@@ -9,6 +9,7 @@ let runExtraParamsCase: typeof import("./extra-params.test-support.js").runExtra
 
 function runDeepSeekV4Case(params: {
   messages?: Array<Record<string, unknown>>;
+  payloadExtras?: Record<string, unknown>;
   provider?: string;
   thinkingFormat?: ModelCompatConfig["thinkingFormat"];
   thinkingLevel?: "off" | "high";
@@ -26,7 +27,11 @@ function runDeepSeekV4Case(params: {
       id: "DeepSeek-V4-Flash",
       ...(compat ? { compat } : {}),
     } as Model<"openai-completions">,
-    payload: { model: "DeepSeek-V4-Flash", messages: params.messages ?? [] },
+    payload: {
+      model: "DeepSeek-V4-Flash",
+      messages: params.messages ?? [],
+      ...params.payloadExtras,
+    },
   }).payload as Record<string, unknown>;
 }
 
@@ -74,6 +79,22 @@ describe("extra-params: DeepSeek V4 OpenAI-compatible thinking fallback", () => 
       thinkingFormat: "openai",
       thinkingLevel: "high",
     });
+    expect((payload.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
+      "reasoning_content",
+    );
+  });
+
+  it("preserves non-DeepSeek reasoning controls while stripping replay fields", () => {
+    const payload = runDeepSeekV4Case({
+      messages: [
+        { role: "user", content: "continue" },
+        { role: "assistant", content: "prior", reasoning_content: "native reasoning" },
+      ],
+      payloadExtras: { reasoning: { effort: "high" } },
+      thinkingFormat: "openrouter",
+      thinkingLevel: "high",
+    });
+    expect(payload.reasoning).toEqual({ effort: "high" });
     expect((payload.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
       "reasoning_content",
     );

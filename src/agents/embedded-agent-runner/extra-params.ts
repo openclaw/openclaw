@@ -974,8 +974,6 @@ function createDeepSeekV4NonNativeCompatSanitizerWrapper(
     }
     return streamWithPayloadPatch(baseStreamFn, model, context, options, (payload) => {
       delete payload.thinking;
-      delete payload.reasoning_effort;
-      delete payload.reasoning;
       stripDeepSeekV4ReasoningContent(payload);
     });
   };
