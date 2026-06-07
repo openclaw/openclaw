@@ -958,26 +958,11 @@ private fun AppearanceSettingsScreen(
   }
 }
 
-internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String =
-  when (mode) {
-    AppearanceThemeMode.System -> "System"
-    AppearanceThemeMode.Dark -> "Dark"
-    AppearanceThemeMode.Light -> "Light"
-  }
+internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String = mode.displayLabel
 
-internal fun appearanceThemeOptions(): List<String> =
-  listOf(
-    appearanceThemeSummary(AppearanceThemeMode.System),
-    appearanceThemeSummary(AppearanceThemeMode.Dark),
-    appearanceThemeSummary(AppearanceThemeMode.Light),
-  )
+internal fun appearanceThemeOptions(): List<String> = AppearanceThemeMode.entries.map { it.displayLabel }
 
-internal fun appearanceThemeModeForLabel(label: String): AppearanceThemeMode =
-  when (label.trim().lowercase()) {
-    "system" -> AppearanceThemeMode.System
-    "light" -> AppearanceThemeMode.Light
-    else -> AppearanceThemeMode.Dark
-  }
+internal fun appearanceThemeModeForLabel(label: String): AppearanceThemeMode = AppearanceThemeMode.fromDisplayLabel(label)
 
 @Composable
 private fun AppearancePaletteSwatch(
