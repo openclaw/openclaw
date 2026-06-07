@@ -83,6 +83,16 @@ export async function moveMemoryIndexFiles(
   }
 }
 
+async function moveMemoryIndexSidecarFiles(
+  sourceBase: string,
+  targetBase: string,
+  options: ResolvedMemoryIndexFileOptions,
+): Promise<void> {
+  for (const suffix of ["-wal", "-shm"]) {
+    await renameWithRetry(`${sourceBase}${suffix}`, `${targetBase}${suffix}`, options);
+  }
+}
+
 async function rmWithRetry(path: string, options: ResolvedMemoryIndexFileOptions): Promise<void> {
   for (let attempt = 1; attempt <= options.maxRemoveAttempts; attempt++) {
     try {
@@ -112,13 +122,23 @@ export async function removeMemoryIndexFiles(
   }
 }
 
-async function swapMemoryIndexFiles(targetPath: string, tempPath: string): Promise<void> {
+async function swapMemoryIndexFiles(
+  targetPath: string,
+  tempPath: string,
+  options: MemoryIndexFileOptions = {},
+): Promise<void> {
+  const resolvedOptions = resolveMemoryIndexFileOptions(options);
   const backupPath = `${targetPath}.backup-${randomUUID()}`;
-  await moveMemoryIndexFiles(targetPath, backupPath);
+  await moveMemoryIndexSidecarFiles(targetPath, backupPath, resolvedOptions);
+  let basePublished = false;
   try {
-    await moveMemoryIndexFiles(tempPath, targetPath);
+    await renameWithRetry(tempPath, targetPath, resolvedOptions);
+    basePublished = true;
+    await moveMemoryIndexSidecarFiles(tempPath, targetPath, resolvedOptions);
   } catch (err) {
-    await moveMemoryIndexFiles(backupPath, targetPath);
+    if (!basePublished) {
+      await moveMemoryIndexSidecarFiles(backupPath, targetPath, resolvedOptions);
+    }
     throw err;
   }
   await removeMemoryIndexFiles(backupPath);
@@ -133,7 +153,7 @@ export async function runMemoryAtomicReindex<T>(params: {
 }): Promise<T> {
   try {
     const result = await params.build();
-    await swapMemoryIndexFiles(params.targetPath, params.tempPath);
+    await swapMemoryIndexFiles(params.targetPath, params.tempPath, params.fileOptions);
     return result;
   } catch (err) {
     try {

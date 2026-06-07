@@ -77,6 +77,53 @@ describe("memory manager atomic reindex", () => {
     await expectPathMissing(tempIndexPath);
   });
 
+  it("keeps the existing base index reachable until the temp base is published", async () => {
+    writeChunkMarker(indexPath, "before");
+    writeChunkMarker(tempIndexPath, "after");
+
+    const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    let targetExistedBeforeTempPublish: boolean | undefined;
+    const mockedFs = {
+      ...actualFs,
+      rename: async (
+        source: Parameters<typeof fs.rename>[0],
+        target: Parameters<typeof fs.rename>[1],
+      ) => {
+        if (String(source) === tempIndexPath && String(target) === indexPath) {
+          try {
+            await actualFs.access(indexPath);
+            targetExistedBeforeTempPublish = true;
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+              throw err;
+            }
+            targetExistedBeforeTempPublish = false;
+          }
+        }
+        await actualFs.rename(source, target);
+      },
+    };
+
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({ ...mockedFs, default: mockedFs }));
+    try {
+      const { runMemoryAtomicReindex: runMemoryAtomicReindexWithMockedFs } =
+        await import("./manager-atomic-reindex.js");
+      await runMemoryAtomicReindexWithMockedFs({
+        targetPath: indexPath,
+        tempPath: tempIndexPath,
+        build: async () => undefined,
+      });
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+
+    expect(targetExistedBeforeTempPublish).toBe(true);
+    expect(readChunkMarker(indexPath)).toBe("after");
+    await expectPathMissing(tempIndexPath);
+  });
+
   it("retries transient rename failures during index swaps", async () => {
     const rename = vi
       .fn()
