@@ -22,6 +22,12 @@ vi.mock("../response-generator.js", () => ({
   generateVoiceResponse: generateVoiceResponseMock,
 }));
 
+// Outbound place-call uses the SSRF-guarded fetch; mock it (returns { response, release }).
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
 const STUB_WEBHOOK_CTX: WebhookContext = {
   rawBody: "",
   headers: {},
@@ -81,42 +87,43 @@ describe("MsteamsProvider (stub surface)", () => {
   });
 
   it("initiateCall (outbound enabled) signs + POSTs /api/calls/place and returns the worker callId", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ callId: "graph-call-9" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    try {
-      const p = new MsteamsProvider({
-        sharedSecret: SECRET,
-        outbound: { enabled: true, workerBaseUrl: "https://worker.example", tenantId: "tenant-1" },
-      });
-      const result = await p.initiateCall({
-        callId: "internal-1",
-        from: "msteams-bot",
-        to: "user:aad-123",
-        message: "Your report is ready.",
-        webhookUrl: "http://localhost/voice/webhook",
-      } as unknown as Parameters<MsteamsProvider["initiateCall"]>[0]);
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ callId: "graph-call-9" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release: vi.fn(),
+    });
+    const p = new MsteamsProvider({
+      sharedSecret: SECRET,
+      outbound: { enabled: true, workerBaseUrl: "https://worker.example", tenantId: "tenant-1" },
+    });
+    const result = await p.initiateCall({
+      callId: "internal-1",
+      from: "msteams-bot",
+      to: "user:aad-123",
+      message: "Your report is ready.",
+      webhookUrl: "http://localhost/voice/webhook",
+    } as unknown as Parameters<MsteamsProvider["initiateCall"]>[0]);
 
-      expect(result).toEqual({ providerCallId: "graph-call-9", status: "initiated" });
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-      expect(url).toBe("https://worker.example/api/calls");
-      expect(init.method).toBe("POST");
-      expect(JSON.parse(init.body as string)).toEqual({
-        userObjectId: "aad-123",
-        tenantId: "tenant-1",
-      });
-      const headers = init.headers as Record<string, string>;
-      expect(headers["x-openclawteamsbridge-signature"]).toMatch(/^[0-9a-f]{64}$/);
-      expect(headers["x-openclawteamsbridge-timestamp"]).toMatch(/^\d+$/);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    expect(result).toEqual({ providerCallId: "graph-call-9", status: "initiated" });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    const req = fetchWithSsrFGuardMock.mock.calls[0][0] as {
+      url: string;
+      init: RequestInit;
+      policy: { allowedHostnames: string[]; allowPrivateNetwork?: boolean };
+    };
+    expect(req.url).toBe("https://worker.example/api/calls");
+    expect(req.init.method).toBe("POST");
+    expect(JSON.parse(req.init.body as string)).toEqual({
+      userObjectId: "aad-123",
+      tenantId: "tenant-1",
+    });
+    const headers = req.init.headers as Record<string, string>;
+    expect(headers["x-openclawteamsbridge-signature"]).toMatch(/^[0-9a-f]{64}$/);
+    expect(headers["x-openclawteamsbridge-timestamp"]).toMatch(/^\d+$/);
+    expect(req.policy.allowedHostnames).toContain("worker.example");
   });
 
   it("initiateCall throws when workerBaseUrl / tenantId / sharedSecret / target are missing", async () => {
@@ -171,32 +178,22 @@ describe("MsteamsProvider (stub surface)", () => {
     } as unknown as Parameters<MsteamsProvider["initiateCall"]>[0];
 
     // Worker rejects: the status + body tail are surfaced.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("user not found", { status: 404, statusText: "Not Found" })),
-    );
-    try {
-      await expect(provider.initiateCall(input)).rejects.toThrow(/worker returned 404/);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("user not found", { status: 404, statusText: "Not Found" }),
+      release: vi.fn(),
+    });
+    await expect(provider.initiateCall(input)).rejects.toThrow(/worker returned 404/);
 
     // Worker accepts but omits the callId: we cannot correlate the media WS later.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(JSON.stringify({}), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-      ),
-    );
-    try {
-      await expect(provider.initiateCall(input)).rejects.toThrow(/did not include a callId/);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release: vi.fn(),
+    });
+    await expect(provider.initiateCall(input)).rejects.toThrow(/did not include a callId/);
   });
 
   it("initiateCall attaches the caught error as the cause when the worker request fails", async () => {
@@ -205,34 +202,26 @@ describe("MsteamsProvider (stub surface)", () => {
       outbound: { enabled: true, workerBaseUrl: "https://worker.example", tenantId: "tenant-1" },
     });
     const networkError = new Error("ECONNREFUSED");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw networkError;
-      }),
-    );
-    try {
-      await provider
-        .initiateCall({
-          callId: "internal-cause",
-          from: "msteams-bot",
-          to: "user:aad-123",
-          webhookUrl: "http://localhost/voice/webhook",
-        } as unknown as Parameters<MsteamsProvider["initiateCall"]>[0])
-        .then(
-          () => {
-            throw new Error("expected initiateCall to reject");
-          },
-          (err: unknown) => {
-            expect(err).toBeInstanceOf(Error);
-            expect((err as Error).message).toMatch(/request to worker failed/);
-            // The original network error is preserved for diagnostics.
-            expect((err as Error).cause).toBe(networkError);
-          },
-        );
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(networkError);
+    await provider
+      .initiateCall({
+        callId: "internal-cause",
+        from: "msteams-bot",
+        to: "user:aad-123",
+        webhookUrl: "http://localhost/voice/webhook",
+      } as unknown as Parameters<MsteamsProvider["initiateCall"]>[0])
+      .then(
+        () => {
+          throw new Error("expected initiateCall to reject");
+        },
+        (err: unknown) => {
+          expect(err).toBeInstanceOf(Error);
+          expect((err as Error).message).toMatch(/request to worker failed/);
+          // The original network error is preserved for diagnostics.
+          expect((err as Error).cause).toBe(networkError);
+        },
+      );
   });
 
   it("hangupCall is a no-op when no session exists", async () => {
@@ -748,14 +737,14 @@ describe("MsteamsProvider (audio loop wiring)", () => {
       outbound: { enabled: true, workerBaseUrl: "https://worker.example", tenantId: "tenant-1" },
     });
     const graphCallId = "graph-out-1";
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ callId: graphCallId }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ callId: graphCallId }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release: vi.fn(),
+    });
     try {
       // Place the call through the manager (creates the CallRecord + maps providerCallId).
       const placed = await manager.initiateCall("user:aad-out", undefined, {
@@ -763,7 +752,7 @@ describe("MsteamsProvider (audio loop wiring)", () => {
         mode: "notify",
       });
       expect(placed.success).toBe(true);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
       const internalCall = manager.getCallByProviderCallId(graphCallId);
       expect(internalCall?.direction).toBe("outbound");
 
@@ -800,14 +789,14 @@ describe("MsteamsProvider (audio loop wiring)", () => {
       },
     });
     const graphCallId = "graph-noanswer-1";
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ callId: graphCallId }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ callId: graphCallId }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release: vi.fn(),
+    });
     try {
       const placed = await manager.initiateCall("user:aad-noanswer", undefined, {
         message: "Your report is ready.",
@@ -838,14 +827,14 @@ describe("MsteamsProvider (audio loop wiring)", () => {
       },
     });
     const graphCallId = "graph-late-1";
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ callId: graphCallId }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ callId: graphCallId }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release: vi.fn(),
+    });
     try {
       const placed = await manager.initiateCall("user:aad-late", undefined, {
         message: "Your report is ready.",
@@ -862,7 +851,9 @@ describe("MsteamsProvider (audio loop wiring)", () => {
       // It must be closed (already finalized), NOT attached or registered as a fresh
       // inbound call — so no new STT session is created.
       const { ws } = await connect(port, graphCallId);
-      const closed = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+      const closed = new Promise<void>((resolve) => {
+        ws.once("close", () => resolve());
+      });
       ws.send(
         JSON.stringify({
           type: "session.start",
