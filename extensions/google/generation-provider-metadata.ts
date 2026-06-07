@@ -18,7 +18,7 @@ export const GOOGLE_VIDEO_MAX_DURATION_SECONDS =
 
 function isGoogleProviderConfigured(
   ctx: { agentDir?: string } | VideoGenerationProviderConfiguredContext,
-  providerId: string = "google",
+  providerId = "google",
 ): boolean {
   return isProviderApiKeyConfigured({
     provider: providerId,
