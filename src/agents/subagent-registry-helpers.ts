@@ -17,12 +17,12 @@ import {
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
+import { isTransientAnnounceDeliveryError } from "./subagent-announce-delivery.js";
 import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isTransientAnnounceDeliveryError } from "./subagent-announce-delivery.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 import {
   getSubagentSessionRuntimeMs,
@@ -130,7 +130,9 @@ export async function deleteSubagentSessionWithRetry(params: {
       if (!isTransientAnnounceDeliveryError(err)) {
         throw err;
       }
-      await new Promise((resolve) => setTimeout(resolve, SWEEP_DELETE_RETRY_DELAY_MS));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, SWEEP_DELETE_RETRY_DELAY_MS);
+      });
     }
   }
   // Re-throw the last transient error if all retries were exhausted.

@@ -42,7 +42,9 @@ const GATEWAY_LIFECYCLE_TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
 
 export function isGatewayLifecycleTransientError(error: unknown): boolean {
   const message = summarizeGatewayLifecycleError(error);
-  if (!message) return false;
+  if (!message) {
+    return false;
+  }
   // Permanent failures (policy/auth/close-code) fail fast — never retry.
   if (GATEWAY_LIFECYCLE_PERMANENT_ERROR_PATTERNS.some((pattern) => pattern.test(message))) {
     return false;

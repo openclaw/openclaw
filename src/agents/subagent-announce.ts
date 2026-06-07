@@ -177,7 +177,6 @@ async function callGatewayForAnnounceFinalize(params: {
       params: params.params,
       timeoutMs: SUBAGENT_ANNOUNCE_SESSION_FINALIZE_TIMEOUT_MS,
     });
-    return;
   } catch (error) {
     if (!isTransientAnnounceDeliveryError(error)) {
       throw error;
