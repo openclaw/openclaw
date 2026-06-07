@@ -125,6 +125,13 @@ const MAX_PRECONNECT_FRAMES = 250;
 const OUTBOUND_ANSWER_TIMEOUT_DEFAULT_MS = 120_000;
 
 /**
+ * How long a timed-out outbound callId is remembered (so a late callee answer is closed instead of
+ * mistaken for a fresh inbound call). After this it self-expires, so the Set can't grow unbounded
+ * from calls that never connect late. Comfortably longer than any realistic late-answer window.
+ */
+const OUTBOUND_TIMED_OUT_RETENTION_MS = 5 * 60_000;
+
+/**
  * Microsoft Teams voice-call provider.
  *
  * Unlike Twilio/Telnyx/Plivo, Teams calls do not arrive on the voice-call
@@ -200,6 +207,8 @@ export class MsteamsProvider implements VoiceCallProvider {
    * late callee answer from being mistaken for a fresh inbound call. Cleared on late-connect or end.
    */
   private readonly timedOutOutbound = new Set<string>();
+  /** Auto-expiry timers for {@link timedOutOutbound} entries, so the Set can't grow without bound. */
+  private readonly timedOutOutboundExpiry = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(options: MsteamsProviderOptions) {
     const { port, bindAddress, path, sharedSecret, outbound, logger } = options;
@@ -287,6 +296,13 @@ export class MsteamsProvider implements VoiceCallProvider {
       this.realtimeCalls.delete(providerCallId);
       realtimeCall.close();
     }
+    // Cancel any outstanding outbound timers so they can't fire after teardown.
+    for (const providerCallId of Array.from(this.pendingOutboundTimers.keys())) {
+      this.clearOutboundTimer(providerCallId);
+    }
+    for (const providerCallId of Array.from(this.timedOutOutboundExpiry.keys())) {
+      this.clearTimedOutOutbound(providerCallId);
+    }
     await this.mediaStream?.stop();
   }
 
@@ -318,7 +334,7 @@ export class MsteamsProvider implements VoiceCallProvider {
 
     // A placed outbound call whose no-answer timer already fired (CallRecord finalized as ended).
     // If the callee answers late, don't treat the media WS as a fresh inbound call — close it.
-    if (this.timedOutOutbound.delete(providerCallId)) {
+    if (this.clearTimedOutOutbound(providerCallId)) {
       this.logger?.warn(
         `MsteamsProvider: late connect for timed-out outbound call ${providerCallId}; closing (already finalized)`,
       );
@@ -843,7 +859,7 @@ export class MsteamsProvider implements VoiceCallProvider {
     this.latestVideoFrames.delete(info.callId);
     this.recordingActiveByCall.delete(info.callId);
     this.clearOutboundTimer(info.callId);
-    this.timedOutOutbound.delete(info.callId);
+    this.clearTimedOutOutbound(info.callId);
     const realtimeCall = this.realtimeCalls.get(info.callId);
     if (realtimeCall) {
       this.realtimeCalls.delete(info.callId);
@@ -931,6 +947,16 @@ export class MsteamsProvider implements VoiceCallProvider {
     }
   }
 
+  /** Forget a timed-out outbound callId and cancel its pending auto-expiry timer. */
+  private clearTimedOutOutbound(providerCallId: string): boolean {
+    const timer = this.timedOutOutboundExpiry.get(providerCallId);
+    if (timer) {
+      clearTimeout(timer);
+      this.timedOutOutboundExpiry.delete(providerCallId);
+    }
+    return this.timedOutOutbound.delete(providerCallId);
+  }
+
   /**
    * A placed outbound call never connected back within the timeout (no answer,
    * declined, or the worker failed after returning a callId). Drop the pending
@@ -943,8 +969,15 @@ export class MsteamsProvider implements VoiceCallProvider {
       return;
     }
     this.pendingOutbound.delete(providerCallId);
-    // Remember it briefly so a late callee answer isn't mistaken for a fresh inbound call.
+    // Remember it briefly so a late callee answer isn't mistaken for a fresh inbound call, but
+    // self-expire so the Set can't grow without bound from calls that never connect late.
     this.timedOutOutbound.add(providerCallId);
+    const expiry = setTimeout(
+      () => this.clearTimedOutOutbound(providerCallId),
+      OUTBOUND_TIMED_OUT_RETENTION_MS,
+    );
+    expiry.unref?.(); // don't keep the process alive just for this cleanup
+    this.timedOutOutboundExpiry.set(providerCallId, expiry);
     this.logger?.warn(
       `MsteamsProvider: outbound call ${providerCallId} did not connect within ${this.outbound?.answerTimeoutMs ?? OUTBOUND_ANSWER_TIMEOUT_DEFAULT_MS}ms; finalizing`,
     );
