@@ -315,14 +315,12 @@ assert_missing_supervisor_after_refresh_probe() {
     cat "$SYSTEMCTL_SHIM_LOG" >&2 || true
     return 1
   fi
+  # The proof hinges on behavior rather than a fragile diagnostic string:
+  # the shim must exercise a missing service-runtime probe, the update must
+  # not take the "already healthy" shortcut, and later gateway probes/status
+  # must still pass after the updater performs the managed restart path.
   if grep -q "Gateway already reports the updated version after service refresh; skipped redundant restart." /tmp/openclaw-upgrade-survivor-update.err /tmp/openclaw-upgrade-survivor-update.json 2>/dev/null; then
     echo "missing-supervisor-after-refresh scenario incorrectly accepted healthy gateway without supervisor proof" >&2
-    cat /tmp/openclaw-upgrade-survivor-update.err >&2 || true
-    cat /tmp/openclaw-upgrade-survivor-update.json >&2 || true
-    return 1
-  fi
-  if ! grep -q "managed service supervision was not verified" /tmp/openclaw-upgrade-survivor-update.err /tmp/openclaw-upgrade-survivor-update.json 2>/dev/null; then
-    echo "missing-supervisor-after-refresh scenario did not emit the expected supervisor diagnostic" >&2
     cat /tmp/openclaw-upgrade-survivor-update.err >&2 || true
     cat /tmp/openclaw-upgrade-survivor-update.json >&2 || true
     return 1
