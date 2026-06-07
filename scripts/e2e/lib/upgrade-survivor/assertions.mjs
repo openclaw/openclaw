@@ -11,7 +11,6 @@ const SCENARIOS = new Set([
   "channel-post-core-restore",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
-  "missing-supervisor-after-refresh",
   "stale-source-plugin-shadow",
   "tilde-log-path",
   "versioned-runtime-deps",

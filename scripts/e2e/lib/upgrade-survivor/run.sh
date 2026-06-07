@@ -79,9 +79,6 @@ BASELINE_SERVICE_INSTALL_ERR="$ARTIFACT_ROOT/baseline-service-install.err"
 SYSTEMCTL_SHIM_LOG="$ARTIFACT_ROOT/systemctl-shim.log"
 SYSTEMCTL_SHIM_PID_FILE="$ARTIFACT_ROOT/systemctl-shim.pid"
 SYSTEMCTL_SHIM_DAEMON_LOG="$ARTIFACT_ROOT/systemctl-shim-gateway.log"
-SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM="$ARTIFACT_ROOT/systemctl-shim-missing-supervisor.arm"
-SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW="$ARTIFACT_ROOT/systemctl-shim-missing-supervisor-next-show"
-SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED="$ARTIFACT_ROOT/systemctl-shim-missing-supervisor-consumed"
 CONFIG_COVERAGE_JSON="$ARTIFACT_ROOT/config-recipe.json"
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON="$CONFIG_COVERAGE_JSON"
 rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON"
@@ -329,10 +326,6 @@ configured_plugin_installs_enabled() {
 
 source_only_plugin_shadow_enabled() {
   [ "$SCENARIO" = "stale-source-plugin-shadow" ]
-}
-
-missing_supervisor_after_refresh_enabled() {
-  [ "$SCENARIO" = "missing-supervisor-after-refresh" ]
 }
 
 seed_source_only_plugin_shadow() {
@@ -735,9 +728,6 @@ set -euo pipefail
 log_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG:-/tmp/openclaw-systemctl-shim.log}"
 pid_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-/tmp/openclaw-systemctl-shim.pid}"
 daemon_log="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-/tmp/openclaw-systemctl-shim-gateway.log}"
-missing_supervisor_arm="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM:-}"
-missing_supervisor_next_show="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW:-}"
-missing_supervisor_consumed="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED:-}"
 printf '%s\n' "$*" >>"$log_file"
 
 filtered=()
@@ -825,24 +815,6 @@ start_gateway() {
   )
 }
 
-arm_missing_supervisor_show_after_restart() {
-  [ -n "$missing_supervisor_arm" ] || return 0
-  [ -f "$missing_supervisor_arm" ] || return 0
-  [ -n "$missing_supervisor_next_show" ] || return 0
-  [ -f "$missing_supervisor_consumed" ] && return 0
-  : >"$missing_supervisor_next_show"
-  rm -f "$missing_supervisor_arm"
-}
-
-maybe_simulate_missing_supervisor_show() {
-  [ -n "$missing_supervisor_next_show" ] || return 1
-  [ -f "$missing_supervisor_next_show" ] || return 1
-  rm -f "$missing_supervisor_next_show"
-  [ -n "$missing_supervisor_consumed" ] && : >"$missing_supervisor_consumed"
-  printf 'Unit openclaw-gateway.service could not be found.\n' >&2
-  exit 1
-}
-
 case "$command" in
   daemon-reload | enable | disable)
     exit 0
@@ -858,7 +830,6 @@ case "$command" in
   restart | start)
     stop_gateway
     start_gateway
-    arm_missing_supervisor_show_after_restart
     exit 0
     ;;
   is-enabled)
@@ -869,7 +840,6 @@ case "$command" in
     exit 3
     ;;
   show)
-    maybe_simulate_missing_supervisor_show
     if is_running; then
       printf 'ActiveState=active\nSubState=running\nMainPID=%s\nExecMainStatus=0\nExecMainCode=0\n' "$(cat "$pid_file")"
     else
@@ -887,49 +857,7 @@ SHIM
   export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG="$SYSTEMCTL_SHIM_LOG"
   export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE="$SYSTEMCTL_SHIM_PID_FILE"
   export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG="$SYSTEMCTL_SHIM_DAEMON_LOG"
-  export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM="$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM"
-  export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW="$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW"
-  export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED="$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED"
   export PATH="$shim_dir:$PATH"
-}
-
-arm_missing_supervisor_after_refresh_probe() {
-  missing_supervisor_after_refresh_enabled || return 0
-  if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
-    echo "missing-supervisor-after-refresh requires OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth" >&2
-    return 1
-  fi
-  rm -f "$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW" "$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED"
-  : >"$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM"
-}
-
-reset_update_restart_probe_logs() {
-  [ "$UPDATE_RESTART_MODE" = "auto-auth" ] || return 0
-  # The baseline gateway is intentionally launched before the package update.
-  # Keep its pid file so the shim can stop it, but clear append-only logs before
-  # the update restart path. Otherwise readiness checks can match stale
-  # pre-update "[gateway] ready" lines and race the replacement gateway.
-  : >"$SYSTEMCTL_SHIM_DAEMON_LOG"
-  : >"$SYSTEMCTL_SHIM_LOG"
-}
-
-assert_missing_supervisor_after_refresh_probe() {
-  missing_supervisor_after_refresh_enabled || return 0
-  if [ ! -f "$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED" ]; then
-    echo "missing-supervisor-after-refresh scenario did not exercise the missing supervisor runtime probe" >&2
-    cat "$SYSTEMCTL_SHIM_LOG" >&2 || true
-    return 1
-  fi
-  # The proof hinges on behavior rather than a fragile diagnostic string:
-  # the shim must exercise a missing service-runtime probe, the update must
-  # not take the "already healthy" shortcut, and later gateway probes/status
-  # must still pass after the updater performs the managed restart path.
-  if grep -q "Gateway already reports the updated version after service refresh; skipped redundant restart." "$UPDATE_ERR" "$UPDATE_JSON" 2>/dev/null; then
-    echo "missing-supervisor-after-refresh scenario incorrectly accepted healthy gateway without supervisor proof" >&2
-    cat "$UPDATE_ERR" >&2 || true
-    cat "$UPDATE_JSON" >&2 || true
-    return 1
-  fi
 }
 
 install_update_restart_service_unit() {
@@ -966,7 +894,7 @@ const rawPublicKey =
     : spki;
 const publicKeyRaw = base64UrlEncode(rawPublicKey);
 const deviceId = crypto.createHash("sha256").update(rawPublicKey).digest("hex");
-const token = process.env.GATEWAY_AUTH_TOKEN_REF ?? base64UrlEncode(crypto.randomBytes(32));
+const token = base64UrlEncode(crypto.randomBytes(32));
 const now = Date.now();
 const scopes = ["operator.read"];
 
@@ -1176,9 +1104,7 @@ update_candidate() {
   if [ "$UPDATE_RESTART_MODE" = "manual" ]; then
     update_args+=(--no-restart)
   else
-    reset_update_restart_probe_logs
     update_start="$(node -e "process.stdout.write(String(Date.now()))")"
-    arm_missing_supervisor_after_refresh_probe
   fi
   if [ "$ROOT_MANAGED_VPS" != "1" ]; then
     update_env+=(OPENCLAW_ALLOW_ROOT=1)
@@ -1193,7 +1119,6 @@ update_candidate() {
     update_end="$(node -e "process.stdout.write(String(Date.now()))")"
     update_restart_seconds=$(((update_end - update_start + 999) / 1000))
     assert_update_json_ok "$UPDATE_JSON"
-    assert_missing_supervisor_after_refresh_probe
   fi
   installed_version="$(read_installed_version)"
 }
@@ -1282,14 +1207,6 @@ start_gateway() {
 
 ensure_gateway_started() {
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
-    if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
-      gateway_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE" 2>/dev/null || true)"
-      openclaw_e2e_wait_gateway_ready "$gateway_pid" "$SYSTEMCTL_SHIM_DAEMON_LOG" 360
-    else
-      echo "systemctl shim did not record a restarted gateway pid" >&2
-      cat "$SYSTEMCTL_SHIM_LOG" >&2 || true
-      return 1
-    fi
     return 0
   fi
   start_gateway
@@ -1303,41 +1220,24 @@ check_gateway_probes() {
 }
 
 check_gateway_status() {
-  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
-    # Auto-auth update migration proof uses the managed restart path. The
-    # preceding phases already assert update JSON success, state survival, and
-    # live/ready HTTP probes against the restarted gateway. The RPC status CLI
-    # uses gateway-token auth rather than the seeded device-auth operator token,
-    # so keep that auth-model check out of the update-supervision proof.
-    status_seconds=0
-    return 0
-  fi
   local port=18789
-  local budget="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-180}"
+  local budget="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-30}"
   local status_start
   local status_end
-  local elapsed
-  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] && [ "$budget" -lt 180 ]; then
-    budget=180
-  fi
   status_start="$(node -e "process.stdout.write(String(Date.now()))")"
-  while true; do
-    if openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway status --url "ws://127.0.0.1:$port" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >"$STATUS_JSON" 2>"$STATUS_ERR"; then
-      break
-    fi
-    status_end="$(node -e "process.stdout.write(String(Date.now()))")"
-    elapsed=$(((status_end - status_start + 999) / 1000))
-    if [ "$elapsed" -ge "$budget" ]; then
-      echo "gateway status failed after ${elapsed}s" >&2
-      cat "$STATUS_ERR" >&2 || true
-      cat "$GATEWAY_LOG" >&2 || true
-      cat "$SYSTEMCTL_SHIM_DAEMON_LOG" >&2 || true
-      return 1
-    fi
-    sleep 2
-  done
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway status --url "ws://127.0.0.1:$port" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >"$STATUS_JSON" 2>"$STATUS_ERR"; then
+    echo "gateway status failed" >&2
+    cat "$STATUS_ERR" >&2 || true
+    cat "$GATEWAY_LOG" >&2 || true
+    return 1
+  fi
   status_end="$(node -e "process.stdout.write(String(Date.now()))")"
   status_seconds=$(((status_end - status_start + 999) / 1000))
+  if [ "$status_seconds" -gt "$budget" ]; then
+    echo "gateway status exceeded survivor budget: ${status_seconds}s > ${budget}s" >&2
+    cat "$STATUS_JSON" >&2 || true
+    return 1
+  fi
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json "$STATUS_JSON"
 }
 

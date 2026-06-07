@@ -2,8 +2,6 @@ name: Systemd Update Proof
 
 on:
   push:
-    branches:
-      - fix/90930-update-systemd-supervision
     paths:
       - .github/workflows/systemd-update-proof.yml
       - scripts/e2e/systemd-update-proof.sh
@@ -14,11 +12,6 @@ on:
       - pnpm-lock.yaml
   workflow_dispatch:
     inputs:
-      baseline:
-        description: Published baseline package to install before update
-        default: openclaw@2026.6.1-beta.2
-        required: true
-        type: string
       profile:
         description: Isolated OpenClaw profile used by the proof
         default: default

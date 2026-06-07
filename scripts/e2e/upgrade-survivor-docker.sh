@@ -176,22 +176,16 @@ UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
 command_timeout="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
 PORT=18789
 START_BUDGET="${OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS:-90}"
-STATUS_BUDGET="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-180}"
+STATUS_BUDGET="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-30}"
 GATEWAY_LOG="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/gateway.log"
 SYSTEMCTL_SHIM_LOG="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/systemctl-shim.log"
 SYSTEMCTL_SHIM_PID_FILE="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/systemctl-shim.pid"
 SYSTEMCTL_SHIM_DAEMON_LOG="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/systemctl-shim-gateway.log"
-SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/systemctl-shim-missing-supervisor.arm"
-SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/systemctl-shim-missing-supervisor-next-show"
-SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/systemctl-shim-missing-supervisor-consumed"
 BASELINE_SERVICE_INSTALL_JSON="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/baseline-service-install.json"
 BASELINE_SERVICE_INSTALL_ERR="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/baseline-service-install.err"
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG="$SYSTEMCTL_SHIM_LOG"
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE="$SYSTEMCTL_SHIM_PID_FILE"
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG="$SYSTEMCTL_SHIM_DAEMON_LOG"
-export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM="$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM"
-export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW="$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW"
-export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED="$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED"
 export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON="$BASELINE_SERVICE_INSTALL_JSON"
 export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR="$BASELINE_SERVICE_INSTALL_ERR"
 
@@ -294,48 +288,6 @@ NODE
   return 1
 }
 
-missing_supervisor_after_refresh_enabled() {
-  [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "missing-supervisor-after-refresh" ]
-}
-
-arm_missing_supervisor_after_refresh_probe() {
-  missing_supervisor_after_refresh_enabled || return 0
-  if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
-    echo "missing-supervisor-after-refresh requires OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth" >&2
-    return 1
-  fi
-  rm -f "$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_NEXT_SHOW" "$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED"
-  : >"$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_ARM"
-}
-
-reset_update_restart_probe_logs() {
-  [ "$UPDATE_RESTART_MODE" = "auto-auth" ] || return 0
-  # Keep the baseline pid file so the shim can stop it, but clear append-only
-  # logs before the update restart path. Stale pre-update "[gateway] ready"
-  # lines can otherwise make readiness checks race the replacement gateway.
-  : >"$SYSTEMCTL_SHIM_DAEMON_LOG"
-  : >"$SYSTEMCTL_SHIM_LOG"
-}
-
-assert_missing_supervisor_after_refresh_probe() {
-  missing_supervisor_after_refresh_enabled || return 0
-  if [ ! -f "$SYSTEMCTL_SHIM_MISSING_SUPERVISOR_CONSUMED" ]; then
-    echo "missing-supervisor-after-refresh scenario did not exercise the missing supervisor runtime probe" >&2
-    cat "$SYSTEMCTL_SHIM_LOG" >&2 || true
-    return 1
-  fi
-  # The proof hinges on behavior rather than a fragile diagnostic string:
-  # the shim must exercise a missing service-runtime probe, the update must
-  # not take the "already healthy" shortcut, and later gateway probes/status
-  # must still pass after the updater performs the managed restart path.
-  if grep -q "Gateway already reports the updated version after service refresh; skipped redundant restart." /tmp/openclaw-upgrade-survivor-update.err /tmp/openclaw-upgrade-survivor-update.json 2>/dev/null; then
-    echo "missing-supervisor-after-refresh scenario incorrectly accepted healthy gateway without supervisor proof" >&2
-    cat /tmp/openclaw-upgrade-survivor-update.err >&2 || true
-    cat /tmp/openclaw-upgrade-survivor-update.json >&2 || true
-    return 1
-  fi
-}
-
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
 
@@ -360,9 +312,6 @@ echo "Running package update against the mounted tarball..."
 update_args=(update --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}" --yes --json)
 if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
   update_args+=(--no-restart)
-else
-  reset_update_restart_probe_logs
-  arm_missing_supervisor_after_refresh_probe
 fi
 set +e
 openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD OPENCLAW_ALLOW_ROOT=1 openclaw "${update_args[@]}" >/tmp/openclaw-upgrade-survivor-update.json 2>/tmp/openclaw-upgrade-survivor-update.err
@@ -376,7 +325,6 @@ if [ "$update_status" -ne 0 ]; then
 fi
 
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
-  assert_missing_supervisor_after_refresh_probe
   echo "Skipping doctor repair until after restart proof."
 else
   echo "Running non-interactive doctor repair..."
@@ -399,14 +347,6 @@ node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
 
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   echo "Gateway restart was handled by openclaw update."
-  if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
-    gateway_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE" 2>/dev/null || true)"
-    openclaw_e2e_wait_gateway_ready "$gateway_pid" "$SYSTEMCTL_SHIM_DAEMON_LOG" 360
-  else
-    echo "systemctl shim did not record a restarted gateway pid" >&2
-    cat "$SYSTEMCTL_SHIM_LOG" >&2 || true
-    exit 1
-  fi
 else
   echo "Starting gateway from upgraded state..."
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
@@ -436,37 +376,22 @@ node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs \
   --out /tmp/openclaw-upgrade-survivor-readyz.json
 
 echo "Checking gateway RPC status..."
-if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
-  # Auto-auth update migration proof uses the managed restart path. Earlier
-  # phases already assert update JSON success, state survival, and live/ready
-  # HTTP probes against the restarted gateway. The RPC status CLI uses
-  # gateway-token auth rather than the seeded device-auth operator token, so
-  # keep that auth-model check out of the update-supervision proof.
-  status_seconds=0
-else
-if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] && [ "$STATUS_BUDGET" -lt 180 ]; then
-  STATUS_BUDGET=180
-fi
 status_start="$(node -e "process.stdout.write(String(Date.now()))")"
-while true; do
-  if openclaw_e2e_maybe_timeout "$command_timeout" openclaw gateway status --url "ws://127.0.0.1:$PORT" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >/tmp/openclaw-upgrade-survivor-status.json 2>/tmp/openclaw-upgrade-survivor-status.err; then
-    break
-  fi
-  status_now="$(node -e "process.stdout.write(String(Date.now()))")"
-  status_elapsed=$(((status_now - status_start + 999) / 1000))
-  if [ "$status_elapsed" -ge "$STATUS_BUDGET" ]; then
-    echo "gateway status failed after ${status_elapsed}s" >&2
-    cat /tmp/openclaw-upgrade-survivor-status.err >&2 || true
-    cat "$GATEWAY_LOG" >&2 || true
-    cat "$SYSTEMCTL_SHIM_DAEMON_LOG" >&2 || true
-    exit 1
-  fi
-  sleep 2
-done
+if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw gateway status --url "ws://127.0.0.1:$PORT" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >/tmp/openclaw-upgrade-survivor-status.json 2>/tmp/openclaw-upgrade-survivor-status.err; then
+  echo "gateway status failed" >&2
+  cat /tmp/openclaw-upgrade-survivor-status.err >&2 || true
+  cat "$GATEWAY_LOG" >&2 || true
+  cat "$SYSTEMCTL_SHIM_DAEMON_LOG" >&2 || true
+  exit 1
+fi
 status_end="$(node -e "process.stdout.write(String(Date.now()))")"
 status_seconds=$(((status_end - status_start + 999) / 1000))
-node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json /tmp/openclaw-upgrade-survivor-status.json
+if [ "$status_seconds" -gt "$STATUS_BUDGET" ]; then
+  echo "gateway status exceeded survivor budget: ${status_seconds}s > ${STATUS_BUDGET}s" >&2
+  cat /tmp/openclaw-upgrade-survivor-status.json >&2 || true
+  exit 1
 fi
+node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json /tmp/openclaw-upgrade-survivor-status.json
 
 echo "Upgrade survivor Docker E2E passed scenario=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base} updateRestartMode=${UPDATE_RESTART_MODE} startup=${start_seconds}s status=${status_seconds}s."
 '
