@@ -356,10 +356,12 @@ describe("findExtraGatewayServices (win32)", () => {
   });
 
   it("collects only non-openclaw marker tasks from schtasks output", async () => {
+    // Real schtasks /Query /FO LIST /V output prefixes root-folder task
+    // names with a backslash (e.g. TaskName:\OpenClaw Gateway).
     execSchtasksMock.mockResolvedValueOnce({
       code: 0,
       stdout: [
-        "TaskName: OpenClaw Gateway",
+        "TaskName:\\OpenClaw Gateway",
         "Task To Run: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
         "",
         "TaskName: Clawdbot Legacy",
@@ -373,6 +375,8 @@ describe("findExtraGatewayServices (win32)", () => {
     });
 
     const result = await findExtraGatewayServices({}, { deep: true });
+    // The \OpenClaw Gateway task is the live launcher — it must be skipped.
+    // Only the unrelated clawdbot task should be flagged.
     expect(result).toEqual([
       {
         platform: "win32",
