@@ -768,6 +768,39 @@ describe("infra runtime", () => {
       }
     });
 
+    it("preserves a session-owned preparation hook when a hookless forced restart pulls a pending timer earlier (#86742)", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const beforeEmit = vi.fn(async () => {});
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        const pending = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "session-A",
+          sessionKey: "agent:main:session-A",
+          emitHooks: { beforeEmit },
+        });
+        const forced = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          preservePendingEmitHooksOnDeferralBypass: true,
+          reason: "gateway.restart.safe",
+          skipDeferral: true,
+        });
+
+        expect(pending.emitHooksQueued).toBe(true);
+        expect(forced.coalesced).toBe(false);
+        expect(forced.emitHooksQueued).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(beforeEmit).toHaveBeenCalledTimes(1);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(peekGatewaySigusr1RestartReason()).toBe("gateway.restart.safe");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
     it("bypasses an active restart deferral when a forced restart arrives", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const staleBeforeEmit = vi.fn(async () => {});

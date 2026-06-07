@@ -813,6 +813,8 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     : Math.max(0, lastRestartEmittedAt + RESTART_COOLDOWN_MS - nowMs);
   const requestedDueAt = nowMs + delayMs + cooldownMsApplied;
   const skipDeferral = opts?.skipDeferral === true;
+  let nextPendingEmitHooks = opts?.emitHooks;
+  let nextPendingSessionKey = opts?.sessionKey;
 
   if (hasUnconsumedRestartSignal()) {
     if (shouldPreferRestartReason(reason, emittedRestartReason)) {
@@ -875,7 +877,14 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       !pendingRestartPreparing &&
       (requestedDueAt < pendingRestartDueAt || shouldUpgradeToSkipDeferral);
     if (shouldPullEarlier) {
-      if (!canReplacePendingRestartEmitHooks(opts?.emitHooks, opts?.sessionKey)) {
+      const preservePendingHooks =
+        opts?.preservePendingEmitHooksOnDeferralBypass === true &&
+        opts?.emitHooks === undefined &&
+        pendingRestartSessionKey !== undefined;
+      if (
+        !preservePendingHooks &&
+        !canReplacePendingRestartEmitHooks(opts?.emitHooks, opts?.sessionKey)
+      ) {
         restartLog.warn(
           `restart continuation dropped: another session owns the pending restart (callerSessionKey=${opts?.sessionKey ?? "unspecified"} pendingSessionKey=${pendingRestartSessionKey ?? "unspecified"})`,
         );
@@ -899,10 +908,16 @@ export function scheduleGatewaySigusr1Restart(opts?: {
           emitHooksQueued: false,
         };
       }
+      const preservedEmitHooks = preservePendingHooks ? pendingRestartEmitHooks : undefined;
+      const preservedSessionKey = preservePendingHooks ? pendingRestartSessionKey : undefined;
       restartLog.warn(
         `restart request rescheduled earlier reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} oldDelayMs=${remainingMs} newDelayMs=${Math.max(0, requestedDueAt - nowMs)} ${formatRestartAudit(opts?.audit)}`,
       );
       clearPendingScheduledRestart();
+      if (preservePendingHooks) {
+        nextPendingEmitHooks = preservedEmitHooks;
+        nextPendingSessionKey = preservedSessionKey;
+      }
     } else {
       if (shouldPreferRestartReason(reason, pendingRestartReason)) {
         pendingRestartReason = reason;
@@ -933,8 +948,8 @@ export function scheduleGatewaySigusr1Restart(opts?: {
 
   pendingRestartDueAt = requestedDueAt;
   pendingRestartReason = reason;
-  pendingRestartEmitHooks = opts?.emitHooks;
-  pendingRestartSessionKey = opts?.sessionKey;
+  pendingRestartEmitHooks = nextPendingEmitHooks;
+  pendingRestartSessionKey = nextPendingSessionKey;
   pendingRestartSkipDeferral = skipDeferral;
   armPendingRestartTimer(requestedDueAt, nowMs);
   return {
