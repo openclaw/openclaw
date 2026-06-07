@@ -113,6 +113,13 @@ const MsteamsConfigSchema = z
         workerBaseUrl: z.string().url().optional(),
         /** AAD tenant id used when placing calls (the target user's tenant). */
         tenantId: z.string().min(1).optional(),
+        /**
+         * Safety-net timeout (ms) for a placed outbound call to connect its media WebSocket back.
+         * If it never connects, the CallRecord is finalized so it doesn't linger. Default 120000:
+         * comfortably longer than a typical Teams ring-to-answer (~30-60s before missed/voicemail),
+         * so it only fires on a genuinely dead placement, not a slow answer. Tune per environment.
+         */
+        answerTimeoutMs: z.number().int().positive().optional(),
       })
       .strict()
       .default({ enabled: false }),
@@ -769,6 +776,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
             enabled: config.msteams.outbound?.enabled ?? false,
             workerBaseUrl: config.msteams.outbound?.workerBaseUrl,
             tenantId: config.msteams.outbound?.tenantId,
+            answerTimeoutMs: config.msteams.outbound?.answerTimeoutMs,
           },
         }
       : config.msteams,
