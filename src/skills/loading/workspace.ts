@@ -1533,6 +1533,29 @@ function resolveSyncedSkillDestinationPath(params: {
   }).resolved;
 }
 
+async function prepareSyncedSkillsDirectory(targetSkillsDir: string): Promise<void> {
+  let stats: fs.Stats;
+  try {
+    stats = await fsp.lstat(targetSkillsDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    await fsp.mkdir(targetSkillsDir, { recursive: true });
+    return;
+  }
+
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    await fsp.rm(targetSkillsDir, { recursive: true, force: true });
+    await fsp.mkdir(targetSkillsDir, { recursive: true });
+    return;
+  }
+
+  for (const entry of await fsp.readdir(targetSkillsDir)) {
+    await fsp.rm(path.join(targetSkillsDir, entry), { recursive: true, force: true });
+  }
+}
+
 export async function syncSkillsToWorkspace(params: {
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
@@ -1563,8 +1586,7 @@ export async function syncSkillsToWorkspace(params: {
       pluginSkillsDir: params.pluginSkillsDir,
     });
 
-    await fsp.rm(targetSkillsDir, { recursive: true, force: true });
-    await fsp.mkdir(targetSkillsDir, { recursive: true });
+    await prepareSyncedSkillsDirectory(targetSkillsDir);
 
     const usedDirNames = new Set<string>();
     for (const entry of entries) {
