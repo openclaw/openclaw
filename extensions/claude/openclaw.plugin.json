@@ -16,7 +16,7 @@
         "properties": {
           "command": {
             "type": "string",
-            "description": "Executable for the openclaw-claude-bridge binary. Defaults to 'openclaw-claude-bridge' on PATH."
+            "description": "Executable for the openclaw-claude-bridge binary. When unset, the gateway runs the bundled (managed) @zeroaltitude/openclaw-claude-bridge resolved from the plugin's node_modules — not a PATH lookup. Set this (or OPENCLAW_CLAUDE_APP_SERVER_BIN) to override with a specific binary path or PATH name."
           },
           "args": {
             "type": "array",

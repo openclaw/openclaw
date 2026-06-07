@@ -14,6 +14,10 @@ import { createInterface, type Interface as ReadlineInterface } from "node:readl
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sanitizeHostExecEnvWithDiagnostics } from "openclaw/plugin-sdk/host-env-security";
 import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "openclaw/plugin-sdk/windows-spawn";
+import {
   CLAUDE_BRIDGE_BIN_ENV,
   DEFAULT_CLAUDE_BRIDGE_COMMAND,
   type ClaudeBridgeCommandSource,
@@ -58,16 +62,59 @@ export function resolveBridgeSpawnEnv(
     overrides: stringOverrides,
     blockPathOverrides: true,
   });
-  const rejected = [
-    ...result.rejectedOverrideBlockedKeys,
-    ...result.rejectedOverrideInvalidKeys,
-  ];
+  const rejected = [...result.rejectedOverrideBlockedKeys, ...result.rejectedOverrideInvalidKeys];
   if (rejected.length > 0) {
     embeddedAgentLog.warn("claude-bridge: rejected unsafe appServer.env overrides", {
       keys: rejected,
     });
   }
   return result.env;
+}
+
+type ClaudeBridgeSpawnRuntime = {
+  platform: NodeJS.Platform;
+  env: NodeJS.ProcessEnv;
+  execPath: string;
+};
+
+/**
+ * Resolves the executable/argv used to launch the bridge, routing Windows
+ * wrapper shims through OpenClaw's shared {@link resolveWindowsSpawnProgram}
+ * boundary — the same one the standalone ACP client uses.
+ *
+ * On win32 the managed resolver returns `node_modules/.bin/openclaw-claude-bridge.cmd`.
+ * Passing that `.cmd` shim directly to `spawn()` fails on patched Node (which
+ * rejects raw `.cmd`/`.bat` spawning), so selecting the claude-bridge runtime on
+ * Windows would die before the bridge initializes. The resolver materializes the
+ * shim down to its real Node/exe entrypoint (or, for an unresolved wrapper, an
+ * explicit shell fallback) so the spawn is Windows-safe. On non-win32 platforms
+ * the command and argv pass through unchanged.
+ *
+ * Addresses the Clawsweeper [P2] "route Windows shims through the spawn resolver"
+ * finding on extensions/claude/src/app-server/client.ts.
+ */
+export function resolveClaudeBridgeSpawnInvocation(
+  params: { command: string; args: string[] },
+  runtime: ClaudeBridgeSpawnRuntime = {
+    platform: process.platform,
+    env: process.env,
+    execPath: process.execPath,
+  },
+): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
+  const program = resolveWindowsSpawnProgram({
+    command: params.command,
+    platform: runtime.platform,
+    env: runtime.env,
+    execPath: runtime.execPath,
+    packageName: MANAGED_CLAUDE_BRIDGE_PACKAGE,
+  });
+  const resolved = materializeWindowsSpawnProgram(program, params.args);
+  return {
+    command: resolved.command,
+    args: resolved.argv,
+    shell: resolved.shell,
+    windowsHide: resolved.windowsHide,
+  };
 }
 
 export type ClaudeAppServerStartOptions = {
@@ -165,14 +212,26 @@ export class ClaudeAppServerClient {
     const command = this.opts.command ?? DEFAULT_COMMAND;
     const args = this.opts.args ?? [];
     const env = resolveBridgeSpawnEnv(process.env, this.opts.env);
+    // Route the (possibly Windows .cmd shim) command through the shared spawn
+    // resolver before launch. PATH/PATHEXT lookup must see the same sanitized env
+    // the child will run with, so resolve against `env` rather than process.env.
+    const invocation = resolveClaudeBridgeSpawnInvocation(
+      { command, args },
+      { platform: process.platform, env, execPath: process.execPath },
+    );
 
-    this.child = spawn(command, args, {
+    this.child = spawn(invocation.command, invocation.args, {
       env,
       stdio: ["pipe", "pipe", "pipe"],
       detached: process.platform !== "win32",
+      shell: invocation.shell,
+      windowsHide: invocation.windowsHide,
     });
 
-    embeddedAgentLog.info("claude-bridge: spawned", { pid: this.child.pid, command });
+    embeddedAgentLog.info("claude-bridge: spawned", {
+      pid: this.child.pid,
+      command: invocation.command,
+    });
 
     this.stderrRl = createInterface({ input: this.child.stderr! });
     this.stderrRl.on("line", (line) => {
