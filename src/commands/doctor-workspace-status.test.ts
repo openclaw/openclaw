@@ -281,6 +281,24 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
+  it("does not crash when plugin install-record loading fails", async () => {
+    mocks.loadInstalledPluginIndexInstallRecords.mockRejectedValueOnce(new Error("EBUSY"));
+    const noteSpy = await runNoteWorkspaceStatusForTest(
+      createPluginLoadResult({
+        plugins: [createPluginRecord({ id: "test-plugin", name: "Test" })],
+      }),
+    );
+    try {
+      // Doctor should complete without throwing — drift is best-effort.
+      const driftCalls = noteSpy.mock.calls.filter(([, title]) =>
+        String(title).includes("Plugin version drift"),
+      );
+      expect(driftCalls).toHaveLength(0);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
   it("adds TaskFlow recovery hints for broken blocked flows", async () => {
     const noteSpy = await runNoteWorkspaceStatusForTest(createPluginLoadResult(), [], {
       flows: [

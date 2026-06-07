@@ -119,25 +119,31 @@ export async function noteWorkspaceStatus(cfg: OpenClawConfig) {
     note(compatibilityWarnings.map((line) => `- ${line}`).join("\n"), "Plugin compatibility");
   }
   // Check official managed plugin version drift against the running gateway.
-  const installRecords = await loadInstalledPluginIndexInstallRecords({
-    env: process.env,
-  });
-  const driftReport = detectPluginVersionDrift({
-    gatewayVersion: VERSION,
-    installRecords,
-    config: cfg,
-  });
-  if (driftReport.drifts.length > 0) {
-    const driftLines = driftReport.drifts.map(
-      (d) => `- ${d.pluginId}: ${d.installedVersion} -> expected ${d.gatewayVersion}`,
-    );
-    driftLines.push(
-      `Fix: ${formatCliCommand("openclaw plugins update <plugin-id>")} for each drifted plugin, then ${formatCliCommand("openclaw gateway restart")}.`,
-    );
-    note(
-      driftLines.join("\n"),
-      `Plugin version drift: ${driftReport.drifts.length} active official plugin${driftReport.drifts.length !== 1 ? "s" : ""} not on gateway ${driftReport.gatewayVersion}`,
-    );
+  // Best-effort: don't let a plugin-index read failure block the rest of doctor.
+  try {
+    const installRecords = await loadInstalledPluginIndexInstallRecords({
+      env: process.env,
+    });
+    const driftReport = detectPluginVersionDrift({
+      gatewayVersion: VERSION,
+      installRecords,
+      config: cfg,
+    });
+    if (driftReport.drifts.length > 0) {
+      const driftLines = driftReport.drifts.map(
+        (d) => `- ${d.pluginId}: ${d.installedVersion} -> expected ${d.gatewayVersion}`,
+      );
+      driftLines.push(
+        `Fix: ${formatCliCommand("openclaw plugins update <plugin-id>")} for each drifted plugin, then ${formatCliCommand("openclaw gateway restart")}.`,
+      );
+      note(
+        driftLines.join("\n"),
+        `Plugin version drift: ${driftReport.drifts.length} active official plugin${driftReport.drifts.length !== 1 ? "s" : ""} not on gateway ${driftReport.gatewayVersion}`,
+      );
+    }
+  } catch {
+    // Plugin install-record loading can fail for transient filesystem or
+    // permission reasons; doctor diagnostic is advisory only.
   }
 
   if (pluginRegistry.diagnostics.length > 0) {
