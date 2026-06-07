@@ -1,4 +1,6 @@
+import SwiftUI
 import Testing
+import UIKit
 @testable import OpenClaw
 
 @MainActor
@@ -37,5 +39,26 @@ import Testing
             discoveredGatewayCount: 1)
 
         #expect(!shouldPresent)
+    }
+
+    @Test func sidebarTabsEnabledForIPadRegularWidth() {
+        #expect(
+            RootTabs.shouldUseSidebarTabs(
+                idiom: .pad,
+                horizontalSizeClass: .regular))
+    }
+
+    @Test func sidebarTabsDisabledForIPadCompactWidth() {
+        #expect(
+            !RootTabs.shouldUseSidebarTabs(
+                idiom: .pad,
+                horizontalSizeClass: .compact))
+    }
+
+    @Test func sidebarTabsDisabledForIPhone() {
+        #expect(
+            !RootTabs.shouldUseSidebarTabs(
+                idiom: .phone,
+                horizontalSizeClass: .regular))
     }
 }

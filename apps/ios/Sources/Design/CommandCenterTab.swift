@@ -6,6 +6,7 @@ struct CommandCenterTab: View {
 
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
     @State private var defaultChatSessionEntry: OpenClawChatSessionEntry?
     @State private var recentChatSessions: [OpenClawChatSessionEntry] = []
@@ -31,26 +32,51 @@ struct CommandCenterTab: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                CommandControlBackground()
-                self.commandAmbientOverlay
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        self.header
-                        self.gatewayCard
-                        self.defaultChatSessionSection
-                        self.recentSessions
+            GeometryReader { geometry in
+                ZStack {
+                    CommandControlBackground()
+                    self.commandAmbientOverlay
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 10) {
+                            self.header
+                            self.gatewayCard
+                            if Self.usesSplitSectionsLayout(
+                                horizontalSizeClass: self.horizontalSizeClass,
+                                containerWidth: geometry.size.width)
+                            {
+                                HStack(alignment: .top, spacing: 12) {
+                                    self.defaultChatSessionSection
+                                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                                    self.recentSessions
+                                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                                }
+                                .padding(.horizontal, OpenClawProMetric.pagePadding)
+                            } else {
+                                self.defaultChatSessionSection
+                                    .padding(.horizontal, OpenClawProMetric.pagePadding)
+                                self.recentSessions
+                                    .padding(.horizontal, OpenClawProMetric.pagePadding)
+                            }
+                        }
+                        .padding(.top, 16)
+                        .padding(.bottom, 18)
                     }
-                    .padding(.top, 16)
-                    .padding(.bottom, 18)
+                    .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
                 }
-                .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
             }
             .navigationBarHidden(true)
         }
         .task(id: self.recentSessionsRefreshID) {
             await self.refreshRecentSessionsIfNeeded()
         }
+    }
+
+    static func usesSplitSectionsLayout(
+        horizontalSizeClass: UserInterfaceSizeClass?,
+        containerWidth: CGFloat) -> Bool
+    {
+        guard horizontalSizeClass == .regular else { return false }
+        return containerWidth >= 1_000
     }
 
     private var header: some View {
@@ -160,7 +186,6 @@ struct CommandCenterTab: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     private var recentSessions: some View {
@@ -200,7 +225,6 @@ struct CommandCenterTab: View {
                 }
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     private func cardHeader(

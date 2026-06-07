@@ -8,6 +8,7 @@ struct RootTabs: View {
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(GatewayConnectionController.self) private var gatewayController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
     @AppStorage("onboarding.requestID") private var onboardingRequestID: Int = 0
@@ -128,6 +129,14 @@ struct RootTabs: View {
         return discoveredGatewayCount > 0
     }
 
+    static func shouldUseSidebarTabs(
+        idiom: UIUserInterfaceIdiom,
+        horizontalSizeClass: UserInterfaceSizeClass?) -> Bool
+    {
+        guard idiom == .pad else { return false }
+        return horizontalSizeClass == .regular
+    }
+
     var body: some View {
         self.rootPresentation(
             self.rootLifecycle(
@@ -165,6 +174,13 @@ struct RootTabs: View {
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(AppTab.settings)
         }
+        .modifier(SidebarAdaptableTabStyle(enabled: self.usesSidebarTabs))
+    }
+
+    private var usesSidebarTabs: Bool {
+        Self.shouldUseSidebarTabs(
+            idiom: UIDevice.current.userInterfaceIdiom,
+            horizontalSizeClass: self.horizontalSizeClass)
     }
 
     private func rootOverlays(_ content: some View) -> some View {
@@ -186,6 +202,7 @@ struct RootTabs: View {
                         .safeAreaPadding(.top, 10)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
+
             }
             .overlay(alignment: .topLeading) {
                 if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
@@ -195,6 +212,7 @@ struct RootTabs: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
+
             .overlay {
                 if self.appModel.cameraFlashNonce != 0 {
                     RootCameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
@@ -674,10 +692,28 @@ private struct RootCameraFlashOverlay: View {
                         self.opacity = 0
                     }
                 }
+
             }
             .onDisappear {
                 self.task?.cancel()
                 self.task = nil
             }
+    }
+}
+
+private struct SidebarAdaptableTabStyle: ViewModifier {
+    let enabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if self.enabled {
+            if #available(iOS 18.0, *) {
+                content.tabViewStyle(.sidebarAdaptable)
+            } else {
+                content
+            }
+        } else {
+            content
+        }
     }
 }
