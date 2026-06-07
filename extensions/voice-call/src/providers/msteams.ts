@@ -112,6 +112,13 @@ const FRAME_BYTES = (MSTEAMS_SAMPLE_RATE_HZ / 1000) * FRAME_DURATION_MS * BYTES_
 const MAX_PRECONNECT_FRAMES = 250;
 
 /**
+ * How long to wait for a placed outbound call's media WebSocket to attach before
+ * giving up and finalizing the CallRecord, so an unanswered / failed-to-connect
+ * call doesn't leak a pending entry or a perpetually-"active" CallRecord.
+ */
+const OUTBOUND_ANSWER_TIMEOUT_MS = 60_000;
+
+/**
  * Microsoft Teams voice-call provider.
  *
  * Unlike Twilio/Telnyx/Plivo, Teams calls do not arrive on the voice-call
@@ -174,6 +181,9 @@ export class MsteamsProvider implements VoiceCallProvider {
    * session.end finalize the CallRecord that manager.initiateCall created.
    */
   private readonly outboundRealtimeInternalIds = new Map<string, string>();
+
+  /** No-answer timers per placed outbound call; cleared when the media WS attaches. */
+  private readonly pendingOutboundTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(options: MsteamsProviderOptions) {
     const { port, bindAddress, path, sharedSecret, outbound, logger } = options;
@@ -284,6 +294,7 @@ export class MsteamsProvider implements VoiceCallProvider {
     const pending = this.pendingOutbound.get(providerCallId);
     if (pending) {
       this.pendingOutbound.delete(providerCallId);
+      this.clearOutboundTimer(providerCallId);
       this.handleOutboundSessionStart(session, pending);
       return;
     }
@@ -751,6 +762,7 @@ export class MsteamsProvider implements VoiceCallProvider {
   private handleSessionEnd(info: { callId: string; reason: string }): void {
     this.latestVideoFrames.delete(info.callId);
     this.recordingActiveByCall.delete(info.callId);
+    this.clearOutboundTimer(info.callId);
     const realtimeCall = this.realtimeCalls.get(info.callId);
     if (realtimeCall) {
       this.realtimeCalls.delete(info.callId);
@@ -827,6 +839,42 @@ export class MsteamsProvider implements VoiceCallProvider {
       timestamp: Date.now(),
       reason: mapEndReason(reason),
     });
+  }
+
+  /** Clear (and forget) the no-answer timer for a placed outbound call. */
+  private clearOutboundTimer(providerCallId: string): void {
+    const timer = this.pendingOutboundTimers.get(providerCallId);
+    if (timer) {
+      clearTimeout(timer);
+      this.pendingOutboundTimers.delete(providerCallId);
+    }
+  }
+
+  /**
+   * A placed outbound call never connected back within the timeout (no answer,
+   * declined, or the worker failed after returning a callId). Drop the pending
+   * entry and finalize the CallRecord so the call doesn't linger as active.
+   */
+  private finalizeUnansweredOutbound(providerCallId: string): void {
+    this.pendingOutboundTimers.delete(providerCallId);
+    const pending = this.pendingOutbound.get(providerCallId);
+    if (!pending) {
+      return;
+    }
+    this.pendingOutbound.delete(providerCallId);
+    this.logger?.warn(
+      `MsteamsProvider: outbound call ${providerCallId} did not connect within ${OUTBOUND_ANSWER_TIMEOUT_MS}ms; finalizing`,
+    );
+    if (this.manager) {
+      this.manager.processEvent({
+        id: `msteams-noanswer-${providerCallId}-${Date.now()}`,
+        type: "call.ended",
+        callId: pending.internalCallId,
+        providerCallId,
+        timestamp: Date.now(),
+        reason: mapEndReason("outbound no-answer timeout"),
+      });
+    }
   }
 
   private buildEvent(
@@ -933,6 +981,14 @@ export class MsteamsProvider implements VoiceCallProvider {
       to: input.to,
       message: input.message,
     });
+    // No-answer guard: if the call never connects back (busy, declined, offline),
+    // finalize the CallRecord after a timeout so it doesn't linger as active.
+    const noAnswerTimer = setTimeout(
+      () => this.finalizeUnansweredOutbound(workerCallId),
+      OUTBOUND_ANSWER_TIMEOUT_MS,
+    );
+    noAnswerTimer.unref?.();
+    this.pendingOutboundTimers.set(workerCallId, noAnswerTimer);
     this.logger?.info(
       `MsteamsProvider: outbound call placed callId=${workerCallId} -> ${userObjectId}`,
     );
