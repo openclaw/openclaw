@@ -1,4 +1,5 @@
 /** Security warnings for gateway exposure, exec policy drift, channel DMs, and plaintext secrets. */
+import { isIP } from "node:net";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-state.js";
@@ -10,7 +11,7 @@ import type { AgentConfig } from "../config/types.agents.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
-import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
+import { isLoopbackAddress, isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import {
   loadExecApprovals,
@@ -85,6 +86,102 @@ function execAskRank(value: ExecAsk): number {
       return 2;
   }
   throw new Error("Unsupported exec ask value");
+}
+
+type TrustedProxyAuthProblem =
+  | "missing_user_header"
+  | "token_conflict"
+  | "missing_proxy"
+  | "unsafe_proxy_source";
+
+function isHostScopedTrustedProxyEntry(entry: string, allowLoopback: boolean): boolean {
+  const candidate = normalizeOptionalString(entry);
+  if (!candidate) {
+    return false;
+  }
+
+  const parts = candidate.split("/");
+  if (parts.length > 2) {
+    return false;
+  }
+
+  const address = parts[0]?.trim() ?? "";
+  const ipVersion = isIP(address);
+  if (ipVersion === 0) {
+    return false;
+  }
+
+  const rawPrefix = parts[1]?.trim();
+  if (rawPrefix !== undefined) {
+    const prefix = Number(rawPrefix);
+    const maxPrefix = ipVersion === 4 ? 32 : 128;
+    if (!Number.isInteger(prefix) || prefix !== maxPrefix) {
+      return false;
+    }
+  }
+
+  return !isLoopbackAddress(address) || allowLoopback;
+}
+
+function resolveTrustedProxyAuthProblem(params: {
+  cfg: OpenClawConfig;
+  hasToken: boolean;
+}): TrustedProxyAuthProblem | undefined {
+  const trustedProxy = params.cfg.gateway?.auth?.trustedProxy;
+  if (!normalizeOptionalString(trustedProxy?.userHeader)) {
+    return "missing_user_header";
+  }
+  if (params.hasToken) {
+    return "token_conflict";
+  }
+
+  const trustedProxies = (params.cfg.gateway?.trustedProxies ?? []).filter((proxy) =>
+    normalizeOptionalString(proxy),
+  );
+  if (trustedProxies.length === 0) {
+    return "missing_proxy";
+  }
+
+  const allowLoopback = trustedProxy?.allowLoopback === true;
+  if (!trustedProxies.every((proxy) => isHostScopedTrustedProxyEntry(proxy, allowLoopback))) {
+    return "unsafe_proxy_source";
+  }
+
+  return undefined;
+}
+
+function trustedProxyAuthProblemLines(
+  problem: TrustedProxyAuthProblem,
+  bindDescriptor: string,
+): string[] {
+  switch (problem) {
+    case "missing_user_header":
+      return [
+        `- CRITICAL: Gateway bound to ${bindDescriptor} with incomplete trusted-proxy authentication.`,
+        '  gateway.auth.mode="trusted-proxy" requires gateway.auth.trustedProxy.userHeader.',
+        "  Fix: set gateway.auth.trustedProxy.userHeader to the identity header your proxy owns.",
+      ];
+    case "token_conflict":
+      return [
+        `- CRITICAL: Gateway bound to ${bindDescriptor} with invalid trusted-proxy authentication.`,
+        '  gateway.auth.mode="trusted-proxy" is mutually exclusive with gateway.auth.token / OPENCLAW_GATEWAY_TOKEN.',
+        '  Fix: remove the shared token or switch gateway.auth.mode to "token" before relying on remote access.',
+      ];
+    case "missing_proxy":
+      return [
+        `- CRITICAL: Gateway bound to ${bindDescriptor} with incomplete trusted-proxy authentication.`,
+        '  gateway.auth.mode="trusted-proxy" requires gateway.trustedProxies to list your reverse proxy IPs.',
+        "  Fix: set gateway.trustedProxies to the exact IP address of each trusted reverse proxy.",
+      ];
+    case "unsafe_proxy_source":
+      return [
+        `- CRITICAL: Gateway bound to ${bindDescriptor} with unsafe trusted-proxy authentication.`,
+        "  gateway.trustedProxies must be narrow proxy IPs for trusted-proxy auth proof; broad CIDRs/default routes are not safe proof.",
+        "  Fix: use exact proxy IPs or host-scoped /32 or /128 entries; enable allowLoopback only for a deliberate same-host proxy.",
+      ];
+  }
+  const exhaustive: never = problem;
+  return exhaustive;
 }
 
 function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
@@ -283,9 +380,16 @@ export async function collectSecurityWarnings(
   const hasPassword =
     authPassword.length > 0 ||
     hasConfiguredSecretInput(cfg.gateway?.auth?.password, cfg.secrets?.defaults);
+  const trustedProxyAuthProblem =
+    resolvedAuth.mode === "trusted-proxy"
+      ? resolveTrustedProxyAuthProblem({ cfg, hasToken })
+      : undefined;
+  const hasTrustedProxyAuth =
+    resolvedAuth.mode === "trusted-proxy" && trustedProxyAuthProblem === undefined;
   const hasSharedSecret =
     (resolvedAuth.mode === "token" && hasToken) ||
     (resolvedAuth.mode === "password" && hasPassword);
+  const hasGatewayAuth = hasSharedSecret || hasTrustedProxyAuth;
   const bindDescriptor = `"${gatewayBind}" (${resolvedBindHost})`;
   const saferRemoteAccessLines = [
     "  Safer remote access: keep bind loopback and use Tailscale Serve/Funnel or an SSH tunnel.",
@@ -294,7 +398,9 @@ export async function collectSecurityWarnings(
   ];
 
   if (isExposed) {
-    if (!hasSharedSecret) {
+    if (trustedProxyAuthProblem) {
+      warnings.push(...trustedProxyAuthProblemLines(trustedProxyAuthProblem, bindDescriptor));
+    } else if (!hasGatewayAuth) {
       const authFixLines =
         resolvedAuth.mode === "password"
           ? [
@@ -313,6 +419,12 @@ export async function collectSecurityWarnings(
         `  Fix: ${formatCliCommand("openclaw config set gateway.bind loopback")}`,
         ...saferRemoteAccessLines,
         ...authFixLines,
+      );
+    } else if (hasTrustedProxyAuth) {
+      warnings.push(
+        `- WARNING: Gateway bound to ${bindDescriptor} with trusted-proxy authentication.`,
+        "  Ensure only configured trusted proxies can reach the Gateway port; block direct clients at a host firewall, network firewall, or loopback bind.",
+        "  Docs: https://docs.openclaw.ai/gateway/trusted-proxy-auth",
       );
     } else {
       // Auth is configured, but still warn about network exposure
