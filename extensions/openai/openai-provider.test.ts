@@ -221,6 +221,49 @@ describe("buildOpenAIProvider", () => {
     }
   });
 
+  it("falls back to direct API-key catalog discovery when OAuth resolution fails", async () => {
+    mocks.resolveApiKeyForProvider.mockRejectedValue(new Error("expired oauth profile"));
+    const provider = buildOpenAIProvider();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        data: [{ id: "gpt-5.5", object: "model" }],
+      }),
+    );
+
+    try {
+      const result = await provider.catalog?.run({
+        resolveProviderAuth: () => ({
+          mode: "oauth",
+          apiKey: "stale-oauth-token",
+          profileId: "openai:chatgpt",
+          source: "profile",
+        }),
+        resolveProviderApiKey: () => ({
+          apiKey: "sk-openai",
+          discoveryApiKey: "sk-discovery",
+        }),
+        config: { auth: { profiles: {} } },
+        agentDir: "/tmp/openai-agent",
+        workspaceDir: "/tmp/openai-workspace",
+      } as never);
+
+      if (!result || "provider" in result) {
+        throw new Error("expected OpenAI live provider catalog");
+      }
+      expect(result.providers.openai?.api).toBe("openai-responses");
+      expect(result.providers.openai?.apiKey).toBe("sk-openai");
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      const headers = fetchSpy.mock.calls[0]?.[1]?.headers;
+      expect(headers).toBeInstanceOf(Headers);
+      if (!(headers instanceof Headers)) {
+        throw new Error("expected fetch headers");
+      }
+      expect(headers.get("Authorization")).toBe("Bearer sk-discovery");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("filters the OpenAI API-key catalog against live model ids", async () => {
     const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({

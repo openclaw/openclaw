@@ -656,18 +656,28 @@ export function buildOpenAIProvider(): ProviderPlugin {
             return { providers: { [PROVIDER_ID]: provider } };
           }
         } catch {
-          if (isCodexCatalogAuthMode(auth.mode)) {
-            return null;
-          }
+          // OAuth discovery is advisory; fall through so configured API-key
+          // auth can still publish the standard OpenAI catalog.
         }
-        if (auth.mode !== "api_key" || !auth.apiKey) {
+        if (auth.mode === "api_key" && auth.apiKey) {
+          return {
+            providers: {
+              [PROVIDER_ID]: await buildOpenAILiveProviderConfig({
+                apiKey: auth.apiKey,
+                discoveryApiKey: auth.discoveryApiKey,
+              }),
+            },
+          };
+        }
+        const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID);
+        if (!apiKey.apiKey) {
           return null;
         }
         return {
           providers: {
             [PROVIDER_ID]: await buildOpenAILiveProviderConfig({
-              apiKey: auth.apiKey,
-              discoveryApiKey: auth.discoveryApiKey,
+              apiKey: apiKey.apiKey,
+              discoveryApiKey: apiKey.discoveryApiKey,
             }),
           },
         };
