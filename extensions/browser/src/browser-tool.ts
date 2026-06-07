@@ -630,6 +630,7 @@ export function createBrowserTool(opts?: {
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
       "Browser choice: omit profile by default for the isolated OpenClaw-managed browser (`openclaw`).",
+      'For advanced Chrome MCP diagnostics or extension/tool inventory, prefer a dedicated OpenClaw-owned automation profile after doctor/status/tabs pass; use profile="user" only when existing signed-in cookies are required.',
       'For the logged-in user browser, use profile="user". A supported Chromium-based browser (v144+) must be running on the selected host or browser node. Use only when existing logins/cookies matter and the user is present.',
       'For profile="user" or other existing-session profiles, omit timeoutMs on act:type, evaluate, hover, scrollIntoView, drag, select, and fill; that driver rejects per-call timeout overrides for those actions.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',

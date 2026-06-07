@@ -123,20 +123,96 @@ If `openclaw browser` is unknown after an upgrade, `browser.request` is missing,
 
 An explicit root `browser` block, for example `browser.enabled=true` or `browser.profiles.<name>`, activates the bundled browser plugin even under a restrictive `plugins.allow`, matching channel config behavior. `plugins.entries.browser.enabled=true` and `tools.alsoAllow: ["browser"]` do not substitute for allowlist membership by themselves. Removing `plugins.allow` entirely also restores the default.
 
-## Profiles: `openclaw` vs `user`
+## Profile lanes: `openclaw`, advanced, and `user`
 
-- `openclaw`: managed, isolated browser (no extension required).
+- `openclaw`: managed, isolated browser (no extension required). Use this
+  default lane for normal page automation, screenshots, forms, and visual
+  proof.
+- Dedicated advanced profile: an OpenClaw-owned existing-session profile, such
+  as `agent-chrome`, for Chrome MCP diagnostics, Lighthouse, screencast, heap
+  snapshots, extension inventory, and other advanced Chrome MCP surfaces when
+  personal cookies are not required.
 - `user`: built-in Chrome MCP attach profile for your **real signed-in Chrome**
-  session.
+  session. Use this only when the task requires existing login/cookies.
 
 For agent browser tool calls:
 
 - Default: use the isolated `openclaw` browser.
-- Prefer `profile="user"` when existing logged-in sessions matter and the user
-  is at the computer to click/approve any attach prompt.
+- Prefer a dedicated advanced profile for Chrome MCP diagnostics or inventory
+  proof when existing signed-in cookies are not required.
+- Prefer `profile="user"` only when existing logged-in sessions matter and the
+  user is at the computer to click/approve any attach prompt.
 - `profile` is the explicit override when you want a specific browser mode.
 
 Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.
+
+### Dedicated advanced Chrome MCP profile
+
+Advanced Chrome MCP capabilities are powerful, but they are not the same thing
+as ordinary page automation. Use a dedicated OpenClaw-owned existing-session
+profile for diagnostics and inventory work so agents do not need to attach to
+the user's daily browser just to run Lighthouse, screencast, heap snapshots,
+console/request detail, or extension inventory.
+
+Example:
+
+```json5
+{
+  browser: {
+    profiles: {
+      "agent-chrome": {
+        driver: "existing-session",
+        attachOnly: true,
+        userDataDir: "~/.openclaw/browser/agent-chrome/user-data",
+        color: "#00AA00",
+        chromeMcp: {
+          capabilities: {
+            diagnostics: true,
+            extensions: true,
+            extensionMutation: false,
+            thirdPartyTools: false,
+            thirdPartyToolExecution: false,
+            webMcpTools: false,
+            webMcpToolExecution: false,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Recommended readiness check:
+
+```bash
+openclaw browser --browser-profile agent-chrome doctor
+openclaw browser --browser-profile agent-chrome status
+openclaw browser --browser-profile agent-chrome tabs
+```
+
+Use `extensionMutation`, `thirdPartyToolExecution`, or
+`webMcpToolExecution` only for trusted automation profiles and reviewed tasks.
+Keep them off for personal `user` profiles unless the user explicitly approves
+that risk.
+
+### Personal signed-in browser attach
+
+The `user` profile attaches to a running signed-in Chrome session through
+Chrome MCP. A desktop Chrome process being "running" is not enough by itself:
+`doctor` and `tabs` must pass. If the profile reports a missing
+`DevToolsActivePort`, a refused remote-debugging port, or another attach error,
+OpenClaw cannot control that signed-in session yet.
+
+Recommended check before using signed-in state:
+
+```bash
+openclaw browser --browser-profile user doctor
+openclaw browser --browser-profile user tabs
+```
+
+When this fails, do not fall back to another profile silently. Report the
+blocker and either use the isolated `openclaw` profile for non-login work or
+prepare a separate profile/browser setup gate for the user's approval.
 
 ## Configuration
 
@@ -193,6 +269,23 @@ Browser settings live in `~/.openclaw/openclaw.json`.
         driver: "existing-session",
         attachOnly: true,
         color: "#00AA00",
+      },
+      "agent-chrome": {
+        driver: "existing-session",
+        attachOnly: true,
+        userDataDir: "~/.openclaw/browser/agent-chrome/user-data",
+        color: "#00AA00",
+        chromeMcp: {
+          capabilities: {
+            diagnostics: true,
+            extensions: true,
+            extensionMutation: false,
+            thirdPartyTools: false,
+            thirdPartyToolExecution: false,
+            webMcpTools: false,
+            webMcpToolExecution: false,
+          },
+        },
       },
       brave: {
         driver: "existing-session",
@@ -930,6 +1023,11 @@ Common examples:
 - CDP startup or readiness failure:
   - `Chrome CDP websocket for profile "openclaw" is not reachable after start`
   - `Remote CDP for profile "<name>" is not reachable at <cdpUrl>`
+  - `Could not find DevToolsActivePort` for a signed-in `user` profile that is
+    running but not attachable
+  - `connect ECONNREFUSED 127.0.0.1:<port>` for a stale Chrome MCP endpoint
+  - `The profile appears to be in use by another Google Chrome process` for a
+    managed profile with stale Chrome `Singleton*` lock files
   - `Port <port> is in use for profile "<name>" but not by openclaw` when a
     loopback external CDP service is configured without `attachOnly: true`
 - Navigation SSRF block:
@@ -946,6 +1044,10 @@ openclaw browser --browser-profile openclaw open https://example.com
 How to read the results:
 
 - If `start` fails with `not reachable after start`, troubleshoot CDP readiness first.
+- If `start` says the profile is locked by another Chrome process, confirm no
+  local process owns the reported lock before moving or resetting any
+  `Singleton*` lock files. Preserve moved lock files in a dated backup when
+  doing manual recovery.
 - If `start` succeeds but `tabs` fails, the control plane is still unhealthy. Treat this as a CDP reachability problem, not a page-navigation problem.
 - If `start` and `tabs` succeed but `open` or `navigate` fails, the browser control plane is up and the failure is in navigation policy or the target page.
 - If `start`, `tabs`, and `open` all succeed, the basic managed-browser control path is healthy.

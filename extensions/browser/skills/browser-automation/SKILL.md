@@ -81,6 +81,16 @@ Use `profile="user"` only when existing cookies/login matter. This attaches to t
 
 For `profile="user"` and other existing-session profiles, omit `timeoutMs` on `act:type`, `evaluate`, `hover`, `scrollIntoView`, `drag`, `select`, and `fill`; that driver rejects per-call timeout overrides for those actions.
 
+## Profile Choice For Advanced Work
+
+Choose the least-private profile that can do the job:
+
+- Use `openclaw` for normal page automation, screenshots, forms, and visual proof. It is isolated from the user's personal browser.
+- Use a dedicated OpenClaw-owned existing-session profile, such as `agent-chrome`, for Chrome MCP diagnostics, Lighthouse, screencast, heap snapshots, extension inventory, or other advanced Chrome MCP work when existing personal cookies are not required.
+- Use `profile="user"` only for tasks that truly need the user's current signed-in Chrome cookies. Treat this as privacy-sensitive and inspect only the requested target.
+
+Before advanced work, prove the selected profile with `doctor`, `status`, and `tabs`. If `doctor` reports missing `DevToolsActivePort`, a refused remote-debugging port, a profile lock, or a disabled capability, stop and report the blocker plus the config/profile path instead of trying another profile silently.
+
 ## Chrome MCP Capability Boundaries
 
 Existing-session profiles can expose enhanced Chrome MCP actions such as `console-message`, `request-detail`, `trace`, `heap-snapshot`, `lighthouse`, `screencast`, `extensions`, `third-party-tools`, and `web-mcp-tools`.
@@ -88,6 +98,7 @@ Existing-session profiles can expose enhanced Chrome MCP actions such as `consol
 Treat these as higher-risk because they can expose private browser state or mutate the attached profile:
 
 - Prefer the isolated `openclaw` profile unless the task needs existing login/cookies.
+- Prefer a dedicated OpenClaw-owned existing-session profile for advanced Chrome MCP capability proof when personal cookies are not required.
 - Use a signed-in or personal profile only for the requested target; avoid unrelated tabs and private content.
 - If a route reports a disabled Chrome MCP capability, do not work around it. Report the config path and stop for the next approval gate.
 - Extension mutation and page-provided tool execution require explicit opt-in on trusted automation profiles.

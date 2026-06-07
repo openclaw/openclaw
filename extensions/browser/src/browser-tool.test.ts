@@ -489,6 +489,7 @@ describe("browser tool description", () => {
     const tool = createBrowserTool();
 
     expect(tool.description).toContain('profile="user"');
+    expect(tool.description).toContain("dedicated OpenClaw-owned automation profile");
     expect(tool.description).toContain("omit timeoutMs on act:type");
     expect(tool.description).toContain("existing-session profiles");
     expect(tool.description).toContain("browser-automation skill");
