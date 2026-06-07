@@ -647,15 +647,17 @@ describe("buildAgentSystemPrompt", () => {
       modelAliasLines: [
         "- Opus: anthropic/claude-opus-4-5",
         "- Sonnet: anthropic/claude-sonnet-4-6",
+        "- xiaomi/mimo-v2-pro-mit: openai/xiaomi/mimo-v2-pro-mit",
       ],
     });
 
     expect(prompt).toContain("## Model Aliases");
     expect(prompt).toContain(
-      "Use exact provider/model strings verbatim when one is specified. Aliases are shortcuts for unqualified model requests.",
+      "Use exact provider/model strings verbatim when one is specified. Listed aliases are valid shortcuts only when the request matches the alias exactly, including aliases that contain `/`.",
     );
     expect(prompt).not.toContain("Prefer aliases when specifying model overrides");
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
+    expect(prompt).toContain("- xiaomi/mimo-v2-pro-mit: openai/xiaomi/mimo-v2-pro-mit");
   });
 
   it("adds ClaudeBot self-update guidance when gateway tool is available", () => {
