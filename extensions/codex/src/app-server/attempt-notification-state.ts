@@ -14,7 +14,7 @@ import {
   isRawAssistantProgressNotification,
   isRawReasoningCompletionNotification,
   isRawToolOutputCompletionNotification,
-  isReasoningDeltaNotification,
+  isReasoningProgressNotification,
   isReasoningItemCompletionNotification,
   isRetryableErrorNotification,
   isTurnNotification,
@@ -152,7 +152,7 @@ export function applyCodexTurnNotificationState(params: {
     (((isRawAssistantProgressNotification(notification) ||
       isRawReasoningCompletionNotification(notification)) &&
       params.activeTurnItemIds.size === 0) ||
-      isReasoningDeltaNotification(notification));
+      isReasoningProgressNotification(notification));
   const postToolPatchUpdateNeedsTerminalGuard =
     isCurrentTurnNotification &&
     turnCrossedToolHandoff &&

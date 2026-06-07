@@ -16,7 +16,7 @@ import * as authBridge from "./auth-bridge.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
-import type { CodexServerNotification } from "./protocol.js";
+import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import {
   createParams,
@@ -2557,7 +2557,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
         turnId: "turn-1",
         item: {
           type: "reasoning",
-          id: "raw-reasoning-1",
+          summary: [],
+          encrypted_content: null,
         },
       },
     });
@@ -2587,76 +2588,97 @@ describe("runCodexAppServerAttempt turn watches", () => {
     ).toBe(false);
   });
 
-  it("uses the post-tool timeout after streamed reasoning progress", async () => {
-    const harness = createStartedThreadHarness();
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-    params.timeoutMs = 60_000;
-
-    const run = runCodexAppServerAttempt(params, {
-      turnCompletionIdleTimeoutMs: 20,
-      turnAssistantCompletionIdleTimeoutMs: 500,
-      postToolRawAssistantCompletionIdleTimeoutMs: 80,
-      turnTerminalIdleTimeoutMs: 500,
-    });
-    await harness.waitForMethod("turn/start");
-
-    const toolResult = (await harness.handleServerRequest({
-      id: "request-tool-1",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: null,
-        tool: "message",
-        arguments: { action: "send", text: "already sent" },
-      },
-    })) as { success?: boolean };
-    expect(toolResult.success).toBe(false);
-    await harness.notify({
-      method: "item/started",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: { id: "reasoning-1", type: "reasoning" },
-      },
-    });
-    await harness.notify({
+  const reasoningProgressNotifications: {
+    method: string;
+    progressParams: JsonObject;
+  }[] = [
+    {
       method: "item/reasoning/textDelta",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "reasoning-1",
-        delta: "thinking after tool",
-      },
-    });
+      progressParams: { delta: "thinking after tool", contentIndex: 0 },
+    },
+    {
+      method: "item/reasoning/summaryTextDelta",
+      progressParams: { delta: "thinking after tool", summaryIndex: 0 },
+    },
+    {
+      method: "item/reasoning/summaryPartAdded",
+      progressParams: { summaryIndex: 0 },
+    },
+  ];
 
-    const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
-      "codex app-server turn idle timed out waiting for turn/completed",
-    );
-    const completionWarnCall = warn.mock.calls.find(
-      ([message]) => message === "codex app-server turn idle timed out waiting for completion",
-    );
-    expect(completionWarnCall).toBeDefined();
-    const completionWarnData = completionWarnCall?.[1] as
-      | { lastActivityReason?: string; timeoutMs?: number }
-      | undefined;
-    expect(completionWarnData?.timeoutMs).toBe(80);
-    expect(completionWarnData?.lastActivityReason).toBe("notification:item/reasoning/textDelta");
-    expect(
-      warn.mock.calls.some(
-        ([message]) =>
-          message === "codex app-server turn idle timed out waiting for terminal event",
-      ),
-    ).toBe(false);
-  });
+  it.each(reasoningProgressNotifications)(
+    "uses the post-tool timeout after streamed reasoning progress from $method",
+    async ({ method, progressParams }) => {
+      const harness = createStartedThreadHarness();
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const params = createParams(
+        path.join(tempDir, "session.jsonl"),
+        path.join(tempDir, "workspace"),
+      );
+      params.timeoutMs = 60_000;
+
+      const run = runCodexAppServerAttempt(params, {
+        turnCompletionIdleTimeoutMs: 20,
+        turnAssistantCompletionIdleTimeoutMs: 500,
+        postToolRawAssistantCompletionIdleTimeoutMs: 80,
+        turnTerminalIdleTimeoutMs: 500,
+      });
+      await harness.waitForMethod("turn/start");
+
+      const toolResult = (await harness.handleServerRequest({
+        id: "request-tool-1",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: null,
+          tool: "message",
+          arguments: { action: "send", text: "already sent" },
+        },
+      })) as { success?: boolean };
+      expect(toolResult.success).toBe(false);
+      await harness.notify({
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "reasoning-1", type: "reasoning" },
+        },
+      });
+      await harness.notify({
+        method,
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "reasoning-1",
+          ...progressParams,
+        },
+      });
+
+      const result = await run;
+      expect(result.aborted).toBe(true);
+      expect(result.timedOut).toBe(true);
+      expect(result.promptError).toBe(
+        "codex app-server turn idle timed out waiting for turn/completed",
+      );
+      const completionWarnCall = warn.mock.calls.find(
+        ([message]) => message === "codex app-server turn idle timed out waiting for completion",
+      );
+      expect(completionWarnCall).toBeDefined();
+      const completionWarnData = completionWarnCall?.[1] as
+        | { lastActivityReason?: string; timeoutMs?: number }
+        | undefined;
+      expect(completionWarnData?.timeoutMs).toBe(80);
+      expect(completionWarnData?.lastActivityReason).toBe(`notification:${method}`);
+      expect(
+        warn.mock.calls.some(
+          ([message]) =>
+            message === "codex app-server turn idle timed out waiting for terminal event",
+        ),
+      ).toBe(false);
+    },
+  );
 
   it("releases the session when Codex accepts a turn but never sends progress", async () => {
     const harness = createStartedThreadHarness();

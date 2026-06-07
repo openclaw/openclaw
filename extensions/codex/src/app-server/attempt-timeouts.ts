@@ -11,7 +11,7 @@ export const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 /** Short guard after apparent assistant completion. */
 export const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
 // Native Codex can spend a long quiet window synthesizing after tool results,
-// raw assistant/reasoning completions, or reasoning deltas. Forwarded deltas
+// raw assistant/reasoning completions, or reasoning progress. Forwarded deltas
 // count as activity, but older native paths may not surface them, so keep this
 // terminal guard conservative.
 export const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_000;

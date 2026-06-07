@@ -115,11 +115,12 @@ export function isRawReasoningCompletionNotification(
   return item ? readString(item, "type") === "reasoning" : false;
 }
 
-/** Returns true for streamed app-server reasoning text progress. */
-export function isReasoningDeltaNotification(notification: CodexServerNotification): boolean {
+/** Returns true for streamed app-server reasoning progress. */
+export function isReasoningProgressNotification(notification: CodexServerNotification): boolean {
   return (
     notification.method === "item/reasoning/textDelta" ||
-    notification.method === "item/reasoning/summaryTextDelta"
+    notification.method === "item/reasoning/summaryTextDelta" ||
+    notification.method === "item/reasoning/summaryPartAdded"
   );
 }
 
