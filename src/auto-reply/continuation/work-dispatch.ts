@@ -16,6 +16,7 @@ import {
   listPendingWorkSessionKeysForRecovery,
   markPendingWorkFailed,
   markPendingWorkTurnGranted,
+  peekSoonestRunningWorkRecoveryDueAt,
   peekSoonestUnmaturedWorkDueAt,
   requeuePendingWork,
   type PendingContinuationWork,
@@ -93,6 +94,27 @@ function requeueWorkForRetry(
   return requeued;
 }
 
+const GATEWAY_RESTARTING_REPLY_TEXT =
+  "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
+
+type ReplyPayloadLike = { text?: unknown };
+
+function isReplyPayloadLike(value: unknown): value is ReplyPayloadLike {
+  return Boolean(value && typeof value === "object");
+}
+
+function isGatewayRestartingReplyPayload(value: unknown): boolean {
+  return isReplyPayloadLike(value) && value.text === GATEWAY_RESTARTING_REPLY_TEXT;
+}
+
+function hasNonDrainReplyPayload(reply: unknown): boolean {
+  if (reply === undefined) {
+    return false;
+  }
+  const payloads = Array.isArray(reply) ? reply : [reply];
+  return payloads.some((payload) => !isGatewayRestartingReplyPayload(payload));
+}
+
 function formatContinuationWakeText(work: PendingContinuationWork): string {
   return (
     `[continuation:wake] Turn ${work.hop}/${work.maxChainLength}. ` +
@@ -158,7 +180,7 @@ async function driveContinuationTurn(
     return { status: "skipped", reason: "missing-session" };
   }
 
-  await getReplyFromConfig(
+  const reply = await getReplyFromConfig(
     {
       Body: wakeText,
       BodyForCommands: wakeText,
@@ -179,10 +201,17 @@ async function driveContinuationTurn(
     },
     cfg,
   );
-  if (isGatewayDraining()) {
+  if (!hasNonDrainReplyPayload(reply) && isGatewayDraining()) {
     return { status: "skipped", reason: CONTINUATION_TURN_DRAINING_REASON };
   }
   return { status: "ran" };
+}
+
+function earlierDueAt(left: number | undefined, right: number | undefined): number | undefined {
+  if (left === undefined) {
+    return right;
+  }
+  return right === undefined ? left : Math.min(left, right);
 }
 
 export async function dispatchPendingContinuationWork(params: {
@@ -194,7 +223,12 @@ export async function dispatchPendingContinuationWork(params: {
     includeRunning: params.recoverRunning === true,
     includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore,
   });
-  const soonest = peekSoonestUnmaturedWorkDueAt(params.sessionKey);
+  const soonestQueued = peekSoonestUnmaturedWorkDueAt(params.sessionKey);
+  const soonestRunningRecovery =
+    params.recoverRunning === true
+      ? peekSoonestRunningWorkRecoveryDueAt(params.sessionKey, RUNNING_WORK_RECOVERY_STALE_MS)
+      : undefined;
+  const soonest = earlierDueAt(soonestQueued, soonestRunningRecovery);
   if (soonest !== undefined) {
     armWorkTimer(params.sessionKey, soonest);
   } else {
@@ -229,10 +263,6 @@ export async function dispatchPendingContinuationWork(params: {
       log.warn(
         `[continuation:work-drive-skipped] flowId=${work.flowId ?? "none"} session=${work.sessionKey} reason=${skippedReason}`,
       );
-      enqueueSystemEvent(
-        `[system:continuation-warning] continue_work turn was not granted (${skippedReason}).`,
-        { sessionKey: work.sessionKey, trusted: true },
-      );
       if (isRetryableContinuationSkipReason(skippedReason)) {
         const retryDueAt = Date.now() + BUSY_RETRY_MS;
         requeueWorkForRetry(work, {
@@ -240,6 +270,10 @@ export async function dispatchPendingContinuationWork(params: {
           summary: `Retryable continuation skip: ${skippedReason}`,
         });
       } else {
+        enqueueSystemEvent(
+          `[system:continuation-warning] continue_work turn was not granted (${skippedReason}).`,
+          { sessionKey: work.sessionKey, trusted: true },
+        );
         markPendingWorkFailed(work, `Continuation turn was not granted: ${skippedReason}`);
         failed++;
       }

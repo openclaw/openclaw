@@ -311,6 +311,29 @@ export function peekSoonestUnmaturedWorkDueAt(sessionKey: string): number | unde
   return soonest;
 }
 
+export function peekSoonestRunningWorkRecoveryDueAt(
+  sessionKey: string,
+  staleMs: number,
+  now = Date.now(),
+): number | undefined {
+  let soonest: number | undefined;
+  for (const flow of listTaskFlowsForOwnerKey(sessionKey)) {
+    if (!isContinuationWorkFlow(flow) || flow.status !== "running") {
+      continue;
+    }
+    const state = decodeWorkState(flow);
+    if (!state) {
+      continue;
+    }
+    const recoveryDueAt = Math.max(state.dueAt, flow.updatedAt + staleMs);
+    if (recoveryDueAt <= now) {
+      return now;
+    }
+    soonest = soonest === undefined ? recoveryDueAt : Math.min(soonest, recoveryDueAt);
+  }
+  return soonest;
+}
+
 export function pendingWorkCount(sessionKey: string): number {
   return listTaskFlowsForOwnerKey(sessionKey).filter(isRecoverableWorkFlow).length;
 }

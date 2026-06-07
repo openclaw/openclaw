@@ -6,6 +6,7 @@ let mainQueueSize = 0;
 let gatewayDraining = false;
 let replyError: Error | undefined;
 let drainAfterReply = false;
+let replyPayloadOverride: unknown;
 const mockSessionStore: Record<string, unknown> = {};
 
 vi.mock("../../config/config.js", () => ({
@@ -59,6 +60,12 @@ vi.mock("../reply/get-reply.js", () => ({
   getReplyFromConfig: vi.fn(async (context: unknown, options: unknown, cfg: unknown) => {
     if (replyError) {
       throw replyError;
+    }
+    if (replyPayloadOverride !== undefined) {
+      if (drainAfterReply) {
+        gatewayDraining = true;
+      }
+      return replyPayloadOverride;
     }
     turnGrants.push({ context, options, cfg });
     if (drainAfterReply) {
@@ -253,6 +260,7 @@ describe("durable continuation_work dispatch", () => {
     gatewayDraining = false;
     replyError = undefined;
     drainAfterReply = false;
+    replyPayloadOverride = undefined;
     for (const key of Object.keys(mockSessionStore)) {
       delete mockSessionStore[key];
     }
@@ -404,15 +412,14 @@ describe("durable continuation_work dispatch", () => {
     const flow = [...mockFlows.values()][0];
     expect(flow).toMatchObject({ status: "queued" });
     expect(flow?.currentStep).toBe("Requeued same-session continuation wake");
-    expect(systemEvents).toEqual([
-      expect.objectContaining({ text: expect.stringContaining("was not granted") }),
-    ]);
+    expect(systemEvents).toEqual([]);
 
     activeSessions.clear();
     mainQueueSize = 0;
     gatewayDraining = false;
     replyError = undefined;
     drainAfterReply = false;
+    replyPayloadOverride = undefined;
     await vi.advanceTimersByTimeAsync(1_000);
     await flushTimers();
 
@@ -489,6 +496,7 @@ describe("durable continuation_work dispatch", () => {
     gatewayDraining = false;
     replyError = undefined;
     drainAfterReply = false;
+    replyPayloadOverride = undefined;
     await vi.advanceTimersByTimeAsync(1_000);
     await flushTimers();
 
@@ -525,8 +533,8 @@ describe("durable continuation_work dispatch", () => {
 
     expect(turnGrants).toHaveLength(0);
 
-    flow.updatedAt = Date.now() - 60_001;
-    await recoverPendingContinuationWork();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushTimers();
 
     expect(turnGrants).toEqual([
       expect.objectContaining({
@@ -538,8 +546,8 @@ describe("durable continuation_work dispatch", () => {
     ]);
   });
 
-  it("requeues instead of succeeding when the gateway starts draining during the turn grant", async () => {
-    const sessionKey = "agent:main:draining";
+  it("finalizes a completed turn when the gateway starts draining after the grant", async () => {
+    const sessionKey = "agent:main:draining-after-grant";
     mockSessionStore[sessionKey] = { sessionKey };
     drainAfterReply = true;
     enqueuePendingWork({
@@ -549,16 +557,14 @@ describe("durable continuation_work dispatch", () => {
       electedAt: Date.now(),
       dueAt: Date.now(),
       maxChainLength: 8,
-      reason: "drain proof",
+      reason: "drain after grant",
     });
 
     const result = await dispatchPendingContinuationWork({ sessionKey });
 
-    expect(result).toEqual({ dispatched: 0, failed: 0 });
-    expect([...mockFlows.values()][0]).toMatchObject({
-      status: "queued",
-      currentStep: "Requeued same-session continuation wake",
-    });
+    expect(result).toEqual({ dispatched: 1, failed: 0 });
+    expect([...mockFlows.values()][0]).toMatchObject({ status: "succeeded" });
+    expect(systemEvents).toEqual([]);
 
     drainAfterReply = false;
     gatewayDraining = false;
@@ -567,12 +573,72 @@ describe("durable continuation_work dispatch", () => {
 
     expect(turnGrants).toEqual([
       expect.objectContaining({
-        context: expect.objectContaining({ Body: expect.stringContaining("drain proof") }),
-      }),
-      expect.objectContaining({
-        context: expect.objectContaining({ Body: expect.stringContaining("drain proof") }),
+        context: expect.objectContaining({ Body: expect.stringContaining("drain after grant") }),
       }),
     ]);
+  });
+
+  it("requeues when gateway drain prevents the turn grant", async () => {
+    const sessionKey = "agent:main:draining-before-grant";
+    mockSessionStore[sessionKey] = { sessionKey };
+    gatewayDraining = true;
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "drain before grant",
+    });
+
+    const result = await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(result).toEqual({ dispatched: 0, failed: 0 });
+    expect(turnGrants).toEqual([]);
+    expect(systemEvents).toEqual([]);
+    expect([...mockFlows.values()][0]).toMatchObject({
+      status: "queued",
+      currentStep: "Requeued same-session continuation wake",
+    });
+
+    gatewayDraining = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushTimers();
+
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({ Body: expect.stringContaining("drain before grant") }),
+      }),
+    ]);
+  });
+
+  it("requeues when getReply returns only the gateway-draining notice", async () => {
+    const sessionKey = "agent:main:drain-payload";
+    mockSessionStore[sessionKey] = { sessionKey };
+    drainAfterReply = true;
+    replyPayloadOverride = {
+      text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+    };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "drain payload",
+    });
+
+    const result = await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(result).toEqual({ dispatched: 0, failed: 0 });
+    expect(turnGrants).toEqual([]);
+    expect(systemEvents).toEqual([]);
+    expect([...mockFlows.values()][0]).toMatchObject({
+      status: "queued",
+      currentStep: "Requeued same-session continuation wake",
+    });
   });
 
   it("requeues transient turn-grant errors instead of failing the durable work", async () => {
@@ -610,6 +676,26 @@ describe("durable continuation_work dispatch", () => {
     ]);
   });
 
+  it("enqueues warning events only for non-retryable skips", async () => {
+    const sessionKey = "agent:main:missing";
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "missing session",
+    });
+
+    const result = await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(result).toEqual({ dispatched: 0, failed: 1 });
+    expect(systemEvents).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("was not granted") }),
+    ]);
+  });
+
   it("does not let a hedge reclaim freshly running continuation work", async () => {
     const sessionKey = "agent:main:fresh-running";
     mockSessionStore[sessionKey] = { sessionKey };
@@ -641,7 +727,7 @@ describe("durable continuation_work dispatch", () => {
     });
 
     await vi.advanceTimersByTimeAsync(0);
-    await flushTimers();
+    await Promise.resolve();
 
     expect(runningFlow.status).toBe("running");
     expect(turnGrants).toEqual([
