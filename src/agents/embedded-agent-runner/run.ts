@@ -509,7 +509,7 @@ function resolveAttemptSuccessfulToolTerminalFallback(params: {
   return resolveSuccessfulToolTerminalFallback({
     observations: params.observations,
     requireDeclaredPresentableFallback:
-      params.attempt.replayMetadata?.hadPotentialSideEffects === true,
+      params.attempt.replayMetadata?.hadPotentialSideEffects ?? false,
   });
 }
 
