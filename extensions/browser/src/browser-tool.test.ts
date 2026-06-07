@@ -492,6 +492,8 @@ describe("browser tool description", () => {
     expect(tool.description).toContain("omit timeoutMs on act:type");
     expect(tool.description).toContain("existing-session profiles");
     expect(tool.description).toContain("browser-automation skill");
+    expect(tool.description).toContain("Enhanced Chrome MCP actions");
+    expect(tool.description).toContain("capability-gated");
   });
 });
 

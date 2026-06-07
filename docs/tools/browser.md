@@ -92,15 +92,22 @@ The browser plugin ships two levels of agent guidance:
 
 - The `browser` tool description carries the compact always-on contract: pick
   the right profile, keep refs on the same tab, use `tabId`/labels for tab
-  targeting, and load the browser skill for multi-step work.
+  targeting, recognize capability-gated Chrome MCP surfaces, and load the
+  browser skill for multi-step work.
 - The bundled `browser-automation` skill carries the longer operating loop:
   check status/tabs first, label task tabs, snapshot before acting, resnapshot
-  after UI changes, recover stale refs once, and report login/2FA/captcha or
-  camera/microphone blockers as manual action instead of guessing.
+  after UI changes, recover stale refs once, choose isolated versus signed-in
+  profiles, respect Chrome MCP capability gates, and report login/2FA/captcha,
+  camera/microphone, disabled-capability, or approval-boundary blockers instead
+  of guessing.
 
 Plugin-bundled skills are listed in the agent's available skills when the
 plugin is enabled. The full skill instructions are loaded on demand, so routine
 turns do not pay the full token cost.
+
+Keep detailed browser-agent workflow guidance in the bundled skill and this
+browser guide. Root agent policies should link here instead of copying the
+Browser/Chrome MCP checklist.
 
 ## Missing browser command or tool
 

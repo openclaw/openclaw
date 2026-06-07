@@ -635,6 +635,7 @@ export function createBrowserTool(opts?: {
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc). For tab operations, targetId also accepts tabId handles (t1) and labels from action=tabs.",
       "For multi-step browser work, login checks, stale refs, duplicate tabs, or Google Meet flows, use the bundled browser-automation skill when it is available.",
+      "Enhanced Chrome MCP actions such as console-message, request-detail, trace, heap-snapshot, lighthouse, screencast, extensions, third-party-tools, and web-mcp-tools are capability-gated; report disabled-capability errors instead of bypassing policy.",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
       "For alert/confirm/prompt flows triggered by your next click, prefer action=dialog with accept/dismiss and no dialogId before the click; use dialogId only when responding to a dialog already reported as pending.",
