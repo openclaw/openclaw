@@ -372,6 +372,45 @@ describe("openshell backend manager", () => {
       renameSpy.mockRestore();
     }
   });
+
+  it("drops non-directory materialized sandbox skills from mirror downloads", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
+    cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
+      if (args[0] === "sandbox" && args[1] === "download") {
+        const tmpDir = args[4];
+        await fs.writeFile(path.join(tmpDir, "from-remote.txt"), "remote", "utf8");
+        await fs.mkdir(path.join(tmpDir, ".openclaw"), { recursive: true });
+        await fs.writeFile(path.join(tmpDir, ".openclaw", "sandbox-skills"), "poison", "utf8");
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    });
+
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({
+        command: "openshell",
+        mode: "mirror",
+      }),
+    });
+    const backend = await factory({
+      sessionKey: "agent:main:turn",
+      scopeKey: "agent:main",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg: createOpenShellBackendSandboxConfig(),
+    });
+
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: undefined,
+    });
+
+    await expect(fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8")).resolves.toBe(
+      "remote",
+    );
+    await expectPathMissing(path.join(workspaceDir, ".openclaw", "sandbox-skills"));
+  });
 });
 
 const tempDirs: string[] = [];

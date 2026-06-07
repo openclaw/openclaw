@@ -602,10 +602,17 @@ function resolveRemoteMaterializedSkillsWorkspaceDir(remoteWorkspaceDir: string)
 
 async function removeMaterializedSkillsFromDownloadedWorkspace(tmpDir: string): Promise<void> {
   let cursor = tmpDir;
-  for (const part of MATERIALIZED_SKILLS_REMOTE_PARTS) {
+  for (const [index, part] of MATERIALIZED_SKILLS_REMOTE_PARTS.entries()) {
     const next = path.join(cursor, part);
     const stats = await fs.lstat(next).catch(() => null);
-    if (!stats || stats.isSymbolicLink()) {
+    if (!stats) {
+      return;
+    }
+    if (index === MATERIALIZED_SKILLS_REMOTE_PARTS.length - 1) {
+      await fs.rm(next, { recursive: true, force: true });
+      return;
+    }
+    if (stats.isSymbolicLink()) {
       return;
     }
     if (!stats.isDirectory()) {
@@ -613,7 +620,6 @@ async function removeMaterializedSkillsFromDownloadedWorkspace(tmpDir: string): 
     }
     cursor = next;
   }
-  await fs.rm(cursor, { recursive: true, force: true });
 }
 
 async function moveMaterializedSkillsShadowAside(params: {
