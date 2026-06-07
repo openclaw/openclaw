@@ -4,9 +4,6 @@
 export const KNIP_UNUSED_FILE_ALLOWLIST = [
   "src/agents/cache/agent-cache-store.sqlite.ts",
   "src/agents/cache/agent-cache-store.ts",
-  "src/state/openclaw-agent-db.paths.ts",
-  "src/state/openclaw-agent-db.ts",
-  "src/state/openclaw-agent-schema.generated.ts",
 ];
 
 // Knip can disagree across supported local/CI platforms for files that are
@@ -50,9 +47,6 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "src/plugins/contracts/rootdir-boundary-canary.ts",
   "src/plugins/contracts/tts-contract-suites.ts",
   "src/plugins/runtime-sidecar-paths-baseline.ts",
-  "src/state/openclaw-agent-db.paths.ts",
-  "src/state/openclaw-agent-db.ts",
-  "src/state/openclaw-agent-schema.generated.ts",
   "src/tasks/task-registry-control.runtime.ts",
   "ui/src/ui/browser-redact.ts",
   "extensions/qa-lab/src/auth-profile.fixture.ts",
