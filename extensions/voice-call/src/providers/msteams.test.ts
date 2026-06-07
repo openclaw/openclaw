@@ -455,6 +455,50 @@ describe("MsteamsProvider (audio loop wiring)", () => {
     ws.close();
   });
 
+  it("attaches the latest shared video frame to the streaming agent turn (inbound vision)", async () => {
+    generateVoiceResponseMock.mockResolvedValue({ text: "I see a stack trace." });
+    const { port, captured } = await setup();
+    const callId = "teams-call-svid";
+    const { ws } = await connect(port, callId);
+
+    // Recording active so the frame buffers and the transcript is processed.
+    ws.send(
+      JSON.stringify({
+        type: "session.start",
+        callId,
+        threadId: "t",
+        caller: { aadId: "a" },
+        recordingStatus: "active",
+      }),
+    );
+    await waitFor(() => captured.current !== undefined);
+
+    ws.send(
+      JSON.stringify({
+        type: "video.frame",
+        source: "screenshare",
+        ts: 1,
+        width: 800,
+        height: 600,
+        mime: "image/jpeg",
+        dataBase64: "AQID",
+      }),
+    );
+    await new Promise<void>((r) => {
+      setTimeout(r, 30);
+    });
+
+    // A transcript drives a turn; the latest frame should ride along as an image.
+    captured.current?.callbacks.onTranscript?.("what's on my screen?");
+    await waitFor(() => generateVoiceResponseMock.mock.calls.length > 0);
+    const arg = generateVoiceResponseMock.mock.calls.at(-1)?.[0] as {
+      images?: Array<{ type: string; data: string; mimeType: string }>;
+    };
+    expect(arg.images?.[0]).toMatchObject({ type: "image", data: "AQID", mimeType: "image/jpeg" });
+
+    ws.close();
+  });
+
   it("does not forward caller audio to STT until recording status is active (Media Access API)", async () => {
     const { port, captured } = await setup();
     const callId = "teams-call-audio-gate";
