@@ -64,32 +64,37 @@ type QaRuntimeToolFixtureDeps = {
   ensureImageGenerationConfigured: (env: QaSuiteRuntimeEnv) => Promise<unknown>;
 };
 
-function readString(value: unknown, fallback = "") {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
+function isRecord(raw: unknown): raw is Record<string, unknown> {
+  return Boolean(raw && typeof raw === "object" && !Array.isArray(raw));
 }
 
-function readBoolean(value: unknown, fallback: boolean) {
-  return typeof value === "boolean" ? value : fallback;
+function readString(raw: unknown, fallback = "") {
+  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : fallback;
 }
 
-function isKnownBroken(value: unknown) {
-  return Boolean(value && typeof value === "object");
+function readBoolean(raw: unknown, fallback: boolean) {
+  return typeof raw === "boolean" ? raw : fallback;
 }
 
-function isKnownHarnessGap(value: unknown) {
-  return Boolean(value && typeof value === "object");
+function isKnownBroken(raw: unknown): raw is Record<string, unknown> {
+  return isRecord(raw);
 }
 
-function isQaRuntimeToolFixtureRequest(value: unknown): value is QaRuntimeToolFixtureRequest {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+function isKnownHarnessGap(raw: unknown): raw is Record<string, unknown> {
+  return isRecord(raw);
 }
 
-function readQaRuntimeToolFixtureRequests(value: unknown): QaRuntimeToolFixtureRequest[] {
-  return Array.isArray(value) ? value.filter(isQaRuntimeToolFixtureRequest) : [];
+function isQaRuntimeToolFixtureRequest(raw: unknown): raw is QaRuntimeToolFixtureRequest {
+  return isRecord(raw);
 }
 
-function formatPlannedToolArgs(value: unknown) {
-  return JSON.stringify(value ?? {}) ?? "undefined";
+function readQaRuntimeToolFixtureRequests(raw: unknown): QaRuntimeToolFixtureRequest[] {
+  return Array.isArray(raw) ? raw.filter(isQaRuntimeToolFixtureRequest) : [];
+}
+
+function formatPlannedToolArgs(rawArgs: unknown) {
+  const encodedArgs = JSON.stringify(rawArgs ?? {});
+  return encodedArgs ?? "undefined";
 }
 
 function requestMatchesPrompt(request: QaRuntimeToolFixtureRequest, promptSnippet: string) {
@@ -458,9 +463,7 @@ function formatKnownBrokenDetails(
   tools: Set<string>,
   config: QaRuntimeToolFixtureConfig,
 ) {
-  const knownBroken = isKnownBroken(config.knownBroken)
-    ? (config.knownBroken as Record<string, unknown>)
-    : {};
+  const knownBroken = isKnownBroken(config.knownBroken) ? config.knownBroken : {};
   const issue = readString(knownBroken.issue);
   const reason = readString(knownBroken.reason, "known broken runtime tool fixture");
   return [
@@ -502,9 +505,7 @@ function formatCodexNativeWorkspaceDetails(params: {
 }
 
 function formatKnownHarnessGapDetails(toolName: string, config: QaRuntimeToolFixtureConfig) {
-  const knownHarnessGap = isKnownHarnessGap(config.knownHarnessGap)
-    ? (config.knownHarnessGap as Record<string, unknown>)
-    : {};
+  const knownHarnessGap = isKnownHarnessGap(config.knownHarnessGap) ? config.knownHarnessGap : {};
   const issue = readString(knownHarnessGap.issue);
   const reason = readString(knownHarnessGap.reason, "known QA harness gap");
   return [`known-harness-gap ${toolName}: ${reason}`, issue ? `tracking: ${issue}` : undefined]
