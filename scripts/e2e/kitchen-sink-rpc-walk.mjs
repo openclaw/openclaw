@@ -289,7 +289,7 @@ export function runCommand(command, args, options = {}) {
             });
           }
         })
-        .catch((error) => {
+        .catch((/** @type {unknown} */ error) => {
           lastResourceSampleError = error;
         })
         .finally(() => {

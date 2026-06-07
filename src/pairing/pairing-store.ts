@@ -9,7 +9,6 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js";
 import { withFileLock as withPathLock } from "../infra/file-lock.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
@@ -278,7 +277,7 @@ function normalizeId(value: string | number): string {
   return normalizeStringifiedOptionalString(value) ?? "";
 }
 
-function normalizeAllowEntry(channel: PairingChannel, entry: string): string {
+function normalizeAllowEntry(entry: string, pairingAdapter?: ChannelPairingAdapter): string {
   const trimmed = entry.trim();
   if (!trimmed) {
     return "";
@@ -286,50 +285,55 @@ function normalizeAllowEntry(channel: PairingChannel, entry: string): string {
   if (trimmed === "*") {
     return "";
   }
-  const adapter = getPairingAdapter(channel);
-  const normalized = adapter?.normalizeAllowEntry ? adapter.normalizeAllowEntry(trimmed) : trimmed;
+  const normalized = pairingAdapter?.normalizeAllowEntry
+    ? pairingAdapter.normalizeAllowEntry(trimmed)
+    : trimmed;
   return normalizeOptionalString(normalized) ?? "";
 }
 
-function normalizeAllowFromList(channel: PairingChannel, store: AllowFromStore): string[] {
+function normalizeAllowFromList(
+  store: AllowFromStore,
+  pairingAdapter?: ChannelPairingAdapter,
+): string[] {
   const list = Array.isArray(store.allowFrom) ? store.allowFrom : [];
-  return dedupePreserveOrder(list.map((v) => normalizeAllowEntry(channel, v)).filter(Boolean));
+  return dedupePreserveOrder(
+    list.map((v) => normalizeAllowEntry(v, pairingAdapter)).filter(Boolean),
+  );
 }
 
-function normalizeAllowFromInput(channel: PairingChannel, entry: string | number): string {
-  return normalizeAllowEntry(channel, normalizeId(entry));
+function normalizeAllowFromInput(
+  entry: string | number,
+  pairingAdapter?: ChannelPairingAdapter,
+): string {
+  return normalizeAllowEntry(normalizeId(entry), pairingAdapter);
 }
 
-async function readAllowFromStateForPath(
-  channel: PairingChannel,
-  filePath: string,
-): Promise<string[]> {
-  return (await readAllowFromStateForPathWithExists(channel, filePath)).entries;
+async function readAllowFromStateForPath(filePath: string): Promise<string[]> {
+  return (await readAllowFromStateForPathWithExists(filePath)).entries;
 }
 
 async function readAllowFromStateForPathWithExists(
-  channel: PairingChannel,
   filePath: string,
 ): Promise<{ entries: string[]; exists: boolean }> {
   return await readAllowFromFileWithExists({
     cacheNamespace: PAIRING_ALLOW_FROM_CACHE_NAMESPACE,
     filePath,
-    normalizeStore: (store) => normalizeAllowFromList(channel, store),
+    normalizeStore: (store) => normalizeAllowFromList(store),
   });
 }
 
-function readAllowFromStateForPathSync(channel: PairingChannel, filePath: string): string[] {
-  return readAllowFromStateForPathSyncWithExists(channel, filePath).entries;
+function readAllowFromStateForPathSync(filePath: string): string[] {
+  return readAllowFromStateForPathSyncWithExists(filePath).entries;
 }
 
-function readAllowFromStateForPathSyncWithExists(
-  channel: PairingChannel,
-  filePath: string,
-): { entries: string[]; exists: boolean } {
+function readAllowFromStateForPathSyncWithExists(filePath: string): {
+  entries: string[];
+  exists: boolean;
+} {
   return readAllowFromFileSyncWithExists({
     cacheNamespace: PAIRING_ALLOW_FROM_CACHE_NAMESPACE,
     filePath,
-    normalizeStore: (store) => normalizeAllowFromList(channel, store),
+    normalizeStore: (store) => normalizeAllowFromList(store),
   });
 }
 
@@ -337,13 +341,14 @@ async function readAllowFromState(params: {
   channel: PairingChannel;
   entry: string | number;
   filePath: string;
+  pairingAdapter?: ChannelPairingAdapter;
 }): Promise<{ current: string[]; normalized: string | null }> {
   const { value } = await readJsonFile<AllowFromStore>(params.filePath, {
     version: 1,
     allowFrom: [],
   });
-  const current = normalizeAllowFromList(params.channel, value);
-  const normalized = normalizeAllowFromInput(params.channel, params.entry);
+  const current = normalizeAllowFromList(value, params.pairingAdapter);
+  const normalized = normalizeAllowFromInput(params.entry, params.pairingAdapter);
   return { current, normalized: normalized || null };
 }
 
@@ -379,7 +384,7 @@ async function readNonDefaultAccountAllowFrom(params: {
   accountId: string;
 }): Promise<string[]> {
   const scopedPath = resolveAllowFromFilePath(params.channel, params.env, params.accountId);
-  return await readAllowFromStateForPath(params.channel, scopedPath);
+  return await readAllowFromStateForPath(scopedPath);
 }
 
 function readNonDefaultAccountAllowFromSync(params: {
@@ -388,7 +393,7 @@ function readNonDefaultAccountAllowFromSync(params: {
   accountId: string;
 }): string[] {
   const scopedPath = resolveAllowFromFilePath(params.channel, params.env, params.accountId);
-  return readAllowFromStateForPathSync(params.channel, scopedPath);
+  return readAllowFromStateForPathSync(scopedPath);
 }
 
 async function updateAllowFromStoreEntry(params: {
@@ -396,6 +401,7 @@ async function updateAllowFromStoreEntry(params: {
   entry: string | number;
   accountId?: string;
   env?: NodeJS.ProcessEnv;
+  pairingAdapter?: ChannelPairingAdapter;
   apply: (current: string[], normalized: string) => string[] | null;
 }): Promise<{ changed: boolean; allowFrom: string[] }> {
   const env = params.env ?? process.env;
@@ -408,6 +414,7 @@ async function updateAllowFromStoreEntry(params: {
         channel: params.channel,
         entry: params.entry,
         filePath,
+        pairingAdapter: params.pairingAdapter,
       });
       if (!normalized) {
         return { changed: false, allowFrom: current };
@@ -427,7 +434,7 @@ export async function readLegacyChannelAllowFromStore(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string[]> {
   const filePath = resolveAllowFromFilePath(channel, env);
-  return await readAllowFromStateForPath(channel, filePath);
+  return await readAllowFromStateForPath(filePath);
 }
 
 export async function readChannelAllowFromStore(
@@ -445,11 +452,11 @@ export async function readChannelAllowFromStore(
     });
   }
   const scopedPath = resolveAllowFromFilePath(channel, env, resolvedAccountId);
-  const scopedEntries = await readAllowFromStateForPath(channel, scopedPath);
+  const scopedEntries = await readAllowFromStateForPath(scopedPath);
   // Backward compatibility: legacy channel-level allowFrom store was unscoped.
   // Keep honoring it for default account to prevent re-pair prompts after upgrades.
   const legacyPath = resolveAllowFromFilePath(channel, env);
-  const legacyEntries = await readAllowFromStateForPath(channel, legacyPath);
+  const legacyEntries = await readAllowFromStateForPath(legacyPath);
   return dedupePreserveOrder([...scopedEntries, ...legacyEntries]);
 }
 
@@ -458,7 +465,7 @@ export function readLegacyChannelAllowFromStoreSync(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const filePath = resolveAllowFromFilePath(channel, env);
-  return readAllowFromStateForPathSync(channel, filePath);
+  return readAllowFromStateForPathSync(filePath);
 }
 
 export function readChannelAllowFromStoreSync(
@@ -476,9 +483,9 @@ export function readChannelAllowFromStoreSync(
     });
   }
   const scopedPath = resolveAllowFromFilePath(channel, env, resolvedAccountId);
-  const scopedEntries = readAllowFromStateForPathSync(channel, scopedPath);
+  const scopedEntries = readAllowFromStateForPathSync(scopedPath);
   const legacyPath = resolveAllowFromFilePath(channel, env);
-  const legacyEntries = readAllowFromStateForPathSync(channel, legacyPath);
+  const legacyEntries = readAllowFromStateForPathSync(legacyPath);
   return dedupePreserveOrder([...scopedEntries, ...legacyEntries]);
 }
 
@@ -491,6 +498,7 @@ type AllowFromStoreEntryUpdateParams = {
   entry: string | number;
   accountId?: string;
   env?: NodeJS.ProcessEnv;
+  pairingAdapter?: ChannelPairingAdapter;
 };
 
 type ChannelAllowFromStoreEntryMutation = (
@@ -508,6 +516,7 @@ async function updateChannelAllowFromStore(
     entry: params.entry,
     accountId: params.accountId,
     env: params.env,
+    pairingAdapter: params.pairingAdapter,
     apply: params.apply,
   });
 }
@@ -690,6 +699,7 @@ export async function approveChannelPairingCode(params: {
   code: string;
   accountId?: string;
   env?: NodeJS.ProcessEnv;
+  pairingAdapter?: ChannelPairingAdapter;
 }): Promise<{ id: string; entry?: PairingRequest } | null> {
   const env = params.env ?? process.env;
   const code = (normalizeNullableString(params.code) ?? "").toUpperCase();
@@ -734,6 +744,7 @@ export async function approveChannelPairingCode(params: {
         entry: entry.id,
         accountId: normalizeOptionalString(params.accountId) ?? entryAccountId,
         env,
+        pairingAdapter: params.pairingAdapter,
       });
       return { id: entry.id, entry };
     },
