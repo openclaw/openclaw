@@ -240,6 +240,8 @@ describe("gateway server chat", () => {
           error: vi.fn(),
           debug: vi.fn(),
         },
+        chatSendReceivedAt: new Map(),
+        firstOutputEmitted: new Map(),
       } as unknown as GatewayRequestContext;
       const { chatHandlers } = await import("./server-methods/chat.js");
 
@@ -549,6 +551,8 @@ describe("gateway server chat", () => {
         registerToolEventRecipient: vi.fn(),
         getRuntimeConfig: () => ({}),
         dedupe: new Map(),
+        chatSendReceivedAt: new Map(),
+        firstOutputEmitted: new Map(),
       } as unknown as GatewayRequestContext;
       dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
 
@@ -685,6 +689,8 @@ describe("gateway server chat", () => {
         registerToolEventRecipient: vi.fn(),
         getRuntimeConfig: () => ({}),
         dedupe: new Map(),
+        chatSendReceivedAt: new Map(),
+        firstOutputEmitted: new Map(),
       } as unknown as GatewayRequestContext;
 
       const pngB64 =
@@ -893,6 +899,10 @@ describe("gateway server chat", () => {
           chatDeltaSentAt: new Map(),
           chatDeltaLastBroadcastLen: new Map(),
           chatDeltaLastBroadcastText: new Map(),
+          bufferedAgentEvents: new Map(),
+          chatSendReceivedAt: new Map(),
+          firstOutputEmitted: new Map(),
+          clearChatRunState: vi.fn(),
           addChatRun: vi.fn(),
           removeChatRun: vi.fn(),
           broadcast: vi.fn(),
@@ -1016,6 +1026,8 @@ describe("gateway server chat", () => {
         nodeSendToSession: vi.fn(),
         registerToolEventRecipient: vi.fn(),
         dedupe: new Map(),
+        chatSendReceivedAt: new Map(),
+        firstOutputEmitted: new Map(),
       } as unknown as GatewayRequestContext;
       dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
 
@@ -1201,6 +1213,8 @@ describe("gateway server chat", () => {
         nodeSendToSession: vi.fn(),
         registerToolEventRecipient: vi.fn(),
         dedupe: new Map(),
+        chatSendReceivedAt: new Map(),
+        firstOutputEmitted: new Map(),
       } as unknown as GatewayRequestContext;
       dispatchInboundMessageMock.mockResolvedValue({});
 
@@ -1316,6 +1330,8 @@ describe("gateway server chat", () => {
         nodeSendToSession: vi.fn(),
         registerToolEventRecipient: vi.fn(),
         dedupe: new Map(),
+        chatSendReceivedAt: new Map(),
+        firstOutputEmitted: new Map(),
       } as unknown as GatewayRequestContext;
       dispatchInboundMessageMock.mockResolvedValue(undefined);
 
@@ -1452,6 +1468,8 @@ describe("gateway server chat", () => {
         nodeSendToSession: vi.fn(),
         registerToolEventRecipient: vi.fn(),
         dedupe: new Map(),
+        chatSendReceivedAt: new Map(),
+        firstOutputEmitted: new Map(),
       } as unknown as GatewayRequestContext;
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
         const replyOptions = (args as { replyOptions?: GetReplyOptions }).replyOptions;
