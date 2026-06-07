@@ -1196,7 +1196,7 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
 
   let providersChanged = false;
   for (const [providerId, providerValue] of Object.entries({ ...providers })) {
-    const provider = getRecord(providerValue);
+    const provider = getRecord(providers[providerId]) ?? getRecord(providerValue);
     if (!provider) {
       continue;
     }
