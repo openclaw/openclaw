@@ -34,7 +34,8 @@ function shouldMatchMutableWhatsAppGroupNames(params: WhatsAppGroupContext): boo
         accounts?: Record<string, { dangerouslyAllowGroupNameMatching?: boolean } | undefined>;
       }
     | undefined;
-  const accountConfig = resolveAccountEntry(whatsapp?.accounts, params.accountId);
+  const accountId = normalizeGroupCandidate(params.accountId);
+  const accountConfig = accountId ? resolveAccountEntry(whatsapp?.accounts, accountId) : undefined;
   if (typeof accountConfig?.dangerouslyAllowGroupNameMatching === "boolean") {
     return accountConfig.dangerouslyAllowGroupNameMatching;
   }
