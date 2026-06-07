@@ -32,6 +32,7 @@ function buildSkillsSection(params: {
     "## Skills (mandatory)",
     "Before replying: scan <available_skills> <description> entries.",
     "- For voice-related tasks (calls, voice chat, Twilio, Teams, Zoom, WhatsApp voice): use the voicechat skill.",
+    "- For document, image, or PDF analysis (reading, summarizing, extracting data from attachments or files): use the mordiem-document-reader skill.",
     `- If exactly one skill clearly applies: read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it.`,
     "- If multiple could apply: choose the most specific one, then read/follow it.",
     "- If none clearly apply: do not read any SKILL.md.",
