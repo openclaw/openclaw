@@ -740,6 +740,57 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.GroupSpace).toBe("T1");
   });
 
+  it("drops OAuth-like DM codes while the Slack auth broker lock is active", async () => {
+    const { dir } = storeFixture.makeTmpStorePath();
+    const lockDir = `${dir}/lock`;
+    fs.mkdirSync(lockDir);
+    const previousLockDir = process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR;
+    process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR = lockDir;
+
+    try {
+      const prepared = await prepareWithDefaultCtx(
+        createSlackMessage({
+          text: "AOWEAgTQqbJLm0vU3W5I2N8lKrOYaqhBuWP2iSX2gurnQUbJ#sRXZFMJdWdujLv5QJWNpyQRZD8ZdfrwX64M4rJ7JXb0",
+        }),
+      );
+
+      expect(prepared).toBeNull();
+      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    } finally {
+      if (previousLockDir === undefined) {
+        delete process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR;
+      } else {
+        process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR = previousLockDir;
+      }
+    }
+  });
+
+  it("keeps OAuth-like DM text when no Slack auth broker lock is active", async () => {
+    const { dir } = storeFixture.makeTmpStorePath();
+    const lockDir = `${dir}/missing-lock`;
+    const previousLockDir = process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR;
+    process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR = lockDir;
+
+    try {
+      const prepared = await prepareWithDefaultCtx(
+        createSlackMessage({
+          text: "AOWEAgTQqbJLm0vU3W5I2N8lKrOYaqhBuWP2iSX2gurnQUbJ#sRXZFMJdWdujLv5QJWNpyQRZD8ZdfrwX64M4rJ7JXb0",
+        }),
+      );
+
+      assertPrepared(prepared);
+      expect(prepared.ctxPayload.RawBody).toContain(
+        "AOWEAgTQqbJLm0vU3W5I2N8lKrOYaqhBuWP2iSX2gurnQUbJ#",
+      );
+    } finally {
+      if (previousLockDir === undefined) {
+        delete process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR;
+      } else {
+        process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR = previousLockDir;
+      }
+    }
+  });
+
   it("does not enable Slack status reactions when the message timestamp is missing", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {

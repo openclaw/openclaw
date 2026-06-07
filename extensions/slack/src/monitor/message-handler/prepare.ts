@@ -1,4 +1,6 @@
 // Slack plugin module implements prepare behavior.
+import { existsSync } from "node:fs";
+import path from "node:path";
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
@@ -86,6 +88,50 @@ const SLACK_HISTORY_MEDIA_MAX_ATTACHMENTS = 4;
 const SLACK_HISTORY_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 const SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS = 1_000;
 const SLACK_HISTORY_MEDIA_TOTAL_TIMEOUT_MS = 3_000;
+const SLACK_AUTH_CODE_RE = /^(?:[A-Za-z0-9_-]{20,}#[A-Za-z0-9_-]{20,}|[A-Za-z0-9_-]{40,})$/;
+
+function resolveSlackAuthBrokerLockDir(): string | undefined {
+  const explicitLockDir = normalizeOptionalString(process.env.OPENCLAW_SLACK_AUTH_BROKER_LOCK_DIR);
+  if (explicitLockDir) {
+    return explicitLockDir;
+  }
+  const stateDir = normalizeOptionalString(process.env.OPENCLAW_SLACK_AUTH_BROKER_STATE_DIR);
+  if (stateDir) {
+    return path.join(stateDir, "lock");
+  }
+  const home = normalizeOptionalString(process.env.HOME);
+  return home
+    ? path.join(home, ".openclaw", "runs", "claude-slack-login-broker", "lock")
+    : undefined;
+}
+
+function shouldSuppressSlackAuthBrokerCode(params: {
+  isDirectMessage: boolean;
+  messageText: string;
+  channelId: string | undefined;
+}): boolean {
+  if (!params.isDirectMessage) {
+    return false;
+  }
+  const suppressionMode = normalizeLowercaseStringOrEmpty(
+    process.env.OPENCLAW_SLACK_SUPPRESS_AUTH_CODE_DMS,
+  );
+  if (["0", "false", "no", "off"].includes(suppressionMode)) {
+    return false;
+  }
+  const text = params.messageText.trim();
+  if (!SLACK_AUTH_CODE_RE.test(text)) {
+    return false;
+  }
+  const lockDir = resolveSlackAuthBrokerLockDir();
+  if (!lockDir || !existsSync(lockDir)) {
+    return false;
+  }
+  logVerbose(
+    `slack: suppressed auth broker code DM channel=${params.channelId ?? "unknown"} lock=${lockDir}`,
+  );
+  return true;
+}
 
 function recordString(
   record: Record<string, unknown> | undefined,
@@ -636,6 +682,16 @@ export async function prepareSlackMessage(params: {
     allowBotsMode,
     isBotMessage,
   } = conversation;
+  const messageText = message.text ?? "";
+  if (
+    shouldSuppressSlackAuthBrokerCode({
+      isDirectMessage,
+      messageText,
+      channelId: message.channel,
+    })
+  ) {
+    return null;
+  }
   const authorization = await authorizeSlackInboundMessage({
     ctx,
     account,
@@ -646,7 +702,6 @@ export async function prepareSlackMessage(params: {
     return null;
   }
   const { senderId, allowFromLower } = authorization;
-  const messageText = message.text ?? "";
   const mentionMetadata = collectSlackMentionMetadata(messageText);
   const { mentionedUserIds, mentionedSubteamIds, hasAnyMention } = mentionMetadata;
   const { explicitlyMentionedBotUser, explicitlyMentionedBotSubteam, explicitlyMentioned } =
