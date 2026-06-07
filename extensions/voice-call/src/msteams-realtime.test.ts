@@ -338,6 +338,7 @@ describe("createMsteamsRealtimeCall", () => {
           mime: "image/jpeg",
           width: 1280,
           height: 720,
+          ts: 0,
         }),
       },
     });
@@ -377,6 +378,7 @@ describe("createMsteamsRealtimeCall", () => {
           mime: "image/jpeg",
           width: 100,
           height: 100,
+          ts: 0,
         }),
       },
     });
