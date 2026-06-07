@@ -764,7 +764,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.alsoAllow":
     "Extra tool allowlist entries merged on top of the selected tool profile and default policy. Keep this list small and explicit so audits can quickly identify intentional policy exceptions.",
   "tools.sessionStatus.details":
-    'Controls session_status structured details. "compact" keeps model-facing tool results small; "full" preserves legacy statusText and route metadata for explicit debugging.',
+    "Controls session_status structured details. Only compact details are supported so model-facing tool results stay small.",
   "tools.byProvider":
     "Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy.",
   "agents.list[].tools.profile":

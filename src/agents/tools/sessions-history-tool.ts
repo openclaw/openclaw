@@ -34,12 +34,39 @@ const SessionsHistoryToolSchema = Type.Object({
   limit: optionalPositiveIntegerSchema(),
 });
 
-const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
+const SESSIONS_HISTORY_WITH_TOOLS_MAX_BYTES = 24 * 1024;
+const SESSIONS_HISTORY_MAX_BYTES = SESSIONS_HISTORY_WITH_TOOLS_MAX_BYTES;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
 const SESSIONS_HISTORY_DEFAULT_LIMIT = 10;
 type GatewayCaller = typeof callGateway;
 
 // sandbox policy handling is shared with sessions-list-tool via sessions-helpers.ts
+
+function isSessionHistoryToolMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = entry.role;
+  if (role === "toolResult" || role === "tool") {
+    return true;
+  }
+  const content = entry.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = (block as Record<string, unknown>).type;
+    return type === "toolCall" || type === "toolUse" || type === "toolCallDelta";
+  });
+}
+
+function stripSessionHistoryToolMessages(messages: unknown[]): unknown[] {
+  return stripToolMessages(messages).filter((message) => !isSessionHistoryToolMessage(message));
+}
 
 function truncateHistoryText(text: string): {
   text: string;
@@ -259,7 +286,7 @@ export function createSessionsHistoryTool(opts?: {
         params: { sessionKey: resolvedKey, limit },
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
-      const selectedMessages = stripToolMessages(rawMessages);
+      const selectedMessages = stripSessionHistoryToolMessages(rawMessages);
       const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
       const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
       const contentRedacted = sanitizedMessages.some((entry) => entry.redacted);

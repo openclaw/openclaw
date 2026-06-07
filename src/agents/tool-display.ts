@@ -41,7 +41,6 @@ const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
   userId: "user",
   runTimeoutSeconds: "timeout",
   timeoutSeconds: "timeout",
-  includeTools: "tools",
   pollQuestion: "poll",
   maxChars: "max chars",
 };

@@ -715,6 +715,19 @@ describe("sessions tools", () => {
         return {
           messages: [
             { role: "toolResult", content: [] },
+            { role: "tool", content: "legacy tool role" },
+            {
+              role: "assistant",
+              content: [{ type: "toolCall", name: "session_status", arguments: {} }],
+            },
+            {
+              role: "assistant",
+              content: [{ type: "toolUse", name: "exec", input: {} }],
+            },
+            {
+              role: "assistant",
+              content: [{ type: "toolCallDelta", partialJson: '{"cmd":"ls"}' }],
+            },
             {
               role: "assistant",
               provider: "openclaw",
@@ -739,9 +752,15 @@ describe("sessions tools", () => {
       throw new Error("missing sessions_history tool");
     }
 
-    const result = await tool.execute("call3", { sessionKey: "main" });
+    const result = await tool.execute("call3", { sessionKey: "main", includeTools: true });
     const details = result.details as { messages?: unknown[] };
     expect(details.messages).toHaveLength(3);
+    expect(details.messages).not.toContainEqual(expect.objectContaining({ role: "toolResult" }));
+    expect(details.messages).not.toContainEqual(expect.objectContaining({ role: "tool" }));
+    const serialized = JSON.stringify(details.messages);
+    expect(serialized).not.toContain("toolCall");
+    expect(serialized).not.toContain("toolUse");
+    expect(serialized).not.toContain("toolCallDelta");
     expect(details.messages).toContainEqual(
       expect.objectContaining({ provider: "openclaw", model: "gateway-injected" }),
     );
@@ -852,7 +871,7 @@ describe("sessions tools", () => {
     expect(details.contentTruncated).toBe(true);
     expect(details.contentRedacted).toBe(false);
     expect(typeof details.bytes).toBe("number");
-    expect((details.bytes ?? 0) <= 80 * 1024).toBe(true);
+    expect((details.bytes ?? 0) <= 24 * 1024).toBe(true);
     expect(details.messages && details.messages.length > 0).toBe(true);
 
     const first = details.messages?.[0] as
@@ -914,7 +933,7 @@ describe("sessions tools", () => {
     expect(details.contentTruncated).toBe(false);
     expect(details.contentRedacted).toBe(false);
     expect(typeof details.bytes).toBe("number");
-    expect((details.bytes ?? 0) <= 80 * 1024).toBe(true);
+    expect((details.bytes ?? 0) <= 24 * 1024).toBe(true);
     expect(details.messages).toHaveLength(1);
     expect(details.messages?.[0]?.content).toContain(
       "[sessions_history omitted: message too large]",

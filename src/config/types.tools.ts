@@ -244,7 +244,7 @@ export type CodeModeConfig =
     };
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
-export type SessionStatusDetailsMode = "compact" | "full";
+export type SessionStatusDetailsMode = "compact";
 
 export type ToolPolicyConfig = {
   /** Exact tool names allowed after the selected profile is applied. */
@@ -712,7 +712,7 @@ export type ToolsConfig = {
   };
   /** session_status tool output policy. */
   sessionStatus?: {
-    /** Compact keeps details small; full preserves legacy details.statusText and route metadata. */
+    /** Compact keeps model-facing details small. */
     details?: SessionStatusDetailsMode;
   };
   /** Elevated exec permissions for the host machine. */
