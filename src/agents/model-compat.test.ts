@@ -799,6 +799,27 @@ describe("selectSmallLiveItems", () => {
       { provider: "ollama", id: "gemma3:4b" },
     ]);
   });
+
+  it("excludes seeded unhealthy stale models from fallback provider spread", () => {
+    const items = [
+      { provider: "openai", id: "gpt-5.2" },
+      { provider: "openai-codex", id: "gpt-5.2" },
+      { provider: "opencode", id: "glm-5" },
+      { provider: "xai", id: "grok-4-1-fast-non-reasoning" },
+    ];
+
+    expect(
+      selectHighSignalLiveItems(
+        items,
+        10,
+        (item) => item,
+        (item) => item.provider,
+      ),
+    ).toEqual([
+      { provider: "opencode", id: "glm-5" },
+      { provider: "xai", id: "grok-4-1-fast-non-reasoning" },
+    ]);
+  });
 });
 
 describe("resolveHighSignalLiveModelLimit", () => {

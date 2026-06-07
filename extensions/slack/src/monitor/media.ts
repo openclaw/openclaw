@@ -542,3 +542,249 @@ export async function resolveSlackAttachmentContent(params: {
   }
   return { text: combinedText, media: allMedia };
 }
+
+export type SlackThreadStarter = {
+  text: string;
+  userId?: string;
+  botId?: string;
+  ts?: string;
+  files?: SlackFile[];
+};
+
+type SlackThreadStarterCacheEntry = {
+  value: SlackThreadStarter;
+  cachedAt: number;
+};
+
+const THREAD_STARTER_CACHE = new Map<string, SlackThreadStarterCacheEntry>();
+const THREAD_STARTER_CACHE_TTL_MS = 6 * 60 * 60_000;
+const THREAD_STARTER_CACHE_MAX = 2000;
+
+function evictThreadStarterCache(): void {
+  const now = Date.now();
+  for (const [cacheKey, entry] of THREAD_STARTER_CACHE.entries()) {
+    if (now - entry.cachedAt > THREAD_STARTER_CACHE_TTL_MS) {
+      THREAD_STARTER_CACHE.delete(cacheKey);
+    }
+  }
+  if (THREAD_STARTER_CACHE.size <= THREAD_STARTER_CACHE_MAX) {
+    return;
+  }
+  const excess = THREAD_STARTER_CACHE.size - THREAD_STARTER_CACHE_MAX;
+  let removed = 0;
+  for (const cacheKey of THREAD_STARTER_CACHE.keys()) {
+    THREAD_STARTER_CACHE.delete(cacheKey);
+    removed += 1;
+    if (removed >= excess) {
+      break;
+    }
+  }
+}
+
+export async function resolveSlackThreadStarter(params: {
+  channelId: string;
+  threadTs: string;
+  client: SlackWebClient;
+}): Promise<SlackThreadStarter | null> {
+  evictThreadStarterCache();
+  const cacheKey = `${params.channelId}:${params.threadTs}`;
+  const cached = THREAD_STARTER_CACHE.get(cacheKey);
+  if (cached && Date.now() - cached.cachedAt <= THREAD_STARTER_CACHE_TTL_MS) {
+    return cached.value;
+  }
+  if (cached) {
+    THREAD_STARTER_CACHE.delete(cacheKey);
+  }
+  try {
+    const response = (await params.client.conversations.replies({
+      channel: params.channelId,
+      ts: params.threadTs,
+      limit: 1,
+      inclusive: true,
+    })) as {
+      messages?: Array<{
+        text?: string;
+        user?: string;
+        bot_id?: string;
+        ts?: string;
+        files?: SlackFile[];
+      }>;
+    };
+    const message = response?.messages?.[0];
+    const text = (message?.text ?? "").trim();
+    if (!message || !text) {
+      return null;
+    }
+    const starter: SlackThreadStarter = {
+      text,
+      userId: message.user,
+      botId: message.bot_id,
+      ts: message.ts,
+      files: message.files,
+    };
+    if (THREAD_STARTER_CACHE.has(cacheKey)) {
+      THREAD_STARTER_CACHE.delete(cacheKey);
+    }
+    THREAD_STARTER_CACHE.set(cacheKey, {
+      value: starter,
+      cachedAt: Date.now(),
+    });
+    evictThreadStarterCache();
+    return starter;
+  } catch {
+    return null;
+  }
+}
+
+export function resetSlackThreadStarterCacheForTest(): void {
+  THREAD_STARTER_CACHE.clear();
+}
+
+export type SlackThreadMessage = {
+  text: string;
+  userId?: string;
+  ts?: string;
+  botId?: string;
+  files?: SlackFile[];
+};
+
+type SlackRepliesPageMessage = {
+  text?: string;
+  user?: string;
+  bot_id?: string;
+  ts?: string;
+  files?: SlackFile[];
+};
+
+type SlackRepliesPage = {
+  messages?: SlackRepliesPageMessage[];
+  response_metadata?: { next_cursor?: string };
+};
+
+type SlackHistoryPage = {
+  messages?: SlackRepliesPageMessage[];
+  response_metadata?: { next_cursor?: string };
+};
+
+function normalizeSlackHistoryMessage(msg: SlackRepliesPageMessage): SlackThreadMessage {
+  return {
+    text: msg.text?.trim()
+      ? msg.text
+      : `[attached: ${msg.files?.map((f) => f.name ?? "file").join(", ")}]`,
+    userId: msg.user,
+    botId: msg.bot_id,
+    ts: msg.ts,
+    files: msg.files,
+  };
+}
+
+/**
+ * Fetches the most recent messages in a Slack thread (excluding the current message).
+ * Used to populate thread context when a new thread session starts.
+ *
+ * Uses cursor pagination and keeps only the latest N retained messages so long threads
+ * still produce up-to-date context without unbounded memory growth.
+ */
+export async function resolveSlackThreadHistory(params: {
+  channelId: string;
+  threadTs: string;
+  client: SlackWebClient;
+  currentMessageTs?: string;
+  limit?: number;
+}): Promise<SlackThreadMessage[]> {
+  const maxMessages = params.limit ?? 20;
+  if (!Number.isFinite(maxMessages) || maxMessages <= 0) {
+    return [];
+  }
+
+  // Slack recommends no more than 200 per page.
+  const fetchLimit = 200;
+  const retained: SlackRepliesPageMessage[] = [];
+  let cursor: string | undefined;
+
+  try {
+    do {
+      const response = (await params.client.conversations.replies({
+        channel: params.channelId,
+        ts: params.threadTs,
+        limit: fetchLimit,
+        inclusive: true,
+        ...(cursor ? { cursor } : {}),
+      })) as SlackRepliesPage;
+
+      for (const msg of response.messages ?? []) {
+        // Keep messages with text OR file attachments
+        if (!msg.text?.trim() && !msg.files?.length) {
+          continue;
+        }
+        if (params.currentMessageTs && msg.ts === params.currentMessageTs) {
+          continue;
+        }
+        retained.push(msg);
+        if (retained.length > maxMessages) {
+          retained.shift();
+        }
+      }
+
+      const next = response.response_metadata?.next_cursor;
+      cursor = typeof next === "string" && next.trim().length > 0 ? next.trim() : undefined;
+    } while (cursor);
+
+    return retained.map((msg) => normalizeSlackHistoryMessage(msg));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fetches recent non-thread Slack conversation history in chronological order.
+ * Used to hydrate top-level direct-message turns when the live session alone
+ * is not enough to recover short follow-up context.
+ */
+export async function resolveSlackConversationHistory(params: {
+  channelId: string;
+  client: SlackWebClient;
+  currentMessageTs?: string;
+  limit?: number;
+}): Promise<SlackThreadMessage[]> {
+  const maxMessages = params.limit ?? 20;
+  if (!Number.isFinite(maxMessages) || maxMessages <= 0) {
+    return [];
+  }
+
+  const fetchLimit = Math.min(200, Math.max(maxMessages, 50));
+  const retained: SlackRepliesPageMessage[] = [];
+  let cursor: string | undefined;
+
+  try {
+    do {
+      const response = (await params.client.conversations.history({
+        channel: params.channelId,
+        limit: fetchLimit,
+        inclusive: false,
+        ...(params.currentMessageTs ? { latest: params.currentMessageTs } : {}),
+        ...(cursor ? { cursor } : {}),
+      })) as SlackHistoryPage;
+
+      for (const msg of response.messages ?? []) {
+        if (!msg.text?.trim() && !msg.files?.length) {
+          continue;
+        }
+        if (params.currentMessageTs && msg.ts === params.currentMessageTs) {
+          continue;
+        }
+        retained.push(msg);
+        if (retained.length >= maxMessages) {
+          return retained.reverse().map((entry) => normalizeSlackHistoryMessage(entry));
+        }
+      }
+
+      const next = response.response_metadata?.next_cursor;
+      cursor = typeof next === "string" && next.trim().length > 0 ? next.trim() : undefined;
+    } while (cursor);
+
+    return retained.reverse().map((entry) => normalizeSlackHistoryMessage(entry));
+  } catch {
+    return [];
+  }
+}

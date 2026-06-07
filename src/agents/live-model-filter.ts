@@ -47,6 +47,13 @@ const SMALL_LIVE_MODEL_PRIORITY = [
   "zai/glm-5.1",
 ] as const;
 
+// Stale/unhealthy channel ids are excluded from healthy live route selection.
+export const UNHEALTHY_CHANNEL_SEED = ["openai/gpt-5.2", "openai-codex/gpt-5.2"] as const;
+
+export function isUnhealthy(canonicalKey: string): boolean {
+  return (UNHEALTHY_CHANNEL_SEED as readonly string[]).includes(canonicalKey);
+}
+
 /** Default cap for high-signal live model sweeps. */
 export const DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT = HIGH_SIGNAL_LIVE_MODEL_PRIORITY.length;
 /** Default cap for the small-model live smoke lane. */
@@ -398,11 +405,15 @@ function selectPrioritizedLiveItems<T>(
   providerOf: (item: T) => string,
   priority: readonly string[],
 ): T[] {
-  if (maxItems <= 0 || items.length <= maxItems) {
-    return items;
+  const eligibleItems = items.filter((item) => {
+    const key = toCanonicalLiveModelKey(refOf(item));
+    return key ? !isUnhealthy(key) : true;
+  });
+  if (maxItems <= 0 || eligibleItems.length <= maxItems) {
+    return eligibleItems;
   }
 
-  const remaining = [...items];
+  const remaining = [...eligibleItems];
   const selected: T[] = [];
   for (const preferredKey of priority) {
     if (selected.length >= maxItems) {
