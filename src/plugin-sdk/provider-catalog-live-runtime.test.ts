@@ -228,4 +228,46 @@ describe("provider-catalog-live-runtime", () => {
     expect(fallback.apiKey).toBe("PROVIDER_API_KEY");
     expect(fallback.models.map((model) => model.id)).toEqual(["model-a", "model-b"]);
   });
+
+  it("does not cache empty live provider config discoveries", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ data: [] })),
+        finalUrl: "https://provider.example.test/v1/models",
+        release,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ data: [{ id: "model-b", object: "model" }] })),
+        finalUrl: "https://provider.example.test/v1/models",
+        release,
+      });
+    const providerConfig = {
+      api: "openai-completions" as const,
+      baseUrl: "https://provider.example.test/v1",
+    };
+    const models = [buildModel("model-a"), buildModel("model-b")];
+
+    const fallback = await buildLiveModelProviderConfig({
+      providerId: "provider",
+      endpoint: "https://provider.example.test/v1/models",
+      providerConfig,
+      fetchGuard: fetchGuardMock,
+      models,
+      ttlMs: 60_000,
+    });
+    const recovered = await buildLiveModelProviderConfig({
+      providerId: "provider",
+      endpoint: "https://provider.example.test/v1/models",
+      providerConfig,
+      fetchGuard: fetchGuardMock,
+      models,
+      ttlMs: 60_000,
+    });
+
+    expect(fallback.models.map((model) => model.id)).toEqual(["model-a", "model-b"]);
+    expect(recovered.models.map((model) => model.id)).toEqual(["model-b"]);
+    expect(fetchGuardMock).toHaveBeenCalledTimes(2);
+  });
 });

@@ -215,6 +215,7 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
       ],
       ttlMs: params.ttlMs,
       load: async () => await fetchLiveProviderModelIds(params),
+      shouldCache: (modelIds) => modelIds.length > 0,
     });
     const liveModelIdSet = new Set(liveModelIds);
     const models = params.models.filter((model) => liveModelIdSet.has(model.id));
