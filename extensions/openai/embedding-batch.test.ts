@@ -1,5 +1,5 @@
 // Openai tests cover embedding batch plugin behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseOpenAiBatchOutput, runOpenAiEmbeddingBatches } from "./embedding-batch.js";
 
 const jsonlEncoder = new TextEncoder();
@@ -58,7 +58,7 @@ describe("OpenAI embedding batch output", () => {
     let fileIndex = 0;
     let batchIndex = 0;
     const maxJsonlBytes = jsonlBytes(JSON.stringify(requests[0]));
-    const fetchImpl: typeof fetch = async (input, init) => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = fetchInputUrl(input);
       if (url.endsWith("/files") && init?.method === "POST") {
         const form = init.body as FormData;
@@ -103,7 +103,7 @@ describe("OpenAI embedding batch output", () => {
         return new Response(outputByFileId.get(contentMatch[1] ?? "") ?? "", { status: 200 });
       }
       return new Response("unexpected request", { status: 500 });
-    };
+    });
 
     const byCustomId = await runOpenAiEmbeddingBatches({
       openAi: {
