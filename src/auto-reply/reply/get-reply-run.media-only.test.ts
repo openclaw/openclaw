@@ -2431,6 +2431,71 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.extraSystemPromptStatic).toBe("group:discord:channel:#ops");
   });
 
+  it("keeps the CLI session-reuse static prompt stable across group turns despite first-turn groupIntro", async () => {
+    const { buildGroupIntro } = await import("./groups.js");
+    // groupIntro is injected only on the first turn; groupChatContext is persistent.
+    vi.mocked(buildGroupChatContext).mockReturnValue("GROUP-CHAT-CONTEXT");
+    vi.mocked(buildGroupIntro).mockReturnValue("GROUP-INTRO");
+    const groupCtx = {
+      Body: "hello team",
+      RawBody: "hello team",
+      CommandBody: "hello team",
+      Provider: "discord",
+      ChatType: "group" as const,
+      SessionKey: "agent:main:discord:guild-1:channel-1",
+    };
+    const groupSessionCtx = {
+      Body: "hello team",
+      BodyStripped: "hello team",
+      Provider: "discord",
+      ChatType: "group" as const,
+    };
+    try {
+      // Turn 1: first turn in the session injects the behavioral group intro.
+      await runPreparedReply(
+        baseParams({
+          isNewSession: true,
+          systemSent: false,
+          ctx: groupCtx,
+          sessionCtx: groupSessionCtx,
+        }),
+      );
+      const firstTurn = requireRunReplyAgentCall(0);
+      // Turn 2: established session no longer re-injects the intro.
+      await runPreparedReply(
+        baseParams({
+          isNewSession: false,
+          systemSent: true,
+          ctx: groupCtx,
+          sessionCtx: groupSessionCtx,
+          sessionEntry: {
+            sessionId: "session-1",
+            updatedAt: 1,
+            systemSent: true,
+            chatType: "group",
+            channel: "discord",
+          } as SessionEntry,
+        }),
+      );
+      const secondTurn = requireRunReplyAgentCall(1);
+
+      // The live prompt still gets the intro on the first turn only.
+      expect(firstTurn.followupRun.run.extraSystemPrompt).toContain("GROUP-INTRO");
+      expect(secondTurn.followupRun.run.extraSystemPrompt).not.toContain("GROUP-INTRO");
+
+      // The session-reuse hash input excludes the volatile intro and stays identical across
+      // turns, so claude-cli reuses the session instead of resetting it every group turn (#69118).
+      expect(firstTurn.followupRun.run.extraSystemPromptStatic).not.toContain("GROUP-INTRO");
+      expect(firstTurn.followupRun.run.extraSystemPromptStatic).toContain("GROUP-CHAT-CONTEXT");
+      expect(secondTurn.followupRun.run.extraSystemPromptStatic).toBe(
+        firstTurn.followupRun.run.extraSystemPromptStatic,
+      );
+    } finally {
+      vi.mocked(buildGroupChatContext).mockReturnValue("");
+      vi.mocked(buildGroupIntro).mockReturnValue("");
+    }
+  });
+
   it.each([
     ["/new", "new"],
     ["/reset", "reset"],

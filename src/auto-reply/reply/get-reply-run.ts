@@ -626,11 +626,12 @@ export async function runPreparedReply(
       fullAccessBlockedReason: fullAccessState.blockedReason,
     }),
   ].filter(Boolean);
-  // Static parts only (no per-message inbound metadata) for CLI session reuse hashing.
+  // Static parts for CLI session-reuse hashing. Excludes per-message inbound metadata and the
+  // first-turn-only groupIntro (still injected into the live prompt above): hashing groupIntro
+  // would drift the fingerprint between turn 1 and later turns, resetting the session (#69118).
   const extraSystemPromptStaticParts = [
     directChatContext,
     groupChatContext,
-    groupIntro,
     groupSystemPrompt,
     buildExecOverridePromptHint({
       execOverrides,
