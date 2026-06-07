@@ -86,7 +86,11 @@ function sanitizeWindowsFilename(value: string): string {
 
 function resolveStartupEntryPath(env: GatewayServiceEnv, extension?: "cmd" | "vbs"): string {
   const taskName = resolveTaskName(env);
-  const entryExtension = extension ?? (shouldUseHiddenWindowsTaskLauncher(env) ? "vbs" : "cmd");
+  // The Startup-folder fallback should launch silently by default on Windows.
+  // A `.vbs` entry using `WScript.Shell.Run(..., 0, False)` suppresses the
+  // transient cmd.exe frame before it reaches the compositor, unlike
+  // `start /min cmd.exe`, which still flashes briefly at logon (#70788).
+  const entryExtension = extension ?? "vbs";
   return path.join(
     resolveWindowsStartupDir(env),
     `${sanitizeWindowsFilename(taskName)}.${entryExtension}`,
@@ -410,21 +414,6 @@ function buildTaskScript({
   }
   const command = programArguments.map(quoteCmdScriptArg).join(" ");
   lines.push(command);
-  return `${lines.join("\r\n")}\r\n`;
-}
-
-function renderStartupLaunchCommand(scriptPath: string): string {
-  return `start "" /min cmd.exe /d /c ${quoteCmdScriptArg(scriptPath)}`;
-}
-
-function buildStartupLauncherScript(params: { description?: string; scriptPath: string }): string {
-  const lines = ["@echo off"];
-  const trimmedDescription = params.description?.trim();
-  if (trimmedDescription) {
-    assertNoCmdLineBreak(trimmedDescription, "Startup launcher description");
-    lines.push(`rem ${trimmedDescription}`);
-  }
-  lines.push(renderStartupLaunchCommand(params.scriptPath));
   return `${lines.join("\r\n")}\r\n`;
 }
 
@@ -1193,15 +1182,10 @@ async function activateScheduledTask(params: {
     if (shouldFallbackToStartupEntry({ code: create.code, detail })) {
       const startupEntryPath = resolveStartupEntryPath(params.env);
       await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
-      const launcher = shouldUseHiddenWindowsTaskLauncher(params.env)
-        ? buildHiddenLauncherScript({
-            description: taskDescription,
-            scriptPath: params.scriptPath,
-          })
-        : buildStartupLauncherScript({
-            description: taskDescription,
-            scriptPath: params.scriptPath,
-          });
+      const launcher = buildHiddenLauncherScript({
+        description: taskDescription,
+        scriptPath: params.scriptPath,
+      });
       await fs.writeFile(startupEntryPath, launcher, "utf8");
       await launchFallbackTaskScript(params.env);
       writeFormattedLines(
