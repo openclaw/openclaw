@@ -271,7 +271,14 @@ export class MsteamsProvider implements VoiceCallProvider {
         session.close("rejected");
         return;
       }
-      const realtimeCall = createMsteamsRealtimeCall({ session, deps: this.realtimeDeps });
+      const realtimeCall = createMsteamsRealtimeCall({
+        session,
+        deps: {
+          ...this.realtimeDeps,
+          // Per-call accessor for the look_at_screen vision tool (inbound video only).
+          getLatestFrame: (source) => this.getLatestVideoFrame(providerCallId, source),
+        },
+      });
       this.realtimeCalls.set(providerCallId, realtimeCall);
       this.logger?.info(
         `MsteamsProvider: realtime session.start callId=${providerCallId} threadId=${session.threadId} caller.aadId=${session.caller.aadId ?? "teams"}`,
