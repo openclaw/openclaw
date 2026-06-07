@@ -33,6 +33,7 @@ import type { OutboundSessionContext } from "../../infra/outbound/session-contex
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
+import { hasMessagingToolDeliveryEvidence } from "../embedded-agent-runner/delivery-evidence.js";
 import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
 import { isNestedAgentLane } from "../lanes.js";
 import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.js";
@@ -188,15 +189,6 @@ function hasNonEmptyStringArray(value: unknown): value is string[] {
 
 function hasNonEmptyArray<T>(value: T[] | undefined): value is T[] {
   return Array.isArray(value) && value.length > 0;
-}
-
-function hasMessagingToolDeliveryEvidence(result: RunResult): boolean {
-  return (
-    result.didSendViaMessagingTool === true ||
-    hasNonEmptyStringArray(result.messagingToolSentTexts) ||
-    hasNonEmptyStringArray(result.messagingToolSentMediaUrls) ||
-    hasNonEmptyArray(result.messagingToolSentTargets)
-  );
 }
 
 function isInternalInterSessionControlReplySource(opts: AgentCommandOpts): boolean {
