@@ -277,12 +277,14 @@ class SshSandboxBackendImpl {
         `${ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT}\nfind "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +`,
         "openclaw-sandbox-clear",
         remoteDir,
+        this.params.runtimePaths.runtimeRootDir,
       ]),
     });
     await uploadDirectoryToSshTarget({
       session,
       localDir,
       remoteDir,
+      remoteRootDir: this.params.runtimePaths.runtimeRootDir,
     });
   }
 
