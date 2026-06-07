@@ -1,3 +1,4 @@
+/** Resolves and emits cron failure-alert notifications. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
@@ -16,6 +17,7 @@ type ResolvedFailureAlert = {
   includeSkipped: boolean;
 };
 
+/** Returns the last failure-notification delivery trace persisted on a cron job. */
 export function failureNotificationDeliveryFromJobState(
   job: CronJob,
 ): CronFailureNotificationDelivery | undefined {
@@ -59,6 +61,7 @@ function clampNonNegativeInt(value: unknown, fallback: number): number {
   return floored >= 0 ? floored : fallback;
 }
 
+/** Resolves effective failure-alert policy from job config, delivery defaults, and global cron config. */
 export function resolveFailureAlert(
   state: CronServiceState,
   job: CronJob,
@@ -76,6 +79,8 @@ export function resolveFailureAlert(
   const mode = jobConfig?.mode ?? globalConfig?.mode;
   const explicitTo = normalizeTo(jobConfig?.to);
 
+  // Announce alerts inherit the job delivery target; webhook alerts require an
+  // explicit alert target so chat recipients are not reused as URLs.
   return {
     after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
     cooldownMs: clampNonNegativeInt(
@@ -113,6 +118,8 @@ function emitFailureAlert(
     params.status === "error" && typeof params.error === "string"
       ? (resolveFailoverReasonFromError(params.error, params.provider) ?? undefined)
       : undefined;
+  // Keep alert bodies compact because they may route through chat channels
+  // with notification previews and provider-specific message limits.
   const statusVerb = params.status === "skipped" ? "skipped" : "failed";
   const detailLabel = params.status === "skipped" ? "Skip reason" : "Last error";
   const text = [
@@ -131,7 +138,7 @@ function emitFailureAlert(
         mode: params.mode,
         accountId: params.accountId,
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         state.deps.log.warn(
           { jobId: params.job.id, err: String(err) },
           "cron: failure alert delivery failed",
@@ -150,6 +157,7 @@ function emitFailureAlert(
   }
 }
 
+/** Emits a failure alert when threshold, best-effort, and cooldown policy allow it. */
 export function maybeEmitFailureAlert(
   state: CronServiceState,
   params: {
@@ -170,6 +178,8 @@ export function maybeEmitFailureAlert(
   }
   const now = state.deps.nowMs();
   const lastAlert = params.job.state.lastFailureAlertAtMs;
+  // Cooldown is stored on job state so process restarts and service reloads do
+  // not spam operators with repeated alerts for the same failing job.
   const inCooldown =
     typeof lastAlert === "number" && now - lastAlert < Math.max(0, params.alertConfig.cooldownMs);
   if (inCooldown) {

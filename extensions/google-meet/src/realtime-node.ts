@@ -1,3 +1,4 @@
+// Google Meet plugin module implements realtime node behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
@@ -140,7 +141,9 @@ function startGoogleMeetNodeAudioInputLoop(params: {
           if (consecutiveInputErrors >= 5 || /unknown bridgeId|bridge is not open/i.test(message)) {
             await params.stop();
           } else {
-            await new Promise((resolve) => setTimeout(resolve, 250));
+            await new Promise((resolve) => {
+              setTimeout(resolve, 250);
+            });
           }
         }
       }
@@ -275,7 +278,7 @@ export async function startNodeAgentAudioBridge(params: {
           ),
         );
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         params.logger.warn(`[google-meet] node agent TTS failed: ${formatErrorMessage(error)}`);
       });
   };
@@ -555,7 +558,7 @@ export async function startNodeRealtimeAudioBridge(params: {
             },
             timeoutMs: 5_000,
           })
-          .catch((error) => {
+          .catch((error: unknown) => {
             params.logger.warn(
               `[google-meet] node audio output failed: ${formatErrorMessage(error)}`,
             );
@@ -578,7 +581,7 @@ export async function startNodeRealtimeAudioBridge(params: {
             },
             timeoutMs: 5_000,
           })
-          .catch((error) => {
+          .catch((error: unknown) => {
             params.logger.warn(
               `[google-meet] node audio clear failed: ${formatErrorMessage(error)}`,
             );

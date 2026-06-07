@@ -1,8 +1,10 @@
+// Gateway maintenance timers.
+// Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { HealthSummary } from "../commands/health.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
-import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import { abortTrackedChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { ChatRunState } from "./server-chat-state.js";
 import type { ChatRunEntry } from "./server-chat.js";
@@ -83,13 +85,13 @@ export function startGatewayMaintenanceTimers(params: {
   const healthInterval = setInterval(() => {
     void params
       .refreshGatewayHealthSnapshot({ probe: false })
-      .catch((err) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
+      .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
   }, HEALTH_REFRESH_INTERVAL_MS);
 
   // Prime cache so first client gets a snapshot without waiting.
   void params
     .refreshGatewayHealthSnapshot({ probe: false })
-    .catch((err) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
+    .catch((err: unknown) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
 
   // dedupe cache cleanup
   const dedupeCleanup = setInterval(() => {
@@ -128,6 +130,8 @@ export function startGatewayMaintenanceTimers(params: {
       return isFutureDateTimestampMs(expiresAtMs, { nowMs: now });
     };
     const isActiveRunDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
+      // Keep idempotency records for active runs so retries cannot create
+      // duplicate chat/agent work while a command is still draining.
       if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
         return false;
       }
@@ -187,19 +191,11 @@ export function startGatewayMaintenanceTimers(params: {
       if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
         continue;
       }
-      abortChatRunById(
-        {
-          chatAbortControllers: params.chatAbortControllers,
-          chatRunBuffers: params.chatRunBuffers,
-          chatAbortedRuns: params.chatRunState.abortedRuns,
-          clearChatRunState: params.chatRunState.clearRun,
-          removeChatRun: params.removeChatRun,
-          agentRunSeq: params.agentRunSeq,
-          broadcast: params.broadcast,
-          nodeSendToSession: params.nodeSendToSession,
-        },
-        { runId, sessionKey: entry.sessionKey, stopReason: "timeout" },
-      );
+      abortTrackedChatRunById(params, {
+        runId,
+        sessionKey: entry.sessionKey,
+        stopReason: "timeout",
+      });
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;
@@ -272,7 +268,7 @@ export function startGatewayMaintenanceTimers(params: {
       recursive: true,
       pruneEmptyDirs: true,
     })
-      .catch((err) => {
+      .catch((err: unknown) => {
         params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
       })
       .finally(() => {

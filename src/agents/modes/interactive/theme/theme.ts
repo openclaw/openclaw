@@ -1,3 +1,8 @@
+/**
+ * Interactive terminal theme loader.
+ *
+ * Validates theme JSON, resolves color variables, watches custom theme files, and exposes Pi TUI theme adapters.
+ */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
@@ -532,8 +537,8 @@ function parseThemeJson(label: string, json: unknown): ThemeJson {
         continue;
       }
 
-      const path = error.instancePath || "/";
-      otherErrors.push(`  - ${path}: ${error.message}`);
+      const pathLocal = error.instancePath || "/";
+      otherErrors.push(`  - ${pathLocal}: ${error.message}`);
     }
 
     let errorMessage = `Invalid theme "${label}":\n`;
@@ -799,9 +804,9 @@ const registeredThemes = new Map<string, Theme>();
 
 export function setRegisteredThemes(themes: Theme[]): void {
   registeredThemes.clear();
-  for (const theme of themes) {
-    if (theme.name) {
-      registeredThemes.set(theme.name, theme);
+  for (const themeLocal of themes) {
+    if (themeLocal.name) {
+      registeredThemes.set(themeLocal.name, themeLocal);
     }
   }
 }

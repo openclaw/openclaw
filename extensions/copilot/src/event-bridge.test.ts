@@ -1,3 +1,4 @@
+// Copilot tests cover event bridge plugin behavior.
 import type { SessionEvent } from "@github/copilot-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
@@ -42,8 +43,8 @@ function createDeferred<T>() {
 }
 
 function flushAsync() {
-  // oxlint-disable-next-line unicorn/no-useless-promise-resolve-reject -- the inner Promise.resolve() forces an additional microtask tick so delta-chain ordering can be observed deterministically in tests.
-  return Promise.resolve().then(() => Promise.resolve());
+  const tick = () => Promise.resolve();
+  return tick().then(tick);
 }
 
 function makeEvent(type: string, data: Record<string, unknown>): SessionEvent {

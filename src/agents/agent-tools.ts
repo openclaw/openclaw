@@ -1,3 +1,8 @@
+/**
+ * Builds the effective OpenClaw agent tool surface.
+ * Assembles core, shell, channel, OpenClaw, plugin, and Tool Search tools, then
+ * applies sandbox, profile, provider, sender, group, and sub-agent policy.
+ */
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -63,7 +68,10 @@ import { execSchema, processSchema } from "./bash-tools.schemas.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
-import { filterLocalModelLeanTools } from "./local-model-lean.js";
+import {
+  filterLocalModelLeanTools,
+  resolveLocalModelLeanPreserveToolNames,
+} from "./local-model-lean.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -106,11 +114,6 @@ import {
   type ToolSearchCatalogToolExecutor,
 } from "./tool-search.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
-
-function isOpenAIProvider(provider?: string) {
-  const normalized = normalizeOptionalLowercaseString(provider);
-  return normalized === "openai";
-}
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
@@ -185,6 +188,10 @@ function createLazyExecTool(defaults?: ExecToolDefaults): AnyAgentTool {
       });
     },
     parameters: execSchema,
+    prepareBeforeToolCallParams: async (...args) =>
+      (await loadTool()).prepareBeforeToolCallParams?.(...args) ?? args[0],
+    finalizeBeforeToolCallParams: (params, preparedParams) =>
+      loadedTool?.finalizeBeforeToolCallParams?.(params, preparedParams) ?? params,
     execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
       (await loadTool()).execute(...args),
   } as AnyAgentTool;
@@ -211,6 +218,7 @@ function createLazyProcessTool(defaults?: ProcessToolDefaults): AnyAgentTool {
   } as AnyAgentTool;
 }
 
+/** Resolve the process-tool isolation key for exec/process session state. */
 export function resolveProcessToolScopeKey(params: {
   scopeKey?: string;
   sessionKey?: string;
@@ -245,6 +253,8 @@ function applyModelProviderToolPolicy(
     agentDir?: string;
     modelCompat?: ModelCompatConfig;
     suppressManagedWebSearch?: boolean;
+    runtimeToolAllowlist?: string[];
+    localModelLeanPreserveToolNames?: string[];
   },
 ): AnyAgentTool[] {
   let tools = toolsInput;
@@ -253,6 +263,7 @@ function applyModelProviderToolPolicy(
     config: params?.config,
     agentId: params?.agentId,
     sessionKey: params?.sessionKey,
+    preserveToolNames: params?.localModelLeanPreserveToolNames ?? params?.runtimeToolAllowlist,
   });
 
   if (
@@ -366,6 +377,7 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
 
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 
+/** Test-only access to internal tool assembly helpers. */
 export const testing = {
   cleanToolSchemaForGemini,
   getToolParamsRecord,
@@ -382,6 +394,7 @@ export type OpenClawCodingToolConstructionPlan = {
   includePluginTools: boolean;
 };
 
+/** Build the runtime tool list for one agent run. */
 export function createOpenClawCodingTools(options?: {
   agentId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
@@ -452,6 +465,8 @@ export function createOpenClawCodingTools(options?: {
   currentThreadTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
   currentMessageId?: string | number;
+  /** True when the current inbound turn carried audio media. */
+  currentInboundAudio?: boolean;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
   /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
@@ -507,6 +522,8 @@ export function createOpenClawCodingTools(options?: {
   onYield?: (message: string) => Promise<void> | void;
   /** Optional instrumentation callback for tool preparation stage timing. */
   recordToolPrepStage?: (name: string) => void;
+  /** Lower routine policy-removal audits for diagnostic-only tool probes. */
+  toolPolicyAuditLogLevel?: "info" | "debug";
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
   /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
@@ -592,6 +609,11 @@ export function createOpenClawCodingTools(options?: {
   ).some((toolName) => {
     const normalized = normalizeToolName(toolName);
     return normalized === "*" || normalized === "message";
+  });
+  const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
+    toolNames: options?.runtimeToolAllowlist,
+    forceMessageTool: options?.forceMessageTool,
+    sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
   });
   const runtimeProfileAlsoAllow = [
     ...(options?.forceMessageTool || options?.sourceReplyDeliveryMode === "message_tool_only"
@@ -695,7 +717,6 @@ export function createOpenClawCodingTools(options?: {
   const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
   const applyPatchEnabled =
     applyPatchConfig?.enabled !== false &&
-    isOpenAIProvider(options?.modelProvider) &&
     isApplyPatchAllowedForModel({
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,
@@ -994,6 +1015,7 @@ export function createOpenClawCodingTools(options?: {
           currentChannelId: options?.currentChannelId,
           currentThreadTs: options?.currentThreadTs,
           currentMessageId: options?.currentMessageId,
+          currentInboundAudio: options?.currentInboundAudio,
           modelProvider: options?.modelProvider,
           modelId: options?.modelId,
           replyToMode: options?.replyToMode,
@@ -1064,6 +1086,8 @@ export function createOpenClawCodingTools(options?: {
     agentDir: options?.agentDir,
     modelCompat: options?.modelCompat,
     suppressManagedWebSearch: options?.suppressManagedWebSearch,
+    runtimeToolAllowlist: options?.runtimeToolAllowlist,
+    localModelLeanPreserveToolNames,
   });
   options?.recordToolPrepStage?.("model-provider-policy");
   // Sender identity is carried for command/channel-action auth; tool visibility
@@ -1101,6 +1125,7 @@ export function createOpenClawCodingTools(options?: {
       },
       { policy: inheritedToolPolicy, label: "inherited tools", unavailableCoreToolReason },
     ],
+    auditLogLevel: options?.toolPolicyAuditLogLevel,
   });
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered);

@@ -1,3 +1,4 @@
+// Gateway service installer: writes config defaults, resolves credentials, and installs service definitions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
@@ -33,6 +34,7 @@ import {
 } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
+/** Merge safe existing service environment into the current install invocation environment. */
 export function mergeInstallInvocationEnv(params: {
   env: NodeJS.ProcessEnv;
   existingServiceEnv?: Record<string, string>;
@@ -62,6 +64,8 @@ export function mergeInstallInvocationEnv(params: {
     ) {
       continue;
     }
+    // Existing service env may contain host-specific secrets or loader overrides; keep only
+    // portable, non-dangerous values and let the current shell override them.
     if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
       continue;
     }
@@ -77,6 +81,7 @@ export function mergeInstallInvocationEnv(params: {
   };
 }
 
+/** Install or refresh the managed Gateway service. */
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
   if (failIfNixDaemonInstallMode(fail)) {
@@ -153,8 +158,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   const service = resolveGatewayService();
-  let loaded = false;
-  let existingServiceCommand: GatewayServiceCommandConfig | null = null;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
@@ -165,7 +169,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       return;
     }
   }
-  existingServiceCommand = await service.readCommand(process.env).catch(() => null);
+  const existingServiceCommand = await service.readCommand(process.env).catch(() => null);
   const existingServiceEnv: Record<string, string> | undefined =
     existingServiceCommand?.environment;
   const installEnv = mergeInstallInvocationEnv({

@@ -8,11 +8,13 @@ import type {
 } from "../agents/codex-mcp-config.types.js";
 import type { EmbeddedRunAttemptResult } from "../agents/embedded-agent-runner/run/types.js";
 import {
+  abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   queueEmbeddedAgentMessageWithOutcome,
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
+  type AbortAndDrainEmbeddedAgentRunResult,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
@@ -22,6 +24,7 @@ import { redactToolDetail } from "../logging/redact.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { truncateUtf16Safe } from "../utils.js";
 
+/** Default truncation limit for user-facing tool progress output. */
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
 export type { AgentMessage } from "../agents/runtime/index.js";
@@ -146,11 +149,13 @@ export {
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 export { getPluginToolMeta } from "../plugins/tools.js";
 export {
+  abortAndDrainEmbeddedAgentRun as abortAndDrainAgentHarnessRun,
   abortEmbeddedAgentRun as abortAgentHarnessRun,
   clearActiveEmbeddedRun,
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
 };
+export type { AbortAndDrainEmbeddedAgentRunResult as AbortAndDrainAgentHarnessRunResult };
 
 /**
  * @deprecated Active-run queueing is an internal runtime concern. This legacy
@@ -171,6 +176,7 @@ export {
   normalizeAgentRuntimeTools,
 } from "../agents/runtime-plan/tools.js";
 export {
+  filterProviderNormalizableTools,
   inspectRuntimeToolInputSchemas,
   projectRuntimeToolInputSchema,
   type RuntimeToolInputSchemaJson,
@@ -183,6 +189,7 @@ export type {
 } from "../agents/codex-mcp-config.types.js";
 export { normalizeProviderToolSchemas } from "../agents/embedded-agent-runner/tool-schema-runtime.js";
 
+/** Detect prompt image references and load them through the same limits used by embedded runs. */
 export async function detectAndLoadAgentHarnessPromptImages(params: {
   prompt: string;
   workspaceDir: string;
@@ -203,7 +210,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
     await Promise.all([
       import("../agents/image-sanitization.js"),
       import("../agents/embedded-agent-runner/run/images.js"),
-      import("../media/constants.js"),
+      import("@openclaw/media-core/constants"),
     ]);
 
   return detectAndLoadPromptImages({
@@ -220,6 +227,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   });
 }
 
+/** Load Codex bundle MCP thread config without forcing the heavy config module into SDK imports. */
 export async function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): Promise<CodexBundleMcpThreadConfig> {
@@ -285,6 +293,7 @@ export {
 // timeout the built-in embedded-agent runner uses — one shared implementation, no
 // copy-pasted watchdog.
 export {
+  compactWithSafetyTimeout,
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "../agents/embedded-agent-runner/compaction-safety-timeout.js";
@@ -323,6 +332,7 @@ export {
  */
 export type ToolProgressDetailMode = "explain" | "raw";
 
+/** Infer compact display metadata for one tool invocation from its name and arguments. */
 export function inferToolMetaFromArgs(
   toolName: string,
   args: unknown,
@@ -351,6 +361,7 @@ export function formatToolProgressOutput(
   return `${truncateUtf16Safe(redacted, maxChars)}\n...(truncated)...`;
 }
 
+/** Inputs used to classify a finished harness turn with little or no visible assistant output. */
 export type AgentHarnessTerminalOutcomeInput = {
   assistantTexts: readonly string[];
   reasoningText?: string | null;
@@ -359,6 +370,7 @@ export type AgentHarnessTerminalOutcomeInput = {
   turnCompleted: boolean;
 };
 
+/** Terminal fallback classification emitted by agent harness adapters. */
 export type AgentHarnessTerminalOutcomeClassification = NonNullable<
   EmbeddedRunAttemptResult["agentHarnessResultClassification"]
 >;

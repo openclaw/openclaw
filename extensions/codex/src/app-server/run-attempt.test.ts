@@ -1,10 +1,8 @@
+// Codex tests cover run attempt plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  abortAgentHarnessRun,
   embeddedAgentLog,
-  onAgentEvent,
-  type AgentEventPayload,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
@@ -12,15 +10,10 @@ import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
-  type DiagnosticEventPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  createMockPluginRegistry,
-  onTrustedInternalDiagnosticEvent,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
@@ -32,7 +25,6 @@ import {
   getCodexWorkspaceMemoryToolNames,
   prependCodexOpenClawPromptContext,
 } from "./attempt-context.js";
-import * as authBridge from "./auth-bridge.js";
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
@@ -49,10 +41,10 @@ import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
 import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
 import type { CodexServerNotification } from "./protocol.js";
 import {
-  createAppServerHarness,
   assistantMessage,
-  createParams,
+  createAppServerHarness,
   createCodexRuntimePlanFixture,
+  createParams,
   createResumeHarness,
   createStartedThreadHarness,
   fastWait,
@@ -705,7 +697,7 @@ describe("runCodexAppServerAttempt", () => {
       });
 
       await expect(
-        client.request("turn/start", turnParams).catch(async (error) => {
+        client.request("turn/start", turnParams).catch(async (error: unknown) => {
           await releaseCodexSandboxExecServerEnvironment(sandbox);
           throw error;
         }),
@@ -772,7 +764,7 @@ describe("runCodexAppServerAttempt", () => {
           nativeCodeModeOnlyEnabled: false,
           userMcpServersEnabled: false,
           environmentSelection,
-        }).catch(async (error) => {
+        }).catch(async (error: unknown) => {
           await releaseCodexSandboxExecServerEnvironment(sandbox);
           throw error;
         }),
@@ -826,7 +818,7 @@ describe("runCodexAppServerAttempt", () => {
           onTimeout: async () => {
             await releaseCodexSandboxExecServerEnvironment(sandbox);
           },
-          operation: async () => new Promise<never>(() => undefined),
+          operation: async () => new Promise<never>(() => {}),
         }),
       ).rejects.toThrow("codex app-server startup timed out");
 
@@ -1120,7 +1112,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
 
@@ -1244,7 +1238,7 @@ describe("runCodexAppServerAttempt", () => {
     params.prompt = "already persisted prompt";
     params.suppressNextUserMessagePersistence = true;
     const readTranscript = async () =>
-      fs.readFile(sessionFile, "utf8").catch((error) => {
+      fs.readFile(sessionFile, "utf8").catch((error: unknown) => {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
           return "";
         }
@@ -1308,6 +1302,79 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(result.promptError).toBeNull();
     expect(result.assistantTexts).toEqual(["Nested done."]);
+  });
+
+  it("delivers completed assistant text when an orphan native tool call lacks a matching result", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session-orphan-tool.jsonl"),
+      path.join(tempDir, "workspace-orphan-tool"),
+    );
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "commandExecution",
+          id: "cmd-orphan",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      },
+    });
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [
+            {
+              type: "agentMessage",
+              id: "msg-final",
+              text: "Recovered with final answer after orphan tool call.",
+            },
+          ],
+          error: null,
+          startedAt: null,
+          completedAt: null,
+          durationMs: null,
+        },
+      },
+    });
+
+    const result = await run;
+
+    expect(result.promptError).toBeNull();
+    expect(result.lastToolError).toMatchObject({
+      toolName: "bash",
+      error: expect.stringContaining("without a matching tool.result"),
+      mutatingAction: true,
+    });
+    expect(result.lastToolError?.actionFingerprint).toContain("pnpm test extensions/codex");
+    expect(result.assistantTexts).toEqual(["Recovered with final answer after orphan tool call."]);
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    const snapshotJson = JSON.stringify(result.messagesSnapshot);
+    expect(snapshotJson).toContain('"toolCallId":"cmd-orphan"');
+    expect(snapshotJson).toContain('"isError":true');
+    expect(snapshotJson).toContain("without a matching tool.result");
   });
 
   it("keeps forced message dynamic tool when toolsAllow omits it", () => {
@@ -1638,11 +1705,11 @@ describe("runCodexAppServerAttempt", () => {
       "assistant",
       "toolResult",
     ]);
-    const assistantMessage = result.messagesSnapshot[1];
-    if (assistantMessage?.role !== "assistant") {
+    const assistantMessageLocal = result.messagesSnapshot[1];
+    if (assistantMessageLocal?.role !== "assistant") {
       throw new Error("expected mirrored assistant tool-call message");
     }
-    expect(assistantMessage.content).toStrictEqual([
+    expect(assistantMessageLocal.content).toStrictEqual([
       {
         type: "toolCall",
         id: "call-wiki-status-1",
@@ -1693,7 +1760,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -1722,7 +1791,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
-  it("does not inject mirrored history when starting Codex without a native thread binding", async () => {
+  it("projects bounded continuity when starting Codex without a native thread binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionManager = SessionManager.open(sessionFile);
@@ -1734,7 +1803,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -1743,14 +1814,54 @@ describe("runCodexAppServerAttempt", () => {
       (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
       "";
 
-    expect(inputText).not.toContain("OpenClaw assembled context for this turn:");
-    expect(inputText).not.toContain("we are fixing the Opik default project");
-    expect(inputText).not.toContain("Opik default project context");
-    expect(inputText).not.toContain("Current user request:");
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("we are fixing the Opik default project");
+    expect(inputText).toContain("Opik default project context");
+    expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
-  it("does not inject newer mirrored history when resuming an existing Codex thread binding", async () => {
+  it("keeps thread-start developer instructions stable when adding fresh-thread continuity", async () => {
+    let hookCalls = 0;
+    const beforePromptBuild = vi.fn(async () => {
+      hookCalls += 1;
+      return {
+        systemPrompt: `custom codex system ${hookCalls}`,
+        prependContext: `queued context ${hookCalls}`,
+      };
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(userMessage("prior visible context", Date.now()));
+    sessionManager.appendMessage(assistantMessage("prior assistant context", Date.now() + 1));
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(beforePromptBuild).toHaveBeenCalled();
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
+    expect(threadStartParams?.developerInstructions).toContain("custom codex system 1");
+    expect(threadStartParams?.developerInstructions).not.toContain("custom codex system 2");
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+    expect(inputText).toContain("queued context");
+    expect(inputText).toContain("prior visible context");
+  });
+
+  it("does not replay mirrored history already covered by an existing Codex binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
@@ -1761,10 +1872,10 @@ describe("runCodexAppServerAttempt", () => {
     }
     const sessionManager = SessionManager.open(sessionFile);
     sessionManager.appendMessage(
-      userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt + 1_000),
+      userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt - 2_000),
     );
     sessionManager.appendMessage(
-      assistantMessage("David Ondrej was mentioned in that prior thread", bindingUpdatedAt + 2_000),
+      assistantMessage("David Ondrej was mentioned in that prior thread", bindingUpdatedAt - 1_000),
     );
     const harness = createResumeHarness();
     const params = createParams(sessionFile, workspaceDir);
@@ -1772,7 +1883,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
 
@@ -1787,6 +1900,137 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).not.toContain("David Ondrej was mentioned in that prior thread");
     expect(inputText).not.toContain("Current user request:");
     expect(inputText).toContain("is the previous message trustworthy?");
+  });
+
+  it("projects only newer visible history when a resumed Codex binding is stale", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    if (!Number.isFinite(bindingUpdatedAt)) {
+      throw new Error("expected valid Codex binding timestamp");
+    }
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(userMessage("old native-owned context", bindingUpdatedAt - 2_000));
+    sessionManager.appendMessage(
+      userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt + 1_000),
+    );
+    sessionManager.appendMessage(
+      assistantMessage("David Ondrej was mentioned in that prior thread", bindingUpdatedAt + 2_000),
+    );
+    const copilotMirrorMessage = {
+      ...assistantMessage("copilot mirror context also matters", bindingUpdatedAt + 3_000),
+      __openclaw: { mirrorIdentity: "copilot:assistant-1" },
+    } as ReturnType<typeof assistantMessage> & { __openclaw: { mirrorIdentity: string } };
+    sessionManager.appendMessage(copilotMirrorMessage);
+    const harness = createResumeHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.prompt = "is the previous message trustworthy?";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    expect(harness.requests.map((request) => request.method)).toContain("thread/resume");
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).not.toContain("old native-owned context");
+    expect(inputText).toContain("we were discussing the Sonnet leak screenshots");
+    expect(inputText).toContain("David Ondrej was mentioned in that prior thread");
+    expect(inputText).toContain("copilot mirror context also matters");
+    expect(inputText).toContain("Current user request:");
+    expect(inputText).toContain("is the previous message trustworthy?");
+  });
+
+  it("does not project Codex mirrored transcript echoes as stale binding continuity", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    if (!Number.isFinite(bindingUpdatedAt)) {
+      throw new Error("expected valid Codex binding timestamp");
+    }
+    const sessionManager = SessionManager.open(sessionFile);
+    const codexMirrorUserMessage = {
+      ...userMessage("codex mirrored user echo", bindingUpdatedAt + 1_000),
+      idempotencyKey: "codex-app-server:user-1",
+    } as ReturnType<typeof userMessage> & { idempotencyKey: string };
+    sessionManager.appendMessage(codexMirrorUserMessage);
+    const codexMirrorAssistantMessage = {
+      ...assistantMessage("codex mirrored assistant echo", bindingUpdatedAt + 2_000),
+      __openclaw: { mirrorIdentity: "codex-app-server:assistant-1" },
+    } as ReturnType<typeof assistantMessage> & { __openclaw: { mirrorIdentity: string } };
+    sessionManager.appendMessage(codexMirrorAssistantMessage);
+    const harness = createResumeHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.prompt = "continue from the real user message";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+
+    expect(inputText).not.toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).not.toContain("codex mirrored user echo");
+    expect(inputText).not.toContain("codex mirrored assistant echo");
+    expect(inputText).toContain("continue from the real user message");
+  });
+
+  it("does not replay messages persisted during an active native Codex turn", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const originalBindingUpdatedAt = Date.now() - 60_000;
+    const bindingPath = `${sessionFile}.codex-app-server.json`;
+    const bindingPayload = JSON.parse(await fs.readFile(bindingPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    bindingPayload.updatedAt = new Date(originalBindingUpdatedAt).toISOString();
+    await fs.writeFile(bindingPath, `${JSON.stringify(bindingPayload, null, 2)}\n`);
+    const sessionManager = SessionManager.open(sessionFile);
+    const firstHarness = createResumeHarness();
+    const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await firstHarness.waitForMethod("turn/start");
+    sessionManager.appendMessage(userMessage("steered into active native turn", Date.now()));
+    await firstHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await firstRun;
+    const completedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(Date.parse(completedBinding?.updatedAt ?? "")).toBeGreaterThan(originalBindingUpdatedAt);
+
+    const secondHarness = createResumeHarness();
+    const secondParams = createParams(sessionFile, workspaceDir);
+    secondParams.prompt = "continue after steering";
+    const secondRun = runCodexAppServerAttempt(secondParams);
+    await secondHarness.waitForMethod("turn/start");
+    await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await secondRun;
+
+    const turnStart = secondHarness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+    expect(inputText).not.toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).not.toContain("steered into active native turn");
+    expect(inputText).toContain("continue after steering");
   });
 
   it("does not project mirrored messages on consecutive resumes", async () => {
@@ -1824,8 +2068,8 @@ describe("runCodexAppServerAttempt", () => {
     const firstInputText =
       (firstTurnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]
         ?.text ?? "";
-    expect(firstInputText).not.toContain("OpenClaw assembled context for this turn:");
-    expect(firstInputText).not.toContain("we were discussing the Sonnet leak screenshots");
+    expect(firstInputText).toContain("OpenClaw assembled context for this turn:");
+    expect(firstInputText).toContain("we were discussing the Sonnet leak screenshots");
     expect(firstInputText).toContain("is the previous message trustworthy?");
 
     const secondHarness = createResumeHarness();
@@ -1978,7 +2222,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
 
@@ -2033,7 +2279,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
 
@@ -2110,7 +2358,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
 
@@ -2298,7 +2548,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
 
@@ -2327,7 +2579,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -2370,7 +2624,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -2410,7 +2666,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
 
@@ -2453,7 +2711,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -2695,7 +2955,9 @@ describe("runCodexAppServerAttempt", () => {
 
       const result = await run;
       expect(result.aborted).toBe(true);
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       expect(unhandledRejections).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
@@ -2787,7 +3049,9 @@ describe("runCodexAppServerAttempt", () => {
       { turnTerminalIdleTimeoutMs: 60_000 },
     );
     await bufferedTerminal;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     harness.close();
 
     const result = await run;
@@ -2827,7 +3091,9 @@ describe("runCodexAppServerAttempt", () => {
       turnTerminalIdleTimeoutMs: 60_000,
     });
     await harness.waitForMethod("turn/start");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
 
@@ -2920,7 +3186,9 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(resolved).toBe(false);
 
     await harness.notify({
@@ -2964,7 +3232,9 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(resolved).toBe(false);
     expect(
       warn.mock.calls.some(([message]) =>
@@ -3644,7 +3914,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("times out app-server startup before thread setup can hang forever", async () => {
-    setCodexAppServerClientFactoryForTest(() => new Promise<never>(() => undefined));
+    setCodexAppServerClientFactoryForTest(() => new Promise<never>(() => {}));
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -3678,7 +3948,9 @@ describe("runCodexAppServerAttempt", () => {
       interval: 1,
     });
     await waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -3737,6 +4009,46 @@ describe("runCodexAppServerAttempt", () => {
     } finally {
       stopDiagnostics();
     }
+  });
+
+  it("does not install an active run handle when turn start resolves after abort", async () => {
+    let resolveTurnStart: ((value: ReturnType<typeof turnStartResult>) => void) | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return await new Promise<ReturnType<typeof turnStartResult>>((resolve) => {
+          resolveTurnStart = resolve;
+        });
+      }
+      return {};
+    });
+    setCodexAppServerClientFactoryForTest(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: () => () => undefined,
+          addRequestHandler: () => () => undefined,
+        }) as never,
+    );
+    const abortController = new AbortController();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.abortSignal = abortController.signal;
+
+    const run = runCodexAppServerAttempt(params);
+    await vi.waitFor(
+      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
+      fastWait,
+    );
+    abortController.abort("test_abort");
+    resolveTurnStart?.(turnStartResult());
+
+    await expect(run).rejects.toThrow("test_abort");
+    expect(queueActiveRunMessageForTest("session-1", "after abort")).toBe(false);
   });
 
   it("keeps extended history enabled when resuming a bound Codex thread", async () => {
@@ -3865,6 +4177,72 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(requests.map((entry) => entry.method)).toContain("thread/start");
     expect(requests.map((entry) => entry.method)).not.toContain("thread/resume");
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.threadId).toBe("thread-1");
+  });
+
+  it("preserves stale-binding continuity when token pressure forces a fresh Codex thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    if (!Number.isFinite(bindingUpdatedAt)) {
+      throw new Error("expected valid Codex binding timestamp");
+    }
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(
+      userMessage("post-binding user context", bindingUpdatedAt + 1_000),
+    );
+    sessionManager.appendMessage(
+      assistantMessage("post-binding assistant context", bindingUpdatedAt + 2_000),
+    );
+    await fs.writeFile(
+      path.join(path.dirname(sessionFile), "sessions.json"),
+      JSON.stringify({
+        "agent:main:session-1": {
+          sessionFile,
+          totalTokens: 12_000,
+        },
+      }),
+    );
+    const rolloutDir = path.join(agentDir, "codex-home", "sessions");
+    await fs.mkdir(rolloutDir, { recursive: true });
+    await fs.writeFile(
+      path.join(rolloutDir, "rollout-thread-existing.jsonl"),
+      `${JSON.stringify({
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: {
+              total_tokens: 220_000,
+            },
+            model_context_window: 258_400,
+          },
+        },
+      })}\n`,
+    );
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+    params.prompt = "large prompt ".repeat(12_000);
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(requests.map((entry) => entry.method)).toContain("thread/start");
+    expect(requests.map((entry) => entry.method)).not.toContain("thread/resume");
+    const turnStart = requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+    expect(inputText).toContain("post-binding user context");
+    expect(inputText).toContain("post-binding assistant context");
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.threadId).toBe("thread-1");
   });
@@ -4085,7 +4463,7 @@ describe("runCodexAppServerAttempt", () => {
       const c = {
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
-            return await new Promise<never>(() => undefined);
+            return await new Promise<never>(() => {});
           }
           return {};
         }),
@@ -4280,7 +4658,9 @@ describe("runCodexAppServerAttempt", () => {
       interval: 1,
     });
     await waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
 

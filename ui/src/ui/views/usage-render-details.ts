@@ -1,3 +1,4 @@
+// Control UI view renders usage render details screen content.
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
@@ -955,11 +956,13 @@ function renderContextPanel(
                   </div>
                   <div class="context-breakdown-list">
                     ${toolsTop.map(
-                      (t) => html`
+                      (tLocal) => html`
                         <div class="context-breakdown-item">
-                          <span class="mono" title=${t.name}>${t.name}</span>
+                          <span class="mono" title=${tLocal.name}>${tLocal.name}</span>
                           <span class="muted"
-                            >~${formatTokens(charsToTokens(t.summaryChars + t.schemaChars))}</span
+                            >~${formatTokens(
+                              charsToTokens(tLocal.summaryChars + tLocal.schemaChars),
+                            )}</span
                           >
                         </div>
                       `,

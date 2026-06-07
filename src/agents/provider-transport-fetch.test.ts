@@ -1,3 +1,4 @@
+// Verifies guarded provider fetch wiring, stream cleanup, proxy, and local service behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
@@ -20,27 +21,61 @@ const {
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
   withTrustedEnvProxyGuardedFetchModeMock,
-} = vi.hoisted(() => ({
-  buildProviderRequestDispatcherPolicyMock: vi.fn<
-    (_request?: unknown) => { mode: "direct" } | undefined
-  >(() => undefined),
-  fetchWithSsrFGuardMock: vi.fn(),
-  ensureModelProviderLocalServiceMock: vi.fn(),
-  mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
-    ...current,
-    ...overrides,
-  })),
-  resolveProviderRequestPolicyConfigMock: vi.fn<() => ProviderRequestPolicyConfigMockResult>(
-    () => ({
-      allowPrivateNetwork: false,
-    }),
-  ),
-  shouldUseEnvHttpProxyForUrlMock: vi.fn(() => false),
-  withTrustedEnvProxyGuardedFetchModeMock: vi.fn((params: Record<string, unknown>) => ({
-    ...params,
-    mode: "trusted_env_proxy",
-  })),
-}));
+  managedStreamCleanupRegistrations,
+} = vi.hoisted(() => {
+  // Mock FinalizationRegistry so stream cleanup registrations are directly assertable.
+  const managedStreamCleanupRegistrationsLocal: Array<{
+    callback: (held: { finalize: () => Promise<void> }) => void;
+    held: { finalize: () => Promise<void> };
+    token: object;
+  }> = [];
+
+  class MockFinalizationRegistry {
+    constructor(private callback: (held: { finalize: () => Promise<void> }) => void) {}
+
+    register(_target: object, held: { finalize: () => Promise<void> }, token?: object) {
+      managedStreamCleanupRegistrationsLocal.push({
+        callback: this.callback,
+        held,
+        token: token ?? {},
+      });
+    }
+
+    unregister(token: object) {
+      const index = managedStreamCleanupRegistrationsLocal.findIndex(
+        (entry) => entry.token === token,
+      );
+      if (index >= 0) {
+        managedStreamCleanupRegistrationsLocal.splice(index, 1);
+      }
+    }
+  }
+
+  vi.stubGlobal("FinalizationRegistry", MockFinalizationRegistry);
+
+  return {
+    buildProviderRequestDispatcherPolicyMock: vi.fn<
+      (_request?: unknown) => { mode: "direct" } | undefined
+    >(() => undefined),
+    fetchWithSsrFGuardMock: vi.fn(),
+    ensureModelProviderLocalServiceMock: vi.fn(),
+    mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
+      ...current,
+      ...overrides,
+    })),
+    resolveProviderRequestPolicyConfigMock: vi.fn<() => ProviderRequestPolicyConfigMockResult>(
+      () => ({
+        allowPrivateNetwork: false,
+      }),
+    ),
+    shouldUseEnvHttpProxyForUrlMock: vi.fn(() => false),
+    withTrustedEnvProxyGuardedFetchModeMock: vi.fn((params: Record<string, unknown>) => ({
+      ...params,
+      mode: "trusted_env_proxy",
+    })),
+    managedStreamCleanupRegistrations: managedStreamCleanupRegistrationsLocal,
+  };
+});
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -63,6 +98,7 @@ vi.mock("./provider-request-config.js", () => ({
 }));
 
 function latestGuardedFetchParams(): Record<string, unknown> {
+  // All transport calls should pass through the SSRF-guarded fetch seam.
   const calls = fetchWithSsrFGuardMock.mock.calls;
   const params = calls[calls.length - 1]?.[0];
   if (!params || typeof params !== "object") {
@@ -80,8 +116,45 @@ function latestTrustedEnvProxyParams(): Record<string, unknown> {
   return params;
 }
 
+function responseStreamText(text: string): ReadableStream<Uint8Array> {
+  return responseStreamChunks([text]);
+}
+
+function responseStreamChunks(chunks: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+      }
+      controller.close();
+    },
+  });
+}
+
+function openResponseStreamText(text: string): {
+  close: () => void;
+  stream: ReadableStream<Uint8Array>;
+} {
+  // Leaves the stream open so cleanup/finalization paths can be exercised.
+  const encoder = new TextEncoder();
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  return {
+    close() {
+      streamController?.close();
+    },
+    stream: new ReadableStream({
+      start(controller) {
+        streamController = controller;
+        controller.enqueue(encoder.encode(text));
+      },
+    }),
+  };
+}
+
 describe("buildGuardedModelFetch", () => {
   beforeEach(() => {
+    managedStreamCleanupRegistrations.length = 0;
     fetchWithSsrFGuardMock.mockReset().mockResolvedValue({
       response: new Response("ok", { status: 200 }),
       finalUrl: "https://api.openai.com/v1/responses",
@@ -130,6 +203,203 @@ describe("buildGuardedModelFetch", () => {
     });
   });
 
+  it("rejects successful streamed OpenAI-compatible responses with HTML content", async () => {
+    const release = vi.fn(async () => undefined);
+    const model = {
+      id: "private-model",
+      provider: "custom-openai",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com",
+    } as unknown as Model<"openai-completions">;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response("<html>not the API</html>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+      finalUrl: "https://proxy.example.com/chat/completions",
+      release,
+    });
+
+    let error: unknown;
+    try {
+      await buildGuardedModelFetch(model)("https://proxy.example.com/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "private-model", stream: true }),
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toMatchObject({
+      name: "ProviderHttpError",
+      status: 200,
+      code: "invalid_provider_content_type",
+      errorType: "invalid_response",
+    });
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/baseUrl.*\/v1 path prefix/);
+    expect(release).toHaveBeenCalled();
+  });
+
+  it("allows missing content-type when streamed OpenAI-compatible responses contain SSE", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(responseStreamText('data: {"ok": true}\n\ndata: [DONE]\n\n')),
+      finalUrl: "https://chatgpt.com/backend-api/codex/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.5",
+      provider: "openai",
+      api: "openclaw-openai-responses-transport",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    } as unknown as Model<"openai-responses">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://chatgpt.com/backend-api/codex/responses",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.5", stream: true }),
+      },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(items).toEqual([{ ok: true }]);
+  });
+
+  it("returns promptly for missing content-type SSE streams that remain open", async () => {
+    const source = openResponseStreamText('data: {"ok": true}\n\n');
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(source.stream),
+      finalUrl: "https://chatgpt.com/backend-api/codex/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.5",
+      provider: "openai",
+      api: "openclaw-openai-responses-transport",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    } as unknown as Model<"openai-responses">;
+
+    const responsePromise = buildGuardedModelFetch(model)(
+      "https://chatgpt.com/backend-api/codex/responses",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.5", stream: true }),
+      },
+    );
+    const timeout = Symbol("timeout");
+    const result = await Promise.race<Response | typeof timeout>([
+      responsePromise,
+      new Promise<typeof timeout>((resolve) => {
+        setTimeout(() => resolve(timeout), 100);
+      }),
+    ]);
+    source.close();
+
+    expect(result).not.toBe(timeout);
+    const response = result as Response;
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(items).toEqual([{ ok: true }]);
+  });
+
+  it("allows missing content-type when the SSE prefix is split across chunks", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(responseStreamChunks(["d", "ata", ': {"ok": true}\n\n'])),
+      finalUrl: "https://chatgpt.com/backend-api/codex/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.5",
+      provider: "openai",
+      api: "openclaw-openai-responses-transport",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    } as unknown as Model<"openai-responses">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://chatgpt.com/backend-api/codex/responses",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.5", stream: true }),
+      },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(items).toEqual([{ ok: true }]);
+  });
+
+  it("synthesizes SSE for missing content-type JSON returned to streaming SDK requests", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(responseStreamText('{"ok": true}')),
+      finalUrl: "https://chatgpt.com/backend-api/codex/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.5",
+      provider: "openai",
+      api: "openclaw-openai-responses-transport",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    } as unknown as Model<"openai-responses">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://chatgpt.com/backend-api/codex/responses",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.5", stream: true }),
+      },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(items).toEqual([{ ok: true }]);
+  });
+
+  it("rejects missing content-type streamed OpenAI-compatible responses with HTML bodies", async () => {
+    const release = vi.fn(async () => undefined);
+    const model = {
+      id: "private-model",
+      provider: "custom-openai",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com",
+    } as unknown as Model<"openai-completions">;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(responseStreamText("<html>not the API</html>")),
+      finalUrl: "https://proxy.example.com/chat/completions",
+      release,
+    });
+
+    await expect(
+      buildGuardedModelFetch(model)("https://proxy.example.com/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "private-model", stream: true }),
+      }),
+    ).rejects.toMatchObject({
+      name: "ProviderHttpError",
+      status: 200,
+      code: "invalid_provider_content_type",
+      errorType: "invalid_response",
+    });
+    expect(release).toHaveBeenCalled();
+  });
+
   it("ensures configured local services before the model request", async () => {
     const release = vi.fn();
     ensureModelProviderLocalServiceMock.mockResolvedValue({ release });
@@ -149,6 +419,47 @@ describe("buildGuardedModelFetch", () => {
     expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(model, undefined, undefined);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+  });
+
+  it("releases guarded fetch slots when streamed bodies are abandoned", async () => {
+    const release = vi.fn(async () => undefined);
+    const encoder = new TextEncoder();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode("chunk-1"));
+            controller.enqueue(encoder.encode("chunk-2"));
+          },
+        }),
+        { status: 200 },
+      ),
+      finalUrl: "https://api.anthropic.com/v1/messages",
+      release,
+    });
+    const model = {
+      id: "claude-sonnet-4-6",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+    } as unknown as Model<"anthropic-messages">;
+
+    const fetcher = buildGuardedModelFetch(model, undefined, { sanitizeSse: false });
+    const response = await fetcher("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"stream":true}',
+    });
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+    const firstChunk = await reader?.read();
+    expect(firstChunk?.done).toBe(false);
+    const registration = managedStreamCleanupRegistrations.at(-1);
+    expect(registration).toBeDefined();
+    await registration?.held.finalize();
+
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(managedStreamCleanupRegistrations).toHaveLength(0);
   });
 
   it("passes model request headers to local service health probes", async () => {

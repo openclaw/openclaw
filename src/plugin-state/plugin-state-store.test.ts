@@ -1,3 +1,4 @@
+// Plugin state store tests cover per-plugin persisted state reads and writes.
 import { rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
@@ -10,7 +11,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   clearPluginStateStoreForTests,
   closePluginStateDatabase,
   createCorePluginStateKeyedStore,
@@ -98,6 +98,24 @@ describe("plugin state keyed store", () => {
       expect(store.entries()).toMatchObject([{ key: "interaction:1", value: { count: 1 } }]);
       expect(store.consume("interaction:1")).toEqual({ count: 1 });
       expect(store.lookup("interaction:1")).toBeUndefined();
+    });
+  });
+
+  it("updates a key from the current stored value", async () => {
+    await withPluginStateTestState(async () => {
+      const store = createPluginStateSyncKeyedStore<{ count: number }>("discord", {
+        namespace: "sync-update",
+        maxEntries: 10,
+      });
+      const update = store.update;
+      if (!update) {
+        throw new Error("expected sync keyed store update support");
+      }
+
+      expect(update("counter", (current) => ({ count: (current?.count ?? 0) + 1 }))).toBe(true);
+      expect(update("counter", (current) => ({ count: (current?.count ?? 0) + 1 }))).toBe(true);
+      expect(update("counter", () => undefined)).toBe(false);
+      expect(store.lookup("counter")).toEqual({ count: 2 });
     });
   });
 

@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements media behavior.
 import type { proto, WAMessage } from "baileys";
 import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -84,7 +85,7 @@ export async function downloadInboundMedia(
       "inbound",
       maxBytes,
       fileName,
-    ).catch((err) => {
+    ).catch((err: unknown) => {
       if (err instanceof Error && /Media exceeds/i.test(err.message)) {
         throw new WhatsAppInboundMediaLimitExceededError(maxBytes);
       }

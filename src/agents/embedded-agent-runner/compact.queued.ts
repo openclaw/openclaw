@@ -1,3 +1,6 @@
+/**
+ * Queues embedded-agent session compaction onto the correct command lane.
+ */
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
@@ -23,11 +26,9 @@ import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
+import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
+import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
-import {
-  maybeCompactAgentHarnessSession,
-  resolveAgentHarnessPolicy,
-} from "../harness/selection.js";
 import { isOpenAIProvider } from "../openai-routing.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
@@ -295,7 +296,7 @@ export async function compactEmbeddedAgentSession(
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
   return enqueueCommandInLane(sessionLane, () =>
     enqueueGlobal(async () => {
-      let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null = null;
+      let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null | undefined;
       let checkpointSnapshotRetained = false;
       try {
         // When the context engine owns compaction, its compact() implementation
@@ -363,8 +364,21 @@ export async function compactEmbeddedAgentSession(
               currentTokenCount: params.currentTokenCount,
               compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
               customInstructions: params.customInstructions,
-              force: params.trigger === "manual",
-              runtimeContext,
+              force:
+                params.force === true ||
+                params.forcePreflight === true ||
+                params.preflightRequired === true ||
+                params.trigger === "manual",
+              runtimeContext: {
+                ...runtimeContext,
+                forceReason:
+                  params.forcePreflight === true || params.preflightRequired === true
+                    ? "preflight_required"
+                    : params.trigger === "manual"
+                      ? "manual"
+                      : undefined,
+                preflightCompactionTrigger: params.preflightCompactionTrigger,
+              },
             },
             resolveCompactionTimeoutMs(params.config),
             params.abortSignal,

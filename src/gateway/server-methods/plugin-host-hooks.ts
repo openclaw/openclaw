@@ -1,3 +1,5 @@
+// Plugin host hook methods expose plugin UI descriptors and validate plugin
+// session action payload/result JSON against declared schemas.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -26,6 +28,7 @@ function formatSessionActionPayloadSchemaErrors(errors: JsonSchemaValidationErro
   return errors.map((error) => error.text).join("; ");
 }
 
+/** Ensures plugin action result extension fields stay JSON-compatible on the wire. */
 function validatePluginSessionActionJsonFields(
   result: Record<string, unknown>,
 ): string | undefined {
@@ -37,6 +40,7 @@ function validatePluginSessionActionJsonFields(
   return undefined;
 }
 
+/** Gateway handlers for plugin-declared Control UI descriptors and session actions. */
 export const pluginHostHookHandlers: GatewayRequestHandlers = {
   "plugins.uiDescriptors": ({ params, respond }) => {
     if (!validatePluginsUiDescriptorsParams(params)) {
@@ -108,6 +112,8 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       registration.action.requiredScopes && registration.action.requiredScopes.length > 0
         ? registration.action.requiredScopes
         : [WRITE_SCOPE];
+    // Plugin actions default to write access, while read-only actions can opt
+    // down. Admin bypasses all checks and write includes read for UI callers.
     const missingScope = requiredScopes.find(
       (scope) =>
         !hasAdmin &&
@@ -149,6 +155,8 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        // Schemas are plugin-provided data; validate their shape before passing
+        // them into the shared schema evaluator so malformed plugins fail cleanly.
         const validation = validateJsonSchemaValue({
           schema: registration.action.schema as JsonSchemaValue,
           cacheKey: `plugin-session-action:${pluginId}:${actionId}`,

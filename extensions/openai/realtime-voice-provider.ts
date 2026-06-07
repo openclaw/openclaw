@@ -1,3 +1,4 @@
+// Openai provider module implements model/runtime integration.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -872,7 +873,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       type: "session.reconnect.scheduled",
       detail: `reason=${reason} attempt=${attempt} delayMs=${delay}`,
     });
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    await new Promise((resolve) => {
+      setTimeout(resolve, delay);
+    });
     if (this.intentionallyClosed) {
       return;
     }

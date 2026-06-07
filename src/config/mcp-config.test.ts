@@ -1,3 +1,4 @@
+// Covers MCP config normalization, validation, and serialization.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -13,11 +14,11 @@ function validationOk(raw: unknown) {
 }
 
 const mockReadSourceConfigSnapshot = vi.hoisted(() => async () => {
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
-  const configPath = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
+  const fsValue = await import("node:fs/promises");
+  const pathValue = await import("node:path");
+  const configPath = pathValue.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
   try {
-    const raw = await fs.readFile(configPath, "utf-8");
+    const raw = await fsValue.readFile(configPath, "utf-8");
     const parsed = JSON.parse(raw);
     return {
       valid: true,
@@ -35,10 +36,10 @@ const mockReadSourceConfigSnapshot = vi.hoisted(() => async () => {
 });
 
 const mockReplaceConfigFile = vi.hoisted(() => async ({ nextConfig }: { nextConfig: unknown }) => {
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
-  const configPath = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
-  await fs.writeFile(configPath, JSON.stringify(nextConfig, null, 2), "utf-8");
+  const fsLocal = await import("node:fs/promises");
+  const pathLocal = await import("node:path");
+  const configPath = pathLocal.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
+  await fsLocal.writeFile(configPath, JSON.stringify(nextConfig, null, 2), "utf-8");
 });
 
 vi.mock("./io.js", () => ({

@@ -1,3 +1,5 @@
+// Lifecycle handler tests cover terminal agent_end behavior, sanitized errors,
+// lifecycle events, and deferred reply cleanup.
 import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { handleAgentEnd } from "./embedded-agent-subscribe.handlers.lifecycle.js";
@@ -20,6 +22,8 @@ function createContext(
     onBlockReplyFlush?: () => void | Promise<void>;
   },
 ): EmbeddedAgentSubscribeContext {
+  // Lifecycle tests only need terminal state and delivery callbacks; omitted
+  // fields stay as no-op mocks so failure assertions stay focused.
   const hasOnBlockReplyOverride = Boolean(overrides && "onBlockReply" in overrides);
   const onBlockReply = hasOnBlockReplyOverride ? overrides?.onBlockReply : vi.fn();
   const emitBlockReply = vi.fn();
@@ -51,12 +55,18 @@ function createContext(
     },
     flushBlockReplyBuffer: vi.fn(),
     emitBlockReply,
+    emitAssistantStreamData: vi.fn(),
+    flushDeferredAssistantEvents: vi.fn(),
+    flushDeferredBlockReplies: vi.fn(),
+    clearDeferredAssistantEvents: vi.fn(),
+    clearDeferredBlockReplies: vi.fn(),
     resolveCompactionRetry: vi.fn(),
     maybeResolveCompactionWait: vi.fn(),
   } as unknown as EmbeddedAgentSubscribeContext;
 }
 
 async function handleAgentEndAndReadWarnMeta(ctx: EmbeddedAgentSubscribeContext) {
+  // Error lifecycle assertions share the same structured warning envelope.
   await handleAgentEnd(ctx);
 
   const warn = vi.mocked(ctx.log.warn);
@@ -86,6 +96,67 @@ function firstWarnMeta(ctx: EmbeddedAgentSubscribeContext): Record<string, unkno
 }
 
 describe("handleAgentEnd", () => {
+  it("suppresses raw assistant error messages in user-facing lifecycle events", async () => {
+    // Canary text proves provider error strings are sanitized before lifecycle
+    // events reach channel integrations.
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "SECRET_CANARY_69737",
+        content: [],
+      },
+      { onAgentEvent },
+    );
+
+    await handleAgentEnd(ctx);
+
+    const meta = firstWarnMeta(ctx);
+    expect(meta.error).not.toContain("SECRET_CANARY_69737");
+    expect(meta.error).toBe("LLM request failed.");
+    const userFacingLifecycleText = JSON.stringify(onAgentEvent.mock.calls);
+    expect(userFacingLifecycleText).not.toContain("SECRET_CANARY_69737");
+    expect(userFacingLifecycleText).toContain("LLM request failed.");
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "LLM request failed.",
+      },
+    });
+  });
+
+  it("suppresses structured provider error messages in user-facing lifecycle events", async () => {
+    const onAgentEvent = vi.fn();
+    const rawError =
+      '{"type":"error","error":{"type":"server_error","message":"SECRET_CANARY_69737"}}';
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      },
+      { onAgentEvent },
+    );
+
+    await handleAgentEnd(ctx);
+
+    const meta = firstWarnMeta(ctx);
+    expect(meta.error).toBe("LLM request failed.");
+    const userFacingLifecycleText = JSON.stringify(onAgentEvent.mock.calls);
+    expect(userFacingLifecycleText).not.toContain("SECRET_CANARY_69737");
+    expect(userFacingLifecycleText).not.toContain("LLM error server_error");
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "LLM request failed.",
+      },
+    });
+  });
+
   it("logs the resolved error message when run ends with assistant error", async () => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(
@@ -139,6 +210,52 @@ describe("handleAgentEnd", () => {
       data: {
         phase: "end",
         stopReason: "aborted",
+      },
+    });
+  });
+
+  it("emits explicit aborted terminal metadata on lifecycle end events", async () => {
+    emitAgentEventMock.mockClear();
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.terminalStopReason = "end_turn";
+    ctx.state.terminalAborted = true;
+
+    await handleAgentEnd(ctx);
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      stream: "lifecycle",
+      data: expect.objectContaining({
+        phase: "end",
+        stopReason: "end_turn",
+        aborted: true,
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "end_turn",
+        aborted: true,
+      },
+    });
+  });
+
+  it("keeps normal lifecycle end events explicitly non-aborted", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.terminalStopReason = "end_turn";
+    ctx.state.terminalAborted = false;
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "end_turn",
+        aborted: false,
       },
     });
   });
@@ -205,13 +322,13 @@ describe("handleAgentEnd", () => {
 
     const meta = firstWarnMeta(ctx);
     expect(meta.event).toBe("embedded_run_agent_end");
-    expect(meta.error).toBe("x-api-key: ***");
+    expect(meta.error).toBe("LLM request failed.");
     expect(meta.rawErrorPreview).toBe("x-api-key: ***");
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: "x-api-key: ***",
+        error: "LLM request failed.",
       },
     });
   });
@@ -342,6 +459,7 @@ describe("handleAgentEnd", () => {
       stream: "lifecycle",
       data: {
         phase: "end",
+        stopReason: "toolUse",
         livenessState: "abandoned",
         replayInvalid: true,
       },
@@ -370,6 +488,7 @@ describe("handleAgentEnd", () => {
       stream: "lifecycle",
       data: {
         phase: "end",
+        stopReason: "toolUse",
         livenessState: "abandoned",
         replayInvalid: true,
       },

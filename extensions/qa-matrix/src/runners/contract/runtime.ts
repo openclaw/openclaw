@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements runtime behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -704,7 +705,7 @@ export async function runMatrixQaLive(params: {
   const syncState: { driver?: string; observer?: string } = {};
   const syncStreams: MatrixQaSyncStreams = {};
   let canaryMs: number | undefined;
-  let initialGatewayBootMs = 0;
+  let initialGatewayBootMs;
   let scenarioGatewayBootMs = 0;
   let scenarioRestartGatewayMs = 0;
   let scenarioTransportInterruptMs = 0;
@@ -887,8 +888,8 @@ export async function runMatrixQaLive(params: {
                 gatewayRuntimeEnv: scenarioGateway.harness.gateway.runtimeEnv,
                 gatewayStateDir: scenarioGateway.harness.gateway.runtimeEnv?.OPENCLAW_STATE_DIR,
                 gatewayWorkspaceDir: scenarioGateway.harness.gateway.workspaceDir,
-                gatewayCall: async (method, params, opts) =>
-                  await scenarioGateway.harness.gateway.call(method, params ?? {}, opts),
+                gatewayCall: async (method, paramsLocal, opts) =>
+                  await scenarioGateway.harness.gateway.call(method, paramsLocal ?? {}, opts),
                 outputDir,
                 registrationToken: harness.registrationToken,
                 restartGateway: async () => {

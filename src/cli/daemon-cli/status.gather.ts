@@ -1,3 +1,4 @@
+// Collects daemon status from service files, config snapshots, ports, probes, and plugin drift.
 import fs from "node:fs/promises";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
@@ -38,6 +39,11 @@ import {
   type GatewayRestartHandoff,
 } from "../../infra/restart-handoff.js";
 import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
+import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-record-reader.js";
+import {
+  detectPluginVersionDrift,
+  type PluginVersionDriftReport,
+} from "../../plugins/plugin-version-drift.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { VERSION } from "../../version.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
@@ -159,6 +165,7 @@ function hasOwnKey(value: unknown, key: string): boolean {
 }
 
 function needsFullStatusConfigRead(raw: string, parsed: unknown): boolean {
+  // Fast reads skip config expansion; includes/env placeholders require full config IO.
   return raw.includes("$include") || raw.includes("${") || hasOwnKey(parsed, "env");
 }
 
@@ -323,6 +330,13 @@ export type DaemonStatus = {
     staleGatewayPids: number[];
   };
   extraServices: Array<{ label: string; detail: string; scope: string }>;
+  /**
+   * Plugin version drift report. Surfaces active official external plugins
+   * whose installed version does not match the running gateway version, which
+   * can happen after `npm install -g openclaw@<v>` updates the gateway binary
+   * without a corresponding `openclaw plugins update`.
+   */
+  pluginVersionDrift?: PluginVersionDriftReport;
 };
 
 function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: boolean) {
@@ -505,7 +519,9 @@ export async function gatherDaemonStatus(
     : process.env;
   const [loaded, runtime] = await Promise.all([
     service.isLoaded({ env: serviceEnv }).catch(() => false),
-    service.readRuntime(serviceEnv).catch((err) => ({ status: "unknown", detail: String(err) })),
+    service
+      .readRuntime(serviceEnv)
+      .catch((err: unknown) => ({ status: "unknown", detail: String(err) })),
   ]);
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
   const configAudit = command
@@ -553,7 +569,9 @@ export async function gatherDaemonStatus(
   const staleUpdateLaunchdJobs =
     opts.deep && process.platform === "darwin"
       ? await loadLaunchdModule()
-          .then(({ findStaleOpenClawUpdateLaunchdJobs }) => findStaleOpenClawUpdateLaunchdJobs())
+          .then(({ findStaleOpenClawUpdateLaunchdJobs }) =>
+            findStaleOpenClawUpdateLaunchdJobs(serviceEnv),
+          )
           .catch(() => [])
       : [];
 
@@ -633,6 +651,30 @@ export async function gatherDaemonStatus(
     lastError = (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv)) ?? undefined;
   }
 
+  // Plugin version drift detection.
+  // Compares active official external plugins against the *running* local
+  // gateway version reported by the probe handshake, falling back to the
+  // invoking CLI VERSION only when no gateway version is available. Reading
+  // records with the merged daemon environment inspects the managed service's
+  // profile/state dir, so remote/explicit URL probes need remote-owned
+  // diagnostics instead.
+  // Best-effort: unreadable install records omit this advisory report.
+  let pluginVersionDrift: PluginVersionDriftReport | undefined;
+  if (daemonCfg.gateway?.mode !== "remote" && !probeUrlOverride) {
+    try {
+      const installRecords = await loadInstalledPluginIndexInstallRecords({
+        env: mergedDaemonEnv as NodeJS.ProcessEnv,
+      });
+      pluginVersionDrift = detectPluginVersionDrift({
+        gatewayVersion: gatewayVersion ?? VERSION,
+        installRecords,
+        config: daemonCfg,
+      });
+    } catch {
+      pluginVersionDrift = undefined;
+    }
+  }
+
   return {
     cli: resolveCliStatusSummary(),
     logFile: resolveConfiguredLogFilePath(cliCfg),
@@ -682,6 +724,7 @@ export async function gatherDaemonStatus(
         }
       : {}),
     extraServices,
+    ...(pluginVersionDrift ? { pluginVersionDrift } : {}),
   };
 }
 

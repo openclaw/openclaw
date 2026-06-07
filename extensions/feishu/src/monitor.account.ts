@@ -1,3 +1,4 @@
+// Feishu plugin module implements monitor.account behavior.
 import * as crypto from "node:crypto";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
@@ -14,7 +15,7 @@ import { isRecord, readString } from "./comment-shared.js";
 import {
   hasProcessedFeishuMessage,
   recordProcessedFeishuMessage,
-  warmupDedupFromDisk,
+  warmupDedupFromPluginState,
 } from "./dedup.js";
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
 import { createFeishuBotMenuHandler } from "./monitor.bot-menu-handler.js";
@@ -272,7 +273,7 @@ function registerEventHandlers(
   const error = runtime?.error ?? console.error;
   const runFeishuHandler = async (params: { task: () => Promise<void>; errorMessage: string }) => {
     if (fireAndForget) {
-      void params.task().catch((err) => {
+      void params.task().catch((err: unknown) => {
         error(`${params.errorMessage}: ${String(err)}`);
       });
       return;
@@ -417,7 +418,7 @@ function registerEventHandlers(
           accountId,
         });
         if (fireAndForget) {
-          promise.catch((err) => {
+          promise.catch((err: unknown) => {
             error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
           });
         } else {
@@ -469,12 +470,12 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     throw new Error(`Feishu account "${accountId}" webhook mode requires encryptKey`);
   }
 
-  const warmupCount = await warmupDedupFromDisk(accountId, log);
+  const warmupCount = await warmupDedupFromPluginState(accountId, log);
   if (warmupCount > 0) {
-    log(`feishu[${accountId}]: dedup warmup loaded ${warmupCount} entries from disk`);
+    log(`feishu[${accountId}]: dedup warmup loaded ${warmupCount} entries from plugin state`);
   }
 
-  let threadBindingManager: ReturnType<typeof createFeishuThreadBindingManager> | null = null;
+  let threadBindingManager: ReturnType<typeof createFeishuThreadBindingManager> | null | undefined;
   try {
     const eventDispatcher = createEventDispatcher(account);
     const chatHistories = new Map<string, HistoryEntry[]>();

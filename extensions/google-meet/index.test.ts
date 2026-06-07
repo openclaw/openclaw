@@ -1,3 +1,4 @@
+// Google Meet tests cover index plugin behavior.
 import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1997,7 +1998,9 @@ describe("google-meet plugin", () => {
         "Chrome observe-only mode does not require a realtime audio bridge",
       );
       expect(
-        result.details.checks?.filter((check) => check.id === "chrome-local-audio-device"),
+        result.details.checks?.filter(
+          (checkLocal) => checkLocal.id === "chrome-local-audio-device",
+        ),
       ).toStrictEqual([]);
       expect(runCommandWithTimeout).not.toHaveBeenCalled();
     } finally {

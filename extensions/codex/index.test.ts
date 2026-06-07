@@ -1,3 +1,4 @@
+// Codex tests cover index plugin behavior.
 import fs from "node:fs";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
@@ -216,7 +217,7 @@ describe("codex plugin", () => {
 
   it("enables the native hook relay for public Codex side questions", async () => {
     const harness = createCodexAppServerAgentHarness({ pluginConfig: { appServer: {} } });
-    const runSideQuestion = harness.runSideQuestion;
+    const runSideQuestion = harness["runSideQuestion"];
     const result = { text: "ok" };
     runCodexAppServerSideQuestionMock.mockResolvedValueOnce(result);
 

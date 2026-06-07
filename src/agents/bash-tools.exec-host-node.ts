@@ -1,3 +1,8 @@
+/**
+ * Node-host exec orchestration.
+ * Combines local policy, remote node policy, auto-review, approval follow-ups,
+ * and `node.invoke system.run` execution for host=node calls.
+ */
 import { randomUUID } from "node:crypto";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import type { InterpreterInlineEvalHit } from "../infra/command-analysis/inline-eval.js";
@@ -74,6 +79,7 @@ function nodePolicyBlocksAutoReview(params: {
   nodeSecurity?: ExecSecurity;
   nodeAsk?: "off" | "on-miss" | "always";
 }): boolean {
+  // Remote node policy can be stricter than local host policy; do not auto-approve across that gap.
   return (
     !params.nodeApprovalPolicyKnown ||
     params.nodeAsk === "always" ||
@@ -82,6 +88,10 @@ function nodePolicyBlocksAutoReview(params: {
   );
 }
 
+/**
+ * Executes a command on a remote node, requesting approval when policy requires it.
+ * Node-host approval combines caller policy and remote node approval snapshots.
+ */
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
 ): Promise<AgentToolResult<ExecToolDetails>> {
@@ -238,6 +248,7 @@ export async function executeNodeHostCommand(
     }
 
     if (!inlineApprovedByAsk) {
+      // Human approval may complete after this tool call returns, so follow-up delivery owns invocation.
       const requestArgs = execHostShared.buildDefaultExecApprovalRequestArgs({
         warnings: params.warnings,
         approvalRunningNoticeMs: params.approvalRunningNoticeMs,
@@ -319,14 +330,14 @@ export async function executeNodeHostCommand(
           const {
             baseDecision,
             approvedByAsk: initialApprovedByAsk,
-            deniedReason: initialDeniedReason,
+            deniedReason: baseDeniedReason,
           } = execHostShared.createExecApprovalDecisionState({
             decision,
             askFallback,
           });
           let approvedByAsk = initialApprovedByAsk;
           let approvalDecision: "allow-once" | "allow-always" | null = null;
-          let deniedReason = initialDeniedReason;
+          let deniedReason = baseDeniedReason;
 
           if (baseDecision.timedOut && askFallback === "full" && approvedByAsk) {
             approvalDecision = "allow-once";
@@ -338,15 +349,15 @@ export async function executeNodeHostCommand(
             approvalDecision = "allow-always";
           }
 
-          ({ approvedByAsk, deniedReason } = execHostShared.enforceStrictInlineEvalApprovalBoundary(
-            {
-              baseDecision,
-              approvedByAsk,
-              deniedReason,
-              requiresInlineEvalApproval: inlineEvalHit !== null,
-              requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
-            },
-          ));
+          const strictBoundaryDecision = execHostShared.enforceStrictInlineEvalApprovalBoundary({
+            baseDecision,
+            approvedByAsk,
+            deniedReason,
+            requiresInlineEvalApproval: inlineEvalHit !== null,
+            requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
+          });
+          approvedByAsk = strictBoundaryDecision.approvedByAsk;
+          deniedReason = strictBoundaryDecision.deniedReason;
           if (deniedReason) {
             approvalDecision = null;
           }
@@ -360,6 +371,7 @@ export async function executeNodeHostCommand(
           }
 
           try {
+            // Approved follow-up invocations need approval scopes because they mutate remote node state.
             const raw = await callGatewayTool(
               "node.invoke",
               { timeoutMs: target.invokeTimeoutMs },

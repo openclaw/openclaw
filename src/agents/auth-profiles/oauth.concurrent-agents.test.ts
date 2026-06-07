@@ -1,3 +1,8 @@
+/**
+ * Tests concurrent OAuth refresh across agent stores.
+ * Verifies shared refresh locks let concurrent agents adopt one fresh token
+ * instead of racing single-use refresh tokens.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -85,7 +90,9 @@ async function runConcurrentRefreshCase(): Promise<ConcurrentRefreshResult> {
     let callCount = 0;
     refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
       callCount += 1;
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       return {
         type: "oauth",
         provider,

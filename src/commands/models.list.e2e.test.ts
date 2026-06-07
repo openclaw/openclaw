@@ -1,3 +1,4 @@
+// Models list e2e tests cover model listing command output with local auth/config fixtures.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -102,7 +103,7 @@ vi.mock("../agents/agent-model-discovery.js", () => {
   class MockModelRegistry {
     find(provider: string, id: string) {
       if (modelRegistryState.findError !== undefined) {
-        throw modelRegistryState.findError;
+        throw toLintErrorObject(modelRegistryState.findError, "Non-Error thrown");
       }
       return (
         modelRegistryState.models.find((model) => model.provider === provider && model.id === id) ??
@@ -112,14 +113,14 @@ vi.mock("../agents/agent-model-discovery.js", () => {
 
     getAll() {
       if (modelRegistryState.getAllError !== undefined) {
-        throw modelRegistryState.getAllError;
+        throw toLintErrorObject(modelRegistryState.getAllError, "Non-Error thrown");
       }
       return modelRegistryState.models;
     }
 
     getAvailable() {
       if (modelRegistryState.getAvailableError !== undefined) {
-        throw modelRegistryState.getAvailableError;
+        throw toLintErrorObject(modelRegistryState.getAvailableError, "Non-Error thrown");
       }
       return modelRegistryState.available;
     }
@@ -768,3 +769,17 @@ describe("models list/status", () => {
     expect(row.available).toBe(false);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

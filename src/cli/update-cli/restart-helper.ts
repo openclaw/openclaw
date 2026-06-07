@@ -1,3 +1,4 @@
+// Builds detached, platform-specific restart scripts for update handoff.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -71,8 +72,8 @@ export async function prepareRestartScript(
   const timestamp = Date.now();
   const platform = process.platform;
 
-  let scriptContent = "";
-  let filename = "";
+  let scriptContent;
+  let filename;
 
   try {
     if (platform === "linux") {

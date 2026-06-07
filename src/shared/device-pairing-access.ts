@@ -1,10 +1,14 @@
+// Device pairing access helpers evaluate pairing scopes and role permissions.
 import { normalizeDeviceAuthScopes } from "./device-auth.js";
 
 export type DevicePairingAccessSummary = {
+  /** Normalized role ids requested or approved for a device. */
   roles: string[];
+  /** Normalized scope ids, including implied operator scopes. */
   scopes: string[];
 };
 
+/** Approval classification shown when a pending pairing differs from existing grants. */
 export type PendingDeviceApprovalKind =
   | "new-pairing"
   | "role-upgrade"
@@ -13,7 +17,9 @@ export type PendingDeviceApprovalKind =
 
 export type PendingDeviceApprovalState = {
   kind: PendingDeviceApprovalKind;
+  /** Access requested by the pending pairing attempt. */
   requested: DevicePairingAccessSummary;
+  /** Existing active access, or null for a new pairing. */
   approved: DevicePairingAccessSummary | null;
 };
 
@@ -69,6 +75,7 @@ function includesAll(allowed: readonly string[], requested: readonly string[]): 
   return requested.every((value) => allowedSet.has(value));
 }
 
+/** Normalizes requested roles/scopes from pending pairing records, including legacy singular role. */
 export function summarizePendingDeviceAccess(request: PendingLike): DevicePairingAccessSummary {
   return {
     roles: normalizeRoleList(request.roles, request.role),
@@ -76,6 +83,7 @@ export function summarizePendingDeviceAccess(request: PendingLike): DevicePairin
   };
 }
 
+/** Summarizes currently approved device access, excluding roles whose tokens are revoked. */
 export function summarizeApprovedDeviceAccess(device: PairedLike): DevicePairingAccessSummary {
   const approvedRoles = normalizeRoleList(device.roles, device.role);
   const tokenList = Array.isArray(device.tokens)
@@ -95,6 +103,7 @@ export function summarizeApprovedDeviceAccess(device: PairedLike): DevicePairing
   };
 }
 
+/** Classifies a pending pairing request as new pairing, role upgrade, scope upgrade, or re-approval. */
 export function resolvePendingDeviceApprovalState(
   request: PendingLike,
   paired?: PairedLike,

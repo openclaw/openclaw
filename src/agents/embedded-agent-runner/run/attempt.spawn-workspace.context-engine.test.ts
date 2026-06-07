@@ -1,3 +1,4 @@
+// Coverage for context-engine bootstrap, assembly, and turn finalization.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -72,6 +73,8 @@ function requireRecords(value: unknown, label: string): Array<Record<string, unk
 }
 
 function sumToolResultTextChars(messages: AgentMessage[]): number {
+  // Context-engine budget tests need deterministic text size accounting for
+  // toolResult blocks.
   return messages.reduce((sum, message) => {
     if (message.role !== "toolResult") {
       return sum;
@@ -131,6 +134,8 @@ function expectFields(actual: Record<string, unknown>, expected: Record<string, 
 }
 
 function trackSessionWriteLocks(): string[] {
+  // Context-engine finalization writes should release and reacquire transcript
+  // locks in a predictable order.
   const events: string[] = [];
   hoisted.acquireSessionWriteLockMock.mockImplementation(async () => {
     const lockId = hoisted.acquireSessionWriteLockMock.mock.calls.length;
@@ -172,6 +177,8 @@ async function runBootstrap(
   contextEngine: AttemptContextEngine,
   overrides: Partial<Parameters<typeof runAttemptContextEngineBootstrap>[0]> = {},
 ) {
+  // Shared bootstrap harness keeps session identifiers stable across context
+  // engine implementations.
   await runAttemptContextEngineBootstrap({
     hadSessionFile: true,
     contextEngine,
@@ -294,8 +301,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         execute: async () => ({ text: "ok" }),
       },
       {
-        name: "dofbot_move_angles",
-        label: "Dofbot Move Angles",
+        name: "fuzzplugin_move_angles",
+        label: "Fuzzplugin Move Angles",
         description: "Move robot joints.",
         parameters: {
           type: "object",
@@ -1740,6 +1747,44 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
   });
 
+  it("repairs tool-result pairing after context engine assembly", async () => {
+    let promptMessages: AgentMessage[] = [];
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({
+        assemble: async () => ({
+          messages: [
+            { role: "user", content: "assembled context", timestamp: 1 },
+            {
+              role: "toolResult",
+              toolCallId: "call_orphan",
+              toolUseId: "call_orphan",
+              toolName: "read",
+              content: [{ type: "text", text: "orphaned result" }],
+              timestamp: 2,
+            },
+          ] as AgentMessage[],
+          estimatedTokens: 8,
+        }),
+      }),
+      sessionKey,
+      tempPaths,
+      sessionPrompt: async (session) => {
+        promptMessages = session.messages.map((message) => message as AgentMessage);
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 3 },
+        ];
+      },
+    });
+
+    expect(promptMessages).toContainEqual(
+      expect.objectContaining({ role: "user", content: "assembled context" }),
+    );
+    expect(promptMessages.some((message) => message.role === "toolResult")).toBe(false);
+    expect(JSON.stringify(promptMessages)).not.toContain("orphaned result");
+  });
+
   it("honors context engines that opt into preassembly overflow authority", async () => {
     const lockEvents = trackSessionWriteLocks();
     let sawPrompt = false;
@@ -1815,9 +1860,36 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const lastCall = hoisted.preemptiveCompactionCalls.at(-1);
     expect(lastCall).toHaveProperty("unwindowedMessages");
     const unwindowed = (lastCall as { unwindowedMessages?: AgentMessage[] }).unwindowedMessages;
-    // The snapshot must reflect the true pre-assembly state, not the in-place
-    // windowed array that assemble mutated.
-    expect(unwindowed).toEqual([preassemblyMarker]);
+    // The snapshot must reflect the true pre-assembly state after LLM-boundary
+    // stamping, not the in-place windowed array that assemble mutated.
+    expect(unwindowed).toHaveLength(1);
+    const [unwindowedMessage] = unwindowed ?? [];
+    expect(unwindowedMessage).toMatchObject({ role: "user", timestamp: 1 });
+    const unwindowedContent = (unwindowedMessage as { content?: unknown } | undefined)?.content;
+    expect(unwindowedContent).toEqual(
+      expect.stringMatching(/^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2} [^\]]+\] /),
+    );
+    expect(unwindowedContent).toContain(hugeHistory);
+    expect(unwindowedContent).not.toContain("windowed");
+  });
+
+  it("passes the boundary-stamped current prompt to llm_input hooks", async () => {
+    const runLlmInput = vi.fn(async () => {});
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "llm_input"),
+      runLlmInput,
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+    });
+
+    const params = mockParams(runLlmInput as MockCallSource, 0, "llm_input params");
+    expect(params.prompt).toEqual(
+      expect.stringMatching(/^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2} [^\]]+\] hello$/),
+    );
   });
 
   it("keeps gateway model runs independent from agent context and session history", async () => {

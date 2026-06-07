@@ -1,14 +1,20 @@
+/**
+ * Normalizes provider/model references and configured model ids.
+ */
 import {
   findNormalizedProviderKey as findNormalizedProviderKeyCore,
   findNormalizedProviderValue as findNormalizedProviderValueCore,
   normalizeProviderId as normalizeProviderIdCore,
   normalizeProviderIdForAuth as normalizeProviderIdForAuthCore,
 } from "@openclaw/model-catalog-core/provider-id";
+import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { modelKey as sharedModelKey, normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 
+// Shared provider/model normalization facade for agent model selection. It
+// combines catalog-core provider IDs, static aliases, and optional plugin hooks.
 export type ModelRef = {
   provider: string;
   model: string;
@@ -18,10 +24,12 @@ export type ModelManifestNormalizationContext = {
   manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
 };
 
+/** Build the canonical provider/model key for model selection. */
 export function modelKey(provider: string, model: string) {
   return sharedModelKey(provider, model);
 }
 
+/** Return the legacy raw key when it differs from the canonical key. */
 export function legacyModelKey(provider: string, model: string): string | null {
   const providerId = provider.trim();
   const modelId = model.trim();
@@ -33,14 +41,17 @@ export function legacyModelKey(provider: string, model: string): string | null {
   return rawKey === canonicalKey ? null : rawKey;
 }
 
+/** Normalize a provider ID using the shared catalog rules. */
 export function normalizeProviderId(provider: string): string {
   return normalizeProviderIdCore(provider);
 }
 
+/** Normalize a provider ID for auth lookup. */
 export function normalizeProviderIdForAuth(provider: string): string {
   return normalizeProviderIdForAuthCore(provider);
 }
 
+/** Find a provider value by normalized provider ID. */
 export function findNormalizedProviderValue<T>(
   entries: Record<string, T> | undefined,
   provider: string,
@@ -48,6 +59,7 @@ export function findNormalizedProviderValue<T>(
   return findNormalizedProviderValueCore(entries, provider);
 }
 
+/** Find the original provider key matching a normalized provider ID. */
 export function findNormalizedProviderKey(
   entries: Record<string, unknown> | undefined,
   provider: string,
@@ -63,7 +75,8 @@ function normalizeProviderModelId(
     allowPluginNormalization?: boolean;
   },
 ): string {
-  const staticModelId = normalizeStaticProviderModelId(provider, model, {
+  const providerModel = stripSelfProviderModelPrefix(provider, model);
+  const staticModelId = normalizeStaticProviderModelId(provider, providerModel, {
     allowManifestNormalization: options?.allowManifestNormalization,
     manifestPlugins: options?.manifestPlugins,
   });
@@ -86,6 +99,7 @@ type ModelRefNormalizeOptions = ModelManifestNormalizationContext & {
   allowPluginNormalization?: boolean;
 };
 
+/** Normalize a provider/model pair into a canonical model reference. */
 export function normalizeModelRef(
   provider: string,
   model: string,
@@ -99,6 +113,7 @@ export function normalizeModelRef(
 type ParseModelRefOptions = ModelRefNormalizeOptions;
 const OPENROUTER_AUTO_COMPAT_ALIAS = "openrouter:auto";
 
+/** Parse `provider/model` or bare model text using a default provider. */
 export function parseModelRef(
   raw: string,
   defaultProvider: string,

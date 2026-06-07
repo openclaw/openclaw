@@ -1,3 +1,4 @@
+// Shared harness and mocks for embedded attempt spawn-workspace tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -45,6 +46,8 @@ type BootstrapContext = {
 };
 
 function normalizeMockProviderId(providerId?: string): string {
+  // Provider ids in mocked model routing follow the same lowercase normalization
+  // as production helpers.
   return normalizeLowercaseStringOrEmpty(providerId);
 }
 
@@ -96,6 +99,8 @@ type AttemptSpawnWorkspaceHoisted = {
 };
 
 export function createSubscriptionMock(): SubscriptionMock {
+  // Minimal subscription surface for runEmbeddedAttempt tests; individual tests
+  // override only the lifecycle method they need.
   return {
     assistantTexts: [] as string[],
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
@@ -104,6 +109,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
+    waitForPendingEvents: async () => {},
     getAcceptedSessionSpawns: () => [],
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],
@@ -130,6 +136,8 @@ export function createSubscriptionMock(): SubscriptionMock {
 }
 
 const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
+  // Hoisted mocks must exist before the runner module graph is imported, because
+  // runEmbeddedAttempt captures these dependencies at module load.
   const spawnSubagentDirectMock = vi.fn();
   const createAgentSessionMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();
@@ -283,6 +291,7 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: () => true,
   listPluginOriginsFromMetadataSnapshot: () => new Map(),
   loadPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
 vi.mock("../../../trajectory/metadata.js", () => ({
@@ -680,6 +689,7 @@ vi.mock("../../tool-policy.js", async (importOriginal) => {
 vi.mock("../../transcript-policy.js", () => ({
   resolveTranscriptPolicy: () => ({
     allowSyntheticToolResults: false,
+    repairToolUseResultPairing: true,
   }),
   shouldAllowProviderOwnedThinkingReplay: () => false,
 }));
@@ -938,7 +948,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.ensureGlobalUndiciStreamTimeoutsMock.mockReset();
   hoisted.buildEmbeddedMessageActionDiscoveryInputMock
     .mockReset()
-    .mockImplementation((params) => params);
+    .mockImplementation((paramsLocal) => paramsLocal);
   hoisted.createOpenClawCodingToolsMock.mockReset().mockImplementation((...args: unknown[]) => {
     const options = args[0] as
       | {

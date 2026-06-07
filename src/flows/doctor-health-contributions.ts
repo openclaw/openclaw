@@ -1,3 +1,4 @@
+// Doctor health contribution helpers collect health checks from plugin manifests.
 import fs from "node:fs";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
@@ -40,6 +41,7 @@ type DoctorHealthFlowContext = {
   env?: NodeJS.ProcessEnv;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
+  gatewayHealthAuthenticated?: boolean;
   gatewayHealthSkipped?: boolean;
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
@@ -446,6 +448,11 @@ async function runReleaseConfiguredPluginInstallsHealth(
   };
 }
 
+async function runDiskSpaceHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteDiskSpace } = await import("../commands/doctor-disk-space.js");
+  noteDiskSpace(ctx.cfg);
+}
+
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
@@ -484,7 +491,11 @@ async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promis
 
 async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionSnapshotHealth } = await import("../commands/doctor-session-snapshots.js");
-  await noteSessionSnapshotHealth({ cfg: ctx.cfg, env: ctx.env ?? process.env });
+  await noteSessionSnapshotHealth({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
 }
 
 async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -544,8 +555,10 @@ async function runStartupChannelMaintenanceHealth(ctx: DoctorHealthFlowContext):
 }
 
 async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteInstallPolicyHealth } = await import("../commands/doctor-install-policy.js");
   const { noteSecurityWarnings } = await import("../commands/doctor-security.js");
   await noteSecurityWarnings(ctx.cfg);
+  await noteInstallPolicyHealth(ctx.cfg, { deep: ctx.options.deep === true, env: ctx.env });
 }
 
 async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -692,7 +705,7 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
   const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
   const { note } = await loadNoteModule();
   const service = resolveGatewayService();
-  let loaded = false;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch {
@@ -783,20 +796,21 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   }
   const { checkGatewayHealth, probeGatewayMemoryStatus } =
     await import("../commands/doctor-gateway-health.js");
-  const { healthOk, status } = await checkGatewayHealth({
+  const { healthOk, authenticated, status } = await checkGatewayHealth({
     runtime: ctx.runtime,
     cfg: ctx.cfg,
     timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
   });
   ctx.gatewayHealthSkipped = false;
   ctx.healthOk = healthOk;
+  ctx.gatewayHealthAuthenticated = authenticated;
   ctx.gatewayStatus = status;
-  ctx.gatewayMemoryProbe = healthOk
+  ctx.gatewayMemoryProbe = authenticated
     ? await probeGatewayMemoryStatus({
         cfg: ctx.cfg,
         timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
       })
-    : { checked: false, ready: false, skipped: false };
+    : { checked: false, ready: false, skipped: healthOk };
 }
 
 async function runWhatsappResponsivenessHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -935,7 +949,7 @@ async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Pro
   }
 }
 
-function formatRuntimeToolSchemaFindings(findings: readonly HealthFinding[]): string {
+function formatHealthFindings(findings: readonly HealthFinding[]): string {
   return findings
     .map((finding) => {
       const lines = [`- ${finding.message}`];
@@ -951,6 +965,31 @@ function formatRuntimeToolSchemaFindings(findings: readonly HealthFinding[]): st
       return lines.join("\n");
     })
     .join("\n");
+}
+
+async function runProviderCatalogProjectionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { registerCoreHealthChecks } = await loadDoctorCoreChecksModule();
+  const { getHealthCheck } = await loadHealthCheckRegistryModule();
+  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } = await loadAgentScopeModule();
+  const { note } = await loadNoteModule();
+
+  registerCoreHealthChecks();
+  const check = getHealthCheck("core/doctor/provider-catalog-projection");
+  if (!check) {
+    return;
+  }
+  const findings = await check.detect({
+    mode: "doctor",
+    runtime: ctx.runtime,
+    cfg: ctx.cfg,
+    cwd: resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg)),
+    configPath: ctx.configPath,
+  });
+  if (findings.length === 0) {
+    return;
+  }
+  ctx.healthOk = false;
+  note(formatHealthFindings(findings), "Doctor warnings");
 }
 
 async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -975,7 +1014,7 @@ async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promis
     return;
   }
   ctx.healthOk = false;
-  note(formatRuntimeToolSchemaFindings(findings), "Doctor warnings");
+  note(formatHealthFindings(findings), "Doctor warnings");
 }
 
 export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
@@ -1034,6 +1073,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:plugin-registry",
       label: "Plugin registry",
       run: runPluginRegistryHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:disk-space",
+      label: "Disk space",
+      run: runDiskSpaceHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",
@@ -1115,6 +1159,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:tool-result-cap",
       label: "Tool result cap",
       run: runToolResultCapHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:provider-catalog-projection",
+      label: "Provider catalog projection",
+      healthCheckIds: ["core/doctor/provider-catalog-projection"],
+      run: runProviderCatalogProjectionHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:runtime-tool-schemas",

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements browser runtime behavior.
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 
@@ -86,6 +87,7 @@ type QaBrowserReadyParams = {
   profile?: string;
   timeoutMs?: number;
   intervalMs?: number;
+  sleepImpl?: (ms: number) => Promise<unknown>;
 };
 
 function normalizeBrowserQuery(
@@ -198,7 +200,7 @@ export async function waitForQaBrowserReady<T extends QaBrowserStatus = QaBrowse
     if (isQaBrowserReady(lastStatus)) {
       return lastStatus as T;
     }
-    await sleep(intervalMs);
+    await (params.sleepImpl ?? sleep)(intervalMs);
   }
   throw new Error(
     `browser control not ready after ${timeoutMs}ms${

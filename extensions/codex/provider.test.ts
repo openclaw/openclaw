@@ -1,3 +1,4 @@
+// Codex tests cover provider plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "./prompt-overlay.js";
 import { codexProviderDiscovery } from "./provider-discovery.js";
@@ -266,7 +267,7 @@ describe("codex provider", () => {
       listModels: listTestCodexAppServerModels,
     });
 
-    expect(client.close).toHaveBeenCalledTimes(1);
+    expect(client["close"]).toHaveBeenCalledTimes(1);
   });
 
   it("does not close an active shared app-server client during live discovery", async () => {
@@ -293,8 +294,8 @@ describe("codex provider", () => {
       listModels: listTestCodexAppServerModels,
     });
 
-    expect(activeClient.close).not.toHaveBeenCalled();
-    expect(discoveryClient.close).toHaveBeenCalledTimes(1);
+    expect(activeClient["close"]).not.toHaveBeenCalled();
+    expect(discoveryClient["close"]).toHaveBeenCalledTimes(1);
   });
 
   it("resolves arbitrary Codex app-server model ids as text-only until discovered", () => {

@@ -1,3 +1,4 @@
+// Voyage plugin module implements embedding batch behavior.
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
 import {
@@ -54,7 +55,10 @@ function resolveVoyageBatchDeps(overrides: Partial<VoyageBatchDeps> | undefined)
     now: overrides?.now ?? Date.now,
     sleep:
       overrides?.sleep ??
-      (async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms))),
+      (async (ms: number) =>
+        await new Promise((resolve) => {
+          setTimeout(resolve, ms);
+        })),
     postJsonWithRetry: overrides?.postJsonWithRetry ?? postJsonWithRetry,
     uploadBatchJsonlFile: overrides?.uploadBatchJsonlFile ?? uploadBatchJsonlFile,
     withRemoteHttpResponse: overrides?.withRemoteHttpResponse ?? withRemoteHttpResponse,

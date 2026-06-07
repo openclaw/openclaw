@@ -1,3 +1,4 @@
+// Voice Call plugin module implements manager behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -204,7 +205,7 @@ export class CallManager {
             providerCallId: call.providerCallId,
             reason: "timeout",
           })
-          .catch((err) => {
+          .catch((err: unknown) => {
             console.warn(
               `[voice-call] Failed to hang up expired restored call ${callId}:`,
               err instanceof Error ? err.message : String(err),
@@ -401,7 +402,7 @@ export class CallManager {
       return;
     }
 
-    void this.speakInitialMessage(call.providerCallId).catch((err) => {
+    void this.speakInitialMessage(call.providerCallId).catch((err: unknown) => {
       console.warn(
         `[voice-call] Failed to speak initial message for call ${call.callId}: ${formatErrorMessage(err)}`,
       );

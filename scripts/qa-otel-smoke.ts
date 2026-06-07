@@ -1,6 +1,7 @@
 #!/usr/bin/env -S node --import tsx
+// Qa Otel Smoke script supports OpenClaw repository automation.
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -126,6 +127,11 @@ const MAX_CAPTURED_BODY_TEXT_BYTES = readPositiveIntegerEnv(
   "OPENCLAW_QA_OTEL_MAX_CAPTURED_BODY_TEXT_BYTES",
   512 * 1024,
 );
+const QA_SUITE_TIMEOUT_MS = readPositiveIntegerEnv(
+  "OPENCLAW_QA_OTEL_SUITE_TIMEOUT_MS",
+  10 * 60 * 1000,
+);
+const QA_SUITE_KILL_GRACE_MS = readPositiveIntegerEnv("OPENCLAW_QA_OTEL_SUITE_KILL_GRACE_MS", 5000);
 
 function readPositiveIntegerEnv(
   name: string,
@@ -399,13 +405,19 @@ class ProtoReader {
     return new TextDecoder().decode(this.bytes());
   }
 
-  fixed64(): number {
-    const end = this.offset + 8;
+  private advance(length: number, label: string): number {
+    const start = this.offset;
+    const end = this.offset + length;
     if (end > this.buffer.length) {
-      throw new Error("truncated protobuf fixed64");
+      throw new Error(`truncated protobuf ${label}`);
     }
-    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset + this.offset, 8);
     this.offset = end;
+    return start;
+  }
+
+  fixed64(): number {
+    const start = this.advance(8, "fixed64");
+    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset + start, 8);
     return view.getFloat64(0, true);
   }
 
@@ -413,11 +425,11 @@ class ProtoReader {
     if (wire === 0) {
       this.varint();
     } else if (wire === 1) {
-      this.offset += 8;
+      this.advance(8, "fixed64");
     } else if (wire === 2) {
       this.bytes();
     } else if (wire === 5) {
-      this.offset += 4;
+      this.advance(4, "fixed32");
     } else {
       throw new Error(`unsupported protobuf wire type ${wire}`);
     }
@@ -687,76 +699,118 @@ function decodeLogRequest(body: Buffer): CapturedLogRecord[] {
   return records;
 }
 
-function startLocalOtlpReceiver(disallowedBodyNeedles: string[] = []) {
+function startLocalOtlpReceiver(disallowedBodyNeedlesLocal: string[] = []) {
   const capturedRequests: CapturedRequest[] = [];
   const capturedSpans: CapturedSpan[] = [];
   const capturedMetrics: CapturedMetric[] = [];
   const capturedLogRecords: CapturedLogRecord[] = [];
   const capturedBodyText: Partial<Record<OtlpSignal, string[]>> = {};
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    if (req.method !== "POST" || !req.url) {
-      res.writeHead(404, { "content-type": "text/plain" });
-      res.end("not found");
-      return;
-    }
-    const requestPath = req.url;
-    const signal = OTLP_SIGNAL_PATHS.get(requestPath);
-    if (!signal) {
-      res.writeHead(404, { "content-type": "text/plain" });
-      res.end("not found");
-      return;
-    }
+  const sockets = new Set<Socket>();
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void (async () => {
+      if (req.method !== "POST" || !req.url) {
+        res.writeHead(404, { "content-type": "text/plain" });
+        res.end("not found");
+        return;
+      }
+      const requestPath = req.url;
+      const signal = OTLP_SIGNAL_PATHS.get(requestPath);
+      if (!signal) {
+        res.writeHead(404, { "content-type": "text/plain" });
+        res.end("not found");
+        return;
+      }
 
-    const contentEncoding = headerValue(req.headers["content-encoding"]);
-    let body: Buffer;
-    try {
-      const compressedBody = await readRequestBody(req);
-      body = decodeRequestBody(compressedBody, contentEncoding);
-    } catch (error) {
-      const statusCode =
-        typeof (error as { statusCode?: unknown }).statusCode === "number"
-          ? (error as { statusCode: number }).statusCode
-          : 400;
+      const contentEncoding = headerValue(req.headers["content-encoding"]);
+      let body: Buffer;
+      try {
+        const compressedBody = await readRequestBody(req);
+        body = decodeRequestBody(compressedBody, contentEncoding);
+      } catch (error) {
+        const statusCode =
+          typeof (error as { statusCode?: unknown }).statusCode === "number"
+            ? (error as { statusCode: number }).statusCode
+            : 400;
+        capturedRequests.push({
+          path: requestPath,
+          signal,
+          bytes: 0,
+          contentEncoding,
+          status: statusCode,
+          spanCount: 0,
+          metricCount: 0,
+          logCount: 0,
+        });
+        res.writeHead(statusCode, { "content-type": "text/plain" });
+        res.end(error instanceof Error ? error.message : String(error));
+        return;
+      }
+      let spans: CapturedSpan[];
+      let metrics: CapturedMetric[];
+      let logRecords: CapturedLogRecord[];
+      try {
+        spans = signal === "traces" ? decodeTraceRequest(body) : [];
+        metrics = signal === "metrics" ? decodeMetricRequest(body) : [];
+        logRecords = signal === "logs" ? decodeLogRequest(body) : [];
+        appendCapturedBodyText(
+          capturedBodyText,
+          signal,
+          body,
+          undefined,
+          disallowedBodyNeedlesLocal,
+        );
+      } catch (error) {
+        appendCapturedBodyText(
+          capturedBodyText,
+          signal,
+          body,
+          undefined,
+          disallowedBodyNeedlesLocal,
+        );
+        capturedRequests.push({
+          path: requestPath,
+          signal,
+          bytes: body.length,
+          contentEncoding,
+          status: 400,
+          spanCount: 0,
+          metricCount: 0,
+          logCount: 0,
+        });
+        res.writeHead(400, { "content-type": "text/plain" });
+        res.end(error instanceof Error ? error.message : String(error));
+        return;
+      }
+      if (spans.length > 0) {
+        capturedSpans.push(...spans);
+      }
+      if (metrics.length > 0) {
+        capturedMetrics.push(...metrics);
+      }
+      if (logRecords.length > 0) {
+        capturedLogRecords.push(...logRecords);
+      }
       capturedRequests.push({
         path: requestPath,
         signal,
-        bytes: 0,
+        bytes: body.length,
         contentEncoding,
-        status: statusCode,
-        spanCount: 0,
-        metricCount: 0,
-        logCount: 0,
+        status: 200,
+        spanCount: spans.length,
+        metricCount: metrics.length,
+        logCount: logRecords.length,
       });
-      res.writeHead(statusCode, { "content-type": "text/plain" });
-      res.end(error instanceof Error ? error.message : String(error));
-      return;
-    }
-    const spans = signal === "traces" ? decodeTraceRequest(body) : [];
-    const metrics = signal === "metrics" ? decodeMetricRequest(body) : [];
-    const logRecords = signal === "logs" ? decodeLogRequest(body) : [];
-    if (spans.length > 0) {
-      capturedSpans.push(...spans);
-    }
-    if (metrics.length > 0) {
-      capturedMetrics.push(...metrics);
-    }
-    if (logRecords.length > 0) {
-      capturedLogRecords.push(...logRecords);
-    }
-    appendCapturedBodyText(capturedBodyText, signal, body, undefined, disallowedBodyNeedles);
-    capturedRequests.push({
-      path: requestPath,
-      signal,
-      bytes: body.length,
-      contentEncoding,
-      status: 200,
-      spanCount: spans.length,
-      metricCount: metrics.length,
-      logCount: logRecords.length,
-    });
-    res.writeHead(200, { "content-type": "application/x-protobuf" });
-    res.end();
+      res.writeHead(200, { "content-type": "application/x-protobuf" });
+      res.end();
+    })();
   });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => {
+      sockets.delete(socket);
+    });
+  });
+  let closePromise: Promise<void> | undefined;
 
   return {
     capturedRequests,
@@ -775,11 +829,24 @@ function startLocalOtlpReceiver(disallowedBodyNeedles: string[] = []) {
       return address.port;
     },
     async close(): Promise<void> {
-      await new Promise<void>((resolve, reject) => {
+      closePromise ??= new Promise<void>((resolve, reject) => {
+        closeLocalOtlpReceiverConnections(server, sockets);
         server.close((err) => (err ? reject(err) : resolve()));
+        closeLocalOtlpReceiverConnections(server, sockets);
       });
+      await closePromise;
     },
   };
+}
+
+function closeLocalOtlpReceiverConnections(
+  server: ReturnType<typeof createServer>,
+  sockets: Set<Socket>,
+): void {
+  for (const socket of sockets) {
+    socket.destroy();
+  }
+  server.closeAllConnections();
 }
 
 async function reserveLocalPort(): Promise<number> {
@@ -833,19 +900,41 @@ async function waitForLocalPort(port: number, timeoutMs: number, readFailure: ()
     if (failure) {
       throw new Error(failure);
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   throw new Error(`timed out waiting for OpenTelemetry Collector on 127.0.0.1:${port}`);
 }
 
-function tailText(value: string, bytes: number): string {
-  const buffer = Buffer.from(value);
-  if (buffer.length <= bytes) {
-    return value;
-  }
-  return Buffer.concat([Buffer.from("...\n"), buffer.subarray(buffer.length - bytes)]).toString(
-    "utf8",
-  );
+function createBoundedTextAccumulator(maxBytes: number) {
+  let tail = Buffer.alloc(0);
+  let truncated = false;
+
+  return {
+    append(chunk: unknown): void {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+      if (buffer.length >= maxBytes) {
+        tail = Buffer.from(buffer.subarray(buffer.length - maxBytes));
+        truncated = true;
+        return;
+      }
+      const nextTail = Buffer.concat([tail, buffer]);
+      if (nextTail.length > maxBytes) {
+        tail = Buffer.from(nextTail.subarray(nextTail.length - maxBytes));
+        truncated = true;
+        return;
+      }
+      tail = nextTail;
+    },
+    byteLength(): number {
+      return tail.byteLength;
+    },
+    text(): string {
+      const output = tail.toString("utf8");
+      return truncated ? `...\n${output}` : output;
+    },
+  };
 }
 
 async function stopDockerContainer(name: string): Promise<void> {
@@ -858,12 +947,38 @@ async function stopDockerContainer(name: string): Promise<void> {
   });
 }
 
-async function startDockerOtelCollector(receiverPort: number) {
-  const collectorPort = await reserveLocalPort();
-  const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-otel-collector-"));
+type StartDockerOtelCollectorDeps = {
+  mkdtemp?: typeof mkdtemp;
+  platform?: NodeJS.Platform;
+  randomUUID?: typeof randomUUID;
+  reserveLocalPort?: typeof reserveLocalPort;
+  rm?: typeof rm;
+  spawn?: typeof spawn;
+  stopDockerContainer?: typeof stopDockerContainer;
+  tmpdir?: typeof tmpdir;
+  waitForLocalPort?: typeof waitForLocalPort;
+  writeFile?: typeof writeFile;
+};
+
+async function startDockerOtelCollector(
+  receiverPort: number,
+  deps: StartDockerOtelCollectorDeps = {},
+) {
+  const reservePort = deps.reserveLocalPort ?? reserveLocalPort;
+  const makeTempDir = deps.mkdtemp ?? mkdtemp;
+  const writeConfigFile = deps.writeFile ?? writeFile;
+  const spawnProcess = deps.spawn ?? spawn;
+  const waitForPort = deps.waitForLocalPort ?? waitForLocalPort;
+  const stopContainer = deps.stopDockerContainer ?? stopDockerContainer;
+  const removePath = deps.rm ?? rm;
+  const makeUuid = deps.randomUUID ?? randomUUID;
+  const osTmpdir = deps.tmpdir ?? tmpdir;
+
+  const collectorPort = await reservePort();
+  const tempDir = await makeTempDir(path.join(osTmpdir(), "openclaw-otel-collector-"));
   const configPath = path.join(tempDir, "collector.yaml");
-  const containerName = `openclaw-otel-smoke-${randomUUID()}`;
-  const useHostNetwork = process.platform === "linux";
+  const containerName = `openclaw-otel-smoke-${makeUuid()}`;
+  const useHostNetwork = (deps.platform ?? process.platform) === "linux";
   const collectorEndpoint = useHostNetwork ? `127.0.0.1:${collectorPort}` : "0.0.0.0:4318";
   const receiverEndpoint = useHostNetwork
     ? `http://127.0.0.1:${receiverPort}`
@@ -888,10 +1003,9 @@ service:
       receivers: [otlp]
       exporters: [otlphttp/openclaw]
 `;
-  await writeFile(configPath, config, "utf8");
+  await writeConfigFile(configPath, config, "utf8");
 
-  const stdout: string[] = [];
-  const stderr: string[] = [];
+  const output = createBoundedTextAccumulator(COLLECTOR_OUTPUT_TAIL_BYTES);
   let exitCode: number | null = null;
   const dockerArgs = [
     "run",
@@ -907,35 +1021,44 @@ service:
     DEFAULT_DOCKER_COLLECTOR_IMAGE,
     "--config=/etc/otelcol/config.yaml",
   ];
-  const child = spawn("docker", dockerArgs, { stdio: ["ignore", "pipe", "pipe"] });
-  child.stdout?.on("data", (chunk) => stdout.push(String(chunk)));
-  child.stderr?.on("data", (chunk) => stderr.push(String(chunk)));
+  const child = spawnProcess("docker", dockerArgs, { stdio: ["ignore", "pipe", "pipe"] });
+  child.stdout?.on("data", (chunk) => output.append(chunk));
+  child.stderr?.on("data", (chunk) => output.append(chunk));
   child.on("error", (err) => {
-    stderr.push(err instanceof Error ? (err.stack ?? err.message) : String(err));
+    output.append(err instanceof Error ? (err.stack ?? err.message) : String(err));
     exitCode = 1;
   });
   child.on("close", (code) => {
     exitCode = code ?? 1;
   });
 
-  await waitForLocalPort(collectorPort, 60_000, () => {
-    if (exitCode === null) {
-      return "";
+  try {
+    await waitForPort(collectorPort, 60_000, () => {
+      if (exitCode === null) {
+        return "";
+      }
+      const collectorOutput = output.text().trim();
+      return `OpenTelemetry Collector exited before readiness (code=${exitCode})${collectorOutput ? `:\n${collectorOutput}` : ""}`;
+    });
+  } catch (error) {
+    try {
+      await stopContainer(containerName);
+    } finally {
+      await removePath(tempDir, { force: true, recursive: true });
     }
-    const output = [...stdout, ...stderr].join("").trim();
-    return `OpenTelemetry Collector exited before readiness (code=${exitCode})${output ? `:\n${output}` : ""}`;
-  });
+    throw error;
+  }
 
   return {
     port: collectorPort,
     image: DEFAULT_DOCKER_COLLECTOR_IMAGE,
     network: useHostNetwork ? "host" : "bridge",
     output(): string {
-      return tailText([...stdout, ...stderr].join("").trim(), COLLECTOR_OUTPUT_TAIL_BYTES);
+      return output.text().trim();
     },
     async close(): Promise<void> {
-      await stopDockerContainer(containerName);
-      await rm(tempDir, { force: true, recursive: true });
+      await stopContainer(containerName);
+      await removePath(tempDir, { force: true, recursive: true });
     },
   };
 }
@@ -949,15 +1072,184 @@ function openClawEntryArgs(): string[] {
 
 function spawnOpenClaw(args: string[], env: NodeJS.ProcessEnv): ChildProcess {
   return spawn(process.execPath, [...openClawEntryArgs(), ...args], {
+    detached: process.platform !== "win32",
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
 
-async function waitForChild(child: ChildProcess): Promise<number> {
-  return await new Promise<number>((resolve) => {
-    child.on("close", (code) => resolve(code ?? 1));
+async function waitForChild(
+  child: ChildProcess,
+  timeoutMs = QA_SUITE_TIMEOUT_MS,
+  killGraceMs = QA_SUITE_KILL_GRACE_MS,
+): Promise<number> {
+  const childExit = new Promise<number>((resolve) => {
+    child.once("close", (code) => resolve(code ?? 1));
   });
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  const timeout = new Promise<"timeout">((resolve) => {
+    timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
+    timeoutHandle.unref();
+  });
+  const result = await Promise.race([childExit, timeout]).finally(() => {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  });
+  if (result !== "timeout") {
+    return result;
+  }
+
+  const cleanupPids = collectChildProcessTreePids(child);
+  terminateChildTree(child, "SIGTERM", cleanupPids);
+  if (!(await waitForProcessTreeExit(child, killGraceMs, cleanupPids))) {
+    terminateChildTree(child, "SIGKILL", cleanupPids);
+    await waitForProcessTreeExit(child, 1000, cleanupPids);
+  }
+  throw new Error(`openclaw qa suite timed out after ${timeoutMs}ms`);
+}
+
+function collectChildProcessTreePids(child: ChildProcess): number[] {
+  if (process.platform === "win32" || typeof child.pid !== "number") {
+    return [];
+  }
+  const ps = spawnSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" });
+  if (ps.status !== 0) {
+    return [child.pid];
+  }
+  const childrenByParent = new Map<number, number[]>();
+  for (const line of ps.stdout.split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)$/u);
+    if (!match) {
+      continue;
+    }
+    const pid = Number(match[1]);
+    const ppid = Number(match[2]);
+    const siblings = childrenByParent.get(ppid) ?? [];
+    siblings.push(pid);
+    childrenByParent.set(ppid, siblings);
+  }
+  const pids = [child.pid];
+  for (const parentPid of pids) {
+    for (const pid of childrenByParent.get(parentPid) ?? []) {
+      pids.push(pid);
+    }
+  }
+  return [...new Set(pids)];
+}
+
+function terminateChildTree(
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+  pids = collectChildProcessTreePids(child),
+  platform = process.platform,
+  runTaskkill = spawnSync,
+): void {
+  if (platform === "win32") {
+    if (typeof child.pid === "number") {
+      const result = runTaskkill("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+      });
+      if (result.status === 0) {
+        return;
+      }
+    }
+    child.kill(signal);
+    return;
+  }
+  if (pids.length > 0) {
+    for (const pid of pids.toReversed()) {
+      signalProcessGroupOrPid(pid, signal);
+    }
+    return;
+  }
+  child.kill(signal);
+}
+
+function signalProcessGroupOrPid(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
+function isErrnoCode(error: unknown, code: string): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    error.code === code
+  );
+}
+
+function processIdOrGroupIsAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (groupError) {
+    if (isErrnoCode(groupError, "EPERM")) {
+      return true;
+    }
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (pidError) {
+    return isErrnoCode(pidError, "EPERM");
+  }
+}
+
+function processTreeIsAlive(
+  child: ChildProcess,
+  pids = collectChildProcessTreePids(child),
+): boolean {
+  if (process.platform === "win32") {
+    return child.exitCode === null && child.signalCode === null;
+  }
+  return pids.some((pid) => processIdOrGroupIsAlive(pid));
+}
+
+async function waitForProcessTreeExit(
+  child: ChildProcess,
+  timeoutMs: number,
+  pids = collectChildProcessTreePids(child),
+): Promise<boolean> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (!processTreeIsAlive(child, pids)) {
+      return true;
+    }
+    await delay(50);
+  }
+  return !processTreeIsAlive(child, pids);
+}
+
+function relayParentSignalsToChild(child: ChildProcess): () => void {
+  if (process.platform === "win32") {
+    return () => {};
+  }
+  const handlers: Array<{ signal: NodeJS.Signals; handler: () => void }> = [];
+  const cleanup = () => {
+    for (const { signal, handler } of handlers) {
+      process.off(signal, handler);
+    }
+    handlers.length = 0;
+  };
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    const handler = () => {
+      terminateChildTree(child, signal);
+      cleanup();
+      process.kill(process.pid, signal);
+    };
+    handlers.push({ signal, handler });
+    process.once(signal, handler);
+  }
+  return cleanup;
 }
 
 function buildQaEnv(port: number): NodeJS.ProcessEnv {
@@ -1043,7 +1335,9 @@ function isLatestGenAiModelCallSpan(span: CapturedSpan): boolean {
 }
 
 async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function hasRequiredSmokeSignals(receiver: ReturnType<typeof startLocalOtlpReceiver>): boolean {
@@ -1105,6 +1399,9 @@ function assertSmoke(params: {
     const emptyRequests = requests.filter((request) => request.bytes === 0);
     if (emptyRequests.length > 0) {
       failures.push(`empty OTLP ${signal} request received`);
+    }
+    for (const request of requests.filter((entry) => entry.status < 200 || entry.status >= 300)) {
+      failures.push(`OTLP ${signal} request ${request.path} returned status ${request.status}`);
     }
   }
   if (params.spans.length === 0) {
@@ -1230,9 +1527,14 @@ async function main() {
     }
 
     const child = spawnOpenClaw(buildQaArgs(options), buildQaEnv(exportPort));
+    const cleanupSignalRelay = relayParentSignalsToChild(child);
     child.stdout?.on("data", (chunk) => process.stdout.write(chunk));
     child.stderr?.on("data", (chunk) => process.stderr.write(chunk));
-    childExitCode = await waitForChild(child);
+    try {
+      childExitCode = await waitForChild(child);
+    } finally {
+      cleanupSignalRelay();
+    }
     if (childExitCode === 0) {
       await waitForExpectedTelemetry(receiver, 15_000);
     } else {
@@ -1335,14 +1637,20 @@ async function main() {
 
 export const testing = {
   appendCapturedBodyText,
+  assertSmoke,
+  createBoundedTextAccumulator,
   decodeRequestBody,
   parseArgs,
   readPositiveIntegerEnv,
   readRequestBody,
+  startLocalOtlpReceiver,
+  startDockerOtelCollector,
+  terminateChildTree,
+  waitForChild,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main().catch((error) => {
+  main().catch((error: unknown) => {
     process.stderr.write(
       `qa-otel-smoke: ${error instanceof Error ? error.stack || error.message : String(error)}\n`,
     );

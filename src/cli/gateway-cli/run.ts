@@ -1,3 +1,4 @@
+// Gateway run option resolution and local server startup command implementation.
 import fs from "node:fs";
 import { request } from "node:http";
 import path from "node:path";
@@ -133,6 +134,7 @@ function extractGatewayMiskeys(parsed: unknown): {
   hasGatewayToken: boolean;
   hasRemoteToken: boolean;
 } {
+  // Detect common token misplacements before startup falls back to unauthenticated mode.
   if (!parsed || typeof parsed !== "object") {
     return { hasGatewayToken: false, hasRemoteToken: false };
   }
@@ -294,7 +296,7 @@ async function readGatewayStartupConfig(params: {
   const { readConfigFileSnapshotWithPluginMetadata } = await import("../../config/config.js");
   const snapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult | null =
     await params.startupTrace.measure("cli.config-snapshot", () =>
-      readConfigFileSnapshotWithPluginMetadata().catch(() => null),
+      readConfigFileSnapshotWithPluginMetadata({ recoverSuspicious: true }).catch(() => null),
     );
   const snapshot: ConfigFileSnapshot | null = snapshotRead?.snapshot ?? null;
   const cfg = snapshot?.config ?? {};
@@ -417,7 +419,11 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
 
   const now = params.now ?? Date.now;
   const sleep =
-    params.sleep ?? (async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms)));
+    params.sleep ??
+    (async (ms: number) =>
+      await new Promise((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   const probeHealth = params.probeHealth ?? ((probeParams) => probeGatewayHealthz(probeParams));
   const retryMs = params.retryMs ?? SUPERVISED_GATEWAY_LOCK_RETRY_MS;
   const timeoutMs = params.timeoutMs ?? SUPERVISED_GATEWAY_LOCK_RETRY_TIMEOUT_MS;
@@ -537,7 +543,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
   const { cfg, snapshot, startupConfigSnapshotRead } = await readGatewayStartupConfig({
     startupTrace,
   });
-  void maybeLogPendingControlUiBuild(cfg).catch((err) => {
+  void maybeLogPendingControlUiBuild(cfg).catch((err: unknown) => {
     gatewayLog.warn(`Control UI asset check failed: ${String(err)}`);
   });
   const portOverride = parsePort(opts.port);

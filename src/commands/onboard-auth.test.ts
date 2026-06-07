@@ -1,3 +1,4 @@
+// Onboard auth tests cover provider auth setup, credential persistence, and auth-profile state.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -31,16 +32,16 @@ vi.mock("../config/paths.js", () => ({
 }));
 
 vi.mock("../agents/auth-profiles/profiles.js", async () => {
-  const fs = await import("node:fs");
-  const path = await import("node:path");
+  const fsLocal = await import("node:fs");
+  const pathLocal = await import("node:path");
   const upsert = (params: { profileId: string; credential: unknown; agentDir?: string }) => {
     const stateDir = process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state";
-    const agentDir = params.agentDir ?? path.join(stateDir, "agents", "main", "agent");
-    const file = path.join(agentDir, "auth-profiles.json");
-    fs.mkdirSync(agentDir, { recursive: true });
+    const agentDir = params.agentDir ?? pathLocal.join(stateDir, "agents", "main", "agent");
+    const file = pathLocal.join(agentDir, "auth-profiles.json");
+    fsLocal.mkdirSync(agentDir, { recursive: true });
     const existing = (() => {
       try {
-        return JSON.parse(fs.readFileSync(file, "utf8")) as {
+        return JSON.parse(fsLocal.readFileSync(file, "utf8")) as {
           version?: number;
           profiles?: Record<string, unknown>;
         };
@@ -48,7 +49,7 @@ vi.mock("../agents/auth-profiles/profiles.js", async () => {
         return { version: 1, profiles: {} };
       }
     })();
-    fs.writeFileSync(
+    fsLocal.writeFileSync(
       file,
       `${JSON.stringify(
         {

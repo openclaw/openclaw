@@ -1,5 +1,9 @@
+// Migrate Hermes plugin module implements auth behavior.
 import { createHash } from "node:crypto";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  resolveAuthStorePathForDisplay,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   createMigrationItem,
   createMigrationManualItem,
@@ -39,7 +43,6 @@ import type { HermesSource } from "./source.js";
 import type { PlannedTargets } from "./targets.js";
 
 const OPENAI_PROVIDER_ID = "openai";
-const LEGACY_OPENAI_PROVIDER_ID = ["openai", "codex"].join("-");
 const OPENAI_DEFAULT_MODEL = "openai/gpt-5.5";
 const HERMES_AUTH_DISPLAY_NAME = "Hermes import";
 
@@ -65,6 +68,10 @@ type HermesCodexAuthProfile = {
   result: ProviderAuthResult;
   sourceProfileId: string;
 };
+
+function authProfileTarget(agentDir: string, profileId: string): string {
+  return `${resolveAuthStorePathForDisplay(agentDir)}#${profileId}`;
+}
 
 function sourceCredentialFingerprint(candidate: HermesCodexAuthCandidate): string {
   const hash = createHash("sha256");
@@ -143,10 +150,7 @@ function hasLegacyOpenAIOAuthTokenFields(value: unknown, keyHint = ""): boolean 
   }
   const provider = readString(value.provider)?.toLowerCase();
   const normalizedKeyHint = keyHint.toLowerCase();
-  const isOpenAIRecord =
-    normalizedKeyHint.includes("openai") ||
-    provider === OPENAI_PROVIDER_ID ||
-    provider === LEGACY_OPENAI_PROVIDER_ID;
+  const isOpenAIRecord = normalizedKeyHint.includes("openai") || provider === OPENAI_PROVIDER_ID;
   const hasTokenPair =
     (readString(value.access) && readString(value.refresh)) ||
     (readString(value.access_token) && readString(value.refresh_token));
@@ -393,7 +397,7 @@ export async function buildAuthItems(params: {
         kind: "auth",
         action: skipped ? "skip" : "create",
         source: profile.candidate.sourcePath,
-        target: `${params.targets.agentDir}/auth-profiles.json#${profileId}`,
+        target: authProfileTarget(params.targets.agentDir, profileId),
         status: skipped ? "skipped" : conflict ? "conflict" : "planned",
         sensitive: true,
         reason: skipped
@@ -437,7 +441,7 @@ export async function applyAuthItem(
     typeof item.details?.sourceCredentialIndex === "number"
       ? item.details.sourceCredentialIndex
       : undefined;
-  const sourceCredentialFingerprint =
+  const sourceCredentialFingerprintLocal =
     typeof item.details?.sourceCredentialFingerprint === "string"
       ? item.details.sourceCredentialFingerprint
       : undefined;
@@ -452,7 +456,9 @@ export async function applyAuthItem(
     profiles,
     sourceProfileId,
     ...(sourceCredentialIndex === undefined ? {} : { sourceCredentialIndex }),
-    ...(sourceCredentialFingerprint ? { sourceCredentialFingerprint } : {}),
+    ...(sourceCredentialFingerprintLocal
+      ? { sourceCredentialFingerprint: sourceCredentialFingerprintLocal }
+      : {}),
   });
   if (!profile) {
     return markMigrationItemSkipped(item, HERMES_REASON_SECRET_NO_LONGER_PRESENT);

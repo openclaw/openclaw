@@ -1,3 +1,6 @@
+/**
+ * Wraps LLM streams with idle-timeout detection and diagnostics.
+ */
 import {
   finiteSecondsToTimerSafeMilliseconds,
   clampTimerTimeoutMs,
@@ -109,8 +112,9 @@ function isOllamaCloudModel(model: { id?: string; provider?: string } | undefine
 }
 
 /**
- * Resolves the LLM idle timeout from configuration.
- * @returns Idle timeout in milliseconds, or 0 to disable
+ * Resolves the stream-idle watchdog timeout for one embedded run. Explicit
+ * provider request timeouts and bounded run/agent timeouts cap the watchdog;
+ * local provider base URLs disable the implicit cloud-provider default.
  */
 export function resolveLlmIdleTimeoutMs(params?: {
   cfg?: OpenClawConfig;
@@ -124,15 +128,15 @@ export function resolveLlmIdleTimeoutMs(params?: {
     clampTimeoutMs(Math.min(valueMs, DEFAULT_LLM_IDLE_TIMEOUT_MS));
 
   const runTimeoutMs = params?.runTimeoutMs;
-  if (typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0) {
-    if (runTimeoutMs >= MAX_TIMER_TIMEOUT_MS) {
-      return 0;
-    }
-  }
-
   const agentTimeoutSeconds = params?.cfg?.agents?.defaults?.timeoutSeconds;
   const agentTimeoutMs = finiteSecondsToTimerSafeMilliseconds(agentTimeoutSeconds);
-  const timeoutBounds = [runTimeoutMs, agentTimeoutMs].filter(
+  const hasExplicitRunTimeout =
+    typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0;
+  const runTimeoutIsNoTimeout = hasExplicitRunTimeout && runTimeoutMs >= MAX_TIMER_TIMEOUT_MS;
+  const timeoutBounds = [
+    runTimeoutIsNoTimeout ? undefined : runTimeoutMs,
+    hasExplicitRunTimeout ? undefined : agentTimeoutMs,
+  ].filter(
     (value): value is number =>
       typeof value === "number" &&
       Number.isFinite(value) &&
@@ -140,6 +144,10 @@ export function resolveLlmIdleTimeoutMs(params?: {
       value < MAX_TIMER_TIMEOUT_MS,
   );
 
+  // Explicit per-model idle timeout (`models.providers.<id>.timeoutSeconds`) wins
+  // over the NO_TIMEOUT_MS sentinel that runTimeoutMs may carry when the caller
+  // declared "run is unlimited". The two are independent: an unlimited run does
+  // not imply opting out of chunk-level hang detection.
   const modelRequestTimeoutMs = params?.modelRequestTimeoutMs;
   if (
     typeof modelRequestTimeoutMs === "number" &&
@@ -161,6 +169,9 @@ export function resolveLlmIdleTimeoutMs(params?: {
   }
 
   if (typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0) {
+    if (runTimeoutMs >= MAX_TIMER_TIMEOUT_MS) {
+      return 0;
+    }
     if (params?.trigger === "cron") {
       return clampTimeoutMs(runTimeoutMs);
     }
@@ -193,13 +204,9 @@ export function resolveLlmIdleTimeoutMs(params?: {
 }
 
 /**
- * Wraps a stream function with idle timeout detection.
- * If no token is received within the specified timeout, the request is aborted.
- *
- * @param baseFn - The base stream function to wrap
- * @param timeoutMs - Idle timeout in milliseconds
- * @param onIdleTimeout - Optional callback invoked when idle timeout triggers
- * @returns A wrapped stream function with idle timeout detection
+ * Wraps a stream function with idle timeout detection for both stream creation
+ * and iterator progress. Each successful `next()` resets the timer; a timeout
+ * aborts the provider request and surfaces the same Error to the caller.
  */
 export function streamWithIdleTimeout(
   baseFn: StreamFn,
@@ -218,6 +225,8 @@ export function streamWithIdleTimeout(
       }
     };
     const abortFromSourceSignal = () => abortStream(sourceSignal?.reason);
+    // Mirror caller cancellation into the provider request while still allowing
+    // this wrapper to abort independently on idle timeout.
     if (sourceSignal?.aborted) {
       abortFromSourceSignal();
     } else {
@@ -285,7 +294,7 @@ export function streamWithIdleTimeout(
               clearTimer();
 
               try {
-                // Race between the actual next() and the timeout
+                // Arm the watchdog only while waiting for provider progress.
                 const result = await Promise.race([
                   streamIterator.next(),
                   createTimeoutPromise((timer) => {
@@ -314,7 +323,10 @@ export function streamWithIdleTimeout(
             onThrow(streamIterator, error) {
               clearTimer();
               cleanupSourceSignal();
-              return streamIterator.throw?.(error) ?? Promise.reject(error);
+              return (
+                streamIterator.throw?.(error) ??
+                Promise.reject(toLintErrorObject(error, "Non-Error rejection"))
+              );
             },
           });
         };
@@ -331,6 +343,8 @@ export function streamWithIdleTimeout(
         }
       };
 
+      // Some providers return a pending Promise before the stream object exists;
+      // protect that creation phase with the same idle watchdog.
       return Promise.race([
         Promise.resolve(maybeStream),
         createTimeoutPromise((timer) => {
@@ -341,7 +355,7 @@ export function streamWithIdleTimeout(
           clearStreamPromiseTimer();
           return wrapStream(stream);
         },
-        (error) => {
+        (error: unknown) => {
           clearStreamPromiseTimer();
           cleanupSourceSignal();
           throw error;
@@ -350,4 +364,18 @@ export function streamWithIdleTimeout(
     }
     return wrapStream(maybeStream);
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

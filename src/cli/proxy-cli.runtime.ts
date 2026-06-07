@@ -1,3 +1,4 @@
+// Debug proxy runtime commands for capture sessions, validation, coverage, and blob reads.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
@@ -62,7 +63,7 @@ export async function runDebugProxyStartCommand(opts: { host?: string; port?: nu
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
-  await new Promise(() => undefined);
+  await new Promise(() => {});
 }
 
 export async function runDebugProxyRunCommand(opts: {
@@ -70,6 +71,7 @@ export async function runDebugProxyRunCommand(opts: {
   port?: number;
   commandArgs: string[];
 }) {
+  // Each proxied child command gets its own capture session id for later query/filtering.
   if (opts.commandArgs.length === 0) {
     throw new Error("proxy run requires a command after --");
   }

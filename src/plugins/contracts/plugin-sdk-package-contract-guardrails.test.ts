@@ -1,3 +1,4 @@
+// Plugin SDK package guardrail tests cover package export and contract drift checks.
 import fs from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -481,7 +482,7 @@ function collectCodeFiles(dir: string): string[] {
   return files;
 }
 
-function collectDeprecatedTestBarrelImports(): Array<{ file: string; specifier: string }> {
+function collectDeprecatedTestBarrelImports(): string[] {
   const leaks: Array<{ file: string; specifier: string }> = [];
   const importPatterns = [
     /\b(?:import|export)\b[\s\S]*?\bfrom\s*["'](openclaw\/plugin-sdk\/(?:testing|test-utils))["']/g,
@@ -509,14 +510,16 @@ function collectDeprecatedTestBarrelImports(): Array<{ file: string; specifier: 
       }
     }
   }
-  return leaks;
+  return leaks.map((entry) => `${entry.file}: ${entry.specifier}`).toSorted();
 }
 
 function collectDeprecatedPackageTestingBridgeDrift(): string[] {
   const source = fs
     .readFileSync(resolve(REPO_ROOT, "packages/plugin-sdk/src/testing.ts"), "utf8")
-    .trim();
-  return source === 'export * from "../../../src/plugin-sdk/testing.js";'
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("//"));
+  return source.length === 1 && source[0] === 'export * from "../../../src/plugin-sdk/testing.js";'
     ? []
     : ["packages/plugin-sdk/src/testing.ts"];
 }
@@ -724,7 +727,7 @@ function collectExtensionProductionSdkSubpathImports(subpaths: ReadonlySet<strin
 }
 
 describe("plugin-sdk package contract guardrails", () => {
-  let deprecatedTestBarrelImports: Array<{ file: string; specifier: string }> = [];
+  let deprecatedTestBarrelImports: string[] = [];
   let unusedReservedSdkSubpaths: string[] = [];
 
   beforeAll(() => {

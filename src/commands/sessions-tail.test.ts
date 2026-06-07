@@ -1,3 +1,4 @@
+// Sessions tail tests cover transcript tailing, filtering, and session-store setup.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -65,7 +66,9 @@ async function waitForRuntimeOutput(
     if (Date.now() - startedAt > timeoutMs) {
       throw new Error(`Timed out waiting for output containing ${pattern}`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
   }
 }
 

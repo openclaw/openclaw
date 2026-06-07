@@ -1,5 +1,9 @@
+/**
+ * Dynamic tool profile rules for Codex app-server tool loading and filtering.
+ */
 import type { CodexDynamicToolsLoading, CodexPluginConfig } from "./config.js";
 
+/** Tool names owned by Codex app-server and normally excluded from OpenClaw dynamic tools. */
 export const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
   "read",
   "write",
@@ -24,11 +28,13 @@ type CodexDynamicToolProfileEnv = {
   OPENCLAW_QA_FORCE_RUNTIME?: string;
 };
 
+/** Normalizes OpenClaw/Codex tool names before filtering and allowlist checks. */
 export function normalizeCodexDynamicToolName(name: string): string {
   const normalized = name.trim().toLowerCase();
   return DYNAMIC_TOOL_NAME_ALIASES[normalized] ?? normalized;
 }
 
+/** Returns true for private QA runs that force the Codex runtime profile. */
 export function isForcedPrivateQaCodexRuntime(
   env: CodexDynamicToolProfileEnv = process.env,
 ): boolean {
@@ -38,6 +44,7 @@ export function isForcedPrivateQaCodexRuntime(
   );
 }
 
+/** Resolves whether dynamic tools load directly or through Codex tool search. */
 export function resolveCodexDynamicToolsLoading(
   config: Pick<CodexPluginConfig, "codexDynamicToolsLoading">,
   env: CodexDynamicToolProfileEnv = process.env,
@@ -47,6 +54,37 @@ export function resolveCodexDynamicToolsLoading(
     : (config.codexDynamicToolsLoading ?? "searchable");
 }
 
+function normalizeCodexModelId(modelId: string | undefined): string {
+  const normalized = modelId?.trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  return normalized.includes("/") ? normalized.split("/").at(-1)! : normalized;
+}
+
+/** Returns true when model behavior requires direct dynamic-tool registration. */
+export function shouldUseDirectCodexDynamicToolsForModel(modelId: string | undefined): boolean {
+  return shouldDisableCodexToolSearchForModel(modelId);
+}
+
+/** Returns true for models whose tool-search path is unsupported or inefficient. */
+export function shouldDisableCodexToolSearchForModel(modelId: string | undefined): boolean {
+  return normalizeCodexModelId(modelId) === "gpt-5.4-nano";
+}
+
+/** Resolves dynamic-tool loading after applying model-specific restrictions. */
+export function resolveCodexDynamicToolsLoadingForModel(
+  config: Pick<CodexPluginConfig, "codexDynamicToolsLoading">,
+  modelId: string | undefined,
+  env: CodexDynamicToolProfileEnv = process.env,
+): CodexDynamicToolsLoading {
+  const loading = resolveCodexDynamicToolsLoading(config, env);
+  return loading === "searchable" && shouldUseDirectCodexDynamicToolsForModel(modelId)
+    ? "direct"
+    : loading;
+}
+
+/** Filters OpenClaw tools that Codex owns natively or config explicitly excludes. */
 export function filterCodexDynamicTools<T extends { name: string }>(
   tools: T[],
   config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,

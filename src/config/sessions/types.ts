@@ -1,4 +1,12 @@
+// Session store types define durable per-session metadata and merge/usage helpers.
 import crypto from "node:crypto";
+import type {
+  AcpSessionRuntimeOptions,
+  SessionAcpIdentity,
+  SessionAcpIdentitySource,
+  SessionAcpIdentityState,
+  SessionAcpMeta,
+} from "@openclaw/acp-core/types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
@@ -6,6 +14,7 @@ import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
+import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 
 export type SessionScope = "per-sender" | "global";
 
@@ -26,49 +35,12 @@ export type SessionOrigin = {
   threadId?: string | number;
 };
 
-export type SessionAcpIdentitySource = "ensure" | "status" | "event";
-
-export type SessionAcpIdentityState = "pending" | "resolved";
-
-export type SessionAcpIdentity = {
-  state: SessionAcpIdentityState;
-  acpxRecordId?: string;
-  acpxSessionId?: string;
-  agentSessionId?: string;
-  source: SessionAcpIdentitySource;
-  lastUpdatedAt: number;
-};
-
-export type SessionAcpMeta = {
-  backend: string;
-  agent: string;
-  runtimeSessionName: string;
-  identity?: SessionAcpIdentity;
-  mode: "persistent" | "oneshot";
-  runtimeOptions?: AcpSessionRuntimeOptions;
-  cwd?: string;
-  state: "idle" | "running" | "error";
-  lastActivityAt: number;
-  lastError?: string;
-};
-
-export type AcpSessionRuntimeOptions = {
-  /**
-   * ACP runtime mode set via session/set_mode (for example: "plan", "normal", "auto").
-   */
-  runtimeMode?: string;
-  /** ACP runtime config option: model id. */
-  model?: string;
-  /** ACP runtime config option: thinking/reasoning effort. */
-  thinking?: string;
-  /** Working directory override for ACP session turns. */
-  cwd?: string;
-  /** ACP runtime config option: permission profile id. */
-  permissionProfile?: string;
-  /** ACP runtime config option: per-turn timeout in seconds. */
-  timeoutSeconds?: number;
-  /** Backend-specific option bag mapped through session/set_config_option. */
-  backendExtras?: Record<string, string>;
+export type {
+  AcpSessionRuntimeOptions,
+  SessionAcpIdentity,
+  SessionAcpIdentitySource,
+  SessionAcpIdentityState,
+  SessionAcpMeta,
 };
 
 export type CliSessionBinding = {
@@ -406,6 +378,12 @@ export type SessionEntry = {
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
   memoryFlushContextHash?: string;
+  /** Consecutive memory flush failures since the last successful flush. */
+  memoryFlushFailureCount?: number;
+  /** Timestamp (ms) of the last failed memory flush attempt. */
+  memoryFlushLastFailedAt?: number;
+  /** Last memory flush failure error message, truncated for durable metadata. */
+  memoryFlushLastFailureError?: string;
   cliSessionIds?: Record<string, string>;
   cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;
@@ -448,6 +426,7 @@ function resolveSessionPluginLines(
   entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
   includeLine: (line: string) => boolean,
 ): string[] {
+  // Status and trace surfaces share the same plugin-owned lines but apply different filters.
   return Array.isArray(entry?.pluginDebugEntries)
     ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
         Array.isArray(pluginEntry?.lines)
@@ -478,6 +457,7 @@ export function normalizeSessionRuntimeModelFields(entry: SessionEntry): Session
   let next = entry;
 
   if (!normalizedModel) {
+    // A model without a valid provider/model pair is not durable runtime metadata.
     if (entry.model !== undefined || entry.modelProvider !== undefined) {
       next = { ...next };
       delete next.model;
@@ -578,6 +558,20 @@ export function mergeSessionEntryWithPolicy(
       patch.sessionStartedAt ??
       (existing.sessionId === sessionId ? existing.sessionStartedAt : updatedAt),
   };
+
+  if (existing.sessionId !== sessionId) {
+    // Session id rotations should move transcript paths when they match known reset/fork shapes.
+    const patchHasSessionFile = Object.hasOwn(patch, "sessionFile");
+    const candidateSessionFile = patchHasSessionFile ? patch.sessionFile : existing.sessionFile;
+    const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
+      sessionFile: candidateSessionFile,
+      previousSessionId: existing.sessionId,
+      nextSessionId: sessionId,
+    });
+    if (rewrittenSessionFile) {
+      next.sessionFile = rewrittenSessionFile;
+    }
+  }
 
   // Guard against stale provider carry-over when callers patch runtime model
   // without also patching runtime provider.

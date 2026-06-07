@@ -1,3 +1,5 @@
+// Target prefix helpers separate provider-owned prefixes from generic target
+// kind prefixes and validate selected-channel mismatches.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
@@ -12,6 +14,7 @@ const TARGET_KIND_PREFIXES = new Set([
   "user",
 ]);
 
+/** Removes a selected channel/provider prefix from an outbound target string. */
 export function stripTargetProviderPrefix(raw: string, ...providers: string[]): string {
   const trimmed = raw.trim();
   const lower = normalizeOptionalLowercaseString(trimmed) ?? "";
@@ -24,6 +27,7 @@ export function stripTargetProviderPrefix(raw: string, ...providers: string[]): 
   return trimmed;
 }
 
+/** Removes generic target-kind prefixes such as room:, thread:, or user:. */
 export function stripTargetKindPrefix(
   raw: string,
   kinds: readonly string[] = ["channel", "conversation", "dm", "group", "room", "thread", "user"],
@@ -35,6 +39,7 @@ export function stripTargetKindPrefix(
   return kindPattern ? raw.replace(new RegExp(`^(${kindPattern}):`, "i"), "").trim() : raw.trim();
 }
 
+/** Strips plugin topic suffixes while preserving ordinary colon-containing targets. */
 export function stripTargetTopicSuffix(
   raw: string,
   options: { allowNumericShorthand?: boolean } = {},
@@ -47,6 +52,7 @@ export function stripTargetTopicSuffix(
   return trimmed.replace(/:topic:.*$/i, "").trim();
 }
 
+/** Parsed provider prefix and the channel that owns it. */
 export type ChannelTargetProviderPrefix = {
   prefix: string;
   channel: string;
@@ -86,10 +92,12 @@ function resolveChannelTargetProviderPrefix(
   return channel ? { prefix, channel } : undefined;
 }
 
+/** Resolves the channel implied by a plugin-owned target prefix, if any. */
 export function resolveTargetPrefixedChannel(raw?: string | null): string | undefined {
   return resolveChannelTargetProviderPrefix(raw)?.channel;
 }
 
+/** Rejects targets whose plugin-owned prefix belongs to a different selected channel. */
 export function validateTargetProviderPrefix(params: {
   channel: string;
   to?: string | null;

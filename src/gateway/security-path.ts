@@ -1,3 +1,5 @@
+// Gateway path security canonicalizes repeatedly encoded paths and protects
+// plugin HTTP routes even under malformed encoding.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type SecurityPathCanonicalization = {
@@ -63,7 +65,7 @@ export function buildCanonicalPathCandidates(
   let malformedEncoding = false;
   let decodePasses = 0;
   for (let pass = 0; pass < maxDecodePasses; pass++) {
-    let nextDecoded = decoded;
+    let nextDecoded;
     try {
       nextDecoded = decodeURIComponent(decoded);
     } catch {

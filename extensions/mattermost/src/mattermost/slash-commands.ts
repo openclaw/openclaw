@@ -1,3 +1,4 @@
+// Mattermost plugin module implements slash commands behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MattermostClient } from "./client.js";
 
@@ -261,7 +262,7 @@ export async function registerSlashCommands(params: {
   }
 
   // Fetch existing commands to avoid duplicates
-  let existing: MattermostCommandResponse[] = [];
+  let existing: MattermostCommandResponse[];
   try {
     existing = await listMattermostCommands(client, teamId);
   } catch (err) {

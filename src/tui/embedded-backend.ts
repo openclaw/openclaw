@@ -1,3 +1,4 @@
+// Implements the embedded backend used by local TUI sessions.
 import { randomUUID } from "node:crypto";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
@@ -35,10 +36,6 @@ import {
 } from "../gateway/live-chat-projector.js";
 import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
 import {
-  injectTimestamp,
-  timestampOptsFromConfig,
-} from "../gateway/server-methods/agent-timestamp.js";
-import {
   augmentChatHistoryWithCanvasBlocks,
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   enforceChatHistoryFinalBudget,
@@ -48,6 +45,8 @@ import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
 import { capArrayByJsonBytes } from "../gateway/session-utils.fs.js";
 import {
+  buildGatewaySessionInfo,
+  getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
@@ -405,7 +404,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const { cfg, storePath, entry } = loadSessionEntry(opts.sessionKey, loadOptions);
+    const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(
+      opts.sessionKey,
+      loadOptions,
+    );
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({
       sessionKey: opts.sessionKey,
@@ -455,13 +457,27 @@ export class EmbeddedTuiBackend implements TuiBackend {
       });
     }
 
+    const defaults = getSessionDefaults(cfg, undefined, { allowPluginNormalization: false });
+    const sessionInfo = buildGatewaySessionInfo({
+      cfg,
+      storePath,
+      store,
+      key: canonicalKey,
+      entry,
+      agentId: opts.agentId,
+    });
+    sessionInfo.thinkingLevel = thinkingLevel;
+    sessionInfo.verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+
     return {
       sessionKey: opts.sessionKey,
       sessionId,
       messages,
+      defaults,
+      sessionInfo,
       thinkingLevel,
       fastMode: entry?.fastMode,
-      verboseLevel: entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault,
+      verboseLevel: sessionInfo.verboseLevel,
     };
   }
 
@@ -539,7 +555,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (!result.ok) {
       throw new Error(result.error.message);
     }
-    return { ok: true, key: result.key, entry: result.entry };
+    return { ok: true as const, key: result.key, entry: result.entry };
   }
 
   async getGatewayStatus() {
@@ -963,10 +979,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
         }
       }
       const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
-      const { cfg, canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);
+      const { canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);
       const result = await agentCommandFromIngress(
         {
-          message: injectTimestamp(params.message, timestampOptsFromConfig(cfg)),
+          // The per-message timestamp prefix is applied at the single LLM
+          // boundary (normalizeMessagesForLlmBoundary) from each message's own
+          // timestamp, so the current turn and historical turns carry identical
+          // bytes on the wire. See: https://github.com/openclaw/openclaw/issues/3658
+          message: params.message,
           sessionKey: canonicalKey,
           ...(params.agentId ? { agentId: params.agentId } : {}),
           ...(entry?.sessionId ? { sessionId: entry.sessionId } : {}),

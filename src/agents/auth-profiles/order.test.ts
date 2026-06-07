@@ -1,3 +1,8 @@
+/**
+ * Tests auth profile ordering and provider compatibility.
+ * Covers manifest auth aliases, configured order, cooldown state, AWS SDK
+ * profiles, and OpenAI/Codex compatibility.
+ */
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,20 +11,29 @@ import { resetProviderAuthAliasMapCacheForTest } from "../provider-auth-aliases.
 import { saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
-const loadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn(() => ({
+const pluginMetadataMocks = vi.hoisted(() => {
+  const snapshot = {
     plugins: [
       {
         id: "fixture-provider",
+        origin: "bundled",
         providerAuthAliases: { "fixture-provider-plan": "fixture-provider" },
       },
     ],
     diagnostics: [],
-  })),
-);
+  };
+  return {
+    getCurrentPluginMetadataSnapshot: vi.fn(() => snapshot),
+    loadPluginMetadataSnapshot: vi.fn(() => snapshot),
+  };
+});
 
-vi.mock("../../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry,
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: pluginMetadataMocks.getCurrentPluginMetadataSnapshot,
+}));
+
+vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: pluginMetadataMocks.loadPluginMetadataSnapshot,
 }));
 
 vi.mock("./external-auth.js", () => ({
@@ -28,13 +42,14 @@ vi.mock("./external-auth.js", () => ({
   shouldPersistExternalAuthProfile: () => true,
 }));
 
-import { resolveAuthProfileOrder } from "./order.js";
+import { isStoredCredentialCompatibleWithAuthProvider, resolveAuthProfileOrder } from "./order.js";
 import { markAuthProfileSuccess } from "./profiles.js";
 
 describe("resolveAuthProfileOrder", () => {
   beforeEach(() => {
     resetProviderAuthAliasMapCacheForTest();
-    loadPluginManifestRegistry.mockClear();
+    pluginMetadataMocks.getCurrentPluginMetadataSnapshot.mockClear();
+    pluginMetadataMocks.loadPluginMetadataSnapshot.mockClear();
   });
 
   it("accepts aliased provider credentials from manifest metadata", async () => {
@@ -194,6 +209,63 @@ describe("resolveAuthProfileOrder", () => {
         auth: {
           order: {
             "fixture-provider": ["fixture-provider:primary"],
+          },
+        },
+      },
+      store,
+      provider: "fixture-provider",
+    });
+
+    expect(order).toStrictEqual([]);
+  });
+
+  it("falls back to stored profiles when a stored order only has missing credentials", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "fixture-provider:key": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "sk-primary",
+        },
+        "fixture-provider:oauth": {
+          type: "oauth",
+          provider: "fixture-provider",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: {
+        "fixture-provider": ["fixture-provider:deleted"],
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      store,
+      provider: "fixture-provider",
+    });
+
+    expect(order).toStrictEqual(["fixture-provider:oauth", "fixture-provider:key"]);
+  });
+
+  it("does not fall back past an explicit configured auth order", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "fixture-provider:primary": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "sk-primary",
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            "fixture-provider": ["fixture-provider:missing"],
           },
         },
       },
@@ -485,5 +557,41 @@ describe("resolveAuthProfileOrder", () => {
     } finally {
       await rm(agentDir, { force: true, recursive: true });
     }
+  });
+
+  it("uses caller-provided auth alias metadata for stored credential compatibility", () => {
+    expect(
+      isStoredCredentialCompatibleWithAuthProvider({
+        cfg: {},
+        authAliasLookupParams: {
+          config: {},
+          metadataSnapshot: {
+            plugins: [
+              {
+                id: "alias-owner",
+                origin: "global",
+                providerAuthAliases: { fixture: "provider-two" },
+              },
+            ],
+          } as never,
+        },
+        provider: "fixture",
+        credential: { type: "api_key", provider: "provider-two", key: "test" },
+      }),
+    ).toBe(true);
+  });
+
+  it("bypasses plugin auth aliases for stored credential compatibility when metadata is empty", () => {
+    expect(
+      isStoredCredentialCompatibleWithAuthProvider({
+        cfg: {},
+        authAliasLookupParams: {
+          config: {},
+          metadataSnapshot: { plugins: [] },
+        },
+        provider: "fixture",
+        credential: { type: "api_key", provider: "provider-two", key: "test" },
+      }),
+    ).toBe(false);
   });
 });

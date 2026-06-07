@@ -1,3 +1,4 @@
+/** Loads and normalizes OpenClaw plugin manifests, including contracts and config schemas. */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
@@ -14,14 +15,14 @@ import type {
   ModelCatalogSuppression,
   ModelCatalogTieredCost,
 } from "@openclaw/model-catalog-core/model-catalog-types";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
-import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
-import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
@@ -32,6 +33,7 @@ import type { PluginConfigUiHint } from "./manifest-types.js";
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
+/** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 export const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
@@ -54,6 +56,7 @@ const pluginManifestLoadCache = new PluginLruCache<PluginManifestLoadCacheEntry>
   MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES,
 );
 
+/** Clears process-local manifest parse cache for tests and explicit refresh flows. */
 export function clearPluginManifestLoadCache(): void {
   pluginManifestLoadCache.clear();
 }
@@ -485,6 +488,7 @@ export type PluginManifestCapabilityProviderModeConfigSignal = {
 export type PluginManifestCapabilityProviderConfigSignal = {
   rootPath: string;
   overlayPath?: string;
+  overlayMapPath?: string;
   required?: string[];
   requiredAny?: string[];
   mode?: PluginManifestCapabilityProviderModeConfigSignal;
@@ -574,11 +578,11 @@ function normalizeStringRecord(value: unknown): Record<string, string> | undefin
   const normalized: Record<string, string> = Object.create(null);
   for (const [rawKey, rawValue] of Object.entries(value)) {
     const key = normalizeOptionalString(rawKey) ?? "";
-    const value = normalizeOptionalString(rawValue) ?? "";
-    if (!key || isBlockedObjectKey(key) || !value) {
+    const valueLocal = normalizeOptionalString(rawValue) ?? "";
+    if (!key || isBlockedObjectKey(key) || !valueLocal) {
       continue;
     }
-    normalized[key] = value;
+    normalized[key] = valueLocal;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -741,12 +745,12 @@ function normalizeCapabilityProviderModeConfigSignal(
   if (!isRecord(value)) {
     return undefined;
   }
-  const path = normalizeOptionalString(value.path);
+  const pathResult = normalizeOptionalString(value.path);
   const defaultValue = normalizeOptionalString(value.default);
   const allowed = normalizeTrimmedStringList(value.allowed);
   const disallowed = normalizeTrimmedStringList(value.disallowed);
   const signal = {
-    ...(path ? { path } : {}),
+    ...(pathResult ? { path: pathResult } : {}),
     ...(defaultValue ? { default: defaultValue } : {}),
     ...(allowed.length > 0 ? { allowed } : {}),
     ...(disallowed.length > 0 ? { disallowed } : {}),
@@ -770,12 +774,14 @@ function normalizeCapabilityProviderConfigSignals(
       continue;
     }
     const overlayPath = normalizeOptionalString(rawSignal.overlayPath);
+    const overlayMapPath = normalizeOptionalString(rawSignal.overlayMapPath);
     const required = normalizeTrimmedStringList(rawSignal.required);
     const requiredAny = normalizeTrimmedStringList(rawSignal.requiredAny);
     const mode = normalizeCapabilityProviderModeConfigSignal(rawSignal.mode);
     const signal = {
       rootPath,
       ...(overlayPath ? { overlayPath } : {}),
+      ...(overlayMapPath ? { overlayMapPath } : {}),
       ...(required.length > 0 ? { required } : {}),
       ...(requiredAny.length > 0 ? { requiredAny } : {}),
       ...(mode ? { mode } : {}),
@@ -922,11 +928,11 @@ function normalizeManifestDangerousConfigFlags(
     if (!isRecord(entry)) {
       continue;
     }
-    const path = normalizeOptionalString(entry.path) ?? "";
-    if (!path || !isManifestConfigLiteral(entry.equals)) {
+    const pathValue = normalizeOptionalString(entry.path) ?? "";
+    if (!pathValue || !isManifestConfigLiteral(entry.equals)) {
       continue;
     }
-    normalized.push({ path, equals: entry.equals });
+    normalized.push({ path: pathValue, equals: entry.equals });
   }
   return normalized.length > 0 ? normalized : undefined;
 }
@@ -942,13 +948,13 @@ function normalizeManifestSecretInputPaths(
     if (!isRecord(entry)) {
       continue;
     }
-    const path = normalizeOptionalString(entry.path) ?? "";
-    if (!path) {
+    const pathLocal = normalizeOptionalString(entry.path) ?? "";
+    if (!pathLocal) {
       continue;
     }
     const expected = entry.expected === "string" ? entry.expected : undefined;
     normalized.push({
-      path,
+      path: pathLocal,
       ...(expected ? { expected } : {}),
     });
   }

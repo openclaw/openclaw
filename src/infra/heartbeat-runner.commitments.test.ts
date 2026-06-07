@@ -1,3 +1,4 @@
+// Covers heartbeat commitment checks and runner scheduling behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -210,7 +211,7 @@ describe("runHeartbeatOnce commitments", () => {
           commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
         });
 
-        const sendTelegram = vi.fn().mockResolvedValue({
+        const sendTelegramResult = vi.fn().mockResolvedValue({
           messageId: "m1",
           chatId: "stale-target",
         });
@@ -230,21 +231,21 @@ describe("runHeartbeatOnce commitments", () => {
           },
         );
 
-        const result = await runHeartbeatOnce({
+        const resultResult = await runHeartbeatOnce({
           cfg,
           agentId: "main",
           sessionKey,
           deps: {
             getReplyFromConfig: replySpy,
-            telegram: sendTelegram,
+            telegram: sendTelegramResult,
             getQueueSize: () => 0,
             nowMs: () => nowMs,
           },
         });
 
         return {
-          result,
-          sendTelegram,
+          result: resultResult,
+          sendTelegram: sendTelegramResult,
           store: await loadCommitmentStore(),
         };
       },
@@ -288,7 +289,7 @@ describe("runHeartbeatOnce commitments", () => {
           commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
         });
 
-        const sendTelegram = vi.fn().mockResolvedValue({
+        const sendTelegramValue = vi.fn().mockResolvedValue({
           messageId: "m1",
           chatId: "155462274",
         });
@@ -307,21 +308,21 @@ describe("runHeartbeatOnce commitments", () => {
           },
         );
 
-        const result = await runHeartbeatOnce({
+        const resultValue = await runHeartbeatOnce({
           cfg,
           agentId: "main",
           sessionKey,
           deps: {
             getReplyFromConfig: replySpy,
-            telegram: sendTelegram,
+            telegram: sendTelegramValue,
             getQueueSize: () => 0,
             nowMs: () => nowMs,
           },
         });
 
         return {
-          result,
-          sendTelegram,
+          result: resultValue,
+          sendTelegram: sendTelegramValue,
           store: await loadCommitmentStore(),
         };
       },
@@ -515,7 +516,7 @@ tasks:
           commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
         });
 
-        const sendTelegram = vi.fn().mockResolvedValue({
+        const sendTelegramLocal = vi.fn().mockResolvedValue({
           messageId: "m1",
           chatId: "155462274",
         });
@@ -532,21 +533,21 @@ tasks:
           },
         );
 
-        const result = await runHeartbeatOnce({
+        const resultLocal = await runHeartbeatOnce({
           cfg,
           agentId: "main",
           sessionKey,
           deps: {
             getReplyFromConfig: replySpy,
-            telegram: sendTelegram,
+            telegram: sendTelegramLocal,
             getQueueSize: () => 0,
             nowMs: () => nowMs,
           },
         });
 
         return {
-          result,
-          sendTelegram,
+          result: resultLocal,
+          sendTelegram: sendTelegramLocal,
           store: await loadCommitmentStore(),
         };
       },

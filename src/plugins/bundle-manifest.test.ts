@@ -1,3 +1,4 @@
+/** Tests bundle manifest parsing for Codex, Claude, Cursor, and OpenClaw formats. */
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -120,7 +121,7 @@ function setupClaudeHookFixture(
   });
 }
 
-type ExpectedBundlePluginManifest = Omit<
+type _ExpectedBundlePluginManifest = Omit<
   BundlePluginManifest,
   "bundleFormat" | "skills" | "settingsFiles" | "hooks" | "capabilities"
 > & {

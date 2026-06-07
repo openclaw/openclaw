@@ -1,5 +1,5 @@
+// Verifies model config schema parsing and validation behavior.
 import { describe, expect, it } from "vitest";
-import { validateConfigObjectRaw } from "./validation.js";
 import { ModelsConfigSchema } from "./zod-schema.core.js";
 
 describe("ModelsConfigSchema", () => {
@@ -24,35 +24,30 @@ describe("ModelsConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("canonicalizes legacy OpenAI ChatGPT response config before validation", () => {
-    const legacyProvider = ["openai", "codex"].join("-");
-    const legacyApi = `${legacyProvider}-responses`;
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          [legacyProvider]: {
-            baseUrl: "https://chatgpt.com/backend-api/codex",
-            api: legacyApi,
-            models: [
-              {
-                id: "gpt-5.5",
-                name: "GPT-5.5",
-                api: legacyApi,
+  it("accepts compat.requiresReasoningContentOnAssistantMessages (issue #89660)", () => {
+    // The field is consumed at runtime (detectCompat/getCompat) and is present
+    // in the ModelCompat type, but was missing from the strict Zod schema, so a
+    // valid config replicating native DeepSeek behavior on a custom provider was
+    // rejected with "Unrecognized key(s)". Use the exact config from the issue.
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        "my-proxy": {
+          baseUrl: "https://my-proxy.example.com/v1",
+          models: [
+            {
+              id: "deepseek-v4-pro",
+              name: "DeepSeek V4 Pro",
+              reasoning: true,
+              compat: {
+                thinkingFormat: "deepseek",
+                requiresReasoningContentOnAssistantMessages: true,
               },
-            ],
-          },
+            },
+          ],
         },
       },
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.config.models?.providers?.openai?.api).toBe("openai-chatgpt-responses");
-    expect(result.config.models?.providers?.openai?.models?.[0]?.api).toBe(
-      "openai-chatgpt-responses",
-    );
-    expect(result.config.models?.providers).not.toHaveProperty(legacyProvider);
+    expect(result.success).toBe(true);
   });
 });

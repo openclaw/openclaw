@@ -577,6 +577,11 @@ See [Inferred commitments](/concepts/commitments).
   value, so repeated failures from one localhost origin do not automatically
   lock out a different origin.
 - `tailscale.mode`: `serve` (tailnet only, loopback bind) or `funnel` (public, requires auth).
+- `tailscale.serviceName`: optional Tailscale Service name for Serve mode, such
+  as `svc:openclaw`. When set, OpenClaw passes it to `tailscale serve
+--service` so the Control UI can be exposed through a named Service instead
+  of the device hostname. The value must use Tailscale's `svc:<dns-label>`
+  Service name format; startup reports the derived Service URL.
 - `tailscale.preserveFunnel`: when `true` and `tailscale.mode = "serve"`, OpenClaw
   checks `tailscale funnel status` before re-applying Serve at startup and skips
   it if an externally configured Funnel route already covers the gateway port.
@@ -722,8 +727,8 @@ Query-string hook tokens are rejected.
 Validation and safety notes:
 
 - `hooks.enabled=true` requires a non-empty `hooks.token`.
-- `hooks.token` must be distinct from `gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN`; reusing the Gateway token fails startup validation.
-- `openclaw security audit` also flags `hooks.token` reuse of active Gateway password auth (`gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, or `--auth password --password <password>`) as a critical finding; password-mode reuse stays startup-compatible and should be repaired by rotating one of the secrets.
+- `hooks.token` should be distinct from active Gateway shared-secret auth (`gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`); startup logs a non-fatal security warning when it detects reuse.
+- `openclaw security audit` flags hook/Gateway auth reuse as a critical finding, including Gateway password auth supplied only at audit time (`--auth password --password <password>`). Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then update external hook senders to use the new hook token.
 - `hooks.path` cannot be `/`; use a dedicated subpath such as `/hooks`.
 - If `hooks.allowRequestSessionKey=true`, constrain `hooks.allowedSessionKeyPrefixes` (for example `["hook:"]`).
 - If a mapping or preset uses a templated `sessionKey`, set `hooks.allowedSessionKeyPrefixes` and `hooks.allowRequestSessionKey=true`. Static mapping keys do not require that opt-in.
@@ -1292,7 +1297,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 - `runLog.maxBytes`: accepted for compatibility with older file-backed cron run logs. Default: `2_000_000` bytes.
 - `runLog.keepLines`: newest SQLite run-history rows retained per job. Default: `2000`.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
-- `webhook`: deprecated legacy fallback webhook URL (http/https) used only for stored jobs that still have `notify: true`.
+- `webhook`: deprecated legacy fallback webhook URL (http/https) used by `openclaw doctor --fix` to migrate stored jobs that still have `notify: true`; runtime delivery uses per-job `delivery.mode="webhook"` plus `delivery.to`, or `delivery.completionDestination` when preserving announce delivery.
 
 ### `cron.retry`
 

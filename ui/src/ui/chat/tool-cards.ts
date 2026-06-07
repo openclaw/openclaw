@@ -1,4 +1,6 @@
+// Control UI chat module implements tool cards behavior.
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import { t } from "../../i18n/index.ts";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
@@ -342,6 +344,26 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
   return cards;
 }
 
+const toolCardsByMessage = new WeakMap<object, Map<string, ToolCard[]>>();
+
+export function extractToolCardsCached(message: unknown, prefix = "tool"): ToolCard[] {
+  if (!message || typeof message !== "object") {
+    return extractToolCards(message, prefix);
+  }
+  let byPrefix = toolCardsByMessage.get(message);
+  if (!byPrefix) {
+    byPrefix = new Map();
+    toolCardsByMessage.set(message, byPrefix);
+  }
+  const cached = byPrefix.get(prefix);
+  if (cached) {
+    return cached;
+  }
+  const cards = extractToolCards(message, prefix);
+  byPrefix.set(prefix, cards);
+  return cards;
+}
+
 export function buildToolCardSidebarContent(card: ToolCard): string {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
@@ -392,15 +414,20 @@ function renderPreviewFrame(params: {
   height?: number;
   sandbox?: string;
 }) {
-  return html`
-    <iframe
-      class="chat-tool-card__preview-frame"
-      title=${params.title}
-      sandbox=${params.sandbox ?? ""}
-      src=${params.src ?? nothing}
-      style=${params.height ? `height:${params.height}px` : ""}
-    ></iframe>
-  `;
+  const sandbox = params.sandbox ?? "";
+  const src = params.src ?? "";
+  return keyed(
+    `${sandbox}\u0000${src}\u0000${params.height ?? ""}`,
+    html`
+      <iframe
+        class="chat-tool-card__preview-frame"
+        title=${params.title}
+        sandbox=${sandbox}
+        src=${src || nothing}
+        style=${params.height ? `height:${params.height}px` : ""}
+      ></iframe>
+    `,
+  );
 }
 
 export function renderToolPreview(
@@ -584,7 +611,7 @@ export function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string
   return formatCollapsedToolPreviewText(inputText);
 }
 
-function resolveCollapsedToolSummaryParts(params: {
+export function resolveCollapsedToolSummaryParts(params: {
   card: ToolCard;
   displayLabel: string;
   displayDetail: string | undefined;

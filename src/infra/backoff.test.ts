@@ -1,3 +1,4 @@
+// Covers retry backoff calculation and abortable sleep behavior.
 import { describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "./backoff.js";
@@ -94,7 +95,7 @@ describe("backoff helpers", () => {
       get reason() {
         return new Error("listener-registration-race");
       },
-      addEventListener(eventValue: string, _listener: EventListenerOrEventListenerObject) {
+      addEventListener(_eventValue: string, _listener: EventListenerOrEventListenerObject) {
         aborted = true;
       },
       removeEventListener() {},

@@ -1,3 +1,4 @@
+// Assembles the canonical Zod schema for OpenClaw config parsing.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -70,6 +71,11 @@ const GatewayRemoteSchemaShape = {
 
 const GatewayRemoteConfigSchema = z.object(GatewayRemoteSchemaShape).strict().optional();
 
+const TailscaleServiceNameSchema = z.string().regex(/^svc:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/, {
+  message:
+    'Tailscale serviceName must use the "svc:<dns-label>" format, for example "svc:openclaw"',
+});
+
 const LegacyCanvasHostSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -95,6 +101,32 @@ const SecuritySchema = z
               })
               .strict(),
           )
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    installPolicy: z
+      .object({
+        enabled: z.boolean().optional(),
+        targets: z
+          .array(z.union([z.literal("skill"), z.literal("plugin")]))
+          .min(1)
+          .optional(),
+        exec: z
+          .object({
+            source: z.literal("exec"),
+            command: z.string().min(1),
+            args: z.array(z.string()).optional(),
+            timeoutMs: z.number().int().min(1).optional(),
+            noOutputTimeoutMs: z.number().int().min(1).optional(),
+            maxOutputBytes: z.number().int().min(1).optional(),
+            env: z.record(z.string(), z.string().register(sensitive)).optional(),
+            passEnv: z.array(z.string()).optional(),
+            trustedDirs: z.array(z.string()).optional(),
+            allowInsecurePath: z.boolean().optional(),
+            allowSymlinkCommand: z.boolean().optional(),
+          })
+          .strict()
           .optional(),
       })
       .strict()
@@ -188,6 +220,7 @@ const MemoryQmdSchema = z
     command: z.string().optional(),
     mcporter: MemoryQmdMcporterSchema.optional(),
     searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
+    rerank: z.boolean().optional(),
     searchTool: z.string().trim().min(1).optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
@@ -1028,12 +1061,6 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
-        webchat: z
-          .object({
-            chatHistoryMaxChars: z.number().int().positive().max(500_000).optional(),
-          })
-          .strict()
-          .optional(),
         handshakeTimeoutMs: z.number().int().min(1).optional(),
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
         channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),
@@ -1042,6 +1069,7 @@ export const OpenClawSchema = z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
+            serviceName: TailscaleServiceNameSchema.optional(),
             preserveFunnel: z.boolean().optional(),
           })
           .strict()

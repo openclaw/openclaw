@@ -1,3 +1,4 @@
+// Imessage plugin module implements approval reactions behavior.
 import {
   buildApprovalReactionHint,
   createApprovalReactionTargetStore,
@@ -201,8 +202,10 @@ function readPersistedTarget(value: unknown): IMessageApprovalReactionTarget | n
     return null;
   }
   const allowedDecisions = target.allowedDecisions
-    .map((value) => (typeof value === "string" ? normalizeApprovalDecision(value) : null))
-    .filter((value): value is ExecApprovalReplyDecision => Boolean(value));
+    .map((valueValue) =>
+      typeof valueValue === "string" ? normalizeApprovalDecision(valueValue) : null,
+    )
+    .filter((valueLocal): valueLocal is ExecApprovalReplyDecision => Boolean(valueLocal));
   if (allowedDecisions.length === 0) {
     return null;
   }

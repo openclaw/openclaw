@@ -1,3 +1,6 @@
+/**
+ * Tests provider stream shared helpers and stream hook capture.
+ */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
@@ -54,7 +57,9 @@ async function resolveStream(stream: ReturnType<StreamFn>) {
 async function nextEvent(iterator: AsyncIterator<unknown>, label: string): Promise<StreamEvent> {
   const result = await Promise.race([
     iterator.next(),
-    new Promise<"timed out">((resolve) => setTimeout(() => resolve("timed out"), 50)),
+    new Promise<"timed out">((resolve) => {
+      setTimeout(() => resolve("timed out"), 50);
+    }),
   ]);
   if (result === "timed out") {
     throw new Error(`timed out waiting for ${label}`);

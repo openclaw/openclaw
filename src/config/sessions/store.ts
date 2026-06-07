@@ -1,3 +1,4 @@
+// Session store facade coordinates reads, writes, maintenance, delivery metadata, and exports.
 import fs from "node:fs";
 import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -37,7 +38,7 @@ import {
   takeMutableSessionStoreCache,
   writeSessionStoreCache,
 } from "./store-cache.js";
-import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
+import { resolveSessionStoreEntry } from "./store-entry.js";
 import {
   loadSessionStore,
   normalizeSessionStore,
@@ -95,6 +96,7 @@ const writerStoreFileStats = new WeakMap<
 >();
 
 function loadSessionArchiveRuntime() {
+  // Archive cleanup is a cold maintenance path, so keep it lazy to avoid gateway import cycles.
   sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
   return sessionArchiveRuntimePromise;
 }
@@ -156,12 +158,6 @@ type SaveSessionStoreOptions = {
   takeCacheOwnership?: boolean;
   /** Active session key for warn-only maintenance. */
   activeSessionKey?: string;
-  /**
-   * Session keys that are allowed to drop persisted ACP metadata during this update.
-   * All other updates preserve existing `entry.acp` blocks when callers replace the
-   * whole session entry without carrying ACP state forward.
-   */
-  allowDropAcpMetaSessionKeys?: string[];
   /** Optional callback for warn-only maintenance. */
   onWarn?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
   /** Optional callback with maintenance stats after a save. */
@@ -306,6 +302,8 @@ function restoreUnchangedSessionStoreCache(
 }
 
 function findJsonValueEnd(json: string, valueStart: number): number | null {
+  // Single-entry persistence rewrites one top-level JSON value; this scanner finds its end without
+  // reparsing the whole store string.
   let depth = 0;
   let inString = false;
   let escaped = false;
@@ -362,6 +360,7 @@ function buildSingleEntrySerializedStore(params: {
   const currentPromptRefs = getSerializedPromptRefs(params.storePath, currentSerialized);
   const marker = `\n  ${JSON.stringify(params.patch.sessionKey)}: `;
   const markerIndex = currentSerialized.indexOf(marker);
+  // Fast path only handles existing pretty-printed top-level entries in the cached JSON shape.
   if (markerIndex < 0) {
     return null;
   }
@@ -450,6 +449,8 @@ function storeHasUnsafeUntouchedHydratedSkillPrompts(
       ? getSerializedPromptRefs(storePath, currentSerialized)
       : undefined;
   for (const [key, entry] of Object.entries(store)) {
+    // If another hydrated entry lost its durable blob, single-entry JSON surgery would persist a
+    // store that cannot rehydrate that prompt later.
     if (key === changedSessionKey || typeof entry.skillsSnapshot?.prompt !== "string") {
       continue;
     }
@@ -500,64 +501,6 @@ function sessionEntriesHaveSameSerializedForm(
   next: SessionEntry,
 ): boolean {
   return previous !== undefined && JSON.stringify(previous) === JSON.stringify(next);
-}
-
-function resolveMutableSessionStoreKey(
-  store: Record<string, SessionEntry>,
-  sessionKey: string,
-): string | undefined {
-  const trimmed = sessionKey.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (Object.hasOwn(store, trimmed)) {
-    return trimmed;
-  }
-  const normalized = normalizeStoreSessionKey(trimmed);
-  if (Object.hasOwn(store, normalized)) {
-    return normalized;
-  }
-  return Object.keys(store).find((key) => normalizeStoreSessionKey(key) === normalized);
-}
-
-function collectAcpMetadataSnapshot(
-  store: Record<string, SessionEntry>,
-): Map<string, NonNullable<SessionEntry["acp"]>> {
-  const snapshot = new Map<string, NonNullable<SessionEntry["acp"]>>();
-  for (const [sessionKey, entry] of Object.entries(store)) {
-    if (entry?.acp) {
-      snapshot.set(sessionKey, entry.acp);
-    }
-  }
-  return snapshot;
-}
-
-function preserveExistingAcpMetadata(params: {
-  previousAcpByKey: Map<string, NonNullable<SessionEntry["acp"]>>;
-  nextStore: Record<string, SessionEntry>;
-  allowDropSessionKeys?: string[];
-}): void {
-  const allowDrop = new Set(
-    (params.allowDropSessionKeys ?? []).map((key) => normalizeStoreSessionKey(key)),
-  );
-  for (const [previousKey, previousAcp] of params.previousAcpByKey.entries()) {
-    const normalizedKey = normalizeStoreSessionKey(previousKey);
-    if (allowDrop.has(normalizedKey)) {
-      continue;
-    }
-    const nextKey = resolveMutableSessionStoreKey(params.nextStore, previousKey);
-    if (!nextKey) {
-      continue;
-    }
-    const nextEntry = params.nextStore[nextKey];
-    if (!nextEntry || nextEntry.acp) {
-      continue;
-    }
-    params.nextStore[nextKey] = {
-      ...nextEntry,
-      acp: previousAcp,
-    };
-  }
 }
 
 async function saveSessionStoreUnlocked(
@@ -649,6 +592,7 @@ async function saveSessionStoreUnlocked(
           .map((entry) => entry?.sessionId)
           .filter((id): id is string => Boolean(id)),
       );
+      // Archive/remove artifacts only after the final live session-id set is known.
       const archivedForDeletedSessions = await archiveRemovedSessionTranscripts({
         removedSessionFiles,
         referencedSessionIds,
@@ -726,6 +670,8 @@ async function saveSessionStoreUnlocked(
       opts.singleEntryPersistence.sessionKey,
     )
   ) {
+    // Hot path for updating one entry: preserve the cached serialized store and replace only that
+    // entry's JSON when no maintenance or prompt-blob repair needs a full rewrite.
     const normalizedEntry = store[opts.singleEntryPersistence.sessionKey];
     const singleEntrySerialized = buildSingleEntrySerializedStore({
       storePath,
@@ -789,7 +735,9 @@ async function saveSessionStoreUnlocked(
           return;
         }
         if (i < 4) {
-          await new Promise((r) => setTimeout(r, 50 * (i + 1)));
+          await new Promise((r) => {
+            setTimeout(r, 50 * (i + 1));
+          });
           continue;
         }
         // Final attempt failed - skip this save. The writer queue ensures
@@ -857,17 +805,11 @@ export async function updateSessionStore<T>(
 ): Promise<T> {
   return await runExclusiveSessionStoreWrite(storePath, async () => {
     const store = loadMutableSessionStoreForWriter(storePath);
-    const previousAcpByKey = collectAcpMetadataSnapshot(store);
     const result = await mutator(store);
     if (opts?.skipSaveWhenResult?.(result)) {
       restoreUnchangedSessionStoreCache(storePath, store);
       return result;
     }
-    preserveExistingAcpMetadata({
-      previousAcpByKey,
-      nextStore: store,
-      allowDropSessionKeys: opts?.allowDropAcpMetaSessionKeys,
-    });
     await saveSessionStoreUnlocked(storePath, store, {
       ...opts,
       singleEntryPersistence: opts?.resolveSingleEntryPersistence?.(result) ?? undefined,
@@ -979,7 +921,6 @@ async function persistResolvedSessionEntry(params: {
   store: Record<string, SessionEntry>;
   resolved: ReturnType<typeof resolveSessionStoreEntry>;
   next: SessionEntry;
-  previousAcpByKey?: Map<string, NonNullable<SessionEntry["acp"]>>;
   skipMaintenance?: boolean;
   takeCacheOwnership?: boolean;
   returnDetached?: boolean;
@@ -991,12 +932,6 @@ async function persistResolvedSessionEntry(params: {
   params.store[params.resolved.normalizedKey] = next;
   for (const legacyKey of params.resolved.legacyKeys) {
     delete params.store[legacyKey];
-  }
-  if (params.previousAcpByKey) {
-    preserveExistingAcpMetadata({
-      previousAcpByKey: params.previousAcpByKey,
-      nextStore: params.store,
-    });
   }
   await saveSessionStoreUnlocked(params.storePath, params.store, {
     activeSessionKey: params.resolved.normalizedKey,
@@ -1116,7 +1051,6 @@ export async function upsertSessionEntry(
   params: SessionEntryWorkflowOptions & {
     sessionKey: string;
     entry: SessionEntry;
-    allowDropAcpMeta?: boolean;
   },
 ): Promise<void> {
   const storePath = resolveSessionWorkflowStorePath(params);
@@ -1124,9 +1058,6 @@ export async function upsertSessionEntry(
     const store = loadMutableSessionStoreForWriter(storePath);
     const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
     const next = cloneSessionEntry(params.entry);
-    if (!params.allowDropAcpMeta && resolved.existing?.acp && !next.acp) {
-      next.acp = resolved.existing.acp;
-    }
     await persistResolvedSessionEntry({
       storePath,
       store,
@@ -1148,7 +1079,6 @@ export async function recordSessionMetaFromInbound(params: {
   const createIfMissing = params.createIfMissing ?? true;
   return await runExclusiveSessionStoreWrite(storePath, async () => {
     const store = loadMutableSessionStoreForWriter(storePath);
-    const previousAcpByKey = collectAcpMetadataSnapshot(store);
     const resolved = resolveSessionStoreEntry({ store, sessionKey });
     const existing = resolved.existing;
     const patch = deriveSessionMetaPatch({
@@ -1164,7 +1094,6 @@ export async function recordSessionMetaFromInbound(params: {
           store,
           resolved,
           next: existing,
-          previousAcpByKey,
           takeCacheOwnership: true,
           returnDetached: true,
         });
@@ -1192,7 +1121,6 @@ export async function recordSessionMetaFromInbound(params: {
       store,
       resolved,
       next,
-      previousAcpByKey,
       takeCacheOwnership: true,
       returnDetached: true,
     });

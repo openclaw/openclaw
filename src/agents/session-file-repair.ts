@@ -1,3 +1,8 @@
+/**
+ * Persisted session JSONL repair helpers.
+ * Drops malformed transcript entries, rewrites unreplayable blank/error turns,
+ * and inserts missing code-mode tool results before replay.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,8 +12,11 @@ import { makeMissingToolResult } from "./session-transcript-repair.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
-/** Placeholder for blank user messages — preserves the user turn so strict
- * providers that require at least one user message don't reject the transcript. */
+/**
+ * Placeholder for blank user messages.
+ * Preserves the user turn so strict providers that require at least one user
+ * message do not reject the transcript.
+ */
 export const BLANK_USER_FALLBACK_TEXT = "(continue)";
 
 type RepairReport = {
@@ -21,10 +29,6 @@ type RepairReport = {
   backupPath?: string;
   reason?: string;
 };
-
-// The sentinel text is shared with stream-message-shared.ts and
-// replay-history.ts so a repaired entry is byte-identical to a live
-// stream-error turn, keeping the repair pass idempotent.
 
 type SessionMessageEntry = {
   type: "message";
@@ -206,15 +210,10 @@ function isCodeModeToolCallRepairCandidate(entry: unknown): entry is SessionMess
     provider?: unknown;
     stopReason?: unknown;
   };
-  const legacyOpenAIProvider = ["openai", "codex"].join("-");
-  const legacyOpenAIResponsesApi = `${legacyOpenAIProvider}-responses`;
-  const openAIProvider = message.provider === "openai" || message.provider === legacyOpenAIProvider;
-  const openAIResponsesApi =
-    message.api === "openai-chatgpt-responses" || message.api === legacyOpenAIResponsesApi;
   return (
     message.role === "assistant" &&
-    openAIResponsesApi &&
-    openAIProvider &&
+    message.api === "openai-chatgpt-responses" &&
+    message.provider === "openai" &&
     message.stopReason !== "error" &&
     message.stopReason !== "aborted"
   );
@@ -296,6 +295,7 @@ function insertMissingCodeModeToolResults(entries: unknown[]): {
   return { entries: insertedToolResults > 0 ? out : entries, insertedToolResults };
 }
 
+/** Repair a persisted session JSONL file in place when replay-breaking corruption is found. */
 export async function repairSessionFileIfNeeded(params: {
   sessionFile: string;
   debug?: (message: string) => void;
@@ -325,7 +325,7 @@ export async function repairSessionFileIfNeeded(params: {
   let rewrittenAssistantMessages = 0;
   let droppedBlankUserMessages = 0;
   let rewrittenUserMessages = 0;
-  let insertedToolResults = 0;
+  let insertedToolResults;
 
   for (const line of lines) {
     if (!line.trim()) {

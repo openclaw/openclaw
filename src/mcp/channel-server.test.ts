@@ -1,3 +1,4 @@
+// Channel MCP server tests cover channel tool registration and requests.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, test, vi } from "vitest";
@@ -268,7 +269,7 @@ describe("openclaw channel mcp server", () => {
 
       test("emits Claude channel and permission notifications", async () => {
         const sessionKey = "agent:main:main";
-        let mcp: Awaited<ReturnType<typeof connectMcpWithoutGateway>> | null = null;
+        let mcp: Awaited<ReturnType<typeof connectMcpWithoutGateway>> | null | undefined;
         try {
           const channelNotifications: Array<{ content: string; meta: Record<string, string> }> = [];
           const permissionNotifications: Array<{

@@ -1,3 +1,5 @@
+// Tool invoke HTTP tests cover request auth, tool context construction, hook
+// filtering, plugin metadata, payload validation, and response shaping.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -236,7 +238,7 @@ beforeAll(async () => {
       }
       res.statusCode = 404;
       res.end("not found");
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       res.statusCode = 500;
       res.end(String(err));
     });
@@ -257,7 +259,9 @@ afterAll(async () => {
   if (!server) {
     return;
   }
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
   sharedServer = undefined;
 });
 

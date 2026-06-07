@@ -1,3 +1,6 @@
+// Human-facing background task commands.
+// Handles task listing/show/cancel/notify/audit plus registry maintenance for tasks, flows, and sessions.
+
 import fs from "node:fs";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -12,7 +15,7 @@ import {
   updateSessionStore,
   type SessionEntry,
 } from "../config/sessions.js";
-import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
+import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
@@ -78,7 +81,7 @@ async function loadTaskCancelConfig() {
 function configureTaskMaintenanceFromConfig(): void {
   const cfg = getRuntimeConfig();
   configureTaskRegistryMaintenance({
-    cronStorePath: resolveCronStorePath(cfg.cron?.store),
+    cronStorePath: resolveCronJobsStorePath(cfg.cron?.store),
   });
 }
 
@@ -108,9 +111,9 @@ function parseCronRunSessionJobId(sessionKey: string): string | undefined {
 
 function readRunningCronJobIds(): Set<string> {
   try {
-    const cronStorePath = resolveCronStorePath(getRuntimeConfig().cron?.store);
+    const cronStorePath = resolveCronJobsStorePath(getRuntimeConfig().cron?.store);
     return new Set(
-      loadCronStoreSync(cronStorePath)
+      loadCronJobsStoreSync(cronStorePath)
         .jobs.filter((job) => typeof job.state?.runningAtMs === "number")
         // Cron session keys are matched case-insensitively against job ids.
         .map((job) => job.id.toLowerCase()),
@@ -129,6 +132,7 @@ function buildSessionRegistryPreserveKeys(params: {
   for (const key of Object.keys(params.store)) {
     const jobId = parseCronRunSessionJobId(key);
     if (!jobId) {
+      // Non-cron session rows are outside this maintenance pass; preserve them.
       preserveKeys.add(key);
       continue;
     }
@@ -161,6 +165,7 @@ async function runSessionRegistryMaintenance(params: {
     const beforeStore = loadSessionStore(target.storePath, { skipCache: true });
     const beforeCount = Object.keys(beforeStore).length;
     if (params.apply) {
+      // Apply mode mutates each store atomically through updateSessionStore.
       const applied = await updateSessionStore(
         target.storePath,
         (store) => {
@@ -191,6 +196,7 @@ async function runSessionRegistryMaintenance(params: {
       continue;
     }
     const previewStore = structuredClone(beforeStore);
+    // Preview mode runs pruning against a clone so dry-run output cannot change stores.
     const { preserveKeys, preservedRunning } = buildSessionRegistryPreserveKeys({
       store: previewStore,
       runningCronJobIds,
@@ -350,6 +356,7 @@ function toSystemAuditFindings(params: {
   severityFilter?: TaskSystemAuditSeverity;
   codeFilter?: TaskSystemAuditCode;
 }) {
+  // Human audit reconciles inspectable tasks first so stale detached runs are reflected.
   const taskFindings = listTaskAuditFindings({ tasks: reconcileInspectableTasks() });
   const flowFindings = listTaskFlowAuditFindings();
   return buildTaskSystemAuditFindings({
@@ -360,6 +367,7 @@ function toSystemAuditFindings(params: {
   });
 }
 
+/** Lists background tasks with optional runtime/status filters. */
 export async function tasksListCommand(
   opts: { json?: boolean; runtime?: string; status?: string },
   runtime: RuntimeEnv,
@@ -412,6 +420,7 @@ export async function tasksListCommand(
   }
 }
 
+/** Shows one task record by id or lookup token. */
 export async function tasksShowCommand(
   opts: { json?: boolean; lookup: string },
   runtime: RuntimeEnv,
@@ -458,6 +467,7 @@ export async function tasksShowCommand(
   }
 }
 
+/** Updates a task's notification policy. */
 export async function tasksNotifyCommand(
   opts: { lookup: string; notify: TaskNotifyPolicy },
   runtime: RuntimeEnv,
@@ -480,6 +490,7 @@ export async function tasksNotifyCommand(
   runtime.log(`Updated ${updated.taskId} notify policy to ${updated.notifyPolicy}.`);
 }
 
+/** Cancels a detached task run by lookup token. */
 export async function tasksCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
@@ -507,6 +518,7 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
   );
 }
 
+/** Prints or serializes combined task/task-flow audit findings. */
 export async function tasksAuditCommand(
   opts: {
     json?: boolean;
@@ -587,6 +599,7 @@ export async function tasksAuditCommand(
   }
 }
 
+/** Previews or applies task, task-flow, and backing session-registry maintenance. */
 export async function tasksMaintenanceCommand(
   opts: { json?: boolean; apply?: boolean },
   runtime: RuntimeEnv,

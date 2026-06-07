@@ -1,3 +1,4 @@
+// Stale plugin config tests cover doctor cleanup and warnings for obsolete plugin config.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
@@ -378,6 +379,119 @@ describe("doctor stale plugin config helpers", () => {
       autoRepairBlocked: true,
     });
     expect(warnings[2]).toContain("Auto-removal is paused");
+  });
+
+  it("keeps an intentionally unavailable Codex plugin entry out of stale diagnostics", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+            agentRuntime: { id: "openclaw" },
+          },
+        },
+      },
+      plugins: {
+        allow: ["codex", "acpx"],
+        entries: {
+          codex: {},
+          acpx: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(scanStalePluginConfig(cfg)).toEqual([
+      {
+        pluginId: "codex",
+        pathLabel: "plugins.allow",
+        surface: "allow",
+      },
+      {
+        pluginId: "acpx",
+        pathLabel: "plugins.allow",
+        surface: "allow",
+      },
+      {
+        pluginId: "acpx",
+        pathLabel: "plugins.entries.acpx",
+        surface: "entries",
+      },
+    ]);
+  });
+
+  it("keeps an explicitly disabled Codex plugin entry out of stale diagnostics", () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          codex: { enabled: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(scanStalePluginConfig(cfg)).toEqual([]);
+    expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
+  });
+
+  it("keeps Codex entry diagnostics when OpenAI wildcard policy falls back to Codex", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+            agentRuntime: { id: "pi" },
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "openai/*": { agentRuntime: { id: "default" } },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          codex: {},
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(scanStalePluginConfig(cfg)).toEqual([
+      {
+        pluginId: "codex",
+        pathLabel: "plugins.entries.codex",
+        surface: "entries",
+      },
+    ]);
+  });
+
+  it("still reports an explicitly enabled missing Codex plugin entry as stale", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+            agentRuntime: { id: "pi" },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          codex: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(scanStalePluginConfig(cfg)).toEqual([
+      {
+        pluginId: "codex",
+        pathLabel: "plugins.entries.codex",
+        surface: "entries",
+      },
+    ]);
   });
 
   it("treats legacy OpenAI Codex plugin ids as stale during scan and repair", () => {

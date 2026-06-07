@@ -1,9 +1,10 @@
+/** Materializes configured MCP catalog entries into agent tools and runtime helpers. */
 import crypto from "node:crypto";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
@@ -19,13 +20,49 @@ import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js"
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
+type ToolResultContentBlock = AgentToolResult<unknown>["content"][number];
+
+// AgentToolResult only carries text/image, but an MCP CallToolResult can also
+// return resource_link, resource, and audio blocks (MCP SDK ContentBlock union).
+// Coercing those into the text/image contract here keeps the boundary honest so
+// downstream provider converters never build an image block with undefined
+// data/media_type, which makes Anthropic 400 and poisons the whole session
+// history (every later turn replays the bad block and 400s too). See #90710.
+function mcpContentBlockToToolResult(block: ContentBlock): ToolResultContentBlock {
+  switch (block.type) {
+    case "text":
+      return { type: "text", text: block.text };
+    case "image":
+      // Only emit an image when the base64 source is actually present.
+      if (block.data && block.mimeType) {
+        return { type: "image", data: block.data, mimeType: block.mimeType };
+      }
+      return { type: "text", text: JSON.stringify(block) };
+    case "audio":
+      return { type: "text", text: `[audio ${block.mimeType}]` };
+    case "resource_link": {
+      const label = block.title ?? block.name;
+      return { type: "text", text: label ? `[${label}] ${block.uri}` : block.uri };
+    }
+    case "resource": {
+      const resource = block.resource;
+      const text = "text" in resource ? resource.text : undefined;
+      return { type: "text", text: text ?? resource.uri };
+    }
+    default:
+      // Forward-compat / untrusted-server guard: stringify any block type the
+      // installed MCP SDK union does not cover instead of dropping it.
+      return { type: "text", text: JSON.stringify(block) };
+  }
+}
+
 function toAgentToolResult(params: {
   serverName: string;
   toolName: string;
   result: CallToolResult;
 }): AgentToolResult<unknown> {
-  const content = Array.isArray(params.result.content)
-    ? (params.result.content as AgentToolResult<unknown>["content"])
+  const content: AgentToolResult<unknown>["content"] = Array.isArray(params.result.content)
+    ? params.result.content.map(mcpContentBlockToToolResult)
     : [];
   const structuredContentBlock =
     params.result.structuredContent !== undefined
@@ -150,7 +187,7 @@ function addMcpUtilityTool(params: {
   serverName: string;
   safeServerName: string;
   executionMode: AnyAgentTool["executionMode"];
-  operation: string;
+  operation: Exclude<PluginToolMcpMeta["operation"], "tool">;
   label: string;
   description: string;
   parameters: Record<string, unknown>;
@@ -177,6 +214,12 @@ function addMcpUtilityTool(params: {
   setPluginToolMeta(agentTool, {
     pluginId: "bundle-mcp",
     optional: false,
+    mcp: {
+      serverName: params.serverName,
+      safeServerName: params.safeServerName,
+      toolName: params.operation,
+      operation: params.operation,
+    },
   });
   params.tools.push(agentTool);
 }
@@ -242,6 +285,12 @@ export function buildBundleMcpToolsFromCatalog(params: {
     setPluginToolMeta(agentTool, {
       pluginId: "bundle-mcp",
       optional: false,
+      mcp: {
+        serverName: tool.serverName,
+        safeServerName: tool.safeServerName,
+        toolName: tool.toolName,
+        operation: "tool",
+      },
     });
     tools.push(agentTool);
   }

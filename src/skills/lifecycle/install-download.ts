@@ -1,3 +1,4 @@
+// Install download helpers fetch remote skill artifacts into temporary storage.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -140,7 +141,7 @@ export async function installDownloadSpec(params: {
     };
   }
 
-  let filename = "";
+  let filename;
   try {
     const parsed = new URL(url);
     filename = path.basename(parsed.pathname);
@@ -151,8 +152,8 @@ export async function installDownloadSpec(params: {
     filename = "download";
   }
 
-  let canonicalRoot = "";
-  let targetDir = "";
+  let canonicalRoot;
+  let targetDir;
   try {
     await ensureDir(root);
     await assertCanonicalPathWithinBase({
@@ -192,7 +193,7 @@ export async function installDownloadSpec(params: {
       code: null,
     };
   }
-  let downloaded = 0;
+  let downloaded;
   try {
     const result = await downloadFile({
       url,

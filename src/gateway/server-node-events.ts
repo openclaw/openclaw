@@ -1,3 +1,5 @@
+// Gateway node event dispatcher.
+// Handles device/node-originated events and routes them to sessions/channels.
 import { randomUUID } from "node:crypto";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -66,8 +68,20 @@ export type NodeEventHandleResult = {
   reason?: string;
 };
 
+type NodeAgentCommandInput = Parameters<typeof agentCommandFromIngress>[0];
+
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
+}
+
+function dispatchNodeAgentCommand(
+  ctx: NodeEventContext,
+  nodeId: string,
+  input: NodeAgentCommandInput,
+): void {
+  void agentCommandFromIngress(input, defaultRuntime, ctx.deps).catch((err: unknown) => {
+    ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+  });
 }
 
 function resolveVoiceTranscriptFingerprint(obj: Record<string, unknown>, text: string): string {
@@ -105,6 +119,8 @@ function shouldDropDuplicateVoiceTranscript(params: {
   fingerprint: string;
   now: number;
 }): boolean {
+  // Voice providers can replay identical transcript fragments during reconnect.
+  // Keep only a bounded last fingerprint per session to avoid duplicate sends.
   const previous = recentVoiceTranscripts.get(params.sessionKey);
   if (
     previous &&
@@ -293,7 +309,7 @@ function queueSessionStoreTouch(params: {
     entry: params.entry,
     sessionId: params.sessionId,
     now: params.now,
-  }).catch((err) => {
+  }).catch((err: unknown) => {
     params.ctx.logGateway.warn("voice session-store update failed: " + formatForLog(err));
   });
 }
@@ -413,26 +429,20 @@ export const handleNodeEvent = async (
         clientRunId: `voice-${randomUUID()}`,
       });
 
-      void agentCommandFromIngress(
-        {
-          runId,
-          message: text,
-          sessionId,
-          sessionKey: canonicalKey,
-          thinking: "low",
-          deliver: false,
-          messageChannel: "node",
-          inputProvenance: {
-            kind: "external_user",
-            sourceChannel: "voice",
-            sourceTool: "gateway.voice.transcript",
-          },
-          allowModelOverride: false,
+      dispatchNodeAgentCommand(ctx, nodeId, {
+        runId,
+        message: text,
+        sessionId,
+        sessionKey: canonicalKey,
+        thinking: "low",
+        deliver: false,
+        messageChannel: "node",
+        inputProvenance: {
+          kind: "external_user",
+          sourceChannel: "voice",
+          sourceTool: "gateway.voice.transcript",
         },
-        defaultRuntime,
-        ctx.deps,
-      ).catch((err) => {
-        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+        allowModelOverride: false,
       });
       return undefined;
     }
@@ -459,7 +469,7 @@ export const handleNodeEvent = async (
         key?: string | null;
       };
 
-      let link: AgentDeepLink | null = null;
+      let link: AgentDeepLink | null;
       try {
         link = JSON.parse(evt.payloadJSON) as AgentDeepLink;
       } catch {
@@ -574,7 +584,7 @@ export const handleNodeEvent = async (
           channel: deliveryChannel,
           to: deliveryTo,
           text: receiptText,
-        }).catch((err) => {
+        }).catch((err: unknown) => {
           ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
         });
       } else if (wantsReceipt) {
@@ -583,27 +593,21 @@ export const handleNodeEvent = async (
         );
       }
 
-      void agentCommandFromIngress(
-        {
-          runId: sessionId,
-          message,
-          images,
-          imageOrder,
-          sessionId,
-          sessionKey: canonicalKey,
-          thinking: link?.thinking ?? undefined,
-          deliver,
-          to: deliveryTo,
-          channel: deliveryChannel,
-          timeout:
-            typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
-          messageChannel: "node",
-          allowModelOverride: false,
-        },
-        defaultRuntime,
-        ctx.deps,
-      ).catch((err) => {
-        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+      dispatchNodeAgentCommand(ctx, nodeId, {
+        runId: sessionId,
+        message,
+        images,
+        imageOrder,
+        sessionId,
+        sessionKey: canonicalKey,
+        thinking: link?.thinking ?? undefined,
+        deliver,
+        to: deliveryTo,
+        channel: deliveryChannel,
+        timeout:
+          typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
+        messageChannel: "node",
+        allowModelOverride: false,
       });
       return undefined;
     }
@@ -743,7 +747,7 @@ export const handleNodeEvent = async (
         (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, ""),
       );
 
-      let text = "";
+      let text;
       if (evt.event === "exec.started") {
         text = `Exec started (node=${nodeId}${runId ? ` id=${runId}` : ""})`;
         if (command) {

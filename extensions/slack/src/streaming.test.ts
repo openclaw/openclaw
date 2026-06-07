@@ -1,3 +1,4 @@
+// Slack tests cover streaming plugin behavior.
 import type { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -78,7 +79,7 @@ describe("stopSlackStream finalize error handling", () => {
 
     await appendSlackStream({ session, chunks });
 
-    expect(session.streamer.append).toHaveBeenCalledWith({ chunks });
+    expect(session.streamer["append"]).toHaveBeenCalledWith({ chunks });
     expect(session.delivered).toBe(true);
     expect(session.pendingText).toBe("");
   });

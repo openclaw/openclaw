@@ -1,3 +1,4 @@
+// Typing tests cover typing indicator start, update, and cleanup behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createTypingCallbacks } from "./typing.js";
@@ -78,14 +79,6 @@ function createTypingHarness(overrides: TypingHarnessOptions = {}) {
 describe("createTypingCallbacks", () => {
   beforeEach(() => {
     vi.useRealTimers();
-  });
-
-  afterEach(() => {
-    if (vi.isFakeTimers()) {
-      vi.clearAllTimers();
-    }
-    vi.useRealTimers();
-    vi.restoreAllMocks();
   });
 
   it("invokes start on reply start", async () => {

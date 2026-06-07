@@ -175,14 +175,39 @@ lives on the [First-run FAQ](/help/faq-first-run).
     Yes. Add extra directories via `skills.load.extraDirs` in `~/.openclaw/openclaw.json` (lowest precedence). Default precedence is `<workspace>/skills` → `<workspace>/.agents/skills` → `~/.agents/skills` → `~/.openclaw/skills` → bundled → `skills.load.extraDirs`. `clawhub` installs into `./skills` by default, which OpenClaw treats as `<workspace>/skills` on the next session. If the skill should only be visible to certain agents, pair that with `agents.defaults.skills` or `agents.list[].skills`.
   </Accordion>
 
-  <Accordion title="How can I use different models for different tasks?">
+  <Accordion title="How can I use different models or settings for different tasks?">
     Today the supported patterns are:
 
     - **Cron jobs**: isolated jobs can set a `model` override per job.
-    - **Sub-agents**: route tasks to separate agents with different default models.
+    - **Agents**: route tasks to separate agents with different default models, thinking levels, and stream params.
     - **On-demand switch**: use `/model` to switch the current session model at any time.
 
-    See [Cron jobs](/automation/cron-jobs), [Multi-Agent Routing](/concepts/multi-agent), and [Slash commands](/tools/slash-commands).
+    For example, use the same model with different per-agent settings:
+
+    ```json5
+    {
+      agents: {
+        list: [
+          {
+            id: "coder",
+            model: "xiaomi/mimo-v2.5-pro",
+            thinkingDefault: "high",
+            params: { temperature: 0.1 },
+          },
+          {
+            id: "chat",
+            model: "xiaomi/mimo-v2.5-pro",
+            thinkingDefault: "off",
+            params: { temperature: 0.8 },
+          },
+        ],
+      },
+    }
+    ```
+
+    Put shared per-model defaults in `agents.defaults.models["provider/model"].params`, then put agent-specific overrides in flat `agents.list[].params`. Do not define separate nested `agents.list[].models["provider/model"].params` entries for the same model; `agents.list[].models` is for per-agent model catalog and runtime overrides.
+
+    See [Cron jobs](/automation/cron-jobs), [Multi-Agent Routing](/concepts/multi-agent), [Configuration](/gateway/config-agents), and [Slash commands](/tools/slash-commands).
 
   </Accordion>
 
@@ -603,6 +628,48 @@ lives on the [First-run FAQ](/help/faq-first-run).
     AGENTS.md or MEMORY.md** rather than relying on chat history.
 
     See [Agent workspace](/concepts/agent-workspace) and [Memory](/concepts/memory).
+
+  </Accordion>
+
+  <Accordion title="Can I make SOUL.md bigger?">
+    Yes. `SOUL.md` is one of the workspace bootstrap files injected into the
+    agent context. The default per-file injection limit is `20000` characters,
+    and the total bootstrap budget across files is `60000` characters.
+
+    Change the shared defaults in your OpenClaw config:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          bootstrapMaxChars: 50000,
+          bootstrapTotalMaxChars: 300000,
+        },
+      },
+    }
+    ```
+
+    Or override one agent:
+
+    ```json5
+    {
+      agents: {
+        list: [
+          {
+            id: "main",
+            bootstrapMaxChars: 50000,
+            bootstrapTotalMaxChars: 300000,
+          },
+        ],
+      },
+    }
+    ```
+
+    Use `/context` to check raw vs injected sizes and whether truncation happened.
+    Keep `SOUL.md` focused on voice, stance, and personality; put operating rules
+    in `AGENTS.md` and durable facts in memory.
+
+    See [Context](/concepts/context) and [Agent config](/gateway/config-agents).
 
   </Accordion>
 
@@ -1283,8 +1350,9 @@ lives on the [First-run FAQ](/help/faq-first-run).
     }
     ```
 
-    If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown
-    headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls.
+    If `HEARTBEAT.md` exists but is effectively empty (only blank lines,
+    Markdown/HTML comments, Markdown headings like `# Heading`, fence markers,
+    or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls.
     If the file is missing, the heartbeat still runs and the model decides what to do.
 
     Per-agent overrides use `agents.list[].heartbeat`. Docs: [Heartbeat](/gateway/heartbeat).
@@ -1585,9 +1653,14 @@ lives on the [Models FAQ](/help/faq-models).
   </Accordion>
 
   <Accordion title="I closed my terminal on Windows - how do I restart OpenClaw?">
-    There are **two Windows install modes**:
+    There are **three Windows install modes**:
 
-    **1) WSL2 (recommended):** the Gateway runs inside Linux.
+    **1) Windows Hub local setup:** the native app manages a local app-owned WSL Gateway.
+
+    Open **OpenClaw Companion** from the Start menu or tray, then use
+    **Gateway Setup** or the Connections tab.
+
+    **2) Manual WSL2 Gateway:** the Gateway runs inside Linux.
 
     Open PowerShell, enter WSL, then restart:
 
@@ -1603,7 +1676,7 @@ lives on the [Models FAQ](/help/faq-models).
     openclaw gateway run
     ```
 
-    **2) Native Windows (not recommended):** the Gateway runs directly in Windows.
+    **3) Native Windows CLI/Gateway:** the Gateway runs directly in Windows.
 
     Open PowerShell and run:
 
@@ -1618,7 +1691,7 @@ lives on the [Models FAQ](/help/faq-models).
     openclaw gateway run
     ```
 
-    Docs: [Windows (WSL2)](/platforms/windows), [Gateway service runbook](/gateway).
+    Docs: [Windows](/platforms/windows), [Gateway service runbook](/gateway).
 
   </Accordion>
 
@@ -1750,7 +1823,7 @@ lives on the [Models FAQ](/help/faq-models).
     - The target channel supports outbound media and isn't blocked by allowlists.
     - The file is within the provider's size limits (images are resized to max 2048px).
     - `tools.fs.workspaceOnly=true` keeps local-path sends limited to workspace, temp/media-store, and sandbox-validated files.
-    - `tools.fs.workspaceOnly=false` lets structured local media sends use host-local files the agent can already read, but only for media plus safe document types (images, audio, video, PDF, and Office docs). Plain text and secret-like files are still blocked.
+    - `tools.fs.workspaceOnly=false` lets structured local media sends use host-local files the agent can already read, but only for media plus safe document types (images, audio, video, PDF, Office docs, and validated text documents such as Markdown/MD, TXT, JSON, YAML, and YML). This is not a secret scanner: an agent-readable `secret.txt` or `config.json` can be attached when the extension and content validation match. Keep sensitive files outside agent-readable paths, or keep `tools.fs.workspaceOnly=true` for stricter local-path sends.
 
     See [Images](/nodes/images).
 
@@ -1841,9 +1914,10 @@ lives on the [Models FAQ](/help/faq-models).
 
   <Accordion title="Are ClawHub skills and third-party plugins safe to install?">
     Treat third-party skills and plugins as code you are choosing to trust.
-    ClawHub skill pages expose scan state before install, and OpenClaw plugin
-    install/update flows run built-in dangerous-code checks, but scans are not a
-    complete security boundary.
+    ClawHub skill pages expose scan state before install, but scans are not a
+    complete security boundary. OpenClaw does not run built-in local
+    dangerous-code blocking during plugin or skill install/update flows; use
+    operator-owned `security.installPolicy` for local allow/block decisions.
 
     Safer pattern:
 

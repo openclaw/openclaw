@@ -1,3 +1,8 @@
+/**
+ * Tests in-process OAuth refresh queuing.
+ * Ensures concurrent refresh attempts serialize and queue gates release after
+ * both success and failure.
+ */
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
@@ -91,12 +96,12 @@ describe("OAuth refresh in-process queue", () => {
         store: ensureAuthProfileStore(agentDir),
         profileId,
         agentDir,
-      }).catch((e) => e),
+      }).catch((e: unknown) => e),
       resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
         store: ensureAuthProfileStore(agentDir),
         profileId,
         agentDir,
-      }).catch((e) => e),
+      }).catch((e: unknown) => e),
     ]);
 
     expect(first).toBeInstanceOf(Error);

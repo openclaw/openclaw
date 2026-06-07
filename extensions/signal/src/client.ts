@@ -1,3 +1,4 @@
+// Signal plugin module implements client behavior.
 import { Buffer } from "node:buffer";
 import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
@@ -139,7 +140,7 @@ function requestSignalHttpText(
       }
       settled = true;
       cleanup();
-      reject(error);
+      reject(toLintErrorObject(error, "Non-Error rejection"));
     };
     const resolveOnce = (response: SignalHttpResponse) => {
       if (settled) {
@@ -291,7 +292,7 @@ function openSignalEventStream(
       }
       settled = true;
       cleanup();
-      reject(error);
+      reject(toLintErrorObject(error, "Non-Error rejection"));
     };
     const request: ClientRequest = client.request(
       url,
@@ -431,4 +432,18 @@ export async function streamSignalEvents(params: {
   }
 
   flushEvent();
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

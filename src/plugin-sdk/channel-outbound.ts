@@ -1,4 +1,4 @@
-// Shared outbound/message lifecycle helpers for channel plugins.
+// Channel outbound contracts define plugin send results, media handling, and delivery metadata.
 import type {
   DurableMessageBatchSendResult,
   DurableMessageSendContext,
@@ -10,6 +10,8 @@ type ChannelMessageRuntimeModule = typeof import("../channels/message/runtime.js
 let channelMessageRuntimeModulePromise: Promise<ChannelMessageRuntimeModule> | null = null;
 
 const loadChannelMessageRuntimeModule = async () => {
+  // Share one lazy import across SDK helper calls so plugin barrels do not eagerly pull
+  // message runtime internals into registration/discovery-only paths.
   channelMessageRuntimeModulePromise ??= import("../channels/message/runtime.js");
   return await channelMessageRuntimeModulePromise;
 };
@@ -74,10 +76,12 @@ export type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 export { sanitizeForPlainText } from "../infra/outbound/sanitize-text.js";
 export { logAckFailure, logTypingFailure } from "../channels/logging.js";
 export * from "../channels/streaming.js";
+export * from "../channels/progress-draft-compositor.js";
 export {
   classifyDurableSendRecoveryState,
   createChannelMessageAdapterFromOutbound,
   createDurableInboundReceiveJournal,
+  createDurableInboundReceiveJournalFromQueue,
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
   createMessageReceiveContext,
@@ -134,6 +138,14 @@ export type {
   ChannelMessageUnknownSendReconciliationResult,
   CreateChannelReplyPipelineParams,
   CreateChannelMessageAdapterFromOutboundParams,
+  ChannelIngressQueue,
+  ChannelIngressQueueClaim,
+  ChannelIngressQueueClaimRef,
+  ChannelIngressQueueCompletedRecord,
+  ChannelIngressQueueEnqueueResult,
+  ChannelIngressQueueFailedRecord,
+  ChannelIngressQueuePruneOptions,
+  ChannelIngressQueueRecord,
   DeriveDurableFinalDeliveryRequirementsParams,
   ChannelMessageLiveCapabilityProof,
   ChannelMessageLiveCapabilityProofMap,
@@ -155,6 +167,7 @@ export type {
   DurableInboundReceiveJournal,
   DurableInboundReceiveJournalOptions,
   DurableInboundReceivePendingRecord,
+  DurableInboundReceiveQueueJournalOptions,
   DurableInboundReceiveReleaseOptions,
   DurableMessageSendIntent,
   DurableMessageSendState,
@@ -186,21 +199,33 @@ export type {
   RenderedMessageBatchPlanKind,
 } from "../channels/message/index.js";
 
+/** Lazily forwards inbound reply delivery through the channel turn kernel. */
 export const deliverInboundReplyWithMessageSendContext: ChannelInboundKernelModule["deliverInboundReplyWithMessageSendContext"] =
   async (...args) => {
     const mod = await import("../channels/turn/kernel.js");
     return await mod.deliverInboundReplyWithMessageSendContext(...args);
   };
 
+/** Sends a durable message batch without eager-loading channel message runtime internals. */
 export async function sendDurableMessageBatch(
+  /**
+   * Durable send context and outbound batch data forwarded to the channel runtime.
+   */
   params: DurableMessageSendContextParams,
 ): Promise<DurableMessageBatchSendResult> {
   const mod = await loadChannelMessageRuntimeModule();
   return await mod.sendDurableMessageBatch(params);
 }
 
+/** Runs work inside a durable message send context loaded through the SDK lazy boundary. */
 export async function withDurableMessageSendContext<T>(
+  /**
+   * Durable send context used to bind sends, receipts, and lifecycle callbacks.
+   */
   params: DurableMessageSendContextParams,
+  /**
+   * Callback executed with the loaded durable-send runtime context.
+   */
   run: (ctx: DurableMessageSendContext) => Promise<T>,
 ): Promise<T> {
   const mod = await loadChannelMessageRuntimeModule();

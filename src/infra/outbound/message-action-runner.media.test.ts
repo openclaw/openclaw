@@ -1,3 +1,5 @@
+// Covers message-action media hydration, sandbox path normalization,
+// attachments, and channel/plugin media source aliases.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -84,6 +87,22 @@ async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
     await test(sandboxDir);
   } finally {
     await fs.rm(sandboxDir, { recursive: true, force: true });
+  }
+}
+
+async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
+  const previous = process.env.OPENCLAW_STATE_DIR;
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-runner-state-"));
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  try {
+    return await test(stateDir);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previous;
+    }
+    await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
 
@@ -298,6 +317,143 @@ describe("runMessageAction media behavior", () => {
     expect(sendArgs.asVoice).toBe(true);
   });
 
+  it("materializes buffer-only send attachments into outbound media paths", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    await withTempOpenClawStateDir(async () => {
+      const result = await runMessageAction({
+        cfg: workspaceConfig,
+        action: "send",
+        params: {
+          channel: "workspace",
+          target: "12345678",
+          buffer: Buffer.from("artifact bytes").toString("base64"),
+          filename: "artifact.txt",
+          contentType: "text/plain",
+        },
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrl).toBeTypeOf("string");
+      await expect(fs.readFile(String(result.sendResult?.mediaUrl), "utf8")).resolves.toBe(
+        "artifact bytes",
+      );
+
+      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+      const sendCtx = requireRecord(sendArgs.ctx);
+      const sendParams = requireRecord(sendCtx.params);
+      expect(sendParams.buffer).toBeUndefined();
+      expect(sendArgs.mediaUrl).toBe(result.sendResult?.mediaUrl);
+      expect(sendArgs.mediaUrls).toEqual([result.sendResult?.mediaUrl]);
+    });
+  });
+
+  it("does not stage buffer-only send attachments before target validation passes", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    await withTempOpenClawStateDir(async (stateDir) => {
+      await expect(
+        runMessageAction({
+          cfg: workspaceConfig,
+          action: "send",
+          params: {
+            channel: "workspace",
+            target: "",
+            buffer: Buffer.from("orphan bytes").toString("base64"),
+            filename: "orphan.txt",
+            contentType: "text/plain",
+          },
+        }),
+      ).rejects.toThrow(/target/i);
+
+      expect(channelResolutionMocks.executeSendAction).not.toHaveBeenCalled();
+      await expect(fs.readdir(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
+    });
+  });
+
+  it("rejects oversized buffer-only send attachments before channel dispatch", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    await withTempOpenClawStateDir(async () => {
+      await expect(
+        runMessageAction({
+          cfg: workspaceConfig,
+          action: "send",
+          params: {
+            channel: "workspace",
+            target: "12345678",
+            message: "too large",
+            buffer: Buffer.alloc(MEDIA_MAX_BYTES + 1, 1).toString("base64"),
+            contentType: "application/octet-stream",
+          },
+        }),
+      ).rejects.toThrow(/too large|limit/i);
+
+      expect(channelResolutionMocks.executeSendAction).not.toHaveBeenCalled();
+    });
+  });
+
+  it("previews dry-run buffer-only sends without writing outbound media files", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    await withTempOpenClawStateDir(async (stateDir) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "12345678",
+          buffer: Buffer.from("preview bytes").toString("base64"),
+          filename: "preview.txt",
+          contentType: "text/plain",
+        },
+      });
+
+      expect(result.kind).toBe("send");
+      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+      const sendCtx = requireRecord(sendArgs.ctx);
+      const sendParams = requireRecord(sendCtx.params);
+      expect(sendParams.buffer).toBeUndefined();
+      expect(sendArgs.mediaUrl).toBe("buffer://message-send/attachment");
+      expect(sendArgs.mediaUrls).toEqual(["buffer://message-send/attachment"]);
+      await expect(fs.readdir(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
+    });
+  });
+
   it("sends structured attachments as media urls", async () => {
     setActivePluginRegistry(
       createTestRegistry([
@@ -361,6 +517,15 @@ describe("runMessageAction media behavior", () => {
       }
       expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "one.png"));
       expect(result.sendResult?.mediaUrls).toEqual([
+        path.join(sandboxDir, "one.png"),
+        path.join(sandboxDir, "two.png"),
+      ]);
+      const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+      const sendCtx = requireRecord(sendArgs.ctx);
+      const sendParams = requireRecord(sendCtx.params);
+      const sendMediaAccess = requireRecord(sendCtx.mediaAccess);
+      expect(sendMediaAccess.localRoots).toEqual(expect.arrayContaining([sandboxDir]));
+      expect(sendParams.mediaUrls).toEqual([
         path.join(sandboxDir, "one.png"),
         path.join(sandboxDir, "two.png"),
       ]);
@@ -515,7 +680,7 @@ describe("runMessageAction media behavior", () => {
       }
     });
 
-    it("rejects host-local text attachments even when fs root expansion is enabled", async () => {
+    it("hydrates validated host-local text attachments when fs root expansion is enabled", async () => {
       await restoreRealMediaLoader();
 
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-text-"));
@@ -523,21 +688,30 @@ describe("runMessageAction media behavior", () => {
         const outsidePath = path.join(tempDir, "secret.txt");
         await fs.writeFile(outsidePath, "secret", "utf8");
 
-        await expect(
-          runMessageAction({
-            cfg: {
-              ...cfg,
-              tools: { fs: { workspaceOnly: false } },
-            },
-            action: "sendAttachment",
-            params: {
-              channel: "attachmentchat",
-              target: "+15551234567",
-              media: outsidePath,
-              message: "caption",
-            },
-          }),
-        ).rejects.toThrow(/Host-local media sends only allow/i);
+        const result = await runMessageAction({
+          cfg: {
+            ...cfg,
+            tools: { fs: { workspaceOnly: false } },
+          },
+          action: "sendAttachment",
+          params: {
+            channel: "attachmentchat",
+            target: "+15551234567",
+            media: outsidePath,
+            message: "caption",
+          },
+        });
+
+        expect(result.kind).toBe("action");
+        expect(result.payload).toMatchObject({
+          ok: true,
+          filename: "secret.txt",
+          caption: "caption",
+          contentType: "text/plain",
+        });
+        expect((result.payload as { buffer?: string }).buffer).toBe(
+          Buffer.from("secret").toString("base64"),
+        );
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
       }

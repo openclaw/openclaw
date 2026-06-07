@@ -1,3 +1,4 @@
+// Feishu plugin module implements monitor.bot menu handler behavior.
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
@@ -138,7 +139,7 @@ export function createFeishuBotMenuHandler(params: {
           }
           return await handleLegacyMenu();
         })
-        .catch(async (err) => {
+        .catch(async (err: unknown) => {
           if (isFeishuRetryableSyntheticEventError(err)) {
             await forgetProcessedFeishuMessage(syntheticMessageId, accountId, log);
           } else {
@@ -150,7 +151,7 @@ export function createFeishuBotMenuHandler(params: {
           releaseFeishuMessageProcessing(syntheticMessageId, accountId);
         });
       if (fireAndForget) {
-        promise.catch((err) => {
+        promise.catch((err: unknown) => {
           error(`feishu[${accountId}]: error handling bot menu event: ${String(err)}`);
         });
         return;

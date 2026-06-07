@@ -1,3 +1,8 @@
+/**
+ * Exec PATH handling tests.
+ * Covers shell snapshot PATH merging, pathPrepend behavior, and host env
+ * sanitization for gateway/sandbox execution.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,11 +13,44 @@ import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 const FOREGROUND_TEST_YIELD_MS = 120_000;
+const ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "PATH", "SHELL", "SSLKEYLOGFILE"] as const;
 type GetShellPathFromLoginShell = typeof import("../infra/shell-env.js").getShellPathFromLoginShell;
 const shellEnvMocks = vi.hoisted(() => ({
   getShellPathFromLoginShell: vi.fn<GetShellPathFromLoginShell>(() => "/custom/bin:/opt/bin"),
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 1234),
 }));
+
+const parseShellSingleQuoted = (input: string) => {
+  if (!input.startsWith("'")) {
+    return null;
+  }
+  let output = "";
+  for (let index = 1; index < input.length; index += 1) {
+    const char = input[index];
+    if (char !== "'") {
+      output += char;
+      continue;
+    }
+    if (input.startsWith("'\\''", index)) {
+      output += "'";
+      index += 3;
+      continue;
+    }
+    return input.slice(index + 1).trim().length === 0 ? output : null;
+  }
+  return null;
+};
+
+const unwrapSnapshotEvalCommand = (command: string) => {
+  const evalIndex = command.lastIndexOf("\neval ");
+  const evalCommand =
+    evalIndex === -1
+      ? command.trimStart().startsWith("eval ")
+        ? command.trimStart().slice("eval ".length)
+        : null
+      : command.slice(evalIndex + "\neval ".length);
+  return evalCommand ? (parseShellSingleQuoted(evalCommand.trim()) ?? command) : command;
+};
 
 vi.mock("../infra/shell-env.js", async () => {
   const mod =
@@ -35,10 +73,11 @@ vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
     spawn: async (input: {
       argv?: string[];
+      ptyCommand?: string;
       env?: NodeJS.ProcessEnv;
       onStdout?: (chunk: string) => void;
     }) => {
-      const command = input.argv?.at(-1) ?? "";
+      const command = unwrapSnapshotEvalCommand(input.ptyCommand ?? input.argv?.at(-1) ?? "");
       const env = input.env ?? {};
       if (command.includes("OPENCLAW_SHELL")) {
         input.onStdout?.(env.OPENCLAW_SHELL ?? "");
@@ -46,7 +85,7 @@ vi.mock("../process/supervisor/index.js", () => ({
         input.onStdout?.(env.SSLKEYLOGFILE ?? "");
       } else if (command.includes("$PATH")) {
         input.onStdout?.(env.PATH ?? "");
-      } else if (command === "echo ok") {
+      } else if (command.includes("echo ok")) {
         input.onStdout?.("ok\n");
       }
       return {
@@ -144,7 +183,8 @@ describe("exec PATH login shell merge", () => {
   });
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["PATH", "SHELL"]);
+    envSnapshot = captureEnv([...ENV_KEYS]);
+    process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
     shellEnvMocks.getShellPathFromLoginShell.mockReset();
     shellEnvMocks.getShellPathFromLoginShell.mockReturnValue("/custom/bin:/opt/bin");
     shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset();
@@ -289,6 +329,17 @@ describe("exec PATH login shell merge", () => {
 });
 
 describe("exec host env validation", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv([...ENV_KEYS]);
+    process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+  });
+
   it("blocks LD_/DYLD_ env vars on host execution", async () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 

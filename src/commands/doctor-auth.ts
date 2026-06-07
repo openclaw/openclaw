@@ -1,4 +1,4 @@
-import fs from "node:fs";
+/** Doctor notes for auth profile health, OAuth refresh failures, and legacy Codex config. */
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
@@ -16,6 +16,7 @@ import {
   type AuthCredentialReasonCode,
   ensureAuthProfileStore,
   hasAnyAuthProfileStoreSource,
+  hasLocalAuthProfileStoreSource,
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
@@ -25,22 +26,20 @@ import {
   classifyOAuthRefreshFailure,
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
-import {
-  resolveAuthStatePath,
-  resolveAuthStorePath,
-  resolveLegacyAuthStorePath,
-} from "../agents/auth-profiles/paths.js";
+import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const LEGACY_CODEX_PROVIDER_ID = "openai-codex";
 const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const LEGACY_CODEX_APIS = new Set(["openai-responses", "openai-completions"]);
+const DOCTOR_REAUTH_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
+  [LEGACY_CODEX_PROVIDER_ID]: OPENAI_PROVIDER_ID,
+};
 
 function hasConfiguredCodexOAuthProfile(cfg: OpenClawConfig): boolean {
   return Object.values(cfg.auth?.profiles ?? {}).some(
@@ -115,6 +114,7 @@ function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
   return lines.join("\n");
 }
 
+/** Emits a warning when legacy Codex transport overrides can shadow configured Codex OAuth. */
 export function noteLegacyCodexProviderOverride(cfg: OpenClawConfig): void {
   const providerOverride = cfg.models?.providers?.[LEGACY_CODEX_PROVIDER_ID];
   if (!providerOverride) {
@@ -142,14 +142,6 @@ type AuthProfileHealthTarget = {
   agentDir: string;
   isDefault: boolean;
 };
-
-function hasLocalAuthProfileStoreSource(agentDir: string): boolean {
-  return (
-    fs.existsSync(resolveAuthStorePath(agentDir)) ||
-    fs.existsSync(resolveAuthStatePath(agentDir)) ||
-    fs.existsSync(resolveLegacyAuthStorePath(agentDir))
-  );
-}
 
 function formatAgentNoteTitle(title: string, agentId: string, labelAgents: boolean): string {
   return labelAgents ? `${title} (agent: ${agentId})` : title;
@@ -180,6 +172,7 @@ function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTar
   return [...targets.values()];
 }
 
+/** Returns the short doctor hint for disabled or cooldown auth profiles. */
 export function resolveUnusableProfileHint(params: {
   kind: "cooldown" | "disabled";
   reason?: string;
@@ -212,6 +205,7 @@ function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | nul
   }
 }
 
+/** Formats provider OAuth refresh failures as actionable doctor note lines. */
 export function formatOAuthRefreshFailureDoctorLine(params: {
   profileId: string;
   provider: string;
@@ -221,7 +215,10 @@ export function formatOAuthRefreshFailureDoctorLine(params: {
   if (!classified) {
     return null;
   }
-  const provider = classified.provider ?? params.provider;
+  const rawProvider = classified.provider ?? params.provider;
+  const provider = rawProvider
+    ? (DOCTOR_REAUTH_PROVIDER_ALIASES[rawProvider] ?? rawProvider)
+    : null;
   const command = buildOAuthRefreshFailureLoginCommand(provider);
   if (classified.reason) {
     return `- ${params.profileId}: re-auth required [${formatOAuthRefreshFailureReason(classified.reason)}] — Run \`${command}\`.`;
@@ -306,6 +303,7 @@ async function noteAuthProfileHealthForTarget(params: {
     store,
     cfg: params.cfg,
     warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    allowKeychainPrompt: params.allowKeychainPrompt,
   });
 
   const findIssues = () =>
@@ -361,6 +359,7 @@ async function noteAuthProfileHealthForTarget(params: {
       }),
       cfg: params.cfg,
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+      allowKeychainPrompt: false,
     });
     issues = findIssues();
   }
@@ -385,6 +384,7 @@ async function noteAuthProfileHealthForTarget(params: {
   }
 }
 
+/** Checks configured agent auth stores and emits doctor notes for stale or unusable profiles. */
 export async function noteAuthProfileHealth(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;

@@ -1,3 +1,8 @@
+/**
+ * Channel setup wizard helper functions.
+ *
+ * Prompts account ids, credentials, allowlists, and account-scoped setup config updates.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeStringEntries,
@@ -30,6 +35,20 @@ let providerAuthInputPromise:
 function loadProviderAuthInput() {
   providerAuthInputPromise ??= import("../../plugins/provider-auth-ref.js");
   return providerAuthInputPromise;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value != null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function asAllowFromList(value: unknown): ReadonlyArray<string | number> | undefined {
+  return Array.isArray(value)
+    ? value.filter(
+        (entry): entry is string | number => typeof entry === "string" || typeof entry === "number",
+      )
+    : undefined;
 }
 
 export const promptAccountId: PromptAccountId = async (params: PromptAccountIdParams) => {
@@ -537,14 +556,17 @@ export function setChannelDmPolicyWithAllowFrom(params: {
   dmPolicy: DmPolicy;
 }): OpenClawConfig {
   const { cfg, channel, dmPolicy } = params;
+  const channelConfig = asRecord(cfg.channels?.[channel]);
   const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.[channel]?.allowFrom) : undefined;
+    dmPolicy === "open"
+      ? addWildcardAllowFrom(asAllowFromList(channelConfig?.allowFrom))
+      : undefined;
   return {
     ...cfg,
     channels: {
       ...cfg.channels,
       [channel]: {
-        ...cfg.channels?.[channel],
+        ...channelConfig,
         dmPolicy,
         ...(allowFrom ? { allowFrom } : {}),
       },

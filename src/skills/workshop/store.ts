@@ -1,3 +1,4 @@
+// Workshop store persists generated skill drafts and metadata under the workspace.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -29,6 +30,7 @@ const MANIFEST_LOCK_REL_PATH = path.join(TARGET_LOCKS_REL_DIR, "proposals-manife
 const PROPOSAL_RECORD_FILE = "proposal.json";
 const PROPOSAL_DRAFT_FILE = "PROPOSAL.md";
 const PROPOSAL_ROLLBACK_FILE = "rollback.json";
+/** Maximum bytes accepted for a proposal draft. */
 export const MAX_PROPOSAL_BYTES = 1024 * 1024;
 export const MAX_PROPOSAL_SUPPORT_FILE_BYTES = 256 * 1024;
 export const MAX_PROPOSAL_SUPPORT_FILES = 64;
@@ -63,6 +65,7 @@ export type PreparedSkillProposalSupportFile = SkillProposalSupportFile & {
 };
 type SkillProposalWriteGuard = (manifest: SkillProposalManifest) => Promise<void> | void;
 
+/** Creates a stable proposal id from skill name, date, and random suffix. */
 export function createSkillProposalId(name: string, now = new Date()): string {
   const normalized = normalizeSkillIndexName(name) || "skill";
   const date = now.toISOString().slice(0, 10).replaceAll("-", "");
@@ -627,6 +630,7 @@ function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | null {
     typeof record.updatedAt !== "string" ||
     typeof record.draftHash !== "string" ||
     record.draftFile !== PROPOSAL_DRAFT_FILE ||
+    !isValidProposalOrigin(record.origin) ||
     !isValidSupportFileList(record.supportFiles) ||
     !record.target ||
     typeof record.target !== "object" ||
@@ -640,6 +644,23 @@ function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | null {
     return null;
   }
   return record;
+}
+
+function isValidProposalOrigin(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const origin = value as Record<string, unknown>;
+  for (const key of ["agentId", "sessionKey", "runId", "messageId"]) {
+    const item = origin[key];
+    if (item !== undefined && typeof item !== "string") {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isValidSupportFileList(value: unknown): boolean {

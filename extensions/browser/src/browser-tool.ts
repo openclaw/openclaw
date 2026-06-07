@@ -1,3 +1,9 @@
+/**
+ * Browser agent tool registration.
+ *
+ * Builds the model-facing browser tool, chooses sandbox/host/node routing, and
+ * maps high-level actions onto browser control client calls.
+ */
 import crypto from "node:crypto";
 import {
   executeActAction,
@@ -441,6 +447,7 @@ function readToolTimeoutMs(params: Record<string, unknown>) {
   });
 }
 
+/** Create the Browser tool exposed to agents. */
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
@@ -530,7 +537,7 @@ export function createBrowserTool(opts?: {
           });
 
       const proxyRequest = nodeTarget
-        ? async (opts: {
+        ? async (optsLocal: {
             method: string;
             path: string;
             query?: Record<string, string | number | boolean | undefined>;
@@ -540,12 +547,12 @@ export function createBrowserTool(opts?: {
           }) => {
             const proxy = await callBrowserProxy({
               nodeId: nodeTarget.nodeId,
-              method: opts.method,
-              path: opts.path,
-              query: opts.query,
-              body: opts.body,
-              timeoutMs: opts.timeoutMs,
-              profile: opts.profile,
+              method: optsLocal.method,
+              path: optsLocal.path,
+              query: optsLocal.query,
+              body: optsLocal.body,
+              timeoutMs: optsLocal.timeoutMs,
+              profile: optsLocal.profile,
             });
             const mapping = await persistProxyFiles(proxy.files);
             applyProxyPaths(proxy.result, mapping);

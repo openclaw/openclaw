@@ -1,3 +1,4 @@
+// Imessage tests cover coalesce plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   combineIMessagePayloads,
@@ -96,7 +97,7 @@ describe("combineIMessagePayloads", () => {
     const payloads = Array.from({ length: 6 }, (_, i) =>
       makePayload({
         guid: `row-${i}`,
-        attachments: Array.from({ length: 5 }, (_, j) => ({
+        attachments: Array.from({ length: 5 }, (_Local, j) => ({
           original_path: `/tmp/${i}-${j}.jpg`,
           mime_type: "image/jpeg",
         })),

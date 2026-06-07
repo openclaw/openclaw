@@ -1,3 +1,4 @@
+// Audits gateway config for bind, auth, and exposure risks.
 import { isIP } from "node:net";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -304,7 +305,7 @@ export function collectGatewayConfigFindings(
   }
 
   if (auth.mode === "trusted-proxy") {
-    const trustedProxies = cfg.gateway?.trustedProxies ?? [];
+    const trustedProxiesLocal = cfg.gateway?.trustedProxies ?? [];
     const trustedProxyConfig = cfg.gateway?.auth?.trustedProxy;
 
     findings.push({
@@ -322,7 +323,7 @@ export function collectGatewayConfigFindings(
         "See /gateway/trusted-proxy-auth for setup guidance.",
     });
 
-    if (trustedProxies.length === 0) {
+    if (trustedProxiesLocal.length === 0) {
       findings.push({
         checkId: "gateway.trusted_proxy_no_proxies",
         severity: "critical",

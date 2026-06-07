@@ -1,7 +1,11 @@
+/**
+ * Browser CLI inspection commands for screenshots and snapshots.
+ */
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserNonNegativeIntegerValue,
   parseBrowserPositiveIntegerValue,
@@ -35,6 +39,7 @@ function parseOptionalIntegerOption(
   return parsed;
 }
 
+/** Registers Browser screenshot and snapshot commands. */
 export function registerBrowserInspectCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -42,7 +47,7 @@ export function registerBrowserInspectCommands(
   browser
     .command("screenshot")
     .description("Capture a screenshot (prints the saved path)")
-    .argument("[targetId]", "CDP target id (or unique prefix)")
+    .argument("[targetId]", BROWSER_TAB_REFERENCE_HELP)
     .option("--full-page", "Capture full scrollable page", false)
     .option("--ref <ref>", "ARIA ref from ai snapshot")
     .option("--element <selector>", "CSS selector for element screenshot")
@@ -84,7 +89,7 @@ export function registerBrowserInspectCommands(
     .command("snapshot")
     .description("Capture a snapshot (default: ai; aria is the accessibility tree)")
     .option("--format <aria|ai>", "Snapshot format (default: ai)", "ai")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option("--limit <n>", "Max nodes (default: 500/800)")
     .option("--mode <efficient>", "Snapshot preset (efficient)")
     .option("--efficient", "Use the efficient snapshot preset", false)

@@ -1,3 +1,6 @@
+/**
+ * Normalizes and classifies compaction failure reasons for diagnostics.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 
@@ -11,6 +14,7 @@ function isGenericCompactionCancelledReason(reason: string): boolean {
   return normalized === "compaction cancelled" || normalized === "error: compaction cancelled";
 }
 
+/** Prefer a safeguard cancel reason when the runtime only reports generic cancellation. */
 export function resolveCompactionFailureReason(params: {
   reason: string;
   safeguardCancelReason?: string | null;
@@ -21,12 +25,13 @@ export function resolveCompactionFailureReason(params: {
   return params.reason;
 }
 
+/** Bucket a raw compaction reason into stable telemetry/status classes. */
 export function classifyCompactionReason(reason?: string): string {
   const text = normalizeLowercaseStringOrEmpty(reason);
   if (!text) {
     return "unknown";
   }
-  if (text.includes("nothing to compact")) {
+  if (text.includes("nothing to compact") || text.includes("no real conversation messages")) {
     return "no_compactable_entries";
   }
   // Backends use both phrases for the same harmless state: the transcript is
@@ -71,6 +76,7 @@ export function classifyCompactionReason(reason?: string): string {
   return "unknown";
 }
 
+/** Sanitize an unknown reason into a short log/metric-safe detail suffix. */
 export function formatUnknownCompactionReasonDetail(reason?: string): string | undefined {
   const sanitized = sanitizeForLog((reason ?? "").replace(/\s+/g, " "))
     .trim()

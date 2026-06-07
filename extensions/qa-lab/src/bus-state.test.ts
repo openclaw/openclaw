@@ -1,3 +1,4 @@
+// Qa Lab tests cover bus state plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
@@ -130,7 +131,9 @@ describe("qa-bus state", () => {
 
     const beforeMatch = await Promise.race([
       pending.then(() => "resolved"),
-      new Promise((resolve) => setTimeout(() => resolve("still-waiting"), 20)),
+      new Promise((resolve) => {
+        setTimeout(() => resolve("still-waiting"), 20);
+      }),
     ]);
     expect(beforeMatch).toBe("still-waiting");
 

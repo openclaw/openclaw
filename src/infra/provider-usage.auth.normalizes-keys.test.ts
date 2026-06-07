@@ -1,3 +1,4 @@
+// Covers provider usage auth profile key normalization.
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -162,6 +163,18 @@ const providerRuntimeMocks = vi.hoisted(() => ({
           envDirect: [params.context.env?.ZAI_API_KEY, params.context.env?.Z_AI_API_KEY],
         });
         return token ? { token } : null;
+      }
+
+      if (params.provider === "anthropic") {
+        const oauth = await params.context.resolveOAuthToken();
+        if (oauth) {
+          return oauth;
+        }
+        const token = resolveToken({
+          providerIds: ["anthropic"],
+          envDirect: [params.context.env?.ANTHROPIC_API_KEY],
+        });
+        return token?.startsWith("sk-ant-oat01-") ? { token } : { handled: true };
       }
 
       if (params.provider === "minimax") {
@@ -723,6 +736,26 @@ describe("resolveProviderAuths key normalization", () => {
         env: buildSuiteEnv(home),
       });
       expect(auths).toEqual([{ provider: "anthropic", token: "token-1" }]);
+    });
+  });
+
+  it("does not use standard Anthropic API keys for provider usage auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["anthropic"],
+      env: {
+        ANTHROPIC_API_KEY: "sk-ant-api03-status-key", // pragma: allowlist secret
+      },
+      expected: [],
+    });
+  });
+
+  it("allows Anthropic setup tokens from API-key sources for provider usage auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["anthropic"],
+      env: {
+        ANTHROPIC_API_KEY: `sk-ant-oat01-${"a".repeat(80)}`,
+      },
+      expected: [{ provider: "anthropic", token: `sk-ant-oat01-${"a".repeat(80)}` }],
     });
   });
 

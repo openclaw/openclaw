@@ -1,3 +1,4 @@
+// Payload fallback tests cover fallback prompt payloads for isolated cron runs.
 import { describe, expect, it } from "vitest";
 import {
   makeIsolatedAgentTurnJob,
@@ -35,21 +36,6 @@ function requireModelFallbackRequest(): {
   }
   return request;
 }
-
-function requireEmbeddedRunRequest(): {
-  modelFallbacksOverride?: string[];
-} {
-  const request = runEmbeddedAgentMock.mock.calls[0]?.[0] as
-    | {
-        modelFallbacksOverride?: string[];
-      }
-    | undefined;
-  if (!request) {
-    throw new Error("Expected embedded run request");
-  }
-  return request;
-}
-
 describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
   setupRunCronIsolatedAgentTurnSuite({ fast: true });
 

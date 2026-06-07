@@ -1,3 +1,4 @@
+// Verifies plugin manifest registry construction and lookups.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -1878,6 +1879,7 @@ describe("loadPluginManifestRegistry", () => {
             {
               rootPath: "plugins.entries.openai.config",
               overlayPath: "image",
+              overlayMapPath: "accounts",
               required: ["apiKey"],
             },
           ],
@@ -1953,6 +1955,7 @@ describe("loadPluginManifestRegistry", () => {
           {
             rootPath: "plugins.entries.openai.config",
             overlayPath: "image",
+            overlayMapPath: "accounts",
             required: ["apiKey"],
           },
         ],

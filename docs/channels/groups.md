@@ -1,5 +1,5 @@
 ---
-summary: "Group chat behavior across surfaces (Discord/iMessage/Matrix/Microsoft Teams/Signal/Slack/Telegram/WhatsApp/Zalo)"
+summary: "Group chat behavior across surfaces (Discord/iMessage/Matrix/Microsoft Teams/QQBot/Signal/Slack/Telegram/WhatsApp/Zalo)"
 read_when:
   - Changing group chat behavior or mention gating
   - Scoping mentionPatterns to specific group conversations
@@ -7,7 +7,7 @@ title: "Groups"
 sidebarTitle: "Groups"
 ---
 
-OpenClaw treats group chats consistently across surfaces: Discord, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo.
+OpenClaw treats group chats consistently across surfaces: Discord, iMessage, Matrix, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp, Zalo.
 
 For always-on rooms that should provide quiet context unless the agent explicitly sends a visible message, see [Ambient room events](/channels/ambient-room-events).
 
@@ -57,6 +57,8 @@ back to automatic visible replies instead of silently suppressing the response.
 For direct chats and any other source event, use `messages.visibleReplies: "message_tool"` to apply the same tool-only visible-reply behavior globally. Internal WebChat direct turns default to automatic final-reply delivery so Pi and Codex receive the same visible-reply contract. Set `messages.visibleReplies: "message_tool"` to intentionally require `message(action=send)` for visible output. `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms.
 
 This replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode, the prompt does not define a `NO_REPLY` contract. Doing nothing visible simply means not calling the message tool.
+
+Plugin-owned conversation bindings are the exception. Once a plugin binds a thread and claims the inbound turn, the plugin's returned reply is the visible binding response; it does not need `message(action=send)`. That reply is plugin runtime output, not private model final text.
 
 Typing indicators are still sent for direct group requests. Ambient always-on room events, when enabled, stay strict and quiet unless the agent calls the message tool.
 

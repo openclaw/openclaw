@@ -1,3 +1,5 @@
+// Gateway Control UI root resolver.
+// Finds configured, bundled, or source-built UI assets during startup.
 import path from "node:path";
 import {
   ensureControlUiAssetsBuilt,
@@ -18,13 +20,14 @@ function startControlUiAssetsBuild(params: {
         params.log.warn(`gateway: ${result.message}`);
       }
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       params.log.warn(
         `gateway: Control UI assets build failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     });
 }
 
+/** Resolves the Control UI asset root state for gateway startup. */
 export async function resolveGatewayControlUiRootState(params: {
   controlUiRootOverride?: string;
   controlUiEnabled: boolean;
@@ -55,6 +58,8 @@ export async function resolveGatewayControlUiRootState(params: {
 
   const resolvedRoot = resolveRoot();
   if (!resolvedRoot) {
+    // Source checkouts may need to build Control UI assets on demand; startup
+    // continues and the route can become available after the build completes.
     startControlUiAssetsBuild({
       gatewayRuntime: params.gatewayRuntime,
       log: params.log,

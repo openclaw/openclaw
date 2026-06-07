@@ -1,3 +1,4 @@
+// Sms tests cover channel plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type ChannelModule = typeof import("./channel.js");
@@ -61,6 +62,12 @@ describe("smsPlugin status", () => {
 describe("smsPlugin outbound", () => {
   it("declares an active text chunker and account-aware chunk limit", () => {
     expect(smsPlugin.configSchema).toBeDefined();
+    expect(smsPlugin.status?.probeAccount).toBeDefined();
+    expect(smsPlugin.status?.formatCapabilitiesProbe).toBeDefined();
+    expect(smsPlugin.secrets?.secretTargetRegistryEntries?.map((entry) => entry.id)).toEqual([
+      "channels.sms.accounts.*.authToken",
+      "channels.sms.authToken",
+    ]);
     expect(smsPlugin.messaging?.targetPrefixes).toEqual(["twilio-sms"]);
     expect(smsPlugin.outbound?.chunker?.("alpha beta", 6)).toEqual(["alpha", "beta"]);
     expect(

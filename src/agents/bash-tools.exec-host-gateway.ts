@@ -1,3 +1,8 @@
+/**
+ * Gateway-host exec approval and allowlist handling.
+ * Evaluates shell allowlists, auto-review, durable approvals, follow-up routing,
+ * and approved command execution for gateway-backed exec calls.
+ */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
@@ -56,6 +61,7 @@ import type {
 } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
+/** Full input bundle for gateway-host allowlist and approval processing. */
 export type ProcessGatewayAllowlistParams = {
   command: string;
   workdir: string;
@@ -93,6 +99,7 @@ export type ProcessGatewayAllowlistParams = {
   trustedSafeBinDirs?: ReadonlySet<string>;
 };
 
+/** Gateway allowlist outcome before command execution continues. */
 export type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
   allowWithoutEnforcedCommand?: boolean;
@@ -333,6 +340,7 @@ async function resolveGatewayExecApprovalFollowupText(params: {
   }
 }
 
+/** Processes gateway exec policy and returns execution/approval/denial outcome. */
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
@@ -605,17 +613,18 @@ export async function processGatewayAllowlist(
 
       const {
         baseDecision,
-        approvedByAsk: initialApprovedByAsk,
-        deniedReason: initialDeniedReason,
+        approvedByAsk: baseApprovedByAsk,
+        deniedReason: baseDeniedReason,
       } = createExecApprovalDecisionState({
         decision,
         askFallback,
       });
-      let approvedByAsk = initialApprovedByAsk;
-      let deniedReason = initialDeniedReason;
+      let approvedByAsk = baseApprovedByAsk;
+      let deniedReason = baseDeniedReason;
 
       if (baseDecision.timedOut && askFallback === "allowlist") {
         if (!analysisOk || !allowlistSatisfied) {
+          approvedByAsk = false;
           // Use a colon separator rather than nested parens so the
           // `Exec denied (gateway id=..., <deniedReason>): cmd` wire format
           // stays unambiguous for parsers that close on the first `):`.
@@ -643,13 +652,15 @@ export async function processGatewayAllowlist(
         }
       }
 
-      ({ approvedByAsk, deniedReason } = enforceStrictInlineEvalApprovalBoundary({
+      const strictBoundaryDecision = enforceStrictInlineEvalApprovalBoundary({
         baseDecision,
         approvedByAsk,
         deniedReason,
         requiresInlineEvalApproval,
         requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
-      }));
+      });
+      approvedByAsk = strictBoundaryDecision.approvedByAsk;
+      deniedReason = strictBoundaryDecision.deniedReason;
 
       if (
         !approvedByAsk &&
@@ -721,7 +732,7 @@ export async function processGatewayAllowlist(
 
       recordMatchedAllowlistUse(resolvedPath ?? undefined);
 
-      let run: Awaited<ReturnType<typeof runExecProcess>> | null = null;
+      let run: Awaited<ReturnType<typeof runExecProcess>> | null;
       try {
         run = await runExecProcess({
           command: params.command,

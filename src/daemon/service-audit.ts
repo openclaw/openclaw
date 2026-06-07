@@ -1,3 +1,4 @@
+/** Audits installed daemon service definitions for drift and repair candidates. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -10,6 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
+import { VERSION } from "../version.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -63,6 +65,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
   gatewayRuntimeNodeSystemMissing: "gateway-runtime-node-system-missing",
   gatewayTokenDrift: "gateway-token-drift",
+  gatewayServiceVersionMismatch: "gateway-service-version-mismatch",
   launchdKeepAlive: "launchd-keep-alive",
   launchdRunAtLoad: "launchd-run-at-load",
   systemdAfterNetworkOnline: "systemd-after-network-online",
@@ -71,6 +74,7 @@ export const SERVICE_AUDIT_CODES = {
   systemdKillModeProcessOrNone: "systemd-kill-mode-process-or-none",
 } as const;
 
+/** Returns whether audit issues require migrating a daemon to a stable Node runtime. */
 export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean {
   return issues.some(
     (issue) =>
@@ -94,6 +98,8 @@ function parseSystemdUnit(content: string): {
   let restartSec: string | undefined;
   let killMode: string | undefined;
 
+  // Parse only unit keys relevant to service resilience; this is not a full
+  // systemd parser and intentionally ignores sections.
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) {
@@ -163,7 +169,7 @@ async function auditSystemdUnit(
   issues: ServiceConfigIssue[],
 ) {
   const unitPath = resolveSystemdUserUnitPath(env);
-  let content = "";
+  let content;
   try {
     content = await fs.readFile(unitPath, "utf8");
   } catch {
@@ -212,7 +218,7 @@ async function auditLaunchdPlist(
   issues: ServiceConfigIssue[],
 ) {
   const plistPath = resolveLaunchAgentPlistPath(env);
-  let content = "";
+  let content;
   try {
     content = await fs.readFile(plistPath, "utf8");
   } catch {
@@ -602,6 +608,20 @@ export function checkTokenDrift(params: {
   return null;
 }
 
+function auditGatewayServiceVersion(command: GatewayServiceCommand, issues: ServiceConfigIssue[]) {
+  const serviceVersion = command?.environment?.OPENCLAW_SERVICE_VERSION?.trim();
+  if (!serviceVersion || serviceVersion === VERSION) {
+    return;
+  }
+
+  issues.push({
+    code: SERVICE_AUDIT_CODES.gatewayServiceVersionMismatch,
+    message: `Gateway service was installed by OpenClaw ${serviceVersion}; current CLI is ${VERSION}.`,
+    detail: command?.sourcePath,
+    level: "recommended",
+  });
+}
+
 export async function auditGatewayServiceConfig(params: {
   env: Record<string, string | undefined>;
   command: GatewayServiceCommand;
@@ -623,6 +643,7 @@ export async function auditGatewayServiceConfig(params: {
   auditManagedServiceEnvironment(params.command, issues, params.expectedManagedServiceEnvKeys);
   auditProxyServiceEnvironment(params.command, issues);
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);
+  auditGatewayServiceVersion(params.command, issues);
   auditGatewayServicePath(params.command, issues, params.env, platform, params.expectedServicePath);
   await auditGatewayRuntime(params.env, params.command, issues, platform);
 

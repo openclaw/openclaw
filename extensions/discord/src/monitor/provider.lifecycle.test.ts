@@ -1,3 +1,4 @@
+// Discord tests cover provider.lifecycle plugin behavior.
 import { EventEmitter } from "node:events";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -29,17 +30,17 @@ const {
   unregisterGatewayMock,
   waitForDiscordGatewayStopMock,
 } = vi.hoisted(() => {
-  const stopGatewayLoggingMock = vi.fn();
-  const getDiscordGatewayEmitterMock = vi.fn<() => EventEmitter | undefined>(() => undefined);
+  const stopGatewayLoggingMockLocal = vi.fn();
+  const getDiscordGatewayEmitterMockLocal = vi.fn<() => EventEmitter | undefined>(() => undefined);
   return {
-    attachDiscordGatewayLoggingMock: vi.fn(() => stopGatewayLoggingMock),
-    getDiscordGatewayEmitterMock,
+    attachDiscordGatewayLoggingMock: vi.fn(() => stopGatewayLoggingMockLocal),
+    getDiscordGatewayEmitterMock: getDiscordGatewayEmitterMockLocal,
     waitForDiscordGatewayStopMock: vi.fn((_params: WaitForDiscordGatewayStopParams) =>
       Promise.resolve(),
     ),
     registerGatewayMock: vi.fn(),
     unregisterGatewayMock: vi.fn(),
-    stopGatewayLoggingMock,
+    stopGatewayLoggingMock: stopGatewayLoggingMockLocal,
   };
 });
 
@@ -727,7 +728,9 @@ describe("runDiscordGatewayLifecycle", () => {
       waitForDiscordGatewayStopMock.mockImplementationOnce(
         (params: WaitForDiscordGatewayStopParams) =>
           new Promise<void>((_resolve, reject) => {
-            params.registerForceStop?.((err) => reject(err));
+            params.registerForceStop?.((err) =>
+              reject(toLintErrorObject(err, "Non-Error rejection")),
+            );
             gateway.isConnected = false;
             emitter.emit("debug", "Gateway websocket opened");
           }),
@@ -755,3 +758,17 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

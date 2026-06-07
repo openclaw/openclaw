@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Rtt script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -65,6 +66,14 @@ function resolveHome(input: string) {
   return input;
 }
 
+function readRequiredPathArg(argv: string[], index: number, flag: string) {
+  const value = argv[index + 1] ?? "";
+  if (!value.trim() || value.startsWith("--")) {
+    throw new Error(`${flag} requires a path.`);
+  }
+  return value;
+}
+
 function parseArgs(argv: string[]) {
   let spec: string | undefined;
   let credentialRole: RttCredentialRole | undefined;
@@ -97,10 +106,8 @@ function parseArgs(argv: string[]) {
       continue;
     }
     if (arg === "--package-tgz") {
-      const value = argv[++index] ?? "";
-      if (!value.trim()) {
-        throw new Error("--package-tgz requires a path.");
-      }
+      const value = readRequiredPathArg(argv, index, "--package-tgz");
+      index += 1;
       packageTgz = path.resolve(resolveHome(value));
       continue;
     }
@@ -117,10 +124,8 @@ function parseArgs(argv: string[]) {
       continue;
     }
     if (arg === "--harness-root") {
-      harnessRoot = argv[++index] ?? "";
-      if (!harnessRoot.trim()) {
-        throw new Error("--harness-root requires a path.");
-      }
+      harnessRoot = readRequiredPathArg(argv, index, "--harness-root");
+      index += 1;
       continue;
     }
     if (arg === "--timeout-ms") {
@@ -128,10 +133,8 @@ function parseArgs(argv: string[]) {
       continue;
     }
     if (arg === "--output") {
-      output = argv[++index] ?? "";
-      if (!output.trim()) {
-        throw new Error("--output requires a path.");
-      }
+      output = readRequiredPathArg(argv, index, "--output");
+      index += 1;
       continue;
     }
     if (arg.startsWith("--")) {
@@ -257,7 +260,7 @@ async function main() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error) => {
+  main().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`[rtt] ${message}\n`);
     process.exitCode = 1;

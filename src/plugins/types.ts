@@ -1,3 +1,4 @@
+// Defines the public plugin API and runtime extension contracts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type {
@@ -576,6 +577,7 @@ export type ProviderNormalizeTransportContext = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   provider: string;
+  modelId?: string;
   api?: string | null;
   baseUrl?: string;
 };
@@ -640,19 +642,24 @@ export type ProviderResolveUsageAuthContext = {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;
   }) => string | undefined;
-  resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderResolvedUsageAuth | null>;
+  resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderUsageAuthToken | null>;
 };
+
+export type ProviderUsageAuthToken = { token: string; accountId?: string };
 
 /**
  * Result of `resolveUsageAuth`.
  *
- * `token` is the credential used for provider usage/billing endpoints.
- * `accountId` is optional provider-specific metadata used by some usage APIs.
+ * Two shapes are supported:
+ * - `{ token: string; accountId?: string }` — use this token for provider usage endpoints.
+ * - `{ handled: true }` — this provider handled the request but has no usable
+ *   usage token; core must skip further fallback (generic API-key/OAuth fallback
+ *   must not run).
+ *
+ * Returning `null` or `undefined` means "not handled by this provider"; core
+ * proceeds to generic fallback resolution.
  */
-export type ProviderResolvedUsageAuth = {
-  token: string;
-  accountId?: string;
-};
+export type ProviderResolvedUsageAuth = ProviderUsageAuthToken | { handled: true };
 
 /**
  * Usage/quota snapshot input for providers that own their usage endpoint

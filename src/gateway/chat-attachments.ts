@@ -1,9 +1,11 @@
+// Gateway chat attachment parser.
+// Normalizes image attachments, offloads large media, and reports unsupported payloads.
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { extensionForMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { estimateBase64DecodedBytes } from "../media/base64.js";
-import { MAX_IMAGE_BYTES } from "../media/constants.js";
-import { extensionForMime, mimeTypeFromFilePath } from "../media/mime.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
@@ -58,6 +60,7 @@ const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 
 export const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
 
+/** Resolve the maximum decoded attachment size accepted for chat image inputs. */
 export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.mediaMaxMb;
   const mb =

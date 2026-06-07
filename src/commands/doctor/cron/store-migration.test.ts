@@ -1,3 +1,4 @@
+// Cron store migration tests cover doctor migration of persisted cron stores.
 import { describe, expect, it } from "vitest";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "../../../cron/stagger.js";
 import { normalizeStoredCronJobs } from "./store-migration.js";
@@ -140,6 +141,22 @@ describe("normalizeStoredCronJobs", () => {
 
     expect(result.mutated).toBe(false);
     expect(result.issues.legacyPayloadKind).toBeUndefined();
+  });
+
+  it("rewrites legacy systemEvent message payloads to text", () => {
+    const jobs = [
+      makeLegacyJob({
+        id: "legacy-system-event-message",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: { kind: "systemEvent", message: "tick" },
+      }),
+    ];
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(result.jobs[0]?.payload).toEqual({ kind: "systemEvent", text: "tick" });
+    expect(result.removedJobs).toEqual([]);
   });
 
   it("removes unrepairable persisted schedule and payload shapes", () => {

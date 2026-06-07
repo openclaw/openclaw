@@ -1,3 +1,4 @@
+// Session store pruning integration tests cover filesystem-backed pruning.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -51,8 +52,8 @@ function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
 }
 
-function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
-  mockLoadConfig.mockReturnValue({
+function applyEnforcedMaintenanceConfig(mockLoadConfigValue: ReturnType<typeof vi.fn>) {
+  mockLoadConfigValue.mockReturnValue({
     session: {
       maintenance: {
         mode: "enforce",
@@ -63,8 +64,8 @@ function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>
   });
 }
 
-function applyCappedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
-  mockLoadConfig.mockReturnValue({
+function applyCappedMaintenanceConfig(mockLoadConfigLocal: ReturnType<typeof vi.fn>) {
+  mockLoadConfigLocal.mockReturnValue({
     session: {
       maintenance: {
         mode: "enforce",

@@ -1,3 +1,5 @@
+// Filesystem session history readers.
+// Parses transcript JSONL files for messages, previews, counts, and usage metadata.
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import {
@@ -116,9 +118,12 @@ function setCachedTranscriptMessageCount(filePath: string, stat: fs.Stats, count
 }
 
 async function yieldTranscriptScan(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
+/** Attach OpenClaw metadata to a transcript message without dropping existing metadata. */
 export function attachOpenClawTranscriptMeta(
   message: unknown,
   meta: Record<string, unknown>,
@@ -142,6 +147,7 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
+/** Read all visible transcript messages for a session from the first existing candidate file. */
 export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
@@ -577,7 +583,7 @@ export async function readSessionMessagesAsync(
   opts: ReadSessionMessagesAsyncOptions,
 ): Promise<unknown[]> {
   if (opts.mode === "recent") {
-    const { mode: modeValue, ...recentOpts } = opts;
+    const { mode: _modeValue, ...recentOpts } = opts;
     return await readRecentSessionMessagesAsync(sessionId, storePath, sessionFile, recentOpts);
   }
   const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);

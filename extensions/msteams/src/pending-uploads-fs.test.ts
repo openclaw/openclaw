@@ -1,6 +1,8 @@
+// Msteams tests cover pending uploads fs plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareFileConsentActivityFs } from "./file-consent-helpers.js";
 import {
@@ -50,6 +52,7 @@ async function cleanupTempDirs(): Promise<void> {
 
 describe("msteams pending uploads (fs-backed)", () => {
   beforeEach(() => {
+    resetPluginStateStoreForTests();
     setMSTeamsRuntime(msteamsRuntimeStub);
     clearPendingUploads();
   });
@@ -105,23 +108,37 @@ describe("msteams pending uploads (fs-backed)", () => {
       { env },
     );
 
-    // Confirm the backing file actually exists on disk with expected shape
+    // Confirm SQLite-backed plugin state was created instead of a new JSON store.
     const storePath = path.join(stateDir, "msteams-pending-uploads.json");
-    const raw = await fs.promises.readFile(storePath, "utf-8");
-    const parsed = JSON.parse(raw) as {
-      version: number;
-      uploads: Record<string, { bufferBase64: string; filename: string }>;
-    };
-    expect(parsed.version).toBe(1);
-    expect(parsed.uploads["upload-x"]?.filename).toBe("secret.bin");
-    expect(Buffer.from(parsed.uploads["upload-x"].bufferBase64, "base64").toString("utf8")).toBe(
-      "top secret",
-    );
+    await expect(fs.promises.access(storePath)).rejects.toThrow();
+    await expect(
+      fs.promises.access(path.join(stateDir, "state", "openclaw.sqlite")),
+    ).resolves.toBeUndefined();
 
     // Second "process": reader using the same state dir
     const reader = await getPendingUploadFs("upload-x", { env });
     expect(reader?.buffer.toString("utf8")).toBe("top secret");
     expect(reader?.filename).toBe("secret.bin");
+  });
+
+  it("stores multi-megabyte uploads by chunking payload bytes", async () => {
+    const stateDir = await makeTempStateDir();
+    const env = makeEnv(stateDir);
+    const payload = Buffer.alloc(6 * 1024 * 1024, 7);
+
+    await storePendingUploadFs(
+      {
+        id: "upload-large",
+        buffer: payload,
+        filename: "large.bin",
+        conversationId: "19:conv@thread.v2",
+      },
+      { env },
+    );
+
+    const reader = await getPendingUploadFs("upload-large", { env });
+    expect(reader?.buffer.equals(payload)).toBe(true);
+    expect(reader?.filename).toBe("large.bin");
   });
 
   it("removes persisted entries", async () => {
@@ -196,22 +213,35 @@ describe("msteams pending uploads (fs-backed)", () => {
     expect(loaded?.consentCardActivityId).toBe("activity-xyz");
   });
 
-  it("ignores malformed or empty store files and returns undefined", async () => {
+  it("ignores legacy pending-upload JSON cache files at runtime", async () => {
     const stateDir = await makeTempStateDir();
     const env = makeEnv(stateDir);
     const storePath = path.join(stateDir, "msteams-pending-uploads.json");
-    await fs.promises.writeFile(storePath, "not valid json", "utf-8");
+    await fs.promises.writeFile(
+      storePath,
+      `${JSON.stringify({
+        version: 1,
+        uploads: {
+          cached: {
+            id: "cached",
+            bufferBase64: Buffer.from("cached payload").toString("base64"),
+            filename: "cached.txt",
+            conversationId: "19:conv@thread.v2",
+            createdAt: Date.now(),
+          },
+        },
+      })}\n`,
+      "utf-8",
+    );
 
-    // Should not throw and should treat as empty
-    expect(await getPendingUploadFs("anything", { env })).toBeUndefined();
-
-    await fs.promises.writeFile(storePath, JSON.stringify({ version: 2, uploads: {} }), "utf-8");
-    expect(await getPendingUploadFs("anything", { env })).toBeUndefined();
+    expect(await getPendingUploadFs("cached", { env })).toBeUndefined();
+    await expect(fs.promises.access(storePath)).resolves.toBeUndefined();
   });
 });
 
 describe("prepareFileConsentActivityFs end-to-end", () => {
   beforeEach(() => {
+    resetPluginStateStoreForTests();
     setMSTeamsRuntime(msteamsRuntimeStub);
     clearPendingUploads();
   });

@@ -1,13 +1,21 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+// Release User Journey Assertions tests cover release user journey assertions script behavior.
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { runReleaseUserJourneyAssertion } from "../../scripts/e2e/lib/release-user-journey/assertions.mjs";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-user-journey/assertions.mjs";
+const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
+
+function nodeOptionsWithoutExperimentalWarnings(extra?: string): string {
+  const current = [process.env.NODE_OPTIONS, extra].filter(Boolean).join(" ");
+  return current.includes(DISABLE_EXPERIMENTAL_WARNING)
+    ? current
+    : [current, DISABLE_EXPERIMENTAL_WARNING].filter(Boolean).join(" ");
+}
 
 function writeJson(filePath: string, value: unknown) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -25,6 +33,7 @@ function runAssertion(
       ...process.env,
       HOME: home,
       ...options.env,
+      NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(options.env?.NODE_OPTIONS),
     },
     killSignal: "SIGKILL",
     timeout: options.timeoutMs,
@@ -50,55 +59,6 @@ async function withEnv<T>(env: Record<string, string>, callback: () => Promise<T
   }
 }
 
-async function waitForFile(filePath: string, timeoutMs = 3000): Promise<string> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (existsSync(filePath)) {
-      return readFileSync(filePath, "utf8");
-    }
-    await delay(25);
-  }
-  throw new Error(`timed out waiting for ${filePath}`);
-}
-
-async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null) {
-    return;
-  }
-  child.kill("SIGTERM");
-  const startedAt = Date.now();
-  while (child.exitCode === null && Date.now() - startedAt < 1000) {
-    await delay(25);
-  }
-  if (child.exitCode === null) {
-    child.kill("SIGKILL");
-  }
-}
-
-function startTcpFixture(portPath: string, connectionHandlerSource: string) {
-  return spawn(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      [
-        'import net from "node:net";',
-        'import fs from "node:fs";',
-        `const server = net.createServer(${connectionHandlerSource});`,
-        'server.listen(0, "127.0.0.1", () => {',
-        "  const address = server.address();",
-        "  fs.writeFileSync(process.env.PORT_FILE, String(address.port));",
-        "});",
-        "setInterval(() => {}, 1000);",
-      ].join("\n"),
-    ],
-    {
-      env: { ...process.env, PORT_FILE: portPath },
-      stdio: "pipe",
-    },
-  );
-}
-
 async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise<{
   port: number;
   stop: () => Promise<void>;
@@ -110,7 +70,9 @@ async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise
     socket.on("error", () => undefined);
     socket.on("close", () => sockets.delete(socket));
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address() as AddressInfo;
   return {
     port: address.port,
@@ -118,14 +80,88 @@ async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise
       for (const socket of sockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }
 
 describe("release user journey assertions", () => {
+  it("scans large files when checking release user journey output text", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const home = path.join(root, "home");
+    const outputPath = path.join(root, "output.log");
+
+    try {
+      const needlePrefix = "journey-plugin";
+      writeFileSync(
+        outputPath,
+        `${"x".repeat(64 * 1024 - needlePrefix.length)}${needlePrefix}-a:pong\n`,
+        "utf8",
+      );
+
+      const result = runAssertion(home, [
+        "assert-file-contains",
+        outputPath,
+        "journey-plugin-a:pong",
+      ]);
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("bounds release user journey output assertion diagnostics", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const home = path.join(root, "home");
+    const outputPath = path.join(root, "output.log");
+
+    try {
+      writeFileSync(
+        outputPath,
+        `DO_NOT_DUMP_OLD_OUTPUT${"x".repeat(70 * 1024)}\nrecent output tail\n`,
+        "utf8",
+      );
+
+      const result = runAssertion(home, ["assert-file-contains", outputPath, "missing"]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("Output tail:");
+      expect(result.stderr).toContain("recent output tail");
+      expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_OUTPUT");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects oversized JSON artifacts before parsing release user journey config", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const home = path.join(root, "home");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+
+    try {
+      mkdirSync(path.dirname(configPath), { recursive: true });
+      writeFileSync(
+        configPath,
+        `DO_NOT_DUMP_OLD_JSON${"x".repeat(2 * 1024 * 1024)}\nrecent json tail`,
+        "utf8",
+      );
+
+      const result = runAssertion(home, ["configure-mock-model", "18080"]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("JSON artifact exceeded");
+      expect(result.stderr).toContain("recent json tail");
+      expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_JSON");
+      expect(result.stderr.length).toBeLessThan(80 * 1024);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("fails when uninstall leaves the managed plugin directory behind", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
@@ -291,7 +327,9 @@ describe("release user journey assertions", () => {
             "0.2",
           ]),
         ),
-      ).rejects.toThrow("Timed out waiting for ClickClack websocket connection");
+      ).rejects.toThrow(
+        'OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS must be a positive integer. Got: "100ms"',
+      );
     } finally {
       await server.stop();
       rmSync(root, { force: true, recursive: true });
@@ -353,7 +391,9 @@ describe("release user journey assertions", () => {
               "hello",
             ]),
         ),
-      ).rejects.toThrow("fixture inbound failed: 500");
+      ).rejects.toThrow(
+        'OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES must be a positive integer. Got: "16bytes"',
+      );
     } finally {
       await server.stop();
       rmSync(root, { force: true, recursive: true });

@@ -1,3 +1,4 @@
+// Setup wizard orchestrates onboarding prompts and generated OpenClaw config.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -245,10 +246,10 @@ export async function runSetupWizard(
   let pendingPluginInstallMigrationBaseConfig: OpenClawConfig | undefined = baseConfig;
   const writeSetupConfigFile = async (
     config: OpenClawConfig,
-    opts: { allowConfigSizeDrop?: boolean } = {},
+    optsLocal: { allowConfigSizeDrop?: boolean } = {},
   ) =>
     await writeWizardConfigFile(config, {
-      ...opts,
+      ...optsLocal,
       migrationBaseConfig: pendingPluginInstallMigrationBaseConfig,
       onPendingPluginInstallMigration: () => {
         pendingPluginInstallMigrationBaseConfig = undefined;
@@ -623,7 +624,7 @@ export async function runSetupWizard(
       nextConfig = applySkipBootstrapConfig(nextConfig);
     }
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
-    nextConfig = await writeSetupConfigFile(nextConfig, {
+    await writeSetupConfigFile(nextConfig, {
       allowConfigSizeDrop: configResetPerformed,
     });
     logConfigUpdated(runtime);

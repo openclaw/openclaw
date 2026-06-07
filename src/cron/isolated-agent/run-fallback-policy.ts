@@ -1,3 +1,4 @@
+/** Resolves model fallback chains for isolated cron runs and preflight. */
 import { resolveModelCandidateChain } from "../../agents/model-fallback.js";
 import type { ModelCandidate } from "../../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -7,6 +8,7 @@ import {
   resolveSubagentModelFallbacksOverride,
 } from "./run-execution.runtime.js";
 
+/** Resolves cron model fallbacks, giving explicit payload fallbacks precedence over subagent/default policy. */
 export function resolveCronFallbacksOverride(params: {
   cfg: OpenClawConfig;
   job: CronJob;
@@ -21,6 +23,8 @@ export function resolveCronFallbacksOverride(params: {
     return payloadFallbacks;
   }
   if (params.useSubagentFallbacks === true && !hasCronPayloadModelOverride) {
+    // A payload model override owns its full candidate chain; otherwise the
+    // selected subagent can contribute its configured fallback policy.
     const subagentFallbacksOverride = resolveSubagentModelFallbacksOverride(
       params.cfg,
       params.agentId,
@@ -37,6 +41,7 @@ export function resolveCronFallbacksOverride(params: {
   });
 }
 
+/** Builds the ordered model candidates used by cron preflight checks. */
 export function resolveCronPreflightCandidates(params: {
   cfg: OpenClawConfig;
   job: CronJob;

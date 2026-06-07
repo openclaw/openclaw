@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements auto reply harness behavior.
 import "./test-helpers.js";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
@@ -148,7 +149,9 @@ async function rmDirWithRetries(
             ? String((retryErr as { code?: unknown }).code)
             : null;
         if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
           continue;
         }
         throw retryErr;

@@ -1,3 +1,4 @@
+// Openai plugin module implements openai chatgpt device code behavior.
 import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationSeconds,
@@ -194,9 +195,9 @@ async function pollOpenAICodexDeviceCode(params: {
     }
 
     if (response.status === 403 || response.status === 404) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline)),
-      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline));
+      });
       continue;
     }
 

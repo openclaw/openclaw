@@ -1,3 +1,4 @@
+// Tests compact command behavior for session compaction and reply status.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -165,6 +166,7 @@ describe("handleCompactCommand", () => {
           space: "workspace-1",
           spawnedBy: "agent:main:parent",
           totalTokens: 12345,
+          authProfileOverride: "github-copilot:work",
         },
       } as HandleCommandsParams,
       true,
@@ -188,6 +190,7 @@ describe("handleCompactCommand", () => {
     expect(call.senderUsername).toBe("alice_u");
     expect(call.senderE164).toBe("+15551234567");
     expect(call.agentDir).toBe("/tmp/openclaw-agent-compact");
+    expect(call.authProfileId).toBe("github-copilot:work");
   });
 
   it("treats already-under-target manual compaction as skipped", async () => {

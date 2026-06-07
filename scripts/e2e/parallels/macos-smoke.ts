@@ -1,4 +1,5 @@
 #!/usr/bin/env -S pnpm tsx
+// Macos Smoke script supports OpenClaw repository automation.
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -6,6 +7,7 @@ import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
   ensureValue,
+  extractLastOpenClawVersionFromLog,
   makeTempDir,
   packageBuildCommitFromTgz,
   packageVersionFromTgz,
@@ -27,6 +29,7 @@ import {
   shellQuote,
   startHostServer,
   warn,
+  withProgressOnStderr,
   writeJson,
   writeSummaryMarkdown,
   type HostServer,
@@ -565,8 +568,8 @@ class MacosSmoke {
     await this.phases.phase(name, timeoutSeconds, fn);
   }
 
-  private remainingPhaseTimeoutMs(): number | undefined {
-    return this.phases.remainingTimeoutMs();
+  private remainingPhaseTimeoutMs(fallbackMs?: number): number | undefined {
+    return this.phases.remainingTimeoutMs(fallbackMs);
   }
 
   private async phaseReturns(
@@ -653,6 +656,7 @@ exec node "$entry" ${argv}`,
       run("prlctl", ["exec", this.options.vmName, "/usr/bin/stat", "-f", "%Su", "/dev/console"], {
         check: false,
         quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(30_000),
       })
         .stdout.trim()
         .replaceAll("\r", "")
@@ -671,6 +675,7 @@ exec node "$entry" ${argv}`,
       {
         check: false,
         quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(30_000),
       },
     ).stdout.replaceAll("\r", "");
     for (const line of users.split("\n")) {
@@ -700,7 +705,7 @@ exec node "$entry" ${argv}`,
         `/Users/${user}`,
         "NFSHomeDirectory",
       ],
-      { check: false, quiet: true },
+      { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(30_000) },
     ).stdout.replaceAll("\r", "");
     const match = /^NFSHomeDirectory:\s+(.+)$/m.exec(output);
     return match?.[1]?.trim() || `/Users/${user}`;
@@ -713,7 +718,7 @@ exec node "$entry" ${argv}`,
       const result = run(
         "prlctl",
         ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id, "--skip-resume"],
-        { check: false, quiet: true, timeoutMs: 360_000 },
+        { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(360_000) },
       );
       this.log(result.stdout);
       this.log(result.stderr);
@@ -725,10 +730,17 @@ exec node "$entry" ${argv}`,
       const status = run("prlctl", ["status", this.options.vmName], {
         check: false,
         quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(60_000),
       }).stdout;
       if (status.includes(" running") || status.includes(" suspended")) {
-        run("prlctl", ["stop", this.options.vmName, "--kill"], { check: false, quiet: true });
-        waitForVmStatus(this.options.vmName, "stopped", 360);
+        run("prlctl", ["stop", this.options.vmName, "--kill"], {
+          check: false,
+          quiet: true,
+          timeoutMs: this.remainingPhaseTimeoutMs(120_000),
+        });
+        waitForVmStatus(this.options.vmName, "stopped", 360, {
+          probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+        });
       }
       run("sleep", ["3"], { quiet: true });
     }
@@ -738,15 +750,23 @@ exec node "$entry" ${argv}`,
     const status = run("prlctl", ["status", this.options.vmName], {
       check: false,
       quiet: true,
-      timeoutMs: 60_000,
+      timeoutMs: this.remainingPhaseTimeoutMs(60_000),
     }).stdout;
     if (this.snapshot.state === "poweroff" || status.includes(" stopped")) {
-      waitForVmStatus(this.options.vmName, "stopped", 360);
+      waitForVmStatus(this.options.vmName, "stopped", 360, {
+        probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+      });
       say(`Start restored poweroff snapshot ${this.snapshot.name}`);
-      run("prlctl", ["start", this.options.vmName], { quiet: true });
+      run("prlctl", ["start", this.options.vmName], {
+        quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
+      });
     } else if (status.includes(" suspended")) {
       say(`Resume restored snapshot ${this.snapshot.name}`);
-      run("prlctl", ["start", this.options.vmName], { quiet: true });
+      run("prlctl", ["start", this.options.vmName], {
+        quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
+      });
     }
     this.waitForCurrentUser();
   }
@@ -993,9 +1013,31 @@ sleep 1`,
 deadline=$((SECONDS + 120))
 while [ $SECONDS -lt $deadline ]; do
   if curl -fsSL --connect-timeout 2 --max-time 5 http://127.0.0.1:18789/ >/tmp/openclaw-dashboard-smoke.html 2>/dev/null; then
-    grep -F '<title>OpenClaw Control</title>' /tmp/openclaw-dashboard-smoke.html >/dev/null &&
-      grep -F '<openclaw-app></openclaw-app>' /tmp/openclaw-dashboard-smoke.html >/dev/null &&
-      exit 0
+    if grep -F '<title>OpenClaw Control</title>' /tmp/openclaw-dashboard-smoke.html >/dev/null &&
+      grep -F '<openclaw-app></openclaw-app>' /tmp/openclaw-dashboard-smoke.html >/dev/null; then
+      asset_paths="$(
+        sed -nE 's/.*<(script|link)[^>]*(src|href)=["'"'"']([^"'"'"']+)["'"'"'].*/\3/p' /tmp/openclaw-dashboard-smoke.html |
+          grep -E '(^|/)assets/' |
+          grep -Ev '^(https?:)?//' |
+          sort -u
+      )"
+      if [ -n "$asset_paths" ]; then
+        assets_ok=1
+        while IFS= read -r asset_path; do
+          [ -n "$asset_path" ] || continue
+          case "$asset_path" in
+            http://127.0.0.1:18789/*) asset_url="$asset_path" ;;
+            /*) asset_url="http://127.0.0.1:18789$asset_path" ;;
+            *) asset_url="http://127.0.0.1:18789/$asset_path" ;;
+          esac
+          curl -fsSL --connect-timeout 2 --max-time 5 "$asset_url" >/dev/null 2>/dev/null ||
+            assets_ok=0
+        done <<EOF
+$asset_paths
+EOF
+        [ "$assets_ok" -eq 1 ] && exit 0
+      fi
+    fi
   fi
   sleep 1
 done
@@ -1113,9 +1155,7 @@ fi`,
   }
 
   private async extractLastVersion(phaseName: string): Promise<string> {
-    const log = await readFile(path.join(this.runDir, `${phaseName}.log`), "utf8").catch(() => "");
-    const matches = [...log.matchAll(/OpenClaw\s+([0-9][^\s]*)/gi)];
-    return matches.at(-1)?.[1] ?? "";
+    return await extractLastOpenClawVersionFromLog(path.join(this.runDir, `${phaseName}.log`));
   }
 
   private upgradeSummaryLabel(): string {
@@ -1196,7 +1236,10 @@ fi`,
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  await new MacosSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
+  const options = parseArgs(process.argv.slice(2));
+  const runSmoke = () => new MacosSmoke(options).run();
+  const runPromise = options.json ? withProgressOnStderr(runSmoke) : runSmoke();
+  await runPromise.catch((error: unknown) => {
     die(error instanceof Error ? error.message : String(error));
   });
 }

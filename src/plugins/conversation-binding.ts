@@ -1,3 +1,4 @@
+// Binds plugin conversations to stable channel and agent identifiers.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -946,7 +947,7 @@ function dispatchPluginConversationBindingResolved(params: {
 }): void {
   // Keep platform interaction acks fast even if the plugin does slow post-bind work.
   queueMicrotask(() => {
-    void notifyPluginConversationBindingResolved(params).catch((error) => {
+    void notifyPluginConversationBindingResolved(params).catch((error: unknown) => {
       log.warn(`plugin binding resolved dispatch failed: ${String(error)}`);
     });
   });

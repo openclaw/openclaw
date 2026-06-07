@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Reproduces memory-search file descriptor retention with a synthetic workspace.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -26,8 +27,18 @@ const ISSUE_FILE_COUNTS = [
 const ISSUE_MEMORY_FILE_COUNT = ISSUE_FILE_COUNTS.reduce((sum, [, count]) => sum + count, 0);
 const DEFAULT_FILE_COUNT = 512;
 const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
+/**
+ * Maximum gateway-ready output tail retained while waiting for startup.
+ */
 export const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
+/**
+ * Maximum bytes read from the memory_search HTTP response.
+ */
 export const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
+/**
+ * Probe query expected to hit the synthetic top-level memory file.
+ */
+export const MEMORY_SEARCH_PROBE_QUERY = "Top-level memory file";
 
 const SKIP_GATEWAY_ENV = {
   NODE_ENV: "test",
@@ -87,6 +98,9 @@ function stripPackageManagerSeparatorForKnownFlags(argv) {
     : argv;
 }
 
+/**
+ * Parses a safe non-negative integer option.
+ */
 export function readNumber(value, label) {
   const raw = String(value).trim();
   if (!NON_NEGATIVE_INTEGER_PATTERN.test(raw)) {
@@ -99,6 +113,9 @@ export function readNumber(value, label) {
   return parsed;
 }
 
+/**
+ * Parses a safe positive integer option.
+ */
 export function readPositiveNumber(value, label) {
   const parsed = readNumber(value, label);
   if (parsed <= 0) {
@@ -117,6 +134,9 @@ function readPositiveNumberEnv(name, fallback) {
   return raw == null || raw.trim() === "" ? fallback : readPositiveNumber(raw, name);
 }
 
+/**
+ * Parses memory FD repro CLI arguments and environment fallbacks.
+ */
 export function parseArgs(argv) {
   const args = stripPackageManagerSeparatorForKnownFlags(argv);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -222,7 +242,9 @@ function logStep(message) {
 }
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function getFreePort() {
@@ -275,15 +297,25 @@ function writeSyntheticWorkspace(workspaceDir, fileCount) {
   }
 }
 
-function writeConfig({ homeDir, workspaceDir, port, token }) {
+/**
+ * Writes isolated OpenClaw config for the synthetic memory workspace.
+ */
+export function writeConfig({ homeDir, workspaceDir, port, token }) {
   const configDir = path.join(homeDir, ".openclaw");
   fs.mkdirSync(configDir, { recursive: true });
   const configPath = path.join(configDir, "openclaw.json");
+  const indexPath = path.join(configDir, "memory", "main.sqlite");
   const config = {
     agents: {
       defaults: {
         workspace: workspaceDir,
         memorySearch: {
+          provider: "none",
+          model: "",
+          store: {
+            path: indexPath,
+            vector: { enabled: false },
+          },
           sync: {
             watch: true,
             onSessionStart: false,
@@ -311,6 +343,40 @@ function writeConfig({ homeDir, workspaceDir, port, token }) {
   return configPath;
 }
 
+function formatTail(text, maxChars = 4096) {
+  return text.length > maxChars ? text.slice(-maxChars) : text;
+}
+
+function preindexSyntheticMemory(env) {
+  logStep("preindex start");
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/run-node.mjs", "memory", "index", "--force", "--agent", "main"],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+      maxBuffer: 10 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      [
+        `memory preindex failed with exit ${result.status ?? result.signal}`,
+        formatTail(result.stdout || ""),
+        formatTail(result.stderr || ""),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+  logStep("preindex complete");
+}
+
+/**
+ * Updates bounded gateway-ready output state from a stdout/stderr chunk.
+ */
 export function updateGatewayReadyOutputState(
   state,
   chunk,
@@ -390,10 +456,16 @@ function sampleFds({ label, pid, workspaceRealPath }) {
   return sample;
 }
 
+/**
+ * Reports whether a spawned child has already exited.
+ */
 export function hasChildExited(child) {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
+/**
+ * Waits until gateway output and listener state both indicate readiness.
+ */
 export async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
   const startedAt = Date.now();
   let outputState = { tail: "", readySeen: false };
@@ -417,6 +489,9 @@ export async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
   throw new Error(`gateway did not become ready within ${timeoutMs}ms; see ${logPath}`);
 }
 
+/**
+ * Stops the gateway child using the default process/runtime hooks.
+ */
 export async function stopGateway({ child, port }) {
   return stopGatewayWithRuntime({
     child,
@@ -426,21 +501,21 @@ export async function stopGateway({ child, port }) {
   });
 }
 
+/**
+ * Stops the gateway child and any remaining listener process.
+ */
 export async function stopGatewayWithRuntime({
   child,
+  childExitPollIntervalMs = 100,
+  childExitPolls = 50,
   port,
   findGatewayPidFn,
   killProcess,
   listenerSettleDelayMs = 500,
 }) {
   if (!hasChildExited(child)) {
-    child.kill("SIGINT");
-    for (let i = 0; i < 50; i += 1) {
-      if (hasChildExited(child)) {
-        break;
-      }
-      await sleep(100);
-    }
+    signalChild(child, "SIGINT");
+    await waitForChildExit(child, { intervalMs: childExitPollIntervalMs, polls: childExitPolls });
   }
   const listenerPid = findGatewayPidFn(port);
   if (listenerPid) {
@@ -455,9 +530,32 @@ export async function stopGatewayWithRuntime({
       } catch {}
     }
   }
+  if (!hasChildExited(child)) {
+    signalChild(child, "SIGKILL");
+    await waitForChildExit(child, { intervalMs: childExitPollIntervalMs, polls: childExitPolls });
+  }
 }
 
+/**
+ * Reads an HTTP response body up to a configured byte limit.
+ */
 export { readBoundedResponseText };
+
+function signalChild(child, signal) {
+  try {
+    child.kill(signal);
+  } catch {}
+}
+
+async function waitForChildExit(child, { intervalMs, polls }) {
+  for (let i = 0; i < polls; i += 1) {
+    if (hasChildExited(child)) {
+      return true;
+    }
+    await sleep(intervalMs);
+  }
+  return hasChildExited(child);
+}
 
 function parseJsonValue(text) {
   try {
@@ -491,6 +589,9 @@ function parseToolTextContent(result) {
   return null;
 }
 
+/**
+ * Classifies the memory_search HTTP response into success/error details.
+ */
 export function classifyMemorySearchInvokeResponse({ httpOk, status, bodyText }) {
   const parsedBody = parseJsonValue(bodyText);
   const body = asRecord(parsedBody);
@@ -589,7 +690,7 @@ async function invokeMemorySearch({ port, token, timeoutMs }) {
       body: JSON.stringify({
         tool: "memory_search",
         args: {
-          query: "FD-leak-probe-sentinel-xyzzy-nomatch",
+          query: MEMORY_SEARCH_PROBE_QUERY,
           maxResults: 1,
           corpus: "memory",
         },
@@ -671,24 +772,7 @@ async function main() {
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_GATEWAY_TOKEN: token,
   };
-  const child = spawn(
-    process.execPath,
-    [
-      "scripts/run-node.mjs",
-      "gateway",
-      "run",
-      "--port",
-      String(port),
-      "--auth",
-      "token",
-      "--token",
-      token,
-      "--bind",
-      "loopback",
-      "--allow-unconfigured",
-    ],
-    { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] },
-  );
+  let child;
 
   const summary = {
     generatedAt: new Date().toISOString(),
@@ -707,6 +791,25 @@ async function main() {
   };
 
   try {
+    preindexSyntheticMemory(env);
+    child = spawn(
+      process.execPath,
+      [
+        "scripts/run-node.mjs",
+        "gateway",
+        "run",
+        "--port",
+        String(port),
+        "--auth",
+        "token",
+        "--token",
+        token,
+        "--bind",
+        "loopback",
+        "--allow-unconfigured",
+      ],
+      { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] },
+    );
     logStep(`workspace=${workspaceDir}`);
     logStep(`files=${options.fileCount} mode=${options.mode} port=${port}`);
     await waitForGatewayReady({ child, port, logPath, timeoutMs: 60_000 });
@@ -744,7 +847,9 @@ async function main() {
       throw new Error(summary.failure);
     }
   } finally {
-    await stopGateway({ child, port });
+    if (child) {
+      await stopGateway({ child, port });
+    }
     if (!options.keep) {
       fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     } else {
@@ -759,10 +864,12 @@ function isMainModule() {
 }
 
 if (isMainModule()) {
-  main().catch((error) => {
-    console.error(
-      `[memory-fd-repro] failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    process.exit(1);
-  });
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(
+        `[memory-fd-repro] failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    },
+  );
 }

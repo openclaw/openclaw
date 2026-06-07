@@ -1,6 +1,11 @@
+/**
+ * Redacts diagnostic payloads before persistence. It removes credential-like
+ * fields, masks embedded auth strings, and replaces image/base64 data with
+ * size and digest metadata.
+ */
 import crypto from "node:crypto";
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { estimateBase64DecodedBytes } from "../media/base64.js";
 
 const REDACTED_IMAGE_DATA = "<redacted>";
 

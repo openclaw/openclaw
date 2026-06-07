@@ -1,3 +1,4 @@
+// Oxlint Config tests cover oxlint config script behavior.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -175,8 +176,6 @@ describe("oxlint config", () => {
         ],
         rules: {
           "typescript/no-explicit-any": "off",
-          "typescript/unbound-method": "off",
-          "eslint/no-unsafe-optional-chaining": "off",
         },
       },
     ]);

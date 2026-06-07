@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
+// Exercises core model selection, aliases, thinking defaults, and visibility policy.
+import { afterEach, describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
@@ -113,6 +114,11 @@ vi.mock("./model-selection-cli.js", () => ({
   isCliProvider: () => false,
 }));
 
+afterEach(() => {
+  setLoggerOverride(null);
+  resetLogger();
+});
+
 const EXPLICIT_ALLOWLIST_CONFIG = {
   agents: {
     defaults: {
@@ -175,6 +181,8 @@ const CLAUDE_CLI_OPUS_48_CATALOG = [
 ];
 
 function resolveAnthropicOpusThinking(cfg: OpenClawConfig) {
+  // Helper keeps thinking-default assertions focused on config differences
+  // while using the same catalog metadata shape as production selection.
   return resolveThinkingDefault({
     cfg,
     provider: "anthropic",
@@ -224,6 +232,7 @@ function createAgentFallbackConfig(params: {
   fallbacks?: string[];
   agentFallbacks?: string[];
 }) {
+  // Compact fixture for primary/fallback allowlist tests.
   return {
     agents: {
       defaults: {
@@ -2527,6 +2536,72 @@ describe("model-selection", () => {
       } as OpenClawConfig;
 
       expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
+    });
+
+    it("treats params.thinking=false as off (#74374)", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "deepseek/deepseek-v4-pro": {
+                params: { thinking: false },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "deepseek",
+          model: "deepseek-v4-pro",
+        }),
+      ).toBe("off");
+    });
+
+    it('treats params.thinking="disabled" as off (#74374)', () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "deepseek/deepseek-v4-pro": {
+                params: { thinking: "disabled" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "deepseek",
+          model: "deepseek-v4-pro",
+        }),
+      ).toBe("off");
+    });
+
+    it('treats params.thinking="none" as off', () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "deepseek/deepseek-v4-pro": {
+                params: { thinking: "none" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "deepseek",
+          model: "deepseek-v4-pro",
+        }),
+      ).toBe("off");
     });
 
     it("keeps thinking off by default for explicitly configured Anthropic Opus 4.7", () => {

@@ -1,3 +1,4 @@
+// Implements `openclaw channels resolve` for provider-specific user/group target resolution.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -120,6 +121,7 @@ function formatResolveResult(result: ResolveResult): string {
   return `${result.input} -> ${result.id}${name}${note}`;
 }
 
+/** Resolve user/group/channel labels into plugin-specific stable target ids. */
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const loadedRaw = getRuntimeConfig();
@@ -207,7 +209,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   }
   const preferredKind = resolvePreferredKind(opts.kind);
 
-  let results: ResolveResult[] = [];
+  let results: ResolveResult[];
   if (preferredKind) {
     const resolved = await plugin.resolver.resolveTargets({
       cfg,

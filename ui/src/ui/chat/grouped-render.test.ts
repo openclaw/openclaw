@@ -15,6 +15,12 @@ const localStorageValues = vi.hoisted(() => new Map<string, string>());
 const markdownRenderMock = vi.hoisted(() =>
   vi.fn((value: string, _options?: { codeBlockChrome?: "copy" | "none" }) => value),
 );
+const streamingTextRenderMock = vi.hoisted(() =>
+  vi.fn((value: string) => `<div class="markdown-plain-text-fallback">${value}</div>`),
+);
+const streamingMarkdownRenderMock = vi.hoisted(() =>
+  vi.fn((value: string) => `<div class="streaming-markdown">${value}</div>`),
+);
 
 vi.mock("../../local-storage.ts", () => ({
   getSafeLocalStorage: () => ({
@@ -26,6 +32,8 @@ vi.mock("../../local-storage.ts", () => ({
 
 vi.mock("../markdown.ts", () => ({
   toSanitizedMarkdownHtml: markdownRenderMock,
+  toStreamingMarkdownHtml: streamingMarkdownRenderMock,
+  toStreamingPlainTextHtml: streamingTextRenderMock,
 }));
 
 vi.mock("../icons.ts", () => ({
@@ -887,6 +895,21 @@ describe("grouped chat rendering", () => {
     expect(bubble?.classList.contains("streaming")).toBe(false);
   });
 
+  it("renders streaming text through the streaming markdown renderer", () => {
+    const container = document.createElement("div");
+    markdownRenderMock.mockClear();
+    streamingMarkdownRenderMock.mockClear();
+    streamingTextRenderMock.mockClear();
+
+    render(renderStreamingGroup("**live**\nreply", 1), container);
+
+    expect(markdownRenderMock).not.toHaveBeenCalled();
+    expect(streamingTextRenderMock).not.toHaveBeenCalled();
+    expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", undefined);
+    const text = container.querySelector(".streaming-markdown");
+    expect(text?.textContent).toBe("**live**\nreply");
+  });
+
   it("renders configured local user names", () => {
     const renderUser = (opts: Partial<RenderMessageGroupOptions>) => {
       const container = document.createElement("div");
@@ -909,6 +932,159 @@ describe("grouped chat rendering", () => {
 
     const avatar = named.querySelector<HTMLElement>(".chat-avatar.user");
     expect(avatar?.tagName).toBe("DIV");
+  });
+
+  it("uses assistant senderLabel for forwarded assistant-side groups", () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "forwarded-group",
+      role: "assistant",
+      senderLabel: "Forwarded from main",
+      messages: [
+        {
+          key: "forwarded-message",
+          message: { role: "assistant", content: "forwarded report", timestamp: 1000 },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+
+    render(
+      renderMessageGroup(group, {
+        showReasoning: true,
+        showToolCalls: true,
+        assistantName: "OpenClaw",
+        assistantAvatar: null,
+      }),
+      container,
+    );
+
+    const sender = container.querySelector<HTMLElement>(".chat-group.assistant .chat-sender-name");
+    expect(sender?.textContent).toBe("Forwarded from main");
+  });
+
+  it("collapses consecutive tool results into an activity group", () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "tool-group",
+      role: "tool",
+      messages: [
+        {
+          key: "tool-message-1",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            content: "File one",
+            timestamp: 1000,
+          },
+        },
+        {
+          key: "tool-message-2",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-2",
+            toolName: "run_command",
+            content: "Command output",
+            timestamp: 1001,
+          },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+
+    renderMessageGroups(container, [group], {
+      isToolMessageExpanded: (id) => (id === "activity:tool-group" ? false : undefined),
+    });
+
+    const activity = expectElement(container, ".chat-activity-group__summary", HTMLButtonElement);
+    expect(activity.textContent).toContain("Activity: 2 tools");
+    expect(activity.textContent).toContain("read_file");
+    expect(activity.textContent).toContain("run_command");
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+  });
+
+  it("passes the effective default-expanded activity state to the toggle handler", () => {
+    const container = document.createElement("div");
+    const onToggleToolMessageExpanded = vi.fn();
+    const group: MessageGroup = {
+      kind: "group",
+      key: "tool-group",
+      role: "tool",
+      messages: [
+        {
+          key: "tool-message-1",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            isError: true,
+            content: JSON.stringify({ error: "Read failed" }),
+            timestamp: 1000,
+          },
+        },
+        {
+          key: "tool-message-2",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-2",
+            toolName: "run_command",
+            content: "Command output",
+            timestamp: 1001,
+          },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+
+    renderMessageGroups(container, [group], { onToggleToolMessageExpanded });
+
+    expect(container.querySelector(".chat-activity-group.is-open")).toBeInstanceOf(HTMLElement);
+    expectElement(container, ".chat-activity-group__summary", HTMLButtonElement).click();
+
+    expect(onToggleToolMessageExpanded).toHaveBeenCalledWith("activity:tool-group", true);
+  });
+
+  it("hides grouped tool activity when tool calls are disabled", () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "tool-group",
+      role: "tool",
+      messages: [
+        {
+          key: "tool-message-1",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read_file",
+            content: "File one",
+            timestamp: 1000,
+          },
+        },
+        {
+          key: "tool-message-2",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-2",
+            toolName: "run_command",
+            content: "Command output",
+            timestamp: 1001,
+          },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+
+    renderMessageGroups(container, [group], { showToolCalls: false });
+
+    expect(container.querySelector(".chat-activity-group")).toBeNull();
   });
 
   it("keeps inline tool cards collapsed by default and renders expanded state", () => {
@@ -1408,6 +1584,8 @@ describe("grouped chat rendering", () => {
 
   it("fetches managed chat images with auth and renders blob previews", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
+    const managedChatImageUrl =
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full";
     const objectUrl = "blob:managed-image";
     vi.stubGlobal(
       "URL",
@@ -1435,7 +1613,7 @@ describe("grouped chat rendering", () => {
         content: [
           {
             type: "image",
-            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+            url: managedChatImageUrl,
             alt: "Generated image 1",
             width: 1,
             height: 1,
@@ -1457,11 +1635,12 @@ describe("grouped chat rendering", () => {
       },
       { interval: 1, timeout: 100 },
     );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [fetchUrl, fetchInit] = requireFetchCall(fetchMock);
-    expect(fetchUrl).toBe(
-      "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
-    );
+    expect(fetchMock).toHaveBeenCalled();
+    const fetchedUrls = fetchMock.mock.calls.map(([url]) => url);
+    expect(
+      fetchedUrls.filter((url) => url !== managedChatImageUrl && url !== "/avatar/main?meta=1"),
+    ).toEqual([]);
+    const [, fetchInit] = requireFetchCallForUrl(fetchMock, managedChatImageUrl);
     expectSameOriginGet(fetchInit);
   });
 
@@ -2089,6 +2268,46 @@ describe("grouped chat rendering", () => {
     renderCanvas({ embedSandboxMode: "trusted", suffix: "trusted" });
     iframe = expectElement(container, ".chat-tool-card__preview-frame", HTMLIFrameElement);
     expect(iframe.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin");
+  });
+
+  it("recreates canvas preview iframes when the sandbox policy changes", () => {
+    const container = document.createElement("div");
+    const renderCanvas = (embedSandboxMode: "strict" | "scripts") =>
+      renderMessageGroups(
+        container,
+        [
+          createMessageGroup(
+            {
+              id: "assistant-canvas-inline-sandbox-change",
+              role: "assistant",
+              content: [
+                { type: "text", text: "Inline canvas result." },
+                createAssistantCanvasBlock({ suffix: "sandbox-change" }),
+              ],
+              timestamp: Date.now(),
+            },
+            "assistant",
+          ),
+        ],
+        { embedSandboxMode },
+      );
+
+    renderCanvas("strict");
+    const strictIframe = expectElement(
+      container,
+      ".chat-tool-card__preview-frame",
+      HTMLIFrameElement,
+    );
+    expect(strictIframe.getAttribute("sandbox")).toBe("");
+
+    renderCanvas("scripts");
+    const scriptsIframe = expectElement(
+      container,
+      ".chat-tool-card__preview-frame",
+      HTMLIFrameElement,
+    );
+    expect(scriptsIframe).not.toBe(strictIframe);
+    expect(scriptsIframe.getAttribute("sandbox")).toBe("allow-scripts");
   });
 
   it("renders assistant_message canvas results in the assistant bubble even when tool rows are visible", () => {

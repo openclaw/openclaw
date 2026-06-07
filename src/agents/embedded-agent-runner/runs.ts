@@ -1,3 +1,6 @@
+/**
+ * Manages active embedded-agent run handles, queues, aborts, and waiters.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   abortActiveReplyRuns,
@@ -638,7 +641,9 @@ export async function waitForActiveEmbeddedRuns(
       );
       return { drained: false };
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, pollMs);
+    });
   }
 }
 

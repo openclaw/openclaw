@@ -1,3 +1,4 @@
+// Discovers gateways over Bonjour and normalizes service records.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeStringEntries,
@@ -551,8 +552,8 @@ function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
       current.gatewayPort = parsePortOrUndefined(txt.gatewayPort);
       current.sshPort = parsePortOrUndefined(txt.sshPort);
       if (txt.gatewayTls) {
-        const raw = normalizeOptionalLowercaseString(txt.gatewayTls);
-        current.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
+        const rawLocal = normalizeOptionalLowercaseString(txt.gatewayTls);
+        current.gatewayTls = rawLocal === "1" || rawLocal === "true" || rawLocal === "yes";
       }
       if (txt.gatewayTlsSha256) {
         current.gatewayTlsFingerprintSha256 = txt.gatewayTlsSha256;

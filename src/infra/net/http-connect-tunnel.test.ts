@@ -1,3 +1,5 @@
+// HTTP CONNECT tunnel tests cover HTTP/HTTPS proxy handshakes, proxy auth,
+// timeout/error cleanup, and tunneled-byte preservation.
 import { EventEmitter } from "node:events";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -303,7 +305,9 @@ describe("openHttpConnectTunnel", () => {
       return socket;
     });
 
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(resolved).toBe(false);
 
     targetTlsSocket.emit("secureConnect");

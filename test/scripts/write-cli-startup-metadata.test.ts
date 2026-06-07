@@ -1,7 +1,8 @@
+// Write Cli Startup Metadata tests cover write cli startup metadata script behavior.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { writeCliStartupMetadata } from "../../scripts/write-cli-startup-metadata.ts";
+import { __testing, writeCliStartupMetadata } from "../../scripts/write-cli-startup-metadata.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 function writeFixtureFile(rootDir: string, relativePath: string, contents: string): void {
@@ -46,8 +47,95 @@ function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
   }
 }
 
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!processIsAlive(pid)) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
+  throw new Error(`process ${pid} was still alive after ${timeoutMs}ms`);
+}
+
 describe("write-cli-startup-metadata", () => {
   const { createTempDir } = createScriptTestHarness();
+
+  it("caps concurrent metadata render workers while preserving result order", async () => {
+    let active = 0;
+    let peakActive = 0;
+
+    const result = await __testing.mapWithConcurrency([1, 2, 3, 4, 5], 2, async (value) => {
+      active += 1;
+      peakActive = Math.max(peakActive, active);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1);
+      });
+      active -= 1;
+      return `rendered-${value}`;
+    });
+
+    expect(result).toEqual(["rendered-1", "rendered-2", "rendered-3", "rendered-4", "rendered-5"]);
+    expect(peakActive).toBe(2);
+  });
+
+  it("fails command help rendering when captured output exceeds the byte limit", async () => {
+    await expect(
+      __testing.spawnText(["--eval", "process.stdout.write('x'.repeat(2048))"], {
+        cwd: process.cwd(),
+        env: process.env,
+        failureMessage: "render failed",
+        killGraceMs: 25,
+        maxOutputBytes: 1024,
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("render failed: output exceeded 1024 bytes");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "kills descendant processes when command help rendering times out",
+    async () => {
+      const tempRoot = createTempDir("openclaw-startup-metadata-timeout-");
+      const markerPath = path.join(tempRoot, "grandchild.pid");
+      const grandchildScript = [
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = await import('node:child_process');",
+        "const { writeFileSync } = await import('node:fs');",
+        `const grandchild = spawn(process.execPath, ["--eval", ${JSON.stringify(grandchildScript)}], { stdio: "ignore" });`,
+        `writeFileSync(${JSON.stringify(markerPath)}, String(grandchild.pid));`,
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      await expect(
+        __testing.spawnText(["--input-type=module", "--eval", parentScript], {
+          cwd: tempRoot,
+          env: process.env,
+          failureMessage: "render failed",
+          killGraceMs: 25,
+          maxOutputBytes: 1024,
+          timeoutMs: 500,
+        }),
+      ).rejects.toThrow("render failed: timed out after 500ms");
+
+      const grandchildPid = Number(readFileSync(markerPath, "utf8"));
+      await waitForProcessExit(grandchildPid);
+    },
+  );
 
   it("writes startup metadata with populated root help text when dist falls back to source rendering", async () => {
     const tempRoot = createTempDir("openclaw-startup-metadata-");
@@ -118,6 +206,81 @@ describe("write-cli-startup-metadata", () => {
     expect(written.subcommandHelpText.gateway).toContain("openclaw gateway");
     expect(written.subcommandHelpText.models).toContain("openclaw models");
     expect(written.subcommandHelpText.plugins).toContain("openclaw plugins");
+  });
+
+  it("renders independent startup help snapshots concurrently", async () => {
+    const tempRoot = createTempDir("openclaw-startup-metadata-concurrency-");
+    const distDir = path.join(tempRoot, "dist");
+    const extensionsDir = path.join(tempRoot, "extensions");
+    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    const started: string[] = [];
+    const unblockers = new Map<string, () => void>();
+    const expectedStarted = ["browser", "secrets", "nodes", "subcommands"];
+
+    mkdirSync(distDir, { recursive: true });
+    writeStartupMetadataSourceSignatureFixture(tempRoot);
+    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
+
+    const renderAfterUnblock = (label: string, output: string): (() => Promise<string>) => {
+      return async () => {
+        started.push(label);
+        await new Promise<void>((resolve) => {
+          unblockers.set(label, resolve);
+        });
+        return output;
+      };
+    };
+
+    const waitForAllStarted = async (): Promise<void> => {
+      const deadline = Date.now() + 1_000;
+      while (Date.now() < deadline) {
+        if (expectedStarted.every((label) => started.includes(label))) {
+          return;
+        }
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5);
+        });
+      }
+      throw new Error(`startup help renderers did not start concurrently: ${started.join(", ")}`);
+    };
+
+    const writePromise = writeCliStartupMetadata({
+      distDir,
+      outputPath,
+      extensionsDir,
+      sourceRootDir: tempRoot,
+      renderBundledRootHelpText: async () => "Usage: openclaw\n",
+      renderSourceBrowserHelpText: renderAfterUnblock("browser", "Usage: openclaw browser\n"),
+      renderSourceSecretsHelpText: renderAfterUnblock("secrets", "Usage: openclaw secrets\n"),
+      renderSourceNodesHelpText: renderAfterUnblock("nodes", "Usage: openclaw nodes\n"),
+      renderSourceSubcommandHelpTextRecord: async () => {
+        started.push("subcommands");
+        await new Promise<void>((resolve) => {
+          unblockers.set("subcommands", resolve);
+        });
+        return {
+          doctor: "Usage: openclaw doctor\n",
+          gateway: "Usage: openclaw gateway\n",
+          models: "Usage: openclaw models\n",
+          plugins: "Usage: openclaw plugins\n",
+        };
+      },
+    });
+
+    await waitForAllStarted();
+    for (const label of expectedStarted) {
+      unblockers.get(label)?.();
+    }
+    await writePromise;
+
+    const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
+      browserHelpText: string;
+      nodesHelpText: string;
+      secretsHelpText: string;
+    };
+    expect(written.browserHelpText).toContain("openclaw browser");
+    expect(written.secretsHelpText).toContain("openclaw secrets");
+    expect(written.nodesHelpText).toContain("openclaw nodes");
   });
 
   it("regenerates nodes help when bundled canvas CLI help sources change", async () => {

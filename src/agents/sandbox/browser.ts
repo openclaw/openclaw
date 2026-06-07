@@ -1,3 +1,8 @@
+/**
+ * Sandbox browser container lifecycle.
+ *
+ * Starts or reuses Chrome/noVNC containers, exposes authenticated CDP/observer URLs, and tracks browser registry state.
+ */
 import crypto from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
@@ -103,7 +108,9 @@ async function waitForSandboxCdp(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await new Promise((r) => setTimeout(r, Math.min(150, remainingMs)));
+    await new Promise((r) => {
+      setTimeout(r, Math.min(150, remainingMs));
+    });
   }
   return false;
 }

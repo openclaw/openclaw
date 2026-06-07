@@ -1,7 +1,10 @@
+// Id-like target resolution gates plugin directory lookups to inputs that are
+// specific enough to avoid broad name searches.
 import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { maybeResolvePluginMessagingTarget } from "./target-normalization.js";
 
+/** Plugin-resolved destination for a channel target that already looks id-like. */
 export type ResolvedIdLikeTarget = {
   to: string;
   kind: ChannelDirectoryEntryKind | "channel";
@@ -10,6 +13,7 @@ export type ResolvedIdLikeTarget = {
   resolutionSource: "plugin";
 };
 
+/** Resolves an id-like outbound target through the channel plugin directory. */
 export async function maybeResolveIdLikeTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;

@@ -1,3 +1,4 @@
+// Defines plugin hook payload and message contracts.
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
@@ -17,6 +18,7 @@ import type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
 } from "./hook-before-agent-start.types.js";
+import type { PluginHookBeforeToolCallResult } from "./hook-before-tool-call-result.js";
 import type { InputGateDecision } from "./hook-decision-types.js";
 import type {
   PluginHookInboundClaimContext,
@@ -64,6 +66,11 @@ export type {
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
 } from "./hook-message.types.js";
+export {
+  PluginApprovalResolutions,
+  type PluginApprovalResolution,
+  type PluginHookBeforeToolCallResult,
+} from "./hook-before-tool-call-result.js";
 
 export type PluginHookName =
   | "before_model_resolve"
@@ -109,7 +116,8 @@ export type PluginHookName =
   | "before_dispatch"
   | "reply_dispatch"
   | "before_install"
-  | "before_agent_run";
+  | "before_agent_run"
+  | "resolve_exec_env";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -150,6 +158,7 @@ export const PLUGIN_HOOK_NAMES = [
   "reply_dispatch",
   "before_install",
   "before_agent_run",
+  "resolve_exec_env",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -410,6 +419,9 @@ export type PluginHookBeforeDispatchEvent = {
   channel?: string;
   sessionKey?: string;
   senderId?: string;
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
   isGroup?: boolean;
   timestamp?: number;
 };
@@ -420,6 +432,9 @@ export type PluginHookBeforeDispatchContext = {
   conversationId?: string;
   sessionKey?: string;
   senderId?: string;
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
 };
 
 export type PluginHookBeforeDispatchResult = {
@@ -431,6 +446,7 @@ export type PluginHookReplyDispatchEvent = {
   ctx: FinalizedMsgContext;
   runId?: string;
   sessionKey?: string;
+  toolsAllow?: string[];
   images?: Array<{ data: string; mimeType: string }>;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
@@ -441,6 +457,8 @@ export type PluginHookReplyDispatchEvent = {
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
+  originatingAccountId?: string;
+  originatingThreadId?: string | number;
   shouldSendToolSummaries: boolean;
   sendPolicy: "allow" | "deny";
   isTailDispatch?: boolean;
@@ -524,33 +542,6 @@ export type PluginHookBeforeToolCallEvent = {
    * host does not know how to derive paths for.
    */
   derivedPaths?: readonly string[];
-};
-
-export const PluginApprovalResolutions = {
-  ALLOW_ONCE: "allow-once",
-  ALLOW_ALWAYS: "allow-always",
-  DENY: "deny",
-  TIMEOUT: "timeout",
-  CANCELLED: "cancelled",
-} as const;
-
-export type PluginApprovalResolution =
-  (typeof PluginApprovalResolutions)[keyof typeof PluginApprovalResolutions];
-
-export type PluginHookBeforeToolCallResult = {
-  params?: Record<string, unknown>;
-  block?: boolean;
-  blockReason?: string;
-  requireApproval?: {
-    title: string;
-    description: string;
-    severity?: "info" | "warning" | "critical";
-    timeoutMs?: number;
-    timeoutBehavior?: "allow" | "deny";
-    allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
-    pluginId?: string;
-    onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
-  };
 };
 
 export type PluginHookAfterToolCallEvent = {
@@ -974,6 +965,14 @@ export type PluginHookBeforeAgentRunEvent = {
 /** Result type for before_agent_run. Returns pass/block or void (= pass). */
 export type PluginHookBeforeAgentRunResult = InputGateDecision | void;
 
+export type PluginHookResolveExecEnvEvent = {
+  sessionKey?: string;
+  toolName: "exec";
+  host: "gateway" | "sandbox" | "node";
+};
+
+export type PluginHookResolveExecEnvContext = PluginHookAgentContext;
+
 export type PluginHookHandlerMap = {
   agent_turn_prepare: (
     event: PluginAgentTurnPrepareEvent,
@@ -1151,6 +1150,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeAgentRunEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentRunResult> | PluginHookBeforeAgentRunResult;
+  resolve_exec_env: (
+    event: PluginHookResolveExecEnvEvent,
+    ctx: PluginHookResolveExecEnvContext,
+  ) => Promise<Record<string, string> | void> | Record<string, string> | void;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

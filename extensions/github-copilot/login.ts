@@ -1,3 +1,4 @@
+// Github Copilot plugin module implements login behavior.
 import { intro, note, outro, spinner } from "@clack/prompts";
 import { stylePromptTitle } from "openclaw/plugin-sdk/cli-runtime";
 import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-mutation";
@@ -221,7 +222,9 @@ async function sleepGitHubDevicePollDelay(delayMs: number, expiresAt: number): P
   while (Date.now() < targetAt) {
     const remainingMs = Math.max(1, targetAt - Date.now());
     const safeDelayMs = resolveTimerTimeoutMs(remainingMs, 1);
-    await new Promise((resolve) => setTimeout(resolve, Math.min(safeDelayMs, remainingMs)));
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(safeDelayMs, remainingMs));
+    });
   }
 }
 

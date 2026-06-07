@@ -1,7 +1,9 @@
+// Tui Pty Test Watch script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 type Options = {
   altScreen: boolean;
@@ -20,6 +22,26 @@ const MODE_TEST_FILES = {
 const MIRROR_TERMINAL_QUERIES = ["\x1b[?u", "\x1b[16t"];
 const DEFAULT_PTY_COLS = 100;
 const DEFAULT_PTY_ROWS = 30;
+const CHILD_SIGTERM_GRACE_MS = 500;
+const CHILD_SIGKILL_GRACE_MS = 5_000;
+const MIRROR_READ_CHUNK_BYTES = 1024 * 1024;
+const CHILD_OUTPUT_TAIL_BYTES = 128 * 1024;
+
+type KillableChild = {
+  pid?: number;
+  kill(signal: NodeJS.Signals): boolean;
+};
+
+type ChildStopper = {
+  cancel: () => void;
+  stop: () => void;
+};
+
+type SignalChild = (child: KillableChild, signal: NodeJS.Signals) => void;
+
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
+  (timer as { unref?: () => void }).unref?.();
+}
 
 function readOption(args: string[], name: string): string | undefined {
   const idx = args.indexOf(name);
@@ -54,7 +76,9 @@ function parseOptions(args = process.argv.slice(2)): Options {
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function shouldUseAltScreen(options: Options) {
@@ -70,21 +94,117 @@ function currentTerminalDimension(value: number | undefined, fallback: number): 
   return String(value && value > 0 ? value : fallback);
 }
 
+function signalChildProcessTree(child: KillableChild, signal: NodeJS.Signals): void {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Non-detached fallback or already-exited group; direct child signaling is
+      // still useful on platforms without process groups.
+    }
+  }
+  child.kill(signal);
+}
+
+function createChildStopper(
+  child: KillableChild,
+  options: {
+    signalChild?: SignalChild;
+    sigtermGraceMs?: number;
+    sigkillGraceMs?: number;
+  } = {},
+): ChildStopper {
+  const signalChild = options.signalChild ?? signalChildProcessTree;
+  const sigtermGraceMs = options.sigtermGraceMs ?? CHILD_SIGTERM_GRACE_MS;
+  const sigkillGraceMs = options.sigkillGraceMs ?? CHILD_SIGKILL_GRACE_MS;
+  let stopping = false;
+  let termTimer: ReturnType<typeof setTimeout> | undefined;
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const cancel = () => {
+    if (termTimer) {
+      clearTimeout(termTimer);
+      termTimer = undefined;
+    }
+    if (killTimer) {
+      clearTimeout(killTimer);
+      killTimer = undefined;
+    }
+  };
+
+  const stop = () => {
+    if (stopping) {
+      return;
+    }
+    stopping = true;
+    signalChild(child, "SIGINT");
+    termTimer = setTimeout(() => {
+      signalChild(child, "SIGTERM");
+      killTimer = setTimeout(() => {
+        signalChild(child, "SIGKILL");
+      }, sigkillGraceMs);
+      unrefTimer(killTimer);
+    }, sigtermGraceMs);
+    unrefTimer(termTimer);
+  };
+
+  return { cancel, stop };
+}
+
 async function createMirrorFile(mirrorPath: string): Promise<void> {
   await mkdir(path.dirname(mirrorPath), { recursive: true });
   await writeFile(mirrorPath, "", "utf8");
 }
 
-async function readNewMirrorData(mirrorPath: string, offset: number) {
-  const data = await readFile(mirrorPath);
-  const nextOffset = data.byteLength;
-  if (nextOffset < offset) {
-    return { chunk: data, offset: nextOffset };
+async function readNewMirrorData(
+  mirrorPath: string,
+  offset: number,
+  maxChunkBytes = MIRROR_READ_CHUNK_BYTES,
+) {
+  const file = await open(mirrorPath, "r");
+  try {
+    const stats = await file.stat();
+    const readOffset = stats.size < offset ? 0 : offset;
+    const availableBytes = stats.size - readOffset;
+    if (availableBytes <= 0) {
+      return { chunk: Buffer.alloc(0), offset: readOffset };
+    }
+    const bytesToRead = Math.min(availableBytes, maxChunkBytes);
+    const buffer = Buffer.alloc(bytesToRead);
+    const { bytesRead } = await file.read(buffer, 0, bytesToRead, readOffset);
+    return { chunk: buffer.subarray(0, bytesRead), offset: readOffset + bytesRead };
+  } finally {
+    await file.close();
   }
-  if (nextOffset === offset) {
-    return { chunk: Buffer.alloc(0), offset };
+}
+
+function appendBufferTail(current: Buffer, chunk: Buffer, maxBytes = CHILD_OUTPUT_TAIL_BYTES) {
+  if (chunk.byteLength >= maxBytes) {
+    return chunk.subarray(chunk.byteLength - maxBytes);
   }
-  return { chunk: data.subarray(offset), offset: nextOffset };
+  if (current.byteLength + chunk.byteLength <= maxBytes) {
+    return current.byteLength === 0 ? Buffer.from(chunk) : Buffer.concat([current, chunk]);
+  }
+  const keepBytes = maxBytes - chunk.byteLength;
+  return Buffer.concat([current.subarray(current.byteLength - keepBytes), chunk]);
+}
+
+async function drainNewMirrorData(
+  mirrorPath: string,
+  offset: number,
+  onChunk: (chunk: Buffer) => void,
+  maxChunkBytes = MIRROR_READ_CHUNK_BYTES,
+) {
+  let nextOffset = offset;
+  for (;;) {
+    const result = await readNewMirrorData(mirrorPath, nextOffset, maxChunkBytes);
+    nextOffset = result.offset;
+    if (result.chunk.byteLength === 0) {
+      return nextOffset;
+    }
+    onChunk(result.chunk);
+  }
 }
 
 async function main(): Promise<void> {
@@ -106,6 +226,7 @@ async function main(): Promise<void> {
     ],
     {
       cwd: process.cwd(),
+      detached: process.platform !== "win32",
       env: {
         ...process.env,
         OPENCLAW_TUI_PTY_MIRROR_PATH: options.mirrorPath,
@@ -119,8 +240,8 @@ async function main(): Promise<void> {
     },
   );
 
-  let childStdout = "";
-  let childStderr = "";
+  let childStdout = Buffer.alloc(0);
+  let childStderr = Buffer.alloc(0);
   let restored = false;
   let mirrorOffset = 0;
   let mirrorFilterPending = "";
@@ -170,10 +291,8 @@ async function main(): Promise<void> {
     }
   };
 
-  const stopChild = () => {
-    child.kill("SIGINT");
-    setTimeout(() => child.kill("SIGTERM"), 500).unref();
-  };
+  const childStopper = createChildStopper(child);
+  const stopChild = childStopper.stop;
 
   const ignoredInput = (chunk: Buffer) => {
     if (chunk.includes(0x03)) {
@@ -230,18 +349,26 @@ async function main(): Promise<void> {
   }
 
   child.stdout?.on("data", (chunk: Buffer) => {
-    childStdout += chunk.toString("utf8");
+    childStdout = appendBufferTail(childStdout, chunk);
   });
   child.stderr?.on("data", (chunk: Buffer) => {
-    childStderr += chunk.toString("utf8");
+    childStderr = appendBufferTail(childStderr, chunk);
   });
 
-  let childExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-  child.on("exit", (code, signal) => {
-    childExit = { code, signal };
+  type ChildExit = { code: number | null; signal: NodeJS.Signals | null };
+  let childExit: ChildExit | null = null;
+  const childFinished = new Promise<ChildExit>((resolve) => {
+    child.once("exit", (code, signal) => {
+      childExit = { code, signal };
+      childStopper.cancel();
+      resolve(childExit);
+    });
   });
 
-  process.once("SIGINT", stopChild);
+  const parentSignals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+  for (const signal of parentSignals) {
+    process.once(signal, stopChild);
+  }
 
   try {
     for (;;) {
@@ -258,11 +385,14 @@ async function main(): Promise<void> {
       await delay(sawMirrorOutput ? 25 : 250);
     }
 
-    const result = await readNewMirrorData(options.mirrorPath, mirrorOffset);
-    if (result.chunk.byteLength > 0) {
-      writeMirrorChunk(result.chunk);
-    }
+    mirrorOffset = await drainNewMirrorData(options.mirrorPath, mirrorOffset, writeMirrorChunk);
   } finally {
+    if (!childExit) {
+      stopChild();
+    }
+    for (const signal of parentSignals) {
+      process.off(signal, stopChild);
+    }
     await drainParentInput();
     restoreInput();
     if (useAltScreen) {
@@ -271,10 +401,14 @@ async function main(): Promise<void> {
     restoreScreen();
   }
 
-  if (childStdout) {
+  if (!childExit) {
+    childExit = await childFinished;
+  }
+
+  if (childStdout.byteLength > 0) {
     process.stdout.write(childStdout);
   }
-  if (childStderr) {
+  if (childStderr.byteLength > 0) {
     process.stderr.write(childStderr);
   }
 
@@ -286,9 +420,19 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(
-    `${error instanceof Error ? error.stack || error.message : String(error)}\n`,
-  );
-  process.exit(1);
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main().catch((error: unknown) => {
+    process.stderr.write(
+      `${error instanceof Error ? error.stack || error.message : String(error)}\n`,
+    );
+    process.exit(1);
+  });
+}
+
+export const testing = {
+  appendBufferTail,
+  createChildStopper,
+  drainNewMirrorData,
+  readNewMirrorData,
+  signalChildProcessTree,
+};

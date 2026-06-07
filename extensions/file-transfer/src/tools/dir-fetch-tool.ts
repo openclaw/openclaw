@@ -1,3 +1,4 @@
+// File Transfer plugin module implements dir fetch tool behavior.
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -588,7 +589,7 @@ export function createDirFetchTool(): AnyAgentTool {
         throw new Error(`dir.fetch UNCOMPRESSED_TOO_LARGE: ${reason}`);
       };
       for (const { relPath, absPath } of walked) {
-        let size = 0;
+        let size;
         try {
           const st = await fs.stat(absPath);
           size = st.size;

@@ -1,3 +1,8 @@
+/**
+ * Subagent run manager.
+ *
+ * Waits for child runs, records terminal outcomes, creates task-runtime entries, and archives completed sessions.
+ */
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -672,7 +677,7 @@ export function createSubagentRunManager(params: {
       throw error;
     }
     try {
-      createRunningTaskRun({
+      const task = createRunningTaskRun({
         runtime: "subagent",
         sourceId: runId,
         ownerKey: requesterSessionKey,
@@ -687,6 +692,11 @@ export function createSubagentRunManager(params: {
         startedAt: now,
         lastEventAt: now,
       });
+      if (!task) {
+        log.warn("Failed to persist background task for subagent run", {
+          runId: registerParams.runId,
+        });
+      }
     } catch (error) {
       log.warn("Failed to create background task for subagent run", {
         runId: registerParams.runId,
@@ -789,7 +799,7 @@ export function createSubagentRunManager(params: {
             inFlightRunIds: params.endedHookInFlightRunIds,
             persist: () => params.persist(),
           });
-        void persistSubagentSessionTiming(entry).catch((err) => {
+        void persistSubagentSessionTiming(entry).catch((err: unknown) => {
           log.warn("failed to persist killed subagent session timing", {
             err,
             runId: entry.runId,

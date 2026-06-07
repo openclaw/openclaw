@@ -548,18 +548,26 @@ Two ways to start an ACP session:
   requester session as system events. Accepted responses include
   `streamLogPath` pointing to a session-scoped JSONL log
   (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
+  Parent progress streams show assistant commentary and ACP status progress by
+  default unless `streaming.progress.commentary=false`. Discord also defaults
+  parent previews to progress mode when no stream mode is configured. Status
+  progress still honors `acp.stream.tagVisibility`, so tags such as `plan`
+  remain hidden unless explicitly enabled.
 </ParamField>
-<ParamField path="runTimeoutSeconds" type="number">
-  Aborts the ACP child turn after N seconds. `0` keeps the turn on the
-  gateway's no-timeout path. The same value is applied to the Gateway
-  run and ACP runtime so stalled/quota-exhausted harnesses do not
-  occupy the parent agent lane indefinitely.
-</ParamField>
+
+ACP `sessions_spawn` runs use `agents.defaults.subagents.runTimeoutSeconds` for
+their default child turn limit. The tool does not accept per-call timeout
+overrides.
+
 <ParamField path="model" type="string">
   Explicit model override for the ACP child session. Codex ACP spawns
   normalize OpenAI refs such as `openai/gpt-5.4` to Codex ACP startup
   config before `session/new`; slash forms such as `openai/gpt-5.4/high`
   also set Codex ACP reasoning effort.
+  When omitted, `sessions_spawn({ runtime: "acp" })` uses existing
+  subagent model defaults (`agents.defaults.subagents.model` or
+  `agents.list[].subagents.model`) when configured; otherwise it lets the
+  ACP harness use its own default model.
   Other harnesses must advertise ACP `models` and support
   `session/set_model`; otherwise OpenClaw/acpx fails clearly instead of
   silently falling back to the target agent default.
@@ -568,6 +576,9 @@ Two ways to start an ACP session:
   Explicit thinking/reasoning effort. For Codex ACP, `minimal` maps to
   low effort, `low`/`medium`/`high`/`xhigh` map directly, and `off`
   omits the reasoning-effort startup override.
+  When omitted, ACP spawns use existing subagent thinking defaults and
+  per-model `agents.defaults.models["provider/model"].params.thinking`
+  for the selected model.
 </ParamField>
 
 ## Spawn bind and thread modes

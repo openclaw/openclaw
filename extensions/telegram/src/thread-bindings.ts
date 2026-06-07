@@ -1,3 +1,4 @@
+// Telegram plugin module implements thread bindings behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -462,7 +463,7 @@ function persistBindingsSafely(params: {
   bindings?: TelegramThreadBindingRecord[];
   reason: string;
 }): void {
-  void enqueuePersistBindings(params).catch((err) => {
+  void enqueuePersistBindings(params).catch((err: unknown) => {
     logVerbose(
       `telegram thread bindings persist failed (${params.accountId}, ${params.reason}): ${String(err)}`,
     );
@@ -560,7 +561,7 @@ export function createTelegramThreadBindingManager(params: {
       sessionEntry.entry.status === "failed" ||
       sessionEntry.entry.status === "killed" ||
       sessionEntry.entry.status === "timeout" ||
-      sessionEntry.entry.acp?.state === "error";
+      sessionEntry.acp?.state === "error";
     if (isStale) {
       staleSessionKeys.add(targetSessionKey);
     }
@@ -628,12 +629,12 @@ export function createTelegramThreadBindingManager(params: {
         return null;
       }
       const key = resolveBindingKey({ accountId, conversationId });
-      const existing = getThreadBindingsState().bindingsByAccountConversation.get(key);
-      if (!existing) {
+      const existingLocal = getThreadBindingsState().bindingsByAccountConversation.get(key);
+      if (!existingLocal) {
         return null;
       }
       const nextRecord: TelegramThreadBindingRecord = {
-        ...existing,
+        ...existingLocal,
         lastActivityAt: normalizeTimestampMs(at ?? Date.now()),
       };
       getThreadBindingsState().bindingsByAccountConversation.set(key, nextRecord);

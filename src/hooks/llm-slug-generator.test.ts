@@ -1,3 +1,4 @@
+// LLM slug generator tests cover generated hook names and collision behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -52,6 +53,16 @@ describe("generateSlugViaLLM", () => {
     const options = requireFirstRunOptions();
     expect(options.timeoutMs).toBe(15_000);
     expect(options.cleanupBundleMcpOnRunEnd).toBe(true);
+  });
+
+  it("marks the run lane-local so internal-helper failures do not poison shared profile health (#71709)", async () => {
+    await generateSlugViaLLM({
+      sessionContent: "hello",
+      cfg: {} as OpenClawConfig,
+    });
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(requireFirstRunOptions().authProfileFailurePolicy).toBe("local");
   });
 
   it("honors configured agent timeoutSeconds for slow local providers", async () => {

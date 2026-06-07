@@ -1,5 +1,11 @@
+/**
+ * Tests persisted auth profile boundary normalization.
+ * Covers malformed credential coercion, state merging, legacy OAuth refs, and
+ * main/agent store drift repair.
+ */
 import { describe, expect, it } from "vitest";
 import { AUTH_STORE_VERSION } from "./constants.js";
+import { resolveAuthProfileOrder } from "./order.js";
 import { coercePersistedAuthProfileStore, mergeAuthProfileStores } from "./persisted.js";
 
 describe("persisted auth profile boundary", () => {
@@ -8,14 +14,25 @@ describe("persisted auth profile boundary", () => {
       version: "not-a-version",
       profiles: {
         "openai:default": {
-          type: "api_key",
+          type: "apiKey",
           provider: " OpenAI ",
-          key: 42,
+          apiKey: "demo-openai-key",
           keyRef: { source: "env", id: "OPENAI_API_KEY" },
           metadata: { account: "acct_123", bad: 123 },
           copyToAgents: "yes",
           email: ["wrong"],
           displayName: "Work",
+        },
+        "openai:legacy-api-key": {
+          type: "apiKey",
+          provider: "openai",
+          apiKey: "legacy-openai-key",
+        },
+        "openai:legacy-malformed-ref": {
+          type: "apiKey",
+          provider: "openai",
+          apiKey: "legacy-fallback-key",
+          keyRef: { source: "env", id: "" },
         },
         "minimax:default": {
           type: "token",
@@ -70,6 +87,16 @@ describe("persisted auth profile boundary", () => {
           metadata: { account: "acct_123" },
           displayName: "Work",
         },
+        "openai:legacy-api-key": {
+          type: "api_key",
+          provider: "openai",
+          key: "legacy-openai-key",
+        },
+        "openai:legacy-malformed-ref": {
+          type: "api_key",
+          provider: "openai",
+          key: "legacy-fallback-key",
+        },
         "minimax:default": {
           type: "token",
           provider: "minimax",
@@ -98,7 +125,6 @@ describe("persisted auth profile boundary", () => {
       },
     });
     expect(store?.profiles["broken:array"]).toBeUndefined();
-    expect(store?.profiles["openai:default"]).not.toHaveProperty("key");
     expect(store?.profiles["openai:default"]).not.toHaveProperty("copyToAgents");
     expect(store?.profiles["openai:oauth"]).not.toHaveProperty("oauthRef");
   });
@@ -192,6 +218,121 @@ describe("persisted auth profile boundary", () => {
     });
     expect(merged.order?.anthropic).toEqual([profileId]);
     expect(merged.lastGood?.anthropic).toBe(profileId);
+  });
+
+  it("preserves config-only order fallbacks during agent-store merges", () => {
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {},
+        order: {
+          openai: ["openai:aws-sdk"],
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:new-login": {
+            type: "oauth",
+            provider: "openai",
+            access: "new-access",
+            refresh: "new-refresh",
+            expires: 1,
+          },
+        },
+        order: {
+          openai: ["openai:new-login", "openai:aws-sdk"],
+        },
+      },
+      { preserveBaseRuntimeExternalProfiles: true },
+    );
+
+    expect(merged.order?.openai).toEqual(["openai:new-login", "openai:aws-sdk"]);
+  });
+
+  it("prefers agent-local provider profiles before inherited main profiles", () => {
+    const expires = Date.now() + 60_000;
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "minimax-portal:cli": {
+            type: "oauth",
+            provider: "minimax-portal",
+            access: "main-minimax-access",
+            refresh: "main-minimax-refresh",
+            expires,
+          },
+        },
+        order: {
+          "minimax-portal": ["minimax-portal:cli"],
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "minimax-portal:default": {
+            type: "oauth",
+            provider: "minimax-portal",
+            access: "agent-minimax-access",
+            refresh: "agent-minimax-refresh",
+            expires,
+          },
+        },
+      },
+      { preserveBaseRuntimeExternalProfiles: true },
+    );
+
+    expect(Object.keys(merged.profiles)).toEqual(["minimax-portal:default", "minimax-portal:cli"]);
+    expect(merged.order?.["minimax-portal"]).toEqual([
+      "minimax-portal:default",
+      "minimax-portal:cli",
+    ]);
+    expect(resolveAuthProfileOrder({ store: merged, provider: "minimax-portal" })).toEqual([
+      "minimax-portal:default",
+      "minimax-portal:cli",
+    ]);
+  });
+
+  it("collapses normalized provider order keys without expanding explicit override order", () => {
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:main": {
+            type: "api_key",
+            provider: "OpenAI",
+            key: "main-key",
+          },
+        },
+        order: {
+          OpenAI: ["openai:main"],
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:agent": {
+            type: "api_key",
+            provider: "openai",
+            key: "agent-key",
+          },
+          "openai:other-agent": {
+            type: "api_key",
+            provider: "openai",
+            key: "other-agent-key",
+          },
+        },
+        order: {
+          openai: ["openai:agent"],
+        },
+      },
+      { preserveBaseRuntimeExternalProfiles: true },
+    );
+
+    expect(merged.order).toEqual({
+      openai: ["openai:agent"],
+    });
   });
 
   it("preserves inherited base runtime external profiles during agent-store merges", () => {

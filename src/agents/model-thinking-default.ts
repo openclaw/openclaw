@@ -1,3 +1,8 @@
+/**
+ * Resolves default thinking levels for provider/model pairs. It combines
+ * explicit per-model config, global defaults, catalog metadata, and model
+ * family fallbacks.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -11,6 +16,7 @@ import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 
 type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
 
+/** Resolves the default thinking level for a provider/model pair. */
 export function resolveThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -41,6 +47,14 @@ export function resolveThinkingDefault(params: {
   const perModelThinking =
     configuredModels?.[canonicalKey]?.params?.thinking ??
     (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
+  // Accept boolean false and common disable aliases as "off".
+  if (
+    perModelThinking === false ||
+    perModelThinking === "disabled" ||
+    perModelThinking === "none"
+  ) {
+    return "off";
+  }
   if (
     perModelThinking === "off" ||
     perModelThinking === "minimal" ||
@@ -90,6 +104,7 @@ export function resolveThinkingDefault(params: {
   });
 }
 
+/** Resolves thinking default after loading runtime catalog only when needed. */
 export async function resolveThinkingDefaultWithRuntimeCatalog(params: {
   cfg: OpenClawConfig;
   provider: string;

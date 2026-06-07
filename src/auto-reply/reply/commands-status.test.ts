@@ -1,9 +1,11 @@
+// Tests status command rendering for sessions, agents, and diagnostics.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
+import { saveAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
@@ -627,18 +629,10 @@ describe("buildStatusReply subagent summary", () => {
 
     await withTempHome(
       async (dir) => {
-        const authPath = path.join(
-          dir,
-          ".openclaw",
-          "agents",
-          "main",
-          "agent",
-          "auth-profiles.json",
-        );
-        fs.mkdirSync(path.dirname(authPath), { recursive: true });
-        fs.writeFileSync(
-          authPath,
-          JSON.stringify({
+        const agentDir = path.join(dir, ".openclaw", "agents", "main", "agent");
+        fs.mkdirSync(agentDir, { recursive: true });
+        saveAuthProfileStore(
+          {
             version: 1,
             profiles: {
               "openai:status": {
@@ -649,8 +643,9 @@ describe("buildStatusReply subagent summary", () => {
                 expires: Date.now() + 60 * 60_000,
               },
             },
-          }),
-          "utf8",
+          },
+          agentDir,
+          { filterExternalAuthProfiles: false, syncExternalCli: false },
         );
         const usageResetBase = Math.floor(Date.now() / 1000);
         providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
@@ -744,18 +739,10 @@ describe("buildStatusReply subagent summary", () => {
 
     await withTempHome(
       async (dir) => {
-        const authPath = path.join(
-          dir,
-          ".openclaw",
-          "agents",
-          "main",
-          "agent",
-          "auth-profiles.json",
-        );
-        fs.mkdirSync(path.dirname(authPath), { recursive: true });
-        fs.writeFileSync(
-          authPath,
-          JSON.stringify({
+        const agentDir = path.join(dir, ".openclaw", "agents", "main", "agent");
+        fs.mkdirSync(agentDir, { recursive: true });
+        saveAuthProfileStore(
+          {
             version: 1,
             profiles: {
               "openai:status": {
@@ -766,8 +753,9 @@ describe("buildStatusReply subagent summary", () => {
                 expires: Date.now() + 60 * 60_000,
               },
             },
-          }),
-          "utf8",
+          },
+          agentDir,
+          { filterExternalAuthProfiles: false, syncExternalCli: false },
         );
         const usageResetBase = Math.floor(Date.now() / 1000);
         providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
@@ -830,21 +818,61 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
+  it("shows DeepSeek balance summaries in /status output", async () => {
+    providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: Date.now(),
+      providers: [
+        {
+          provider: "deepseek",
+          displayName: "DeepSeek",
+          windows: [],
+          summary: "Balance ¥42.50",
+        },
+      ],
+    });
+
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-deepseek-usage",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+      contextTokens: 1_000_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: deepseek/deepseek-v4-pro");
+    expect(normalized).toContain("Usage: Balance ¥42.50");
+    const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+      ([params]) => params?.providers?.includes("deepseek"),
+    );
+    if (!providerUsageCall) {
+      throw new Error("expected provider usage summary call for deepseek");
+    }
+    expect(providerUsageCall[0]?.providers).toEqual(["deepseek"]);
+  });
+
   it("uses Codex OAuth auth labels for explicit OpenAI OpenClaw auth order", async () => {
     await withTempHome(
       async (dir) => {
-        const authPath = path.join(
-          dir,
-          ".openclaw",
-          "agents",
-          "main",
-          "agent",
-          "auth-profiles.json",
-        );
-        fs.mkdirSync(path.dirname(authPath), { recursive: true });
-        fs.writeFileSync(
-          authPath,
-          JSON.stringify({
+        const agentDir = path.join(dir, ".openclaw", "agents", "main", "agent");
+        fs.mkdirSync(agentDir, { recursive: true });
+        saveAuthProfileStore(
+          {
             version: 1,
             profiles: {
               "openai:status": {
@@ -860,8 +888,9 @@ describe("buildStatusReply subagent summary", () => {
                 key: "sk-test",
               },
             },
-          }),
-          "utf8",
+          },
+          agentDir,
+          { filterExternalAuthProfiles: false, syncExternalCli: false },
         );
 
         const text = await buildStatusText({

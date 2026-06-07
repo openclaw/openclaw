@@ -1,3 +1,4 @@
+// Probe script for OpenWebUI E2E connectivity.
 import { Agent, setGlobalDispatcher } from "undici";
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response-text.mjs";
 
@@ -220,10 +221,12 @@ let modelIds = [];
 let targetModel = "";
 let lastModelsError = "";
 for (let attempt = 1; attempt <= modelAttempts; attempt += 1) {
-  const modelsResult = await fetchModels(authHeaders, attempt).catch((error) => {
-    lastModelsError = error instanceof Error ? error.message : String(error);
-    return undefined;
-  });
+  const modelsResult = await fetchModels(authHeaders, attempt).catch(
+    /** @param {unknown} error */ (error) => {
+      lastModelsError = error instanceof Error ? error.message : String(error);
+      return undefined;
+    },
+  );
   if (modelsResult?.ok) {
     modelIds = extractModelIds(modelsResult.json);
     targetModel =

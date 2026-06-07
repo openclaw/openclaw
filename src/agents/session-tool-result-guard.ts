@@ -1,3 +1,8 @@
+/**
+ * Session transcript guard for tool-call/result consistency.
+ *
+ * Caps large tool results, repairs missing results, applies redaction, and emits transcript update events.
+ */
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -16,6 +21,7 @@ import type {
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -53,9 +59,26 @@ function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): numb
 }
 
 type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
+type CompactionAppendValidator = (entryId: string, appendedText: string) => boolean;
 
 function isUserAgentMessage(message: AgentMessage): message is UserAgentMessage {
   return message.role === "user";
+}
+
+function isExpectedCompactionAppend(entryId: string, appendedText: string): boolean {
+  const lines = appendedText
+    .trimEnd()
+    .split("\n")
+    .filter((line) => line.length > 0);
+  if (lines.length !== 1) {
+    return false;
+  }
+  try {
+    const entry = JSON.parse(lines[0]) as { type?: unknown; id?: unknown };
+    return entry.type === "compaction" && entry.id === entryId;
+  } catch {
+    return false;
+  }
 }
 
 type TranscriptSeqByEntryId = Map<string, number>;
@@ -511,7 +534,7 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage): boolea
   }
   const provider = normalizeOptionalString((message as { provider?: unknown }).provider) ?? "";
   const model = normalizeOptionalString((message as { model?: unknown }).model) ?? "";
-  return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
+  return isTranscriptOnlyOpenClawAssistantModel(provider, model);
 }
 
 export { getRawSessionAppendMessage };
@@ -563,6 +586,10 @@ export function installSessionToolResultGuard(
       message: Extract<AgentMessage, { role: "user" }>,
     ) => void | Promise<void>;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
+    withCompactionPersistence?: (
+      append: () => string,
+      validateAppend: CompactionAppendValidator,
+    ) => string;
     onAssistantErrorMessagePersisted?: (
       message: Extract<AgentMessage, { role: "assistant" }>,
     ) => void | Promise<void>;
@@ -620,6 +647,15 @@ export function installSessionToolResultGuard(
       }),
     };
   };
+  const originalAppendCompaction = sessionManager.appendCompaction.bind(sessionManager);
+  const guardedAppendCompaction = ((
+    ...args: Parameters<SessionManager["appendCompaction"]>
+  ): string => {
+    const append = () => originalAppendCompaction(...args);
+    return opts?.withCompactionPersistence
+      ? opts.withCompactionPersistence(append, isExpectedCompactionAppend)
+      : append();
+  }) as SessionManager["appendCompaction"];
 
   /**
    * Run the before_message_write hook. Returns the (possibly modified) message,
@@ -745,8 +781,15 @@ export function installSessionToolResultGuard(
     ) {
       flushPendingToolResults();
     }
-    // If new tool calls arrive while older ones are pending, flush the old ones first.
-    if (pendingState.shouldFlushBeforeNewToolCalls(toolCalls.length)) {
+    // If synthetic results are disabled, a new assistant tool-call turn is a safe
+    // boundary to drop older pending ids. When synthetic results are enabled,
+    // do not synthesize here: parallel tool-result appends can still be racing
+    // this assistant append, and transcript repair can move late real results
+    // back into strict provider order before the next replay.
+    if (
+      !allowSyntheticToolResults &&
+      pendingState.shouldFlushBeforeNewToolCalls(toolCalls.length)
+    ) {
       flushPendingToolResults();
     }
 
@@ -809,6 +852,7 @@ export function installSessionToolResultGuard(
 
   // Monkey-patch appendMessage with our guarded version.
   sessionManager.appendMessage = guardedAppend as SessionManager["appendMessage"];
+  sessionManager.appendCompaction = guardedAppendCompaction;
 
   return {
     flushPendingToolResults,

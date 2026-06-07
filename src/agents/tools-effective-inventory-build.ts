@@ -1,3 +1,8 @@
+/**
+ * Builds the operator-facing effective inventory for the current tool surface:
+ * runtime-compatible tools plus warnings for tools quarantined by schema
+ * policy, with plugin/channel ownership preserved.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -11,6 +16,7 @@ import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import { summarizeToolDescriptionText } from "./tool-description-summary.js";
 import { resolveToolDisplay } from "./tool-display.js";
 import {
+  filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
   type RuntimeToolSchemaDiagnostic,
 } from "./tool-schema-projection.js";
@@ -44,6 +50,8 @@ function summarizeToolDescription(tool: AnyAgentTool): string {
   });
 }
 
+// Tool metadata may be attached to the normalized tool or the raw fallback
+// before schema projection. Check both so owner attribution survives cloning.
 function resolveEffectiveToolSource(
   tool: AnyAgentTool,
   fallbackTool?: AnyAgentTool,
@@ -69,13 +77,16 @@ function resolveEffectiveToolSource(
   return { source: "core" };
 }
 
+// Unsupported-schema notices need owner context when available so operators know
+// whether to disable a plugin/channel or fix core tool definitions.
 function buildUnsupportedToolSchemaNotice(params: {
   diagnostic: RuntimeToolSchemaDiagnostic;
   tool: AnyAgentTool | undefined;
   fallbackTool: AnyAgentTool | undefined;
 }): EffectiveToolInventoryNotice {
-  const source = params.tool
-    ? resolveEffectiveToolSource(params.tool, params.fallbackTool)
+  const sourceTool = params.tool ?? params.fallbackTool;
+  const source = sourceTool
+    ? resolveEffectiveToolSource(sourceTool, params.fallbackTool)
     : { source: "core" as const };
   const owner =
     source.source === "plugin" && source.pluginId
@@ -98,12 +109,49 @@ function buildUnsupportedToolSchemaNotices(params: {
   return params.diagnostics.map((diagnostic) =>
     buildUnsupportedToolSchemaNotice({
       diagnostic,
-      tool: params.tools[diagnostic.toolIndex],
+      tool: readMatchingTool(params.tools, diagnostic),
       fallbackTool: params.rawToolsByName.get(diagnostic.toolName),
     }),
   );
 }
 
+function readMatchingTool(
+  tools: readonly AnyAgentTool[],
+  diagnostic: RuntimeToolSchemaDiagnostic,
+): AnyAgentTool | undefined {
+  try {
+    const tool = tools[diagnostic.toolIndex];
+    return tool?.name === diagnostic.toolName ? tool : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Raw tool arrays can contain getters/proxies from plugin boundaries. Read
+// defensively; projection diagnostics handle the exact unreadable entry later.
+function buildReadableRawToolsByName(
+  tools: readonly AnyAgentTool[],
+): ReadonlyMap<string, AnyAgentTool> {
+  const toolsByName = new Map<string, AnyAgentTool>();
+  let toolCount: number;
+  try {
+    toolCount = tools.length;
+  } catch {
+    return toolsByName;
+  }
+  for (let index = 0; index < toolCount; index += 1) {
+    try {
+      const tool = tools[index];
+      toolsByName.set(tool.name, tool);
+    } catch {
+      // Unreadable entries are reported by the schema projection diagnostics.
+    }
+  }
+  return toolsByName;
+}
+
+// Duplicate labels are ambiguous in inventory UIs; add the owner/id only where
+// needed so unique entries keep their concise display names.
 function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveToolInventoryEntry[] {
   const counts = new Map<string, number>();
   for (const entry of entries) {
@@ -118,6 +166,7 @@ function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveTo
   });
 }
 
+/** Builds effective inventory entries from already runtime-compatible tools. */
 export function buildEffectiveToolInventoryEntries(
   tools: readonly AnyAgentTool[],
   rawToolsByName: ReadonlyMap<string, AnyAgentTool> = new Map(),
@@ -159,6 +208,7 @@ export function buildEffectiveToolInventoryEntries(
   );
 }
 
+/** Normalizes tools, quarantines incompatible schemas, and returns inventory output. */
 export function buildRuntimeCompatibleToolInventory(params: {
   tools: readonly AnyAgentTool[];
   cfg: OpenClawConfig;
@@ -171,23 +221,30 @@ export function buildRuntimeCompatibleToolInventory(params: {
   entries: EffectiveToolInventoryEntry[];
   notices: EffectiveToolInventoryNotice[];
 } {
-  const rawToolsByName = new Map(params.tools.map((tool) => [tool.name, tool]));
+  const rawToolsByName = buildReadableRawToolsByName(params.tools);
+  const preNormalizationProjection = filterProviderNormalizableTools(params.tools);
+  const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [
+    ...preNormalizationProjection.diagnostics,
+  ];
   const normalizedTools = normalizeAgentRuntimeTools({
     // Schema normalization can replace tool definitions, so hand the runtime
     // policy a mutable copy while keeping this inventory API readonly.
-    tools: [...params.tools],
+    tools: [...preNormalizationProjection.tools],
     provider: params.modelProvider ?? "",
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     modelId: params.modelId,
     modelApi: params.modelApi ?? undefined,
     model: params.runtimeModel,
+    onPreNormalizationSchemaDiagnostics: (diagnostics) =>
+      preNormalizationDiagnostics.push(...diagnostics),
   });
   const projection = filterRuntimeCompatibleTools(normalizedTools);
+  const diagnostics = [...preNormalizationDiagnostics, ...projection.diagnostics];
   return {
     entries: buildEffectiveToolInventoryEntries(projection.tools, rawToolsByName),
     notices: buildUnsupportedToolSchemaNotices({
-      diagnostics: projection.diagnostics,
+      diagnostics,
       tools: normalizedTools,
       rawToolsByName,
     }),

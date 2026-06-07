@@ -1,3 +1,8 @@
+/**
+ * Subagent registry record types.
+ *
+ * Defines execution, completion, delivery, pending-delivery, and attachment state stored for child runs.
+ */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
@@ -56,6 +61,9 @@ export type SubagentCompletionDeliveryState = {
   lastAttemptAt?: number;
   attemptCount?: number;
   lastError?: string | null;
+  steeringLeaseId?: string;
+  steeringLeasedAt?: number;
+  steeringInjectedAt?: number;
   suspendedAt?: number;
   suspendedReason?: "retry-limit" | "expiry";
   discardedAt?: number;
@@ -68,7 +76,12 @@ export type SubagentCompletionDeliveryState = {
     status?: string;
     lastError?: string | null;
   };
-  lastDropReason?: "queue_cap" | "parent_run_ended" | "sink_unavailable" | "dedupe";
+  lastDropReason?:
+    | "queue_cap"
+    | "parent_run_ended"
+    | "sink_unavailable"
+    | "dedupe"
+    | "waiting_for_requester_turn";
 };
 
 export type SubagentRunRecord = {

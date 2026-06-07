@@ -1,3 +1,4 @@
+// Xai plugin module implements xai oauth behavior.
 import { randomBytes } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -425,16 +426,16 @@ async function pollXaiDeviceCodeToken(
 
     const error = parseXaiOAuthErrorResponse(body).error;
     if (error === "authorization_pending") {
-      await new Promise((resolve) =>
-        setTimeout(resolve, resolveNextXaiDeviceCodePollDelayMs(intervalMs, deadlineMs)),
-      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, resolveNextXaiDeviceCodePollDelayMs(intervalMs, deadlineMs));
+      });
       continue;
     }
     if (error === "slow_down") {
       intervalMs += XAI_DEVICE_CODE_SLOW_DOWN_INCREMENT_MS;
-      await new Promise((resolve) =>
-        setTimeout(resolve, resolveNextXaiDeviceCodePollDelayMs(intervalMs, deadlineMs)),
-      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, resolveNextXaiDeviceCodePollDelayMs(intervalMs, deadlineMs));
+      });
       continue;
     }
     if (error === "access_denied" || error === "authorization_denied") {

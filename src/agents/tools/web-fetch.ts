@@ -1,3 +1,8 @@
+/**
+ * web_fetch built-in tool.
+ *
+ * Fetches HTTP(S) content through SSRF guards, provider config, caching, and bounded extraction.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -444,7 +449,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
 
   const start = Date.now();
   let res: Response;
-  let release: (() => Promise<void>) | null = null;
+  let release: (() => Promise<void>) | null;
   let finalUrl = params.url;
   try {
     const fetchWithWebToolsNetworkGuard = await loadWebGuardedFetch();

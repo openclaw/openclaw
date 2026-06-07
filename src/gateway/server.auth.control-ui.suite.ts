@@ -1,3 +1,5 @@
+// Control UI auth suite covers trusted-proxy, pairing, device identity, and
+// operator/node role checks for browser-facing gateway connections.
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, expect, test, vi } from "vitest";
@@ -582,7 +584,9 @@ export function registerControlUiAndPairingSuite(): void {
           ws,
           (o) => o.type === "event" && o.event === "connect.challenge",
         );
-        await new Promise<void>((resolve) => ws.once("open", resolve));
+        await new Promise<void>((resolve) => {
+          ws.once("open", resolve);
+        });
         const challenge = await challengePromise;
         const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
         expect(typeof nonce).toBe("string");
@@ -700,7 +704,9 @@ export function registerControlUiAndPairingSuite(): void {
 
   test("device token auth matrix", async () => {
     const { server, ws, port, prevToken } = await startControlUiServerWithClient("secret");
-    const { deviceToken, deviceIdentityPath } = await ensurePairedDeviceTokenForCurrentIdentity(ws);
+    const { identity, deviceToken, deviceIdentityPath } =
+      await ensurePairedDeviceTokenForCurrentIdentity(ws);
+    const { getPairedDevice } = await import("../infra/device-pairing.js");
     ws.close();
 
     const scenarios: Array<{
@@ -783,6 +789,9 @@ export function registerControlUiAndPairingSuite(): void {
           ws2.close();
         }
       }
+      const paired = await getPairedDevice(identity.deviceId);
+      expect(paired?.lastSeenReason).toBe("connect");
+      expect(typeof paired?.lastSeenAtMs).toBe("number");
     } finally {
       await server.close();
       restoreGatewayToken(prevToken);
@@ -880,9 +889,12 @@ export function registerControlUiAndPairingSuite(): void {
       (entry) => entry.deviceId === identity.deviceId,
     );
     expect(pendingAfterRead).toHaveLength(0);
-    if (!(await getPairedDevice(identity.deviceId))) {
+    const pairedAfterRead = await getPairedDevice(identity.deviceId);
+    if (!pairedAfterRead) {
       throw new Error(`expected paired device ${identity.deviceId}`);
     }
+    expect(pairedAfterRead.lastSeenReason).toBe("connect");
+    expect(typeof pairedAfterRead.lastSeenAtMs).toBe("number");
     wsRemoteRead.close();
 
     const ws2 = await openWs(port, { host: "gateway.example" });
@@ -1609,7 +1621,9 @@ export function registerControlUiAndPairingSuite(): void {
         socket,
         (o) => o.type === "event" && o.event === "connect.challenge",
       );
-      await new Promise<void>((resolve) => socket.once("open", resolve));
+      await new Promise<void>((resolve) => {
+        socket.once("open", resolve);
+      });
       const challenge = await challengePromise;
       const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
       expect(typeof nonce).toBe("string");

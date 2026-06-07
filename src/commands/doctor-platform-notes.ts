@@ -1,3 +1,4 @@
+/** Platform-specific doctor notes for macOS gateway launchd state and startup tuning. */
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -9,6 +10,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { findStaleOpenClawUpdateLaunchdJobs } from "../daemon/launchd.js";
+import { resolveGatewayService, type GatewayService } from "../daemon/service.js";
 import { shortenHomePath } from "../utils.js";
 
 const execFileAsync = promisify(execFile);
@@ -17,6 +19,7 @@ function resolveHomeDir(): string {
   return process.env.HOME ?? os.homedir();
 }
 
+/** Returns the macOS marker warning when LaunchAgent writes are locally disabled. */
 export function collectMacLaunchAgentOverrideWarning(deps?: {
   platform?: NodeJS.Platform;
   homeDir?: string;
@@ -41,6 +44,7 @@ export function collectMacLaunchAgentOverrideWarning(deps?: {
   ].join("\n");
 }
 
+/** Emits the macOS LaunchAgent override warning when present. */
 export async function noteMacLaunchAgentOverrides() {
   const warning = collectMacLaunchAgentOverrideWarning();
   if (warning) {
@@ -48,15 +52,20 @@ export async function noteMacLaunchAgentOverrides() {
   }
 }
 
+/** Returns a warning for stale OpenClaw updater launchd jobs left after interrupted updates. */
 export async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
   platform?: NodeJS.Platform;
   findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
+  env?: NodeJS.ProcessEnv;
 }): Promise<string | null> {
   const platform = deps?.platform ?? process.platform;
   if (platform !== "darwin") {
     return null;
   }
-  const jobs = await (deps?.findJobs ?? findStaleOpenClawUpdateLaunchdJobs)().catch(() => []);
+  const scanEnv = deps?.env ?? process.env;
+  const jobs = await (deps?.findJobs ?? findStaleOpenClawUpdateLaunchdJobs)(scanEnv).catch(
+    () => [],
+  );
   if (jobs.length === 0) {
     return null;
   }
@@ -75,12 +84,22 @@ export async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
   ].join("\n");
 }
 
+/** Emits stale updater launchd job notes using the gateway service environment when available. */
 export async function noteMacStaleOpenClawUpdateLaunchdJobs(deps?: {
   platform?: NodeJS.Platform;
   findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
+  env?: NodeJS.ProcessEnv;
+  service?: Pick<GatewayService, "readCommand">;
   noteFn?: typeof note;
 }) {
-  const warning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps);
+  const platform = deps?.platform ?? process.platform;
+  const serviceEnv =
+    platform === "darwin" ? await resolveGatewayServiceEnvForPlatformNotes(deps) : deps?.env;
+  const warning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning({
+    env: serviceEnv,
+    findJobs: deps?.findJobs,
+    platform,
+  });
   if (warning) {
     (deps?.noteFn ?? note)(warning, "Gateway (macOS)");
   }
@@ -108,6 +127,7 @@ function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
   );
 }
 
+/** Returns a warning for host-wide launchctl gateway auth env overrides. */
 export async function collectMacLaunchctlGatewayEnvOverrideWarning(
   cfg: OpenClawConfig,
   deps?: {
@@ -157,6 +177,7 @@ export async function collectMacLaunchctlGatewayEnvOverrideWarning(
     .join("\n");
 }
 
+/** Emits macOS launchctl gateway auth override warnings. */
 export async function noteMacLaunchctlGatewayEnvOverrides(
   cfg: OpenClawConfig,
   deps?: {
@@ -171,19 +192,48 @@ export async function noteMacLaunchctlGatewayEnvOverrides(
   }
 }
 
+async function resolveGatewayServiceEnvForPlatformNotes(deps?: {
+  env?: NodeJS.ProcessEnv;
+  service?: Pick<GatewayService, "readCommand">;
+}): Promise<NodeJS.ProcessEnv> {
+  const baseEnv = deps?.env ?? process.env;
+  const service = deps?.service ?? resolveGatewayService();
+  const command = await service.readCommand(baseEnv).catch(() => null);
+  return command?.environment
+    ? ({
+        ...baseEnv,
+        ...command.environment,
+      } satisfies NodeJS.ProcessEnv)
+    : baseEnv;
+}
+
+/** Collects all macOS gateway platform warnings without emitting notes. */
 export async function collectMacGatewayPlatformWarnings(
   cfg: OpenClawConfig,
+  deps?: {
+    platform?: NodeJS.Platform;
+    env?: NodeJS.ProcessEnv;
+    service?: Pick<GatewayService, "readCommand">;
+    findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
+  },
 ): Promise<readonly string[]> {
+  const platform = deps?.platform ?? process.platform;
   const warnings: string[] = [];
-  const launchAgentWarning = collectMacLaunchAgentOverrideWarning();
+  const launchAgentWarning = collectMacLaunchAgentOverrideWarning({ platform });
   if (launchAgentWarning) {
     warnings.push(launchAgentWarning);
   }
-  const staleUpdateWarning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning();
+  const serviceEnv =
+    platform === "darwin" ? await resolveGatewayServiceEnvForPlatformNotes(deps) : deps?.env;
+  const staleUpdateWarning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning({
+    env: serviceEnv,
+    findJobs: deps?.findJobs,
+    platform,
+  });
   if (staleUpdateWarning) {
     warnings.push(staleUpdateWarning);
   }
-  const launchctlWarning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg);
+  const launchctlWarning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg, { platform });
   if (launchctlWarning) {
     warnings.push(launchctlWarning);
   }
@@ -204,6 +254,7 @@ function isTmpCompileCachePath(cachePath: string): boolean {
   );
 }
 
+/** Emits startup tuning hints for low-power Linux hosts when env settings are suboptimal. */
 export function noteStartupOptimizationHints(
   env: NodeJS.ProcessEnv = process.env,
   deps?: {

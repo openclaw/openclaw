@@ -1,3 +1,4 @@
+// Imessage plugin module implements inbound processing behavior.
 import {
   buildMentionRegexes,
   buildChannelInboundEventContext,
@@ -434,7 +435,7 @@ export async function resolveIMessageInboundDecision(params: {
       params.selfChatCache?.remember(selfChatLookup);
     }
     if (isSelfChat) {
-      params.selfChatCache?.remember(selfChatLookup);
+      params.selfChatCache?.remember({ ...selfChatLookup, allowCreatedAtSkew: true });
       const echoScope = buildIMessageEchoScope({
         accountId: params.accountId,
         isGroup,

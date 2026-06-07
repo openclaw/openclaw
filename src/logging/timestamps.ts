@@ -1,3 +1,4 @@
+// Timestamp helpers validate time zones and format log timestamps.
 const validTimeZoneCache = new Map<string, boolean>();
 const timestampFormatterCache = new Map<string, Intl.DateTimeFormat>();
 let hostTimeZone: string | undefined;
@@ -7,7 +8,7 @@ export function isValidTimeZone(tz: string): boolean {
   if (cached !== undefined) {
     return cached;
   }
-  let valid = false;
+  let valid;
   try {
     new Intl.DateTimeFormat("en", { timeZone: tz }).format();
     valid = true;

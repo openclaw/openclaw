@@ -1,3 +1,4 @@
+// Openai tests cover openclaw.plugin plugin behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildOpenAIProvider } from "./openai-provider.js";
@@ -106,7 +107,7 @@ describe("OpenAI plugin manifest", () => {
   });
 
   it("routes setup through the OpenAI setup runtime", () => {
-    expect(manifest.legacyPluginIds).toEqual(["openai-codex"]);
+    expect(manifest.legacyPluginIds).toBeUndefined();
     expect(manifest.setup?.providers?.map((provider) => provider.id)).toEqual(["openai"]);
     expect(manifest.providerAuthAliases).toBeUndefined();
   });

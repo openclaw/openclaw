@@ -1,3 +1,4 @@
+// Workspace skill loading helpers discover and load skills from workspace directories.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1552,7 +1553,7 @@ export async function syncSkillsToWorkspace(params: {
 
     const usedDirNames = new Set<string>();
     for (const entry of entries) {
-      let dest: string | null = null;
+      let dest: string | null;
       try {
         dest = resolveSyncedSkillDestinationPath({
           targetSkillsDir,

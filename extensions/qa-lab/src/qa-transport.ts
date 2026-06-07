@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements qa transport behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -212,8 +213,8 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
         await this.state.reset();
       },
       readNormalizedMessage: this.state.readMessage.bind(this.state),
-      executeGenericAction: (params) => this.handleAction(params),
-      waitForReady: (params) => this.waitReady(params),
+      executeGenericAction: (paramsValue) => this.handleAction(paramsValue),
+      waitForReady: (paramsLocal) => this.waitReady(paramsLocal),
       waitForCondition: createFailureAwareTransportWaitForCondition(this.state),
       assertNoFailureReplies: (options) => {
         assertNoFailureReplies(this.state, options);

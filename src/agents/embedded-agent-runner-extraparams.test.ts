@@ -1,3 +1,4 @@
+// Covers extra-params stream wrapper composition across provider families.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
@@ -115,6 +116,8 @@ function createTestXaiFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
   fastMode: boolean,
 ): StreamFn {
+  // xAI fast mode swaps known model ids before the request reaches the base
+  // stream function, mirroring the provider wrapper without network calls.
   return (model, context, options) => {
     if (!fastMode || model.api !== "openai-completions" || model.provider !== "xai") {
       return (
@@ -154,6 +157,8 @@ function stripTestXaiUnsupportedStrictFlag(tool: unknown): unknown {
 }
 
 function createTestXaiPayloadCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  // xAI rejects OpenAI-specific reasoning and strict tool-schema fields, so the
+  // wrapper removes those from the outgoing payload.
   return (model, context, options) => {
     const underlying =
       baseStreamFn ??
@@ -237,6 +242,8 @@ function isDirectAnthropicModel(model: { provider?: string; baseUrl?: string }):
 }
 
 function createAnthropicBetaHeadersWrapper(baseStreamFn: StreamFn | undefined, betas: string[]) {
+  // Anthropic beta headers combine OAuth-required betas, default tool/thinking
+  // betas, and user-configured betas while stripping the managed 1M marker.
   const underlying = baseStreamFn ?? (() => ({}) as ReturnType<StreamFn>);
   return ((model, context, options) => {
     const configuredBetas = betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA);
@@ -320,6 +327,8 @@ type WrapProviderStreamFnParams = Parameters<
 >[0];
 
 function installFullProviderRuntimeDepsForTest() {
+  // Install a test-only provider runtime that composes the same wrapper families
+  // the production provider hook layer owns.
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: (params) => {
       if (params.provider !== "openai") {
@@ -552,6 +561,8 @@ describe("applyExtraParamsToAgent", () => {
     payload?: Record<string, unknown>;
     thinkingLevel?: Parameters<typeof applyExtraParamsToAgent>[5];
   }) {
+    // Mutates a caller-owned payload through onPayload, matching how the runtime
+    // finalizes provider request bodies.
     const payload = params.payload ?? { store: false };
     const baseStreamFn: StreamFn = (model, _context, options) => {
       options?.onPayload?.(payload, model);
@@ -609,6 +620,8 @@ describe("applyExtraParamsToAgent", () => {
     extraParamsOverride?: Record<string, unknown>;
     payload?: Record<string, unknown>;
   }) {
+    // This bypasses provider wrappers so the test observes only core
+    // parallel_tool_calls alias handling.
     return withMinimalProviderRuntimeDepsForTest(() => {
       const payload = params.payload ?? {};
       const baseStreamFn: StreamFn = (model, _context, options) => {
@@ -706,6 +719,153 @@ describe("applyExtraParamsToAgent", () => {
     ]);
   });
 
+  it("removes implicit disabled thinking for MiniMax-M3 anthropic-messages payloads", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "disabled" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toStrictEqual([{}]);
+  });
+
+  it("preserves explicit off thinking for MiniMax-M3 anthropic-messages payloads", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "disabled" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3", undefined, "off");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toStrictEqual([
+      {
+        thinking: { type: "disabled" },
+      },
+    ]);
+  });
+
+  it("rewrites MiniMax-M3 default budget thinking to adaptive", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "enabled", budget_tokens: 1024 },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3", undefined, "adaptive");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toStrictEqual([
+      {
+        thinking: { type: "adaptive" },
+      },
+    ]);
+  });
+
+  it("restores explicit MiniMax-M3 maxTokens when rewriting budget thinking", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        max_tokens: 8692,
+        thinking: { type: "enabled", budget_tokens: 8192 },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3", undefined, "adaptive");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, { maxTokens: 500 });
+
+    expect(payloads).toStrictEqual([
+      {
+        max_tokens: 500,
+        thinking: { type: "adaptive" },
+      },
+    ]);
+  });
+
+  it("preserves downstream explicit MiniMax-M3 thinking overrides", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "disabled" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {
+      onPayload: (payload) => {
+        (payload as Record<string, unknown>).thinking = { type: "disabled" };
+      },
+    });
+
+    expect(payloads).toStrictEqual([
+      {
+        thinking: { type: "disabled" },
+      },
+    ]);
+  });
+
   it("fills DeepSeek V4 reasoning_content for unowned OpenAI-compatible proxy models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "opencode",
@@ -731,6 +891,26 @@ describe("applyExtraParamsToAgent", () => {
     expect(messages[0]).not.toHaveProperty("reasoning_content");
     expect(messages[1]).toHaveProperty("reasoning_content", "");
     expect(messages[2]).not.toHaveProperty("reasoning_content");
+  });
+
+  it("does not add DeepSeek V4 thinking params on the Foundry fallback path", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "microsoft-foundry",
+      applyModelId: "deepseek-v4-pro",
+      thinkingLevel: "high",
+      model: {
+        api: "openai-completions",
+        provider: "microsoft-foundry",
+        id: "deepseek-v4-pro",
+      } as Model<"openai-completions">,
+      payload: {
+        reasoning_effort: "high",
+        messages: [{ role: "user", content: "hello" }],
+      },
+    });
+
+    expect(payload.reasoning_effort).toBe("high");
+    expect(payload).not.toHaveProperty("thinking");
   });
 
   it("fills MiMo V2.6 reasoning_content for unowned OpenAI-compatible proxy models", () => {
@@ -2871,6 +3051,32 @@ describe("applyExtraParamsToAgent", () => {
       } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(true);
+  });
+
+  it("keeps Responses replay item ids enabled for direct OpenAI store-enabled requests", () => {
+    let capturedOptions:
+      | (SimpleStreamOptions & {
+          replayResponsesItemIds?: boolean;
+        })
+      | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedOptions = options;
+      return {} as ReturnType<StreamFn>;
+    };
+    const streamFn = createOpenAIResponsesContextManagementWrapper(baseStreamFn, undefined);
+
+    void streamFn(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+      { messages: [] },
+      {},
+    );
+
+    expect(capturedOptions?.replayResponsesItemIds).toBe(true);
   });
 
   it("forces store=true for azure-openai provider with openai-responses API (#42800)", () => {

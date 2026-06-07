@@ -1,3 +1,4 @@
+// Dreaming payload migration tests cover cron doctor repair of old dreaming payloads.
 import { describe, expect, it } from "vitest";
 import {
   countStaleDreamingJobs,
@@ -81,7 +82,7 @@ describe("migrateLegacyDreamingPayloadShape", () => {
     const jobs = [job];
     const result = migrateLegacyDreamingPayloadShape(jobs);
     expect(result.rewrittenCount).toBe(1);
-    expect((jobs[0]?.payload as Record<string, unknown>).lightContext).toBe(true);
+    expect((jobs[0].payload as Record<string, unknown>).lightContext).toBe(true);
   });
 
   it("normalizes delivery to mode=none when omitted on an isolated dreaming job", () => {

@@ -1,3 +1,4 @@
+// Telegram tests cover action runtime plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -232,20 +233,6 @@ function mockCall(source: MockCallSource, callIndex: number, label: string) {
 
 function resultDetails(result: Awaited<ReturnType<typeof handleTelegramAction>>) {
   return requireRecord(result.details, "Telegram action details");
-}
-
-function readDurableQueueEntries(stateDir: string): Record<string, unknown>[] {
-  const queueDir = path.join(stateDir, "delivery-queue");
-  if (!fs.existsSync(queueDir)) {
-    return [];
-  }
-  return fs
-    .readdirSync(queueDir)
-    .filter((name) => name.endsWith(".json"))
-    .map((name) => JSON.parse(fs.readFileSync(path.join(queueDir, name), "utf-8"))) as Record<
-    string,
-    unknown
-  >[];
 }
 
 describe("handleTelegramAction", () => {
@@ -659,12 +646,17 @@ describe("handleTelegramAction", () => {
 
   it("persists sendMessage action deliveries before Telegram platform send", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-action-durable-"));
-    const { createOutboundTestPlugin, createTestRegistry, setActivePluginRegistry } =
-      await import("openclaw/plugin-sdk/plugin-test-runtime");
+    const {
+      createOutboundTestPlugin,
+      createTestRegistry,
+      readQueuedDeliveryEntriesForTest,
+      setActivePluginRegistry,
+    } = await import("openclaw/plugin-sdk/plugin-test-runtime");
+    const readDurableQueueEntries = () => readQueuedDeliveryEntriesForTest(stateDir);
     const sendText = vi
       .fn()
       .mockImplementationOnce(async () => {
-        const entries = readDurableQueueEntries(stateDir);
+        const entries = readDurableQueueEntries();
         expect(entries).toHaveLength(1);
         expect(entries[0]).toMatchObject({
           channel: "telegram",
@@ -682,7 +674,7 @@ describe("handleTelegramAction", () => {
         throw new Error("telegram timeout");
       })
       .mockImplementationOnce(async () => {
-        const entries = readDurableQueueEntries(stateDir);
+        const entries = readDurableQueueEntries();
         const liveEntry = entries.find((entry) =>
           JSON.stringify(entry.payloads).includes("delivers after queue write"),
         );
@@ -743,7 +735,7 @@ describe("handleTelegramAction", () => {
         ),
       ).rejects.toThrow("telegram timeout");
 
-      const retryableEntries = readDurableQueueEntries(stateDir);
+      const retryableEntries = readDurableQueueEntries();
       expect(retryableEntries).toHaveLength(1);
       expect(retryableEntries[0]).toMatchObject({
         payloads: [
@@ -770,8 +762,8 @@ describe("handleTelegramAction", () => {
         ok: true,
         messageId: "tg-ok",
       });
-      expect(readDurableQueueEntries(stateDir)).toHaveLength(1);
-      expect(readDurableQueueEntries(stateDir)[0]).toMatchObject({
+      expect(readDurableQueueEntries()).toHaveLength(1);
+      expect(readDurableQueueEntries()[0]).toMatchObject({
         payloads: [
           {
             text: "times out after queue write",

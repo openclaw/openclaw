@@ -1,5 +1,6 @@
+// Changed Lanes tests cover changed lanes script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -7,9 +8,11 @@ import {
   detectChangedLanes,
   isLiveDockerPackageScriptOnlyChange,
   isPackageScriptOnlyChange,
+  listChangedPathsFromGit,
 } from "../../scripts/changed-lanes.mjs";
 import {
   buildChangedCheckCrabboxArgs,
+  cleanupCorepackPnpmShimDir,
   createChangedCheckChildEnv,
   createChangedCheckPlan,
   createPnpmManagedCommand,
@@ -69,7 +72,73 @@ function parseChangedLaneOutput(output: string): {
   };
 }
 
+function writeRepoFile(repoDir: string, filePath: string, contents: string): void {
+  const absolutePath = path.join(repoDir, filePath);
+  mkdirSync(path.dirname(absolutePath), { recursive: true });
+  writeFileSync(absolutePath, contents, "utf8");
+}
+
+function createSyntheticMergeRepo(prefix: string): { dir: string; staleBase: string } {
+  const dir = makeTempRepoRoot(tempDirs, prefix);
+  git(dir, ["init", "-q", "--initial-branch=main"]);
+  writeRepoFile(dir, "README.md", "base\n");
+  git(dir, ["add", "."]);
+  git(dir, [
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "user.name=Test User",
+    "commit",
+    "-q",
+    "-m",
+    "base",
+  ]);
+  const staleBase = git(dir, ["rev-parse", "HEAD"]);
+
+  git(dir, ["switch", "-q", "-c", "feature"]);
+  writeRepoFile(dir, "src/pr.ts", "export const pr = true;\n");
+  git(dir, ["add", "."]);
+  git(dir, [
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "user.name=Test User",
+    "commit",
+    "-q",
+    "-m",
+    "feature",
+  ]);
+
+  git(dir, ["switch", "-q", "main"]);
+  writeRepoFile(dir, "src/main-only.ts", "export const mainOnly = true;\n");
+  git(dir, ["add", "."]);
+  git(dir, [
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "user.name=Test User",
+    "commit",
+    "-q",
+    "-m",
+    "main only",
+  ]);
+  git(dir, [
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "user.name=Test User",
+    "merge",
+    "--no-ff",
+    "feature",
+    "-m",
+    "synthetic merge",
+  ]);
+
+  return { dir, staleBase };
+}
+
 afterEach(() => {
+  cleanupCorepackPnpmShimDir();
   cleanupTempDirs(tempDirs);
 });
 
@@ -150,6 +219,119 @@ describe("scripts/changed-lanes", () => {
 
     expect(result.paths).toEqual(["scripts/new-check.mjs"]);
     expectLanes(result.lanes, { tooling: true });
+  });
+
+  it("falls back to a two-dot diff when a delegated checkout has no merge base", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-no-merge-base-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
+    git(dir, ["add", "README.md"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+    git(dir, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(dir, ["switch", "-q", "--orphan", "feature"]);
+    writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
+    mkdirSync(path.join(dir, "src"), { recursive: true });
+    writeFileSync(path.join(dir, "src", "committed.ts"), "export const committed = 1;\n", "utf8");
+    git(dir, ["add", "README.md", "src/committed.ts"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "feature base",
+    ]);
+    writeFileSync(path.join(dir, "src", "feature.ts"), "export const value = 1;\n", "utf8");
+
+    expect(
+      listChangedPathsFromGit({ base: "origin/main", cwd: dir, includeWorktree: false }),
+    ).toEqual(["src/committed.ts"]);
+    expect(listChangedPathsFromGit({ base: "origin/main", cwd: dir })).toEqual([
+      "src/committed.ts",
+      "src/feature.ts",
+    ]);
+  });
+
+  it("prefers raw sync worktree paths over an implausibly broad no-merge-base diff", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-raw-sync-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    for (let index = 0; index < 250; index += 1) {
+      writeFileSync(path.join(dir, `baseline-${index}.txt`), "baseline\n", "utf8");
+    }
+    git(dir, ["add", "."]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+    git(dir, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(dir, ["switch", "-q", "--orphan", "feature"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "raw sync base",
+    ]);
+    mkdirSync(path.join(dir, "src"), { recursive: true });
+    writeFileSync(path.join(dir, "src", "feature.ts"), "export const value = 1;\n", "utf8");
+
+    const previousRawSync = process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC;
+    delete process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC;
+    try {
+      const normalPaths = listChangedPathsFromGit({ base: "origin/main", cwd: dir });
+      expect(normalPaths.length).toBeGreaterThan(200);
+      expect(normalPaths).toContain("baseline-0.txt");
+      expect(normalPaths).toContain("src/feature.ts");
+
+      process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC = "1";
+      expect(listChangedPathsFromGit({ base: "origin/main", cwd: dir })).toEqual([
+        "src/feature.ts",
+      ]);
+    } finally {
+      if (previousRawSync === undefined) {
+        delete process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC;
+      } else {
+        process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC = previousRawSync;
+      }
+    }
+  });
+
+  it("uses the merge commit first parent instead of a stale PR payload base", () => {
+    const { dir, staleBase } = createSyntheticMergeRepo("openclaw-changed-lanes-merge-");
+
+    expect(listChangedPathsFromGit({ base: staleBase, cwd: dir, includeWorktree: false })).toEqual([
+      "src/main-only.ts",
+      "src/pr.ts",
+    ]);
+    expect(
+      listChangedPathsFromGit({
+        base: staleBase,
+        cwd: dir,
+        includeWorktree: false,
+        mergeHeadFirstParent: true,
+      }),
+    ).toEqual(["src/pr.ts"]);
   });
 
   it("ignores local Crabbox metadata in the default local diff", () => {
@@ -405,6 +587,21 @@ describe("scripts/changed-lanes", () => {
     expect(command.args).toEqual(["pnpm", "check:no-conflict-markers"]);
   });
 
+  it("cleans CI Corepack pnpm shim temp dirs", () => {
+    const command = createPnpmManagedCommand(
+      { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { CI: "1", PATH: "/usr/bin" },
+    );
+    const [shimDir] = String(command.env?.PATH ?? "").split(path.delimiter);
+
+    expect(path.basename(shimDir)).toMatch(/^openclaw-corepack-pnpm-/u);
+    expect(existsSync(path.join(shimDir, "pnpm"))).toBe(true);
+
+    cleanupCorepackPnpmShimDir();
+
+    expect(existsSync(shimDir)).toBe(false);
+  });
+
   it("keeps local changed-check children on the repo pnpm shim", () => {
     const command = createPnpmManagedCommand(
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
@@ -415,10 +612,9 @@ describe("scripts/changed-lanes", () => {
     expect(command.args).toEqual(["check:no-conflict-markers"]);
   });
 
-  it("delegates local Testbox-mode changed gates before running locally", () => {
+  it("delegates local changed gates to Crabbox before running locally", () => {
     expect(
       shouldDelegateChangedCheckToCrabbox(["--base", "origin/main"], {
-        OPENCLAW_TESTBOX: "1",
         PATH: "/usr/bin",
       }),
     ).toBe(true);
@@ -442,6 +638,11 @@ describe("scripts/changed-lanes", () => {
       "240m",
       "--timing-json",
       "--",
+      "env",
+      "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1",
+      "OPENCLAW_CHANGED_LANES_RAW_SYNC=1",
+      "CI=1",
+      "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false",
       "corepack",
       "pnpm",
       "check:changed",
@@ -452,14 +653,67 @@ describe("scripts/changed-lanes", () => {
     ]);
   });
 
-  it("does not delegate dry-run or CI changed gates", () => {
-    expect(shouldDelegateChangedCheckToCrabbox(["--dry-run"], { OPENCLAW_TESTBOX: "1" })).toBe(
-      false,
-    );
+  it("delegates staged changed gates as explicit remote paths", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-check-changed-staged-delegate-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
+    git(dir, ["add", "README.md"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+    mkdirSync(path.join(dir, "src"), { recursive: true });
+    writeFileSync(path.join(dir, "src", "staged.ts"), "export const staged = 1;\n", "utf8");
+    git(dir, ["add", "src/staged.ts"]);
+
+    const args = buildChangedCheckCrabboxArgs(["--staged", "--timed"], { cwd: dir });
+    expect(args.slice(args.indexOf("check:changed") + 1)).toEqual([
+      "--timed",
+      "--base",
+      "HEAD",
+      "--head",
+      "HEAD",
+      "--",
+      "src/staged.ts",
+    ]);
+  });
+
+  it("delegates empty staged changed gates without rediscovering unstaged paths", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-check-changed-empty-staged-delegate-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
+    git(dir, ["add", "README.md"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+    mkdirSync(path.join(dir, "src"), { recursive: true });
+    writeFileSync(path.join(dir, "src", "unstaged.ts"), "export const unstaged = 1;\n", "utf8");
+
+    const args = buildChangedCheckCrabboxArgs(["--staged", "--timed"], { cwd: dir });
+
+    expect(args.slice(args.indexOf("check:changed") + 1)).toEqual(["--timed", "--no-changes"]);
+  });
+
+  it("does not delegate dry-run, CI, or remote-child changed gates", () => {
+    expect(shouldDelegateChangedCheckToCrabbox(["--dry-run"], {})).toBe(false);
+    expect(shouldDelegateChangedCheckToCrabbox([], { GITHUB_ACTIONS: "true" })).toBe(false);
+    expect(shouldDelegateChangedCheckToCrabbox([], { CI: "1" })).toBe(false);
     expect(
-      shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_TESTBOX: "1", GITHUB_ACTIONS: "true" }),
+      shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "1" }),
     ).toBe(false);
-    expect(shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_TESTBOX: "1", CI: "1" })).toBe(false);
   });
 
   it("runs changed-check lint lanes under the parent heavy-check lock", () => {

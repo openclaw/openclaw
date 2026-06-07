@@ -1,3 +1,4 @@
+// Skills CLI command tests cover skill command registration and subcommand behavior.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSkillsCli } from "./skills-cli.js";
@@ -72,12 +73,12 @@ const mocks = vi.hoisted(() => {
   });
   return {
     loadConfigMock: vi.fn(() => ({})),
-    resolveDefaultAgentIdMock: vi.fn((configForTest: unknown) => "main"),
+    resolveDefaultAgentIdMock: vi.fn((_configForTest: unknown) => "main"),
     resolveAgentIdByWorkspacePathMock: vi.fn(
-      (configForTest: unknown, _workspacePath: string): string | undefined => undefined,
+      (_configForTest: unknown, _workspacePath: string): string | undefined => undefined,
     ),
     resolveAgentWorkspaceDirMock: vi.fn(
-      (configForTest: unknown, _agentId: string) => "/tmp/workspace",
+      (_configForTest: unknown, _agentId: string) => "/tmp/workspace",
     ),
     searchSkillsFromClawHubMock: vi.fn(),
     installSkillFromClawHubMock: vi.fn(),
@@ -565,6 +566,25 @@ describe("skills cli commands", () => {
     );
   });
 
+  it("passes --force-install through for ClawHub skill installs", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/calendar",
+    });
+
+    await runCommand(["skills", "install", "calendar", "--force-install"]);
+
+    expect(installSkillFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        slug: "calendar",
+        forceInstall: true,
+      }),
+    );
+  });
+
   it("rejects using --global and --agent together for installs", async () => {
     await expect(
       runCommand(["skills", "install", "calendar", "--global", "--agent", "main"]),
@@ -610,6 +630,30 @@ describe("skills cli commands", () => {
       "update result log",
     ).toBe(true);
     expect(runtimeErrors).toStrictEqual([]);
+  });
+
+  it("passes --force-install through for ClawHub skill updates", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/workspace/skills/calendar",
+      },
+    ]);
+
+    await runCommand(["skills", "update", "--all", "--force-install"]);
+
+    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        slug: undefined,
+        forceInstall: true,
+      }),
+    );
   });
 
   it("updates tracked ClawHub skills in the cwd-inferred agent workspace", async () => {
@@ -718,6 +762,21 @@ describe("skills cli commands", () => {
       slug: "calendar",
       logger: expect.any(Object),
     });
+  });
+
+  it("exits nonzero when a tracked ClawHub skill update fails", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: false,
+        error: "blocked by install policy: calendar is not approved",
+      },
+    ]);
+
+    await expect(runCommand(["skills", "update", "calendar"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain("blocked by install policy: calendar is not approved");
+    expect(runtimeLogs).toStrictEqual([]);
   });
 
   it("rejects using --global and --agent together for updates", async () => {

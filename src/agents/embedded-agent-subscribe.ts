@@ -1,3 +1,6 @@
+/**
+ * Subscribes to embedded-agent sessions and streams formatted replies/events.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
@@ -188,6 +191,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
     lastDeliveredBlockReplyText: undefined,
+    deferBlockReplyDelivery: typeof params.onBeforeTerminalDelivery === "function",
+    deferredBlockReplies: [],
+    deferredAssistantEvents: [],
     toolExecutionSinceLastBlockReply: false,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,
@@ -210,6 +216,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     replayState: createEmbeddedRunReplayState(params.initialReplayState),
     livenessState: "working",
     hadDeterministicSideEffect: false,
+    pendingEventChain: null,
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
@@ -254,6 +261,46 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const shouldAllowSilentTurnText = (text: string | undefined) =>
     Boolean(text && isSilentReplyText(text, SILENT_REPLY_TOKEN));
+  const emitAssistantStreamDataSafely = (
+    delivery: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number],
+  ) => {
+    const { data } = delivery;
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "assistant",
+      data,
+    });
+    void params.onAgentEvent?.({
+      stream: "assistant",
+      data,
+    });
+    if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
+      void params.onPartialReply(data);
+    }
+  };
+  const emitAssistantStreamData = (
+    data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"],
+    options?: { emitPartialReply?: boolean },
+  ) => {
+    const delivery = { data, emitPartialReply: options?.emitPartialReply === true };
+    if (state.deferBlockReplyDelivery) {
+      state.deferredAssistantEvents.push(delivery);
+      return;
+    }
+    emitAssistantStreamDataSafely(delivery);
+  };
+  const flushDeferredAssistantEvents = () => {
+    if (state.deferredAssistantEvents.length === 0) {
+      return;
+    }
+    const deferred = state.deferredAssistantEvents.splice(0);
+    for (const delivery of deferred) {
+      emitAssistantStreamDataSafely(delivery);
+    }
+  };
+  const clearDeferredAssistantEvents = () => {
+    state.deferredAssistantEvents.length = 0;
+  };
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedAgentSessionParams["onBlockReply"]>>[0],
     options?: { assistantMessageIndex?: number },
@@ -272,7 +319,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       if (!isPromiseLike<void>(maybeTask)) {
         return true;
       }
-      const task = Promise.resolve(maybeTask).catch((err) => {
+      const task = Promise.resolve(maybeTask).catch((err: unknown) => {
         log.warn(`block reply callback failed: ${String(err)}`);
       });
       pendingBlockReplyTasks.add(task);
@@ -294,10 +341,35 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       options?.consumePendingToolMedia === false
         ? withAssistantDirectives
         : consumePendingToolMediaIntoReply(state, withAssistantDirectives);
+    if (state.deferBlockReplyDelivery) {
+      const deferredPayload =
+        options?.assistantMessageIndex !== undefined
+          ? setReplyPayloadMetadata(withToolMedia, {
+              assistantMessageIndex: options.assistantMessageIndex,
+            })
+          : withToolMedia;
+      state.deferredBlockReplies.push(deferredPayload);
+      return;
+    }
     const emitted = emitBlockReplySafely(withToolMedia, options);
     if (emitted && !withToolMedia.isReasoning && hasAssistantVisibleReply(withToolMedia)) {
       state.visibleBlockReplyCount += 1;
     }
+  };
+  const flushDeferredBlockReplies = () => {
+    if (state.deferredBlockReplies.length === 0) {
+      return;
+    }
+    const deferred = state.deferredBlockReplies.splice(0);
+    for (const payload of deferred) {
+      const emitted = emitBlockReplySafely(payload);
+      if (emitted && !payload.isReasoning && hasAssistantVisibleReply(payload)) {
+        state.visibleBlockReplyCount += 1;
+      }
+    }
+  };
+  const clearDeferredBlockReplies = () => {
+    state.deferredBlockReplies.length = 0;
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -452,7 +524,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         state.compactionRetryReject = reject;
       });
       // Prevent unhandled rejection if rejected after all consumers have resolved
-      state.compactionRetryPromise.catch((err) => {
+      state.compactionRetryPromise.catch((err: unknown) => {
         log.debug(`compaction promise rejected (no waiter): ${String(err)}`);
       });
     }
@@ -659,7 +731,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
 
   const stripBlockTags = (
     text: string,
-    state: {
+    stateLocal: {
       thinking: boolean;
       final: boolean;
       inlineCode?: InlineCodeState;
@@ -674,9 +746,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     },
     options?: { final?: boolean; completeMarkdownChunk?: boolean },
   ): string => {
-    const input = `${state.pendingFenceFragment ?? ""}${state.pendingTagFragment ?? ""}${text}`;
-    state.pendingFenceFragment = undefined;
-    state.pendingTagFragment = undefined;
+    const input = `${stateLocal.pendingFenceFragment ?? ""}${stateLocal.pendingTagFragment ?? ""}${text}`;
+    stateLocal.pendingFenceFragment = undefined;
+    stateLocal.pendingTagFragment = undefined;
     if (!input) {
       return text;
     }
@@ -685,19 +757,19 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       ? { text: input, pendingFenceFragment: undefined }
       : options?.completeMarkdownChunk
         ? { text: input, pendingFenceFragment: undefined }
-        : splitTrailingFenceFragment(input, state.fence?.atLineStart ?? true);
-    state.pendingFenceFragment = pendingFenceFragment;
+        : splitTrailingFenceFragment(input, stateLocal.fence?.atLineStart ?? true);
+    stateLocal.pendingFenceFragment = pendingFenceFragment;
     if (!fenceInput) {
       return "";
     }
 
-    const inlineStateStart = state.inlineCode ?? createInlineCodeState();
-    const fenceStateStart = state.fence;
+    const inlineStateStart = stateLocal.inlineCode ?? createInlineCodeState();
+    const fenceStateStart = stateLocal.fence;
     const initialCodeSpans = buildCodeSpanIndex(fenceInput, inlineStateStart, fenceStateStart);
     const { text: scanText, pendingTagFragment } = options?.final
       ? { text: fenceInput, pendingTagFragment: undefined }
       : splitTrailingBlockTagFragment(fenceInput, initialCodeSpans.isInside);
-    state.pendingTagFragment = pendingTagFragment;
+    stateLocal.pendingTagFragment = pendingTagFragment;
     if (!scanText) {
       return "";
     }
@@ -707,31 +779,35 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     THINKING_TAG_SCAN_RE.lastIndex = 0;
     let lastIndex = 0;
     let lastCodeIndex = 0;
-    let inThinking = state.thinking;
+    let inThinking = stateLocal.thinking;
     // Hidden reasoning has its own code state: malformed hidden fences must not
     // mark later visible text as code, but literal close tags there stay hidden.
-    let hiddenInlineState: InlineCodeState = state.reasoningInlineCode
-      ? { ...state.reasoningInlineCode }
+    let hiddenInlineState: InlineCodeState = stateLocal.reasoningInlineCode
+      ? { ...stateLocal.reasoningInlineCode }
       : createInlineCodeState();
-    let hiddenFenceState: FenceScanState | undefined = state.reasoningFence?.open
-      ? { atLineStart: state.reasoningFence.atLineStart, open: { ...state.reasoningFence.open } }
-      : state.reasoningFence
-        ? { atLineStart: state.reasoningFence.atLineStart }
+    let hiddenFenceState: FenceScanState | undefined = stateLocal.reasoningFence?.open
+      ? {
+          atLineStart: stateLocal.reasoningFence.atLineStart,
+          open: { ...stateLocal.reasoningFence.open },
+        }
+      : stateLocal.reasoningFence
+        ? { atLineStart: stateLocal.reasoningFence.atLineStart }
         : undefined;
-    let hiddenPendingFenceFragment = state.reasoningPendingFenceFragment;
-    state.reasoningPendingFenceFragment = undefined;
+    let hiddenPendingFenceFragment = stateLocal.reasoningPendingFenceFragment;
+    stateLocal.reasoningPendingFenceFragment = undefined;
     const advanceHiddenCodeState = (segment: string) => {
       const hiddenInput = `${hiddenPendingFenceFragment ?? ""}${segment}`;
       hiddenPendingFenceFragment = undefined;
       if (!hiddenInput) {
         return;
       }
-      const { text: hiddenFenceInput, pendingFenceFragment } = options?.final
-        ? { text: hiddenInput, pendingFenceFragment: undefined }
-        : options?.completeMarkdownChunk
+      const { text: hiddenFenceInput, pendingFenceFragment: pendingFenceFragmentLocal } =
+        options?.final
           ? { text: hiddenInput, pendingFenceFragment: undefined }
-          : splitTrailingFenceFragment(hiddenInput, hiddenFenceState?.atLineStart ?? true);
-      hiddenPendingFenceFragment = pendingFenceFragment;
+          : options?.completeMarkdownChunk
+            ? { text: hiddenInput, pendingFenceFragment: undefined }
+            : splitTrailingFenceFragment(hiddenInput, hiddenFenceState?.atLineStart ?? true);
+      hiddenPendingFenceFragment = pendingFenceFragmentLocal;
       if (!hiddenFenceInput) {
         return;
       }
@@ -786,26 +862,26 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (!inThinking) {
       processed += scanText.slice(lastIndex);
     }
-    state.thinking = inThinking;
-    state.reasoningInlineCode = inThinking ? hiddenInlineState : undefined;
-    state.reasoningFence = inThinking ? hiddenFenceState : undefined;
-    state.reasoningPendingFenceFragment = inThinking ? hiddenPendingFenceFragment : undefined;
+    stateLocal.thinking = inThinking;
+    stateLocal.reasoningInlineCode = inThinking ? hiddenInlineState : undefined;
+    stateLocal.reasoningFence = inThinking ? hiddenFenceState : undefined;
+    stateLocal.reasoningPendingFenceFragment = inThinking ? hiddenPendingFenceFragment : undefined;
 
     // If enforcement is disabled, we still strip the tags themselves to prevent
     // hallucinations (e.g. Minimax copying the style) from leaking, but we
     // do not enforce buffering/extraction logic.
     const finalCodeSpans = buildCodeSpanIndex(processed, inlineStateStart, fenceStateStart);
     if (!params.enforceFinalTag) {
-      state.inlineCode = finalCodeSpans.inlineState;
-      state.fence = finalCodeSpans.fenceState;
+      stateLocal.inlineCode = finalCodeSpans.inlineState;
+      stateLocal.fence = finalCodeSpans.fenceState;
       return stripFinalTagsOutsideCodeSpans(processed, finalCodeSpans.isInside);
     }
 
     // If enforcement is enabled, only return text that appeared inside a <final> block.
     let result = "";
     let lastFinalIndex = 0;
-    let inFinal = state.final;
-    let everInFinal = state.final;
+    let inFinal = stateLocal.final;
+    let everInFinal = stateLocal.final;
 
     for (const match of findFinalTagMatches(processed)) {
       const idx = match.index;
@@ -840,32 +916,32 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (inFinal) {
       result += processed.slice(lastFinalIndex);
     }
-    state.final = inFinal;
+    stateLocal.final = inFinal;
 
     // Strict Mode: If enforcing final tags, we MUST NOT return content unless
     // we have seen a <final> tag. Otherwise, we leak "thinking out loud" text
     // (e.g. "**Locating Manulife**...") that the model emitted without <think> tags.
     if (!everInFinal) {
-      state.inlineCode = createInlineCodeState();
-      state.fence = finalCodeSpans.fenceState;
-      state.finalInlineCode = undefined;
-      state.finalFence = undefined;
+      stateLocal.inlineCode = createInlineCodeState();
+      stateLocal.fence = finalCodeSpans.fenceState;
+      stateLocal.finalInlineCode = undefined;
+      stateLocal.finalFence = undefined;
       return "";
     }
 
     // Hardened Cleanup: Remove any remaining <final> tags that might have been
     // missed (e.g. nested tags or hallucinations) to prevent leakage.
-    const finalResultInlineStateStart = state.finalInlineCode ?? createInlineCodeState();
-    const finalResultFenceStateStart = state.finalFence;
+    const finalResultInlineStateStart = stateLocal.finalInlineCode ?? createInlineCodeState();
+    const finalResultFenceStateStart = stateLocal.finalFence;
     const resultCodeSpans = buildCodeSpanIndex(
       result,
       finalResultInlineStateStart,
       finalResultFenceStateStart,
     );
-    state.inlineCode = finalCodeSpans.inlineState;
-    state.fence = finalCodeSpans.fenceState;
-    state.finalInlineCode = inFinal ? resultCodeSpans.inlineState : undefined;
-    state.finalFence = inFinal ? resultCodeSpans.fenceState : undefined;
+    stateLocal.inlineCode = finalCodeSpans.inlineState;
+    stateLocal.fence = finalCodeSpans.fenceState;
+    stateLocal.finalInlineCode = inFinal ? resultCodeSpans.inlineState : undefined;
+    stateLocal.finalFence = inFinal ? resultCodeSpans.fenceState : undefined;
     return stripFinalTagsOutsideCodeSpans(result, resultCodeSpans.isInside);
   };
 
@@ -1128,6 +1204,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingToolAudioAsVoice = false;
     state.pendingToolTrustedLocalMedia = false;
     state.visibleBlockReplyCount = 0;
+    state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
+    clearDeferredAssistantEvents();
+    clearDeferredBlockReplies();
     state.pendingAssistantReplyDirectives = undefined;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
@@ -1161,7 +1240,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     stripBlockTags,
     emitBlockChunk,
     flushBlockReplyBuffer,
+    emitAssistantStreamData,
     emitBlockReply,
+    flushDeferredAssistantEvents,
+    flushDeferredBlockReplies,
+    clearDeferredAssistantEvents,
+    clearDeferredBlockReplies,
     emitReasoningStream,
     consumeReplyDirectives,
     consumePartialReplyDirectives,
@@ -1262,6 +1346,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       yielded?: boolean;
       timeoutPhase?: AgentRunTimeoutPhase;
       providerStarted?: boolean;
+      aborted?: boolean;
     }) => {
       if (typeof meta.replayInvalid === "boolean") {
         state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
@@ -1280,6 +1365,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       }
       if (typeof meta.providerStarted === "boolean") {
         state.providerStarted = meta.providerStarted;
+      }
+      if (typeof meta.aborted === "boolean") {
+        state.terminalAborted = meta.aborted;
       }
     },
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
@@ -1308,6 +1396,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getUsageTotals,
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
+    waitForPendingEvents: () => state.pendingEventChain ?? Promise.resolve(),
     getItemLifecycle: () => ({
       startedCount: state.itemStartedCount,
       completedCount: state.itemCompletedCount,

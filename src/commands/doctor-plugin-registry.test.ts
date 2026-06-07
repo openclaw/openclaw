@@ -1,3 +1,4 @@
+// Doctor plugin registry tests cover plugin registry checks and repair diagnostics.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -269,8 +270,20 @@ function expectedPluginIndexRecord(params: {
     startup: {
       sidecar: false,
       memory: false,
+      configPaths: [],
       deferConfiguredChannelFullLoadUntilAfterListen: false,
       agentHarnesses: [],
+    },
+    contributions: {
+      channels: [],
+      channelConfigs: [],
+      providers: [params.pluginId],
+      modelCatalogProviders: [],
+      modelSupportPrefixes: [],
+      modelSupportPatterns: [],
+      autoEnableProviderIds: [],
+      commandAliases: [],
+      contracts: {},
     },
     compat: [],
   };

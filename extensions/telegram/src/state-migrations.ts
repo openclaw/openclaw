@@ -1,3 +1,4 @@
+// Telegram plugin module implements state migrations behavior.
 import fs from "node:fs";
 import path from "node:path";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
@@ -88,7 +89,7 @@ function listTelegramLegacySidecarAccountIds(params: {
   prefix: string;
   suffix: string;
 }): string[] {
-  let persistedAccountIds: string[] = [];
+  let persistedAccountIds: string[];
   try {
     persistedAccountIds = fs
       .readdirSync(path.join(params.stateDir, "telegram"), { withFileTypes: true })

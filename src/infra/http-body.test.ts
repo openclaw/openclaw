@@ -1,3 +1,4 @@
+// Tests HTTP body reading and size-limit handling.
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -19,7 +20,9 @@ type MockIncomingMessage = IncomingMessage & {
 };
 
 async function waitForMicrotaskTurn(): Promise<void> {
-  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  await new Promise<void>((resolve) => {
+    queueMicrotask(resolve);
+  });
 }
 
 async function expectRequestBodyLimitError(

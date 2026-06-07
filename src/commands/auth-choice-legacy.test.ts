@@ -1,3 +1,4 @@
+// Legacy auth-choice tests cover deprecated choice detection and replacement messages.
 import { describe, expect, it, vi } from "vitest";
 
 const manifestAuthChoices = vi.hoisted(() => [
@@ -59,22 +60,12 @@ describe("auth choice legacy aliases", () => {
     ]);
   });
 
-  it("does not keep old OpenAI Codex setup choices alive outside doctor", () => {
-    const legacyChoice = ["openai", "codex"].join("-");
-    expect(normalizeLegacyOnboardAuthChoice(legacyChoice, { env: authChoiceManifestEnv() })).toBe(
-      legacyChoice,
-    );
+  it("does not keep retired Codex setup choices alive outside doctor", () => {
     expect(normalizeLegacyOnboardAuthChoice("codex-cli", { env: authChoiceManifestEnv() })).toBe(
       "codex-cli",
     );
     expect(
-      resolveDeprecatedAuthChoiceReplacement(legacyChoice, { env: authChoiceManifestEnv() }),
+      resolveDeprecatedAuthChoiceReplacement("codex-cli", { env: authChoiceManifestEnv() }),
     ).toBeUndefined();
-    expect(normalizeLegacyOnboardAuthChoice(`${legacyChoice}-device-code`)).toBe(
-      `${legacyChoice}-device-code`,
-    );
-    expect(normalizeLegacyOnboardAuthChoice(`${legacyChoice}-api-key`)).toBe(
-      `${legacyChoice}-api-key`,
-    );
   });
 });

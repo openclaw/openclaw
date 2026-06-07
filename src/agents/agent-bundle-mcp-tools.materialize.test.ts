@@ -1,3 +1,4 @@
+/** Tests materializing MCP catalog tools into agent tool definitions and results. */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
@@ -90,7 +91,15 @@ describe("createBundleMcpToolRuntime", () => {
 
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
     expect(runtime.tools[0].executionMode).toBe("sequential");
-    expect(getPluginToolMeta(runtime.tools[0])?.pluginId).toBe("bundle-mcp");
+    expect(getPluginToolMeta(runtime.tools[0])).toMatchObject({
+      pluginId: "bundle-mcp",
+      mcp: {
+        serverName: "bundleProbe",
+        safeServerName: "bundleProbe",
+        toolName: "bundle_probe",
+        operation: "tool",
+      },
+    });
     const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
     expectTextContentBlock(result.content[0], "FROM-BUNDLE");
     expect(result.details).toEqual({
@@ -147,6 +156,72 @@ describe("createBundleMcpToolRuntime", () => {
     });
   });
 
+  it("coerces non-text/image MCP tool-result blocks to text (resource_link/resource/audio)", async () => {
+    // resource_link/resource/audio blocks have no base64 image source; if they
+    // leaked into the provider image branch Anthropic would 400 on an image with
+    // undefined data/media_type and poison the whole session history (#90710).
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [
+            { type: "text", text: "intro" },
+            {
+              type: "resource_link",
+              uri: "https://example.com/a.docx",
+              name: "a.docx",
+              title: "Quarterly report",
+            },
+            {
+              type: "resource_link",
+              uri: "https://example.com/bare",
+              name: "",
+            },
+            {
+              type: "resource",
+              resource: { uri: "memo://one", text: "memo body" },
+            },
+            {
+              type: "resource",
+              resource: { uri: "blob://two", blob: "AAAA", mimeType: "application/pdf" },
+            },
+            { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
+            { type: "image", data: "iVBOR", mimeType: "image/png" },
+          ],
+          isError: false,
+        } as CallToolResult,
+      }),
+    });
+
+    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+
+    expect(result.content).toEqual([
+      { type: "text", text: "intro" },
+      { type: "text", text: "[Quarterly report] https://example.com/a.docx" },
+      { type: "text", text: "https://example.com/bare" },
+      { type: "text", text: "memo body" },
+      { type: "text", text: "blob://two" },
+      { type: "text", text: "[audio audio/mpeg]" },
+      { type: "image", data: "iVBOR", mimeType: "image/png" },
+    ]);
+  });
+
+  it("coerces a malformed image block (missing base64 source) to text", async () => {
+    // A real-world poison case: image block with undefined data/media_type.
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [{ type: "image" } as unknown as CallToolResult["content"][number]],
+          isError: false,
+        } as CallToolResult,
+      }),
+    });
+
+    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toEqual({ type: "text", text: JSON.stringify({ type: "image" }) });
+  });
+
   it("disambiguates bundle MCP tools that collide with existing tool names", async () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: makeToolRuntime(),
@@ -159,9 +234,9 @@ describe("createBundleMcpToolRuntime", () => {
   it("preserves catalog diagnostics when MCP servers fail tool listing", async () => {
     const diagnostics = [
       {
-        serverName: "dofbot",
-        safeServerName: "dofbot",
-        launchSummary: "node dofbot-mcp.mjs",
+        serverName: "fuzzplugin",
+        safeServerName: "fuzzplugin",
+        launchSummary: "node fuzzplugin-mcp.mjs",
         message: 'tools[0].inputSchema.type expected "object"',
       },
     ];

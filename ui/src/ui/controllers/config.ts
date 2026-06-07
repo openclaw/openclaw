@@ -1,3 +1,4 @@
+// Control UI controller manages config gateway state.
 import { applyMergePatch } from "../../../../src/config/merge-patch.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
@@ -39,6 +40,7 @@ export type ConfigState = {
   pendingUpdateExpectedVersion: string | null;
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   lastError: string | null;
+  chatError?: string | null;
 };
 
 const autoAllowlistedPluginIdsByState = new WeakMap<ConfigState, Set<string>>();
@@ -53,6 +55,7 @@ export async function loadConfig(state: ConfigState, options: LoadConfigOptions 
   }
   state.configLoading = true;
   state.lastError = null;
+  state.chatError = null;
   try {
     const res = await state.client.request<ConfigSnapshot>("config.get", {});
     applyConfigSnapshot(state, res, options);
@@ -225,6 +228,7 @@ async function submitConfigChange(
   }
   state[busyKey] = true;
   state.lastError = null;
+  state.chatError = null;
   try {
     const raw = serializeFormForSubmit(state);
     const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
@@ -273,6 +277,7 @@ export async function runUpdate(state: ConfigState) {
   }
   state.updateRunning = true;
   state.lastError = null;
+  state.chatError = null;
   state.updateStatusBanner = null;
   try {
     const res = await state.client.request<{
@@ -521,6 +526,7 @@ export async function openConfigFile(state: ConfigState): Promise<void> {
     return;
   }
   state.lastError = null;
+  state.chatError = null;
   try {
     const res = await state.client.request<{ ok: boolean; path?: string; error?: string }>(
       "config.openFile",

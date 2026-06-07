@@ -1,3 +1,4 @@
+// Openai provider module implements model/runtime integration.
 import {
   fetchRemoteEmbeddingVectors,
   resolveRemoteEmbeddingClient,
@@ -81,11 +82,12 @@ export async function createOpenAiEmbeddingProvider(
       ...(typeof OPENAI_MAX_INPUT_TOKENS[client.model] === "number"
         ? { maxInputTokens: OPENAI_MAX_INPUT_TOKENS[client.model] }
         : {}),
-      embedQuery: async (text, options) => {
-        const [vec] = await embed([text], "query", options?.signal);
+      embedQuery: async (text, optionsValue) => {
+        const [vec] = await embed([text], "query", optionsValue?.signal);
         return vec ?? [];
       },
-      embedBatch: async (texts, options) => await embed(texts, "document", options?.signal),
+      embedBatch: async (texts, optionsLocal) =>
+        await embed(texts, "document", optionsLocal?.signal),
     },
     client,
   };

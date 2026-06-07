@@ -1,3 +1,4 @@
+// Telegram plugin module implements send behavior.
 import * as grammy from "grammy";
 import { type ApiClientOptions, Bot, HttpError } from "grammy";
 import type { ReactionType, ReactionTypeEmoji } from "grammy/types";
@@ -399,6 +400,7 @@ async function resolveAndPersistChatId(params: {
     resolvedChatId: chatId,
     verbose: params.verbose,
     gatewayClientScopes: params.gatewayClientScopes,
+    ...(params.gatewayClientScopes === undefined ? { trustedInternalWriteback: true } : {}),
   });
   return chatId;
 }
@@ -527,7 +529,7 @@ function createTelegramRequestWithDiag(params: {
             fn: runRequest,
             ...(options?.shouldLog ? { shouldLog: options.shouldLog } : {}),
           });
-    return call.catch((err) => {
+    return call.catch((err: unknown) => {
       logHttpError(label ?? "request", err);
       throw err;
     });
@@ -567,7 +569,7 @@ function createRequestWithChatNotFound(params: {
   input: string;
 }) {
   return async <T>(fn: () => Promise<T>, label: string) =>
-    params.requestWithDiag(fn, label).catch((err) => {
+    params.requestWithDiag(fn, label).catch((err: unknown) => {
       throw wrapTelegramChatNotFoundError(err, {
         chatId: params.chatId,
         input: params.input,
@@ -776,9 +778,9 @@ export async function sendMessageTelegram(
       return fixedPlainTextChunks.map((plainText) => ({ plainText }));
     }
     const plainTextChunks = splitTelegramPlainTextFallback(fallbackText, htmlChunks.length, 4000);
-    return htmlChunks.map((htmlText, index) => ({
-      htmlText,
-      plainText: plainTextChunks[index] ?? htmlText,
+    return htmlChunks.map((htmlTextLocal, index) => ({
+      htmlText: htmlTextLocal,
+      plainText: plainTextChunks[index] ?? htmlTextLocal,
     }));
   };
 

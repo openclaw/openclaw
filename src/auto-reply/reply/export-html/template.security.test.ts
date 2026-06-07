@@ -1,3 +1,4 @@
+// Tests exported HTML transcript escaping and template safety.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,7 +52,7 @@ let parseHtmlPromise: Promise<LinkedomModule["parseHTML"]> | null = null;
 
 async function loadParseHTML(): Promise<LinkedomModule["parseHTML"]> {
   parseHtmlPromise ??= (import(LINKEDOM_MODULE) as Promise<LinkedomModule>).then(
-    ({ parseHTML }) => parseHTML,
+    (module) => module["parseHTML"],
   );
   return parseHtmlPromise;
 }

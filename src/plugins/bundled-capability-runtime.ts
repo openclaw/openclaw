@@ -1,3 +1,4 @@
+/** Loads capability providers from bundled plugin public runtime artifacts. */
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
@@ -300,7 +301,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
 
-    let mod: OpenClawPluginModule | null = null;
+    let mod: OpenClawPluginModule | null;
     try {
       mod = getModuleLoader(safeSource)(safeSource) as OpenClawPluginModule;
     } catch (error) {

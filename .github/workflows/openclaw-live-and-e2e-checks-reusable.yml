@@ -563,7 +563,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     env:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
@@ -595,7 +595,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'openshell-e2e')
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -887,7 +887,7 @@ jobs:
           summary=".artifacts/docker-tests/release-${DOCKER_E2E_CHUNK}/summary.json"
           if [[ ! -f "$summary" ]]; then
             echo "Docker chunk summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
           node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E chunk: ${DOCKER_E2E_CHUNK:-unknown}" >> "$GITHUB_STEP_SUMMARY"
 
@@ -897,7 +897,7 @@ jobs:
         with:
           name: docker-e2e-${{ matrix.chunk_id }}
           path: .artifacts/docker-tests/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   plan_docker_lane_groups:
     needs: validate_selected_ref
@@ -1147,7 +1147,7 @@ jobs:
           summary=".artifacts/docker-tests/targeted-${{ steps.plan.outputs.artifact_suffix }}/summary.json"
           if [[ ! -f "$summary" ]]; then
             echo "Docker targeted summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
           node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E targeted lanes" >> "$GITHUB_STEP_SUMMARY"
 
@@ -1157,7 +1157,7 @@ jobs:
         with:
           name: docker-e2e-${{ steps.plan.outputs.artifact_suffix }}
           path: .artifacts/docker-tests/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   validate_docker_openwebui:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
@@ -1274,7 +1274,7 @@ jobs:
           summary=".artifacts/docker-tests/release-openwebui/summary.json"
           if [[ ! -f "$summary" ]]; then
             echo "Docker Open WebUI summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
           node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E chunk: openwebui" >> "$GITHUB_STEP_SUMMARY"
 
@@ -1284,7 +1284,7 @@ jobs:
         with:
           name: docker-e2e-openwebui
           path: .artifacts/docker-tests/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   prepare_docker_e2e_image:
     needs: validate_selected_ref
@@ -1918,7 +1918,7 @@ jobs:
             profiles: stable full
           - suite_id: native-live-src-gateway-core
             label: Native live gateway core
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core
+            command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core
             timeout_minutes: 60
             profile_env_only: false
             profiles: beta minimum stable full
@@ -1953,7 +1953,7 @@ jobs:
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-minimax
             label: Native live gateway profiles MiniMax
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
@@ -2038,7 +2038,7 @@ jobs:
             profiles: full
           - suite_id: native-live-src-gateway-backends
             label: Native live gateway backends
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends
+            command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
@@ -2252,7 +2252,7 @@ jobs:
             profiles: stable full
           - suite_id: live-gateway-minimax-docker
             label: Docker live gateway MiniMax
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 40
             profile_env_only: false
             profiles: stable full

@@ -1,3 +1,4 @@
+// In-process gateway run loop, restart signaling, drain, and update respawn handling.
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -45,6 +46,7 @@ const gatewayLifecycleRuntimeLoader = createLazyImportLoader<GatewayLifecycleRun
 const loadGatewayLifecycleRuntimeModule = () => gatewayLifecycleRuntimeLoader.load();
 
 function createRestartIterationHook(onRestart: () => Promise<void> | void): () => Promise<boolean> {
+  // The first loop starts fresh; subsequent iterations are in-process restarts.
   let isFirstIteration = true;
   return async () => {
     if (isFirstIteration) {
@@ -206,7 +208,7 @@ export async function runGatewayLoop(params: {
         } catch {
           // Best-effort; parent fallback keeps the gateway reachable for recovery.
         }
-        await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err) => {
+        await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err: unknown) => {
           gatewayLog.warn(`failed to mark update restart sentinel unhealthy: ${String(err)}`);
         });
         if (hadLock && !(await reacquireLockForInProcessRestart())) {
@@ -243,7 +245,7 @@ export async function runGatewayLoop(params: {
         gatewayLog.warn(
           `update respawn failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
         );
-        await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err) => {
+        await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err: unknown) => {
           gatewayLog.warn(`failed to mark update restart sentinel unhealthy: ${String(err)}`);
         });
       } else {
@@ -371,7 +373,7 @@ export async function runGatewayLoop(params: {
       restartDrainingMarkPromise = (async () => {
         const { markGatewayDraining } = await loadGatewayLifecycleRuntimeModule();
         markGatewayDraining();
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         restartDrainingMarkPromise = null;
         throw err;
       });
@@ -687,7 +689,7 @@ export async function runGatewayLoop(params: {
     }
     if (!server || !restartResolver) {
       pendingStartupRequest = acceptedRequest;
-      void markRestartDraining().catch((err) => {
+      void markRestartDraining().catch((err: unknown) => {
         gatewayLog.warn(`failed to mark gateway draining for startup restart: ${String(err)}`);
       });
       armPendingStartupForceExitTimer();
@@ -768,7 +770,7 @@ export async function runGatewayLoop(params: {
         sigusr1RestartIntent?.reason ?? restartReason,
         sigusr1RestartIntent ?? undefined,
       );
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       // Defense in depth: if anything in the listener body rejects, the
       // SIGUSR1 emit has already advanced emittedRestartToken but no one
       // called markGatewaySigusr1RestartHandled. Without unsticking the

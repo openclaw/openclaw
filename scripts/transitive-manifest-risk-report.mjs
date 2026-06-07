@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+// Reports transitive npm package manifest risks such as lifecycle scripts,
+// exotic specs, and recently published versions.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -20,6 +22,7 @@ const PINNED_GITHUB_TARBALL_PATTERN =
 const EXOTIC_SPEC_PATTERN = /^(?:git\+|github:|gitlab:|bitbucket:|https?:)/iu;
 const RECENTLY_PUBLISHED_VERSION_TYPE = "recently-published-version";
 const NPM_PACKUMENT_ACCEPT_HEADER = "application/json";
+/** Maximum npm packument response size accepted by the risk scanner. */
 export const NPM_PACKUMENT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 function isAllowedPinnedSpec(spec) {
@@ -668,7 +671,7 @@ export async function main(argv = process.argv.slice(2)) {
     renderTransitiveManifestRiskMarkdownReport(report),
   );
   const artifactHint =
-    typeof options.markdownPath === "string" ? " See " + options.markdownPath + "." : "";
+    typeof options.markdownPath === "string" ? " See ".concat(options.markdownPath, ".") : "";
   process.stdout.write(
     `INFO transitive manifest risk report: inspected ${report.packageVersions} resolved ` +
       `package manifests; ${report.findingCount} reported risk signals, ` +
@@ -682,7 +685,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
     (exitCode) => {
       process.exitCode = exitCode;
     },
-    (error) => {
+    /** @param {unknown} error */ (error) => {
       process.stderr.write(`${error.stack ?? error.message ?? String(error)}\n`);
       process.exitCode = 1;
     },

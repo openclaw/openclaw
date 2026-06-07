@@ -1,3 +1,5 @@
+// End-to-end subscription tests cover usage, lifecycle, tool logging,
+// messaging/media side effects, and replay-state behavior for embedded runs.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +24,8 @@ import { makeZeroUsageSnapshot } from "./usage.js";
 
 describe("subscribeEmbeddedAgentSession", () => {
   async function flushBlockReplyCallbacks(): Promise<void> {
+    // Block replies can schedule nested microtasks; drain twice before checking
+    // delivery state in broad subscription tests.
     await Promise.resolve();
     await Promise.resolve();
   }
@@ -54,6 +58,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   function createSubscribedHarness(
     options: Omit<Parameters<typeof subscribeEmbeddedAgentSession>[0], "session">,
   ) {
+    // Default trusted media tools to built-ins so tests that opt into custom
+    // builtin sets get matching local media trust behavior.
     const { session, emit } = createStubSessionHarness();
     subscribeEmbeddedAgentSession({
       session,
@@ -135,6 +141,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   }
 
   async function captureToolLifecycleLogSubsystems(messageChannel?: string): Promise<string[]> {
+    // Use a temporary file-backed logger so subsystem attribution is verified
+    // against real serialized log lines.
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-log-attribution-"));
     const logFile = path.join(tempDir, "openclaw.log");
     try {
@@ -1275,6 +1283,43 @@ describe("subscribeEmbeddedAgentSession", () => {
     const error = (lifecycleError.data as { error?: unknown } | undefined)?.error;
     expect(typeof error).toBe("string");
     expect(error).toContain("API rate limit reached");
+  });
+
+  it("reads terminal abort state before emitting lifecycle:end", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+    let terminalAborted = false;
+    subscribeEmbeddedAgentSession({
+      session,
+      runId: "run-aborted",
+      sessionKey: "test-session",
+      onAgentEvent,
+      isTerminalAborted: () => terminalAborted,
+    });
+    const assistantMessage = {
+      api: "test",
+      provider: "test",
+      model: "test",
+      role: "assistant",
+      stopReason: "aborted",
+      content: [],
+      usage: makeZeroUsageSnapshot(),
+      timestamp: 0,
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: assistantMessage });
+    emit({ type: "message_end", message: assistantMessage });
+    terminalAborted = true;
+    emit({ type: "agent_end", messages: [assistantMessage] });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        stopReason: "aborted",
+        aborted: true,
+      }),
+    );
   });
 
   it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {

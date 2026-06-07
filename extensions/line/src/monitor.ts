@@ -1,3 +1,4 @@
+// Line plugin module implements monitor behavior.
 import type { webhook } from "@line/bot-sdk";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -437,7 +438,7 @@ export async function monitorLineProvider(
             logVerbose(`line: received ${body.events.length} webhook events`);
             void Promise.resolve()
               .then(() => match.target.bot.handleWebhook(body))
-              .catch((err) => {
+              .catch((err: unknown) => {
                 match.target.runtime.error?.(
                   danger(`line webhook dispatch failed: ${String(err)}`),
                 );

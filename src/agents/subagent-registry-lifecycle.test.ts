@@ -1,3 +1,5 @@
+// Subagent registry lifecycle tests cover completion, cleanup, announce retry,
+// detached task status, and resource retirement around child-run endings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
@@ -203,6 +205,8 @@ async function runNoReplyMirrorScenario(params: {
   idempotencyKey?: string;
   idempotencyKeyForEntry?: (entry: SubagentRunRecord) => string;
 }): Promise<SubagentRunRecord> {
+  // A failed direct announce can still be mirrored from the requester history;
+  // the idempotency key prevents stale or unrelated assistant text from winning.
   const entry = createRunEntry({
     endedAt: 4_000,
     expectsCompletionMessage: true,
@@ -611,6 +615,7 @@ describe("subagent registry lifecycle hardening", () => {
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
     await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(entry.delivery?.status).toBe("not_required");
     expect(entry.delivery?.announcedAt).toBeUndefined();
   });
 

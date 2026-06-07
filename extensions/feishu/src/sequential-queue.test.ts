@@ -1,3 +1,4 @@
+// Feishu tests cover sequential queue plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSequentialQueue } from "./sequential-queue.js";
@@ -85,7 +86,9 @@ describe("createSequentialQueue", () => {
         }),
       ).rejects.toThrow("boom");
 
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(unhandled).toStrictEqual([]);
 
       await expect(enqueue("feishu:default:chat-1", async () => {})).resolves.toBeUndefined();

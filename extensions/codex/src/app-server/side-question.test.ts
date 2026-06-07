@@ -1,3 +1,4 @@
+// Codex tests cover side question plugin behavior.
 import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   onInternalDiagnosticEvent,
@@ -54,9 +55,14 @@ const { testing, runCodexAppServerSideQuestion } = await import("./side-question
 type ServerRequest = Required<Pick<RpcRequest, "id" | "method">> & {
   params?: RpcRequest["params"];
 };
+type ClientRequest = (
+  method: string,
+  requestParams?: unknown,
+  options?: unknown,
+) => Promise<unknown>;
 
 type FakeClient = {
-  request: ReturnType<typeof vi.fn>;
+  request: ReturnType<typeof vi.fn<ClientRequest>>;
   addNotificationHandler: ReturnType<typeof vi.fn>;
   addRequestHandler: ReturnType<typeof vi.fn>;
   notifications: Array<(notification: CodexServerNotification) => void>;
@@ -71,7 +77,7 @@ function createFakeClient(): FakeClient {
   const client: FakeClient = {
     notifications,
     requests,
-    request: vi.fn(),
+    request: vi.fn<ClientRequest>(),
     addNotificationHandler: vi.fn((handler: (notification: CodexServerNotification) => void) => {
       notifications.push(handler);
       return () => {
@@ -136,7 +142,9 @@ function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
 }
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string> {
@@ -625,19 +633,21 @@ describe("runCodexAppServerSideQuestion", () => {
         return {};
       }
       if (method === "turn/start") {
-        setTimeout(async () => {
-          approvalResponse = await client.handleRequest({
-            id: 42,
-            method: "item/commandExecution/requestApproval",
-            params: {
-              threadId: "side-thread",
-              turnId: "turn-1",
-              itemId: "cmd-side",
-              command: "/bin/bash -lc 'node -v'",
-              cwd: "/tmp/workspace",
-            },
-          });
-          client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+        setTimeout(() => {
+          void (async () => {
+            approvalResponse = await client.handleRequest({
+              id: 42,
+              method: "item/commandExecution/requestApproval",
+              params: {
+                threadId: "side-thread",
+                turnId: "turn-1",
+                itemId: "cmd-side",
+                command: "/bin/bash -lc 'node -v'",
+                cwd: "/tmp/workspace",
+              },
+            });
+            client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+          })();
         }, 0);
         return turnStartResult("turn-1");
       }
@@ -913,20 +923,22 @@ describe("runCodexAppServerSideQuestion", () => {
         return {};
       }
       if (method === "turn/start") {
-        setTimeout(async () => {
-          toolResponse = await client.handleRequest({
-            id: 42,
-            method: "item/tool/call",
-            params: {
-              threadId: "side-thread",
-              turnId: "turn-1",
-              callId: "tool-1",
-              tool: "wiki_status",
-              arguments: { topic: "AGENTS.md" },
-            },
-          });
-          client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
-          client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
+        setTimeout(() => {
+          void (async () => {
+            toolResponse = await client.handleRequest({
+              id: 42,
+              method: "item/tool/call",
+              params: {
+                threadId: "side-thread",
+                turnId: "turn-1",
+                callId: "tool-1",
+                tool: "wiki_status",
+                arguments: { topic: "AGENTS.md" },
+              },
+            });
+            client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
+            client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
+          })();
         }, 0);
         return turnStartResult("turn-1");
       }
@@ -966,20 +978,22 @@ describe("runCodexAppServerSideQuestion", () => {
         return {};
       }
       if (method === "turn/start") {
-        setTimeout(async () => {
-          await client.handleRequest({
-            id: 42,
-            method: "item/tool/call",
-            params: {
-              threadId: "side-thread",
-              turnId: "turn-1",
-              callId: "tool-1",
-              tool: "wiki_status",
-              arguments: { topic: "AGENTS.md" },
-            },
-          });
-          client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
-          client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
+        setTimeout(() => {
+          void (async () => {
+            await client.handleRequest({
+              id: 42,
+              method: "item/tool/call",
+              params: {
+                threadId: "side-thread",
+                turnId: "turn-1",
+                callId: "tool-1",
+                tool: "wiki_status",
+                arguments: { topic: "AGENTS.md" },
+              },
+            });
+            client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
+            client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
+          })();
         }, 0);
         return turnStartResult("turn-1");
       }
@@ -1045,20 +1059,22 @@ describe("runCodexAppServerSideQuestion", () => {
         return {};
       }
       if (method === "turn/start") {
-        setTimeout(async () => {
-          await client.handleRequest({
-            id: 42,
-            method: "item/tool/call",
-            params: {
-              threadId: "side-thread",
-              turnId: "turn-1",
-              callId: "tool-1",
-              tool: "wiki_status",
-              arguments: { topic: "AGENTS.md" },
-            },
-          });
-          client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
-          client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
+        setTimeout(() => {
+          void (async () => {
+            await client.handleRequest({
+              id: 42,
+              method: "item/tool/call",
+              params: {
+                threadId: "side-thread",
+                turnId: "turn-1",
+                callId: "tool-1",
+                tool: "wiki_status",
+                arguments: { topic: "AGENTS.md" },
+              },
+            });
+            client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
+            client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
+          })();
         }, 0);
         return turnStartResult("turn-1");
       }
@@ -1098,35 +1114,37 @@ describe("runCodexAppServerSideQuestion", () => {
         return {};
       }
       if (method === "turn/start") {
-        setTimeout(async () => {
-          unrelatedUserInputResponse = await client.handleRequest({
-            id: 42,
-            method: "item/tool/requestUserInput",
-            params: {
-              threadId: "parent-thread",
-              turnId: "parent-turn",
-              itemId: "input-parent",
-              questions: [],
-            },
-          });
-          userInputResponse = await client.handleRequest({
-            id: 43,
-            method: "item/tool/requestUserInput",
-            params: {
-              threadId: "side-thread",
-              turnId: "turn-1",
-              itemId: "input-1",
-              questions: [
-                {
-                  id: "choice",
-                  header: "Choice",
-                  question: "Pick one",
-                  options: [{ label: "A", description: "" }],
-                },
-              ],
-            },
-          });
-          client.emit(turnCompleted("side-thread", "turn-1", "No input needed."));
+        setTimeout(() => {
+          void (async () => {
+            unrelatedUserInputResponse = await client.handleRequest({
+              id: 42,
+              method: "item/tool/requestUserInput",
+              params: {
+                threadId: "parent-thread",
+                turnId: "parent-turn",
+                itemId: "input-parent",
+                questions: [],
+              },
+            });
+            userInputResponse = await client.handleRequest({
+              id: 43,
+              method: "item/tool/requestUserInput",
+              params: {
+                threadId: "side-thread",
+                turnId: "turn-1",
+                itemId: "input-1",
+                questions: [
+                  {
+                    id: "choice",
+                    header: "Choice",
+                    question: "Pick one",
+                    options: [{ label: "A", description: "" }],
+                  },
+                ],
+              },
+            });
+            client.emit(turnCompleted("side-thread", "turn-1", "No input needed."));
+          })();
         }, 0);
         return turnStartResult("turn-1");
       }

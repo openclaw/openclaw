@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot.create telegram bot harness behavior.
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
@@ -8,7 +9,7 @@ import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 
 type AnyMock = ReturnType<typeof vi.fn>;
-type AnyAsyncMock = ReturnType<typeof vi.fn>;
+type AnyAsyncMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
 type GetRuntimeConfigFn =
   typeof import("openclaw/plugin-sdk/runtime-config-snapshot").getRuntimeConfig;
 type LoadSessionStoreFn =
@@ -103,7 +104,7 @@ export function setSessionStoreEntriesForTest(entries: SessionStore) {
 const { readChannelAllowFromStore, upsertChannelPairingRequest } = vi.hoisted(
   (): {
     readChannelAllowFromStore: MockFn<TelegramBotDeps["readChannelAllowFromStore"]>;
-    upsertChannelPairingRequest: AnyAsyncMock;
+    upsertChannelPairingRequest: MockFn<TelegramBotDeps["upsertChannelPairingRequest"]>;
   } => ({
     readChannelAllowFromStore: vi.fn(async () => [] as string[]),
     upsertChannelPairingRequest: vi.fn(async () => ({
@@ -113,20 +114,26 @@ const { readChannelAllowFromStore, upsertChannelPairingRequest } = vi.hoisted(
   }),
 );
 
-export function getReadChannelAllowFromStoreMock(): AnyAsyncMock {
+export function getReadChannelAllowFromStoreMock(): MockFn<
+  TelegramBotDeps["readChannelAllowFromStore"]
+> {
   return readChannelAllowFromStore;
 }
 
-export function getUpsertChannelPairingRequestMock(): AnyAsyncMock {
+export function getUpsertChannelPairingRequestMock(): MockFn<
+  TelegramBotDeps["upsertChannelPairingRequest"]
+> {
   return upsertChannelPairingRequest;
 }
 
 const skillCommandListHoisted = vi.hoisted(() => ({
   listSkillCommandsForAgents: vi.fn(() => []),
 }));
-const modelProviderDataHoisted = vi.hoisted(() => ({
-  buildModelsProviderData: vi.fn(),
-}));
+const modelProviderDataHoisted = vi.hoisted(
+  (): { buildModelsProviderData: MockFn<TelegramBotDeps["buildModelsProviderData"]> } => ({
+    buildModelsProviderData: vi.fn(),
+  }),
+);
 const replySpyHoisted = vi.hoisted(() => ({
   replySpy: vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
     await opts?.onReplyStart?.();
@@ -163,7 +170,7 @@ async function dispatchHarnessReplies(
       await params.dispatcherOptions.deliver?.(finalPayload, { kind: "final" });
       finalCount += 1;
     } catch (err) {
-      params.dispatcherOptions.onError?.(err, { kind: "final" });
+      void params.dispatcherOptions.onError?.(err, { kind: "final" });
     }
   }
   return {

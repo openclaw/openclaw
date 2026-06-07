@@ -1,3 +1,5 @@
+// Message-action specs describe which actions need destinations and which
+// legacy/plugin aliases count as an existing target.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -6,8 +8,14 @@ import { getBootstrapChannelPlugin } from "../../channels/plugins/bootstrap-regi
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
+/**
+ * Canonical parameter shape used by an outbound message action target.
+ */
 export type MessageActionTargetMode = "to" | "channelId" | "none";
 
+/**
+ * Target-parameter policy for each supported channel message action.
+ */
 export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, MessageActionTargetMode> =
   {
     send: "to",
@@ -97,6 +105,7 @@ function listActionTargetAliasSpecs(
   if (!normalizedChannel || !hasPotentialPluginActionParam(params)) {
     return specs;
   }
+  // Plugin aliases are only checked after cheap param-shape screening to avoid bootstrap reads.
   const plugin = getBootstrapChannelPlugin(normalizedChannel);
   const channelSpec = plugin?.actions?.messageActionTargetAliases?.[action];
   if (channelSpec) {
@@ -105,10 +114,16 @@ function listActionTargetAliasSpecs(
   return specs;
 }
 
+/**
+ * Reports whether an action normally needs a destination target.
+ */
 export function actionRequiresTarget(action: ChannelMessageActionName): boolean {
   return MESSAGE_ACTION_TARGET_MODE[action] !== "none";
 }
 
+/**
+ * Detects whether an action invocation already carries a usable target.
+ */
 export function actionHasTarget(
   action: ChannelMessageActionName,
   params: Record<string, unknown>,

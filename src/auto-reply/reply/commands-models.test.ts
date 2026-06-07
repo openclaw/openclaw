@@ -1,3 +1,4 @@
+// Tests model command output, catalog loading, and provider auth status rendering.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
@@ -279,7 +280,7 @@ describe("handleModelsCommand", () => {
   it("does not block default browse when read-only catalog loading is slow", async () => {
     vi.useFakeTimers();
     try {
-      modelCatalogMocks.loadModelCatalog.mockReturnValue(new Promise(() => undefined));
+      modelCatalogMocks.loadModelCatalog.mockReturnValue(new Promise(() => {}));
 
       const resultPromise = handleModelsCommand(buildParams("/models"), true);
       await vi.advanceTimersByTimeAsync(750);

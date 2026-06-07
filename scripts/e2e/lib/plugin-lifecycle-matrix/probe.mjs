@@ -1,6 +1,8 @@
+// Probe script for plugin lifecycle matrix E2E scenarios.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 
 const home = os.homedir();
 
@@ -26,8 +28,7 @@ function readRequiredJson(file) {
 }
 
 function records() {
-  const index = readJson(openclawPath("plugins", "installs.json"));
-  return index.installRecords ?? index.records ?? {};
+  return readPluginInstallRecords();
 }
 
 function recordFor(pluginId) {
@@ -36,6 +37,10 @@ function recordFor(pluginId) {
 
 function config() {
   return readJson(process.env.OPENCLAW_CONFIG_PATH ?? openclawPath("openclaw.json"));
+}
+
+function requiredConfig() {
+  return readRequiredJson(process.env.OPENCLAW_CONFIG_PATH ?? openclawPath("openclaw.json"));
 }
 
 function assert(condition, message) {
@@ -116,7 +121,7 @@ function printInstallPath(pluginId) {
 }
 
 function assertUninstalled(pluginId) {
-  const cfg = config();
+  const cfg = requiredConfig();
   const record = recordFor(pluginId);
   assert(!record, `install record still present for ${pluginId}`);
   assert(!cfg.plugins?.entries?.[pluginId], `plugin config entry still present for ${pluginId}`);

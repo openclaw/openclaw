@@ -1,3 +1,4 @@
+// Doctor legacy-state e2e tests cover yes-mode state migrations without interactive prompts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin } from "../plugins/types.js";
 import {
@@ -46,26 +47,30 @@ describe("doctor command", () => {
   });
 
   it("runs legacy state migrations in yes mode without prompting", async () => {
-    const { doctorCommand, runtime, runLegacyStateMigrations } =
-      await arrangeLegacyStateMigrationTest();
-
-    await (doctorCommand as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(
+    const {
+      doctorCommand: doctorCommandValue,
       runtime,
-      { yes: true },
-    );
+      runLegacyStateMigrations,
+    } = await arrangeLegacyStateMigrationTest();
+
+    await (
+      doctorCommandValue as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>
+    )(runtime, { yes: true });
 
     expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
     expect(confirm).not.toHaveBeenCalled();
   }, 30_000);
 
   it("runs legacy state migrations in non-interactive mode without prompting", async () => {
-    const { doctorCommand, runtime, runLegacyStateMigrations } =
-      await arrangeLegacyStateMigrationTest();
-
-    await (doctorCommand as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(
+    const {
+      doctorCommand: doctorCommandLocal,
       runtime,
-      { nonInteractive: true },
-    );
+      runLegacyStateMigrations,
+    } = await arrangeLegacyStateMigrationTest();
+
+    await (
+      doctorCommandLocal as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>
+    )(runtime, { nonInteractive: true });
 
     expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
     expect(confirm).not.toHaveBeenCalled();

@@ -1,3 +1,4 @@
+// Persists and formats per-session cost and usage records.
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -2046,18 +2047,20 @@ export async function loadSessionCostSummary(params: {
       if (entry.role === "assistant") {
         messageCounts.assistant += 1;
         messageCounts.total += 1;
-        const ts = entry.timestamp?.getTime();
-        if (ts !== undefined) {
+        const tsLocal = entry.timestamp?.getTime();
+        if (tsLocal !== undefined) {
           const latencyMs =
             entry.durationMs ??
-            (lastUserTimestamp !== undefined ? Math.max(0, ts - lastUserTimestamp) : undefined);
+            (lastUserTimestamp !== undefined
+              ? Math.max(0, tsLocal - lastUserTimestamp)
+              : undefined);
           if (
             latencyMs !== undefined &&
             Number.isFinite(latencyMs) &&
             latencyMs <= MAX_LATENCY_MS
           ) {
             latencyValues.push(latencyMs);
-            const dayKey = formatDayKey(entry.timestamp ?? new Date(ts));
+            const dayKey = formatDayKey(entry.timestamp ?? new Date(tsLocal));
             const dailyLatencies = dailyLatencyMap.get(dayKey) ?? [];
             dailyLatencies.push(latencyMs);
             dailyLatencyMap.set(dayKey, dailyLatencies);
@@ -2298,6 +2301,12 @@ export async function loadSessionUsageTimeSeries(params: {
     return null;
   }
 
+  if (params.maxPoints !== undefined && params.maxPoints !== null) {
+    if (!Number.isFinite(params.maxPoints) || params.maxPoints <= 0) {
+      return { sessionId: params.sessionId, points: [] };
+    }
+  }
+
   const points: SessionUsageTimePoint[] = [];
   let cumulativeTokens = 0;
   let cumulativeCost = 0;
@@ -2339,11 +2348,6 @@ export async function loadSessionUsageTimeSeries(params: {
   const sortedPoints = points.toSorted((a, b) => a.timestamp - b.timestamp);
 
   // Optionally downsample if too many points
-  if (params.maxPoints !== undefined && params.maxPoints !== null) {
-    if (!Number.isFinite(params.maxPoints) || params.maxPoints <= 0) {
-      return { sessionId: params.sessionId, points: [] };
-    }
-  }
   const maxPoints = params.maxPoints ?? 100;
   if (sortedPoints.length > maxPoints) {
     const step = Math.ceil(sortedPoints.length / maxPoints);

@@ -1,3 +1,4 @@
+// Google plugin module implements embedding batch behavior.
 import crypto from "node:crypto";
 import {
   buildEmbeddingBatchGroupOptions,
@@ -267,7 +268,9 @@ async function waitForGeminiBatch(params: {
       throw new Error(`gemini batch ${params.batchName} timed out after ${params.timeoutMs}ms`);
     }
     params.debug?.(`gemini batch ${params.batchName} ${state}; waiting ${params.pollIntervalMs}ms`);
-    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, params.pollIntervalMs);
+    });
     current = undefined;
   }
 }

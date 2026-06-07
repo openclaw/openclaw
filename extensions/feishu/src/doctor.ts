@@ -1,3 +1,4 @@
+// Feishu plugin module implements doctor behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -400,7 +401,7 @@ function inspectSessionTranscript(params: {
     return null;
   }
 
-  let raw = "";
+  let raw;
   try {
     raw = fs.readFileSync(params.transcriptPath, "utf-8");
   } catch {
@@ -752,7 +753,6 @@ async function repairFeishuDoctorState(params: {
         },
         {
           skipMaintenance: true,
-          allowDropAcpMetaSessionKeys: [...keys],
         },
       );
       const removed = removedEntries.length;

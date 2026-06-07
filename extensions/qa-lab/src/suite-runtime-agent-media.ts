@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements suite runtime agent media behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { buildQaImageGenerationConfigPatch } from "./providers/image-generation.js";
@@ -131,7 +132,9 @@ async function resolveGeneratedImagePath(params: {
     if (match) {
       return match;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   throw new Error(`timed out after ${params.timeoutMs}ms`);
 }

@@ -1,3 +1,4 @@
+// Covers Tailscale install, whois, Serve, and Funnel helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import * as tailscale from "./tailscale.js";
@@ -203,6 +204,24 @@ describe("tailscale helpers", () => {
     });
   });
 
+  it("enableTailscaleServe passes a configured service name", async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: "" });
+
+    await enableTailscaleServe(3000, exec as never, "svc:openclaw");
+
+    expect(exec).toHaveBeenCalledTimes(1);
+    expectExecCall(
+      exec,
+      1,
+      tailscaleBin,
+      ["serve", "--service=svc:openclaw", "--bg", "--yes", "3000"],
+      {
+        maxBuffer: 200_000,
+        timeoutMs: 15_000,
+      },
+    );
+  });
+
   it("disableTailscaleServe uses fallback", async () => {
     const exec = vi
       .fn()
@@ -213,6 +232,18 @@ describe("tailscale helpers", () => {
 
     expect(exec).toHaveBeenCalledTimes(2);
     expectExecCall(exec, 2, "sudo", ["-n", tailscaleBin, "serve", "reset"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
+  });
+
+  it("disableTailscaleServe disables only the configured service name", async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: "" });
+
+    await disableTailscaleServe(exec as never, "svc:openclaw");
+
+    expect(exec).toHaveBeenCalledTimes(1);
+    expectExecCall(exec, 1, tailscaleBin, ["serve", "clear", "svc:openclaw"], {
       maxBuffer: 200_000,
       timeoutMs: 15_000,
     });

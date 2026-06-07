@@ -1,3 +1,4 @@
+// Covers shared provider usage helpers.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { clampPercent, resolveUsageProviderId, withTimeout } from "./provider-usage.shared.js";
@@ -9,6 +10,7 @@ describe("provider-usage.shared", () => {
   });
 
   it.each([
+    { value: "deepseek", expected: "deepseek" },
     { value: "zai", expected: "zai" },
     { value: "z-ai", expected: undefined },
     { value: " GOOGLE-GEMINI-CLI ", expected: "google-gemini-cli" },
@@ -60,7 +62,9 @@ describe("provider-usage.shared", () => {
 
   it("returns fallback when timeout wins", async () => {
     vi.useFakeTimers();
-    const late = new Promise<string>((resolve) => setTimeout(() => resolve("late"), 50));
+    const late = new Promise<string>((resolve) => {
+      setTimeout(() => resolve("late"), 50);
+    });
     const result = withTimeout(late, 1, "fallback");
     await vi.advanceTimersByTimeAsync(1);
     await expect(result).resolves.toBe("fallback");

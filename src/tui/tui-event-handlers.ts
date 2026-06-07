@@ -1,3 +1,4 @@
+// Handles TUI keyboard, paste, backend, and command events.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
@@ -76,6 +77,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   const sessionRuns = new Map<string, number>();
   const finalizedRuns = new Map<string, number>();
   const finalizedRunsWithDisplay = new Map<string, number>();
+  const completedRuns = new Map<string, number>();
   const postFinalizingRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
@@ -96,7 +98,12 @@ export function createEventHandlers(context: EventHandlerContext) {
   let streamingWatchdogRunId: string | null = null;
 
   const flushPendingHistoryRefreshIfIdle = () => {
-    if (!pendingHistoryRefresh || state.activeChatRunId) {
+    if (
+      !pendingHistoryRefresh ||
+      state.activeChatRunId ||
+      state.pendingChatRunId ||
+      state.pendingOptimisticUserMessage
+    ) {
       return;
     }
     pendingHistoryRefresh = false;
@@ -192,8 +199,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     lastSessionKey = state.currentSessionKey;
+    if (state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage) {
+      return;
+    }
     finalizedRuns.clear();
     finalizedRunsWithDisplay.clear();
+    completedRuns.clear();
     sessionRuns.clear();
     postFinalizingRuns.clear();
     streamAssembler = new TuiStreamAssembler();
@@ -260,8 +271,15 @@ export function createEventHandlers(context: EventHandlerContext) {
     pruneRunMap(sessionRuns);
   };
 
+  const markSubmittedRunRegistered = (runId: string) => {
+    if (state.pendingSubmitDraft?.runId === runId) {
+      state.pendingSubmitDraft = null;
+    }
+  };
+
   const noteFinalizedRun = (runId: string, opts?: { displayedFinal?: boolean }) => {
     finalizedRuns.set(runId, Date.now());
+    completedRuns.set(runId, Date.now());
     if (opts?.displayedFinal === true) {
       finalizedRunsWithDisplay.set(runId, Date.now());
     }
@@ -269,6 +287,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamAssembler.drop(runId);
     pruneRunMap(finalizedRuns);
     pruneRunMap(finalizedRunsWithDisplay);
+    pruneRunMap(completedRuns);
   };
 
   const notePostFinalizingRun = (runId: string) => {
@@ -343,6 +362,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     wasActiveRun: boolean;
     status: "aborted" | "error";
   }) => {
+    completedRuns.set(params.runId, Date.now());
+    pruneRunMap(completedRuns);
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
@@ -406,8 +427,13 @@ export function createEventHandlers(context: EventHandlerContext) {
 
   const maybeRefreshHistoryForRun = (
     runId: string,
-    opts?: { allowLocalWithoutDisplayableFinal?: boolean },
+    opts?: {
+      allowLocalWithoutDisplayableFinal?: boolean;
+      hasDisplayableFinal?: boolean;
+      wasPendingChatRun?: boolean;
+    },
   ) => {
+    const isPendingChatRun = opts?.wasPendingChatRun === true || state.pendingChatRunId === runId;
     const isLocalRun = isLocalRunId?.(runId) ?? false;
     if (isLocalRun) {
       forgetLocalRunId?.(runId);
@@ -421,6 +447,17 @@ export function createEventHandlers(context: EventHandlerContext) {
         pendingHistoryRefresh = true;
         return;
       }
+    }
+    if (!isPendingChatRun && (state.pendingChatRunId || state.pendingOptimisticUserMessage)) {
+      pendingHistoryRefresh = true;
+      return;
+    }
+    // When the final event already produced displayable output, skip the
+    // reload. loadHistory() does clearAll() + rebuild from server, but the
+    // server may not have persisted this message yet, causing the
+    // just-rendered final message to vanish (#87922).
+    if (opts?.hasDisplayableFinal) {
+      return;
     }
     if (hasConcurrentActiveRun(runId)) {
       return;
@@ -542,14 +579,22 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearPendingTerminalLifecycleError(evt.runId);
     chatLog.dismissPendingSystem(evt.runId);
     noteSessionRun(evt.runId);
-    if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
-      state.activeChatRunId = evt.runId;
-      if (state.pendingOptimisticUserMessage) {
-        noteLocalRunId?.(evt.runId);
-        state.pendingOptimisticUserMessage = false;
-      }
+    markSubmittedRunRegistered(evt.runId);
+    const isPendingChatRun = state.pendingChatRunId === evt.runId;
+    const isLocalChatRun = isLocalRunId?.(evt.runId) ?? false;
+    const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
+    const isNewOptimisticRun =
+      state.pendingOptimisticUserMessage &&
+      !isLocalBtwRun &&
+      (isPendingChatRun || (isLocalChatRun && evt.runId !== state.activeChatRunId));
+    if (isNewOptimisticRun) {
+      noteLocalRunId?.(evt.runId);
+      state.pendingOptimisticUserMessage = false;
     }
-    if (state.pendingChatRunId === evt.runId) {
+    if (!state.activeChatRunId && !isLocalBtwRun) {
+      state.activeChatRunId = evt.runId;
+    }
+    if (isPendingChatRun) {
       state.pendingChatRunId = null;
     }
     if (evt.state === "delta") {
@@ -567,9 +612,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       chatLog.updateAssistant(displayText, evt.runId);
     }
     if (evt.state === "final") {
-      const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
+      const isLocalBtwRunLocal = isLocalBtwRunId?.(evt.runId) ?? false;
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      if (!evt.message && isLocalBtwRun) {
+      if (!evt.message && isLocalBtwRunLocal) {
         forgetLocalBtwRunId?.(evt.runId);
         noteFinalizedRun(evt.runId);
         clearStaleStreamingIfNoTrackedRunRemains();
@@ -579,6 +624,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!evt.message) {
         maybeRefreshHistoryForRun(evt.runId, {
           allowLocalWithoutDisplayableFinal: true,
+          wasPendingChatRun: isPendingChatRun,
         });
         chatLog.dropAssistant(evt.runId);
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
@@ -586,7 +632,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       if (isCommandMessage(evt.message)) {
-        maybeRefreshHistoryForRun(evt.runId);
+        maybeRefreshHistoryForRun(evt.runId, { wasPendingChatRun: isPendingChatRun });
         const text = extractTextFromMessage(evt.message);
         if (text) {
           chatLog.addSystem(text);
@@ -595,7 +641,6 @@ export function createEventHandlers(context: EventHandlerContext) {
         tui.requestRender(true);
         return;
       }
-      maybeRefreshHistoryForRun(evt.runId);
       const stopReason =
         evt.message && typeof evt.message === "object" && !Array.isArray(evt.message)
           ? typeof (evt.message as Record<string, unknown>).stopReason === "string"
@@ -611,6 +656,14 @@ export function createEventHandlers(context: EventHandlerContext) {
       );
       const suppressEmptyExternalPlaceholder =
         finalText === "(no output)" && !isLocalRunId?.(evt.runId);
+      // Skip the history reload when the final event produced displayable
+      // output. loadHistory() does clearAll() + rebuild from server data,
+      // but the server may not have persisted this message yet — causing
+      // the just-rendered final message to vanish (#87922).
+      maybeRefreshHistoryForRun(evt.runId, {
+        hasDisplayableFinal: !suppressEmptyExternalPlaceholder,
+        wasPendingChatRun: isPendingChatRun,
+      });
       if (suppressEmptyExternalPlaceholder) {
         chatLog.dropAssistant(evt.runId);
       } else {
@@ -704,12 +757,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.stream === "lifecycle") {
       if (isPendingRun) {
         noteSessionRun(evt.runId);
+        markSubmittedRunRegistered(evt.runId);
         state.activeChatRunId = evt.runId;
         state.pendingChatRunId = null;
         if (state.pendingOptimisticUserMessage) {
-          if (localMode) {
-            noteLocalRunId?.(evt.runId);
-          }
+          noteLocalRunId?.(evt.runId);
           state.pendingOptimisticUserMessage = false;
         }
       }
@@ -804,12 +856,28 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearPendingTerminalLifecycleErrors();
   };
 
+  const consumeCompletedRunForPendingSend = (runId: string) => {
+    if (!completedRuns.has(runId)) {
+      return false;
+    }
+    completedRuns.delete(runId);
+    return true;
+  };
+
+  // True once any event for this runId has been seen, even before sendChat
+  // resolves. Lets the optimistic-submit path know an accepted run already
+  // registered so it does not re-arm a draft the abort path would then drop.
+  const isRunObserved = (runId: string) => sessionRuns.has(runId);
+
   return {
     handleChatEvent,
     handleAgentEvent,
     handleBtwEvent,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
+    consumeCompletedRunForPendingSend,
+    isRunObserved,
+    flushPendingHistoryRefreshIfIdle,
     dispose,
   };
 }

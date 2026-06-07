@@ -1,3 +1,4 @@
+// Googlechat plugin module implements doctor contract behavior.
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -128,7 +129,7 @@ export function normalizeCompatibilityConfig({
 
   const changes: string[] = [];
   let updated = rawEntry;
-  let changed = false;
+  let changed;
 
   const root = normalizeGoogleChatEntry({
     entry: updated,

@@ -1,3 +1,4 @@
+// Node-host daemon lifecycle commands for install, status, start, stop, and restart.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
@@ -78,6 +79,7 @@ function resolveNodeDefaults(
   opts: NodeDaemonInstallOptions,
   config: Awaited<ReturnType<typeof loadNodeHostConfig>>,
 ) {
+  // CLI flags override node-host config; missing values fall back to loopback Gateway defaults.
   const host = normalizeOptionalString(opts.host) || config?.gateway?.host || "127.0.0.1";
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
@@ -111,7 +113,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const service = resolveNodeService();
-  let loaded = false;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
@@ -219,7 +221,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
     service.readCommand(process.env).catch(() => null),
     service
       .readRuntime(process.env)
-      .catch((err): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
+      .catch((err: unknown): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
   ]);
 
   const payload = {

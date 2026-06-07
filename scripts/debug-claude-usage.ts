@@ -1,3 +1,4 @@
+// Debug Claude Usage script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -489,7 +490,7 @@ export const testing = {
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  await main().catch((error) => {
+  await main().catch((error: unknown) => {
     console.error(
       previewForDevToolLog(error instanceof Error ? error.message : String(error), 800),
     );

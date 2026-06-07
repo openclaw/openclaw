@@ -1,15 +1,7 @@
 // Intentional Knip unused-file findings. These are dynamic entrypoints,
 // generated/build inputs, manifest-discovered plugin surfaces, live-test
 // helpers, or package bridge files that static production scanning cannot see.
-export const KNIP_UNUSED_FILE_ALLOWLIST = [
-  // Per-agent SQLite scaffold is intentionally landed before runtime migration
-  // callers so the schema and scoped cache API can be reviewed together.
-  "src/agents/cache/agent-cache-store.sqlite.ts",
-  "src/agents/cache/agent-cache-store.ts",
-  "src/state/openclaw-agent-db.paths.ts",
-  "src/state/openclaw-agent-db.ts",
-  "src/state/openclaw-agent-schema.generated.ts",
-];
+export const KNIP_UNUSED_FILE_ALLOWLIST = [];
 
 // Knip can disagree across supported local/CI platforms for files that are
 // only reachable through test-only import graphs, sparse-checkout proof
@@ -28,6 +20,9 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "extensions/diffs/src/viewer-payload.ts",
   "extensions/matrix/src/plugin-entry.runtime.js",
   "extensions/memory-core/src/memory-tool-manager-mock.ts",
+  "src/agents/cache/agent-cache-store.sqlite.ts",
+  "src/agents/cache/agent-cache-store.ts",
+  "ui/src/ui/browser-redact.ts",
   "src/agents/subagent-registry.runtime.ts",
   "src/auto-reply/inbound.group-require-mention-test-plugins.ts",
   "src/auto-reply/reply/get-reply.test-loader.ts",
@@ -48,6 +43,7 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "src/plugins/contracts/tts-contract-suites.ts",
   "src/plugins/runtime-sidecar-paths-baseline.ts",
   "src/tasks/task-registry-control.runtime.ts",
+  "ui/src/ui/browser-redact.ts",
   "extensions/qa-lab/src/auth-profile.fixture.ts",
   "extensions/qa-lab/src/codex-plugin.fixture.ts",
 ];

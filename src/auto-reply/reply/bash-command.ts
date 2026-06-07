@@ -1,3 +1,4 @@
+/** Handles /bash and ! shell command chat shortcuts. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -66,7 +67,7 @@ function formatOutputBlock(text: string) {
 
 function parseBashRequest(raw: string): BashRequest | null {
   const trimmed = raw.trimStart();
-  let restSource = "";
+  let restSource;
   if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("/bash")) {
     const match = trimmed.match(/^\/bash(?:\s*:\s*|\s+|$)([\s\S]*)$/i);
     if (!match) {
@@ -181,6 +182,7 @@ function buildUsageReply(): ReplyPayload {
   };
 }
 
+/** Parses, authorizes, starts, polls, or stops chat-driven bash commands. */
 export async function handleBashChatCommand(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;

@@ -1,3 +1,4 @@
+// Sms plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import {
@@ -28,7 +29,9 @@ import {
   normalizeSmsAllowFrom,
   normalizeSmsPhoneNumber,
 } from "./phone.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { sendSmsTextChunks, toSmsPlainText } from "./send.js";
+import { formatSmsProbeLines, probeSmsAccount, type SmsProbe } from "./status.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
 const CHANNEL_ID = "sms";
@@ -187,7 +190,7 @@ const smsMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
-export const smsPlugin: ChannelPlugin<ResolvedSmsAccount> = createChatChannelPlugin({
+export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChatChannelPlugin({
   base: {
     id: CHANNEL_ID,
     meta: {
@@ -264,9 +267,15 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount> = createChatChannelPlu
           statusState: !account.enabled ? "disabled" : configured ? "configured" : "unconfigured",
         };
       },
+      probeAccount: async ({ account, timeoutMs }) => await probeSmsAccount({ account, timeoutMs }),
+      formatCapabilitiesProbe: ({ probe }) => formatSmsProbeLines(probe),
       buildCapabilitiesDiagnostics: async ({ account }) => ({
         lines: collectSmsStartupWarnings(account).map((text) => ({ text, tone: "warn" })),
       }),
+    },
+    secrets: {
+      secretTargetRegistryEntries,
+      collectRuntimeConfigAssignments,
     },
     agentPrompt: {
       messageToolHints: () => [

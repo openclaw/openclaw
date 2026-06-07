@@ -1,10 +1,13 @@
+// Memory Core tests cover tools plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemorySearchManagerMockCalls,
   getMemorySearchManagerMockConfigs,
   getMemorySearchManagerMockParams,
+  getMemorySyncMockCalls,
   resetMemoryToolMockState,
   setMemoryBackend,
+  setMemoryCustomStatus,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
 } from "./memory-tool-manager-mock.js";
@@ -133,7 +136,7 @@ describe("memory_search unavailable payloads", () => {
   it("returns unavailable metadata when manager setup does not settle", async () => {
     vi.useFakeTimers();
     try {
-      setMemorySearchManagerImpl(async () => await new Promise(() => undefined));
+      setMemorySearchManagerImpl(async () => await new Promise(() => {}));
       const tool = createMemorySearchToolOrThrow();
 
       const resultPromise = tool.execute("manager-timeout", { query: "hello" });
@@ -156,7 +159,7 @@ describe("memory_search unavailable payloads", () => {
       let searchCalls = 0;
       setMemorySearchImpl(async () => {
         searchCalls += 1;
-        return await new Promise(() => undefined);
+        return await new Promise(() => {});
       });
       const tool = createMemorySearchToolOrThrow();
 
@@ -254,6 +257,39 @@ describe("memory_search unavailable payloads", () => {
       "MEMORY.md",
     );
     expect(searchCalls).toBe(2);
+  });
+
+  it("returns unavailable metadata when the index identity is paused", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      return [];
+    });
+    const reason = "index was built for provider openai, expected ollama";
+    setMemoryCustomStatus({
+      indexIdentity: {
+        status: "mismatched",
+        reason,
+      },
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("paused-index", { query: "hidden thread codename" });
+
+    expectUnavailableMemorySearchDetails(result.details, {
+      error: reason,
+      warning:
+        "Tell the user: memory search is paused because the memory index was built with a different embedding provider/model/settings.",
+      action:
+        "Tell the user to run: openclaw memory status --index or openclaw memory index --force.",
+    });
+    expect(searchCalls).toBe(1);
+    expect(getMemorySyncMockCalls()).toBe(0);
   });
 
   it("returns structured search debug metadata for qmd results", async () => {

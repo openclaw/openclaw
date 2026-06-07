@@ -1,3 +1,4 @@
+// OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
 import {
   normalizeOptionalLowercaseString,
   readStringValue,
@@ -36,6 +37,9 @@ const log = createSubsystemLogger("llm/providers/stream-wrappers");
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 type OpenClawSimpleStreamOptions = SimpleStreamOptions & {
   openclawCodeModeToolSurface?: boolean;
+};
+type OpenAIResponsesReplayOptions = Parameters<StreamFn>[2] & {
+  replayResponsesItemIds?: boolean;
 };
 export { resolveOpenAITextVerbosity };
 
@@ -393,15 +397,21 @@ export function createOpenAIResponsesContextManagementWrapper(
     }
 
     const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
+    const replayResponsesItemIds =
+      policy.explicitStore === undefined
+        ? (options as OpenAIResponsesReplayOptions | undefined)?.replayResponsesItemIds
+        : policy.explicitStore;
+    const nextOptions: OpenAIResponsesReplayOptions = {
       ...options,
+      ...(replayResponsesItemIds === undefined ? {} : { replayResponsesItemIds }),
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
           applyOpenAIResponsesPayloadPolicy(payload as Record<string, unknown>, policy);
         }
         return originalOnPayload?.(payload, model);
       },
-    });
+    };
+    return underlying(model, context, nextOptions);
   };
 }
 

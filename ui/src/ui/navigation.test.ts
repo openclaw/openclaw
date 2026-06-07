@@ -1,3 +1,4 @@
+// Control UI tests cover navigation behavior.
 import { describe, expect, it } from "vitest";
 import {
   TAB_GROUPS,
@@ -38,6 +39,7 @@ describe("iconForTab", () => {
       cron: "loader",
       agents: "folder",
       skills: "zap",
+      skillWorkshop: "wrench",
       nodes: "monitor",
       dreams: "moon",
       config: "settings",
@@ -73,6 +75,7 @@ describe("titleForTab", () => {
       cron: "Cron Jobs",
       agents: "Agents",
       skills: "Skills",
+      skillWorkshop: "Skill Workshop",
       nodes: "Nodes",
       dreams: "Dreaming",
       config: "Settings",
@@ -102,6 +105,7 @@ describe("subtitleForTab", () => {
       cron: "Wakeups and recurring runs.",
       agents: "Workspaces, tools, identities.",
       skills: "Skills and API keys.",
+      skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
       nodes: "Paired devices and commands.",
       dreams: "Memory dreaming, consolidation, and reflection.",
       config: "Edit openclaw.json.",

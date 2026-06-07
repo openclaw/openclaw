@@ -1,3 +1,6 @@
+/**
+ * Browser control HTTP server startup and shutdown entrypoints.
+ */
 import type { Server } from "node:http";
 import express from "express";
 import {
@@ -28,6 +31,7 @@ import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
 const log = createSubsystemLogger("browser");
 const logServer = log.child("server");
 
+/** Starts the Browser control HTTP server from runtime config. */
 export async function startBrowserControlServerFromConfig(): Promise<BrowserServerState | null> {
   const current = getBrowserControlState();
   if (current?.server) {
@@ -84,7 +88,7 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
   const server = await new Promise<Server>((resolve, reject) => {
     const s = app.listen(port, "127.0.0.1", () => resolve(s));
     s.once("error", reject);
-  }).catch((err) => {
+  }).catch((err: unknown) => {
     logServer.error(`openclaw browser server failed to bind 127.0.0.1:${port}: ${String(err)}`);
     return null;
   });
@@ -107,6 +111,7 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
   return state;
 }
 
+/** Stops the Browser control HTTP server and unregisters bridge auth. */
 export async function stopBrowserControlServer(): Promise<void> {
   const current = getBrowserControlState();
   if (current?.port) {

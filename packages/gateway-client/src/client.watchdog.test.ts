@@ -1,3 +1,4 @@
+// Gateway Client tests cover client.watchdog behavior.
 import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -82,13 +83,17 @@ describe("GatewayClient", () => {
       for (const client of wss.clients) {
         client.terminate();
       }
-      await new Promise<void>((resolve) => wss?.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss?.close(() => resolve());
+      });
       wss = null;
     }
     if (httpsServer) {
       httpsServer.closeAllConnections?.();
       httpsServer.closeIdleConnections?.();
-      await new Promise<void>((resolve) => httpsServer?.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        httpsServer?.close(() => resolve());
+      });
       httpsServer = null;
     }
   });

@@ -1,3 +1,4 @@
+// Zalo plugin module implements lifecycle test support behavior.
 import { request as httpRequest } from "node:http";
 import { createPluginRuntimeMediaMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { expect, vi } from "vitest";
@@ -398,7 +399,9 @@ export function expectImageLifecycleDelivery(params: {
 export async function settleAsyncWork(): Promise<void> {
   for (let i = 0; i < 6; i += 1) {
     await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
   }
 }
 

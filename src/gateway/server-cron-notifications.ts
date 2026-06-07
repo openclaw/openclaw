@@ -1,3 +1,5 @@
+// Gateway cron notification delivery.
+// Sends announce and webhook notifications for cron completion/failure events.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -32,7 +34,7 @@ type CronAgentResolver = (requested?: string | null) => {
 
 type CronWebhookTarget = {
   url: string;
-  source: "delivery" | "legacy";
+  source: "delivery" | "completionDestination";
 };
 
 function redactWebhookUrl(url: string): string {
@@ -44,25 +46,39 @@ function redactWebhookUrl(url: string): string {
   }
 }
 
-function resolveCronWebhookTarget(params: {
-  delivery?: { mode?: string; to?: string };
-  legacyNotify?: boolean;
-  legacyWebhook?: string;
-}): CronWebhookTarget | null {
+function redactOptionalWebhookUrl(url: unknown): string | undefined {
+  const normalized = normalizeOptionalString(url);
+  return normalized ? redactWebhookUrl(normalized) : undefined;
+}
+
+/** Resolves direct webhook delivery and completion-destination webhooks. */
+function resolveCronWebhookTargets(params: {
+  delivery?: {
+    mode?: string;
+    to?: string;
+    completionDestination?: { mode?: string; to?: string };
+  };
+}): CronWebhookTarget[] {
+  const targets: CronWebhookTarget[] = [];
   const mode = normalizeOptionalLowercaseString(params.delivery?.mode);
   if (mode === "webhook") {
     const url = normalizeHttpWebhookUrl(params.delivery?.to);
-    return url ? { url, source: "delivery" } : null;
-  }
-
-  if (params.legacyNotify) {
-    const legacyUrl = normalizeHttpWebhookUrl(params.legacyWebhook);
-    if (legacyUrl) {
-      return { url: legacyUrl, source: "legacy" };
+    if (url) {
+      targets.push({ url, source: "delivery" });
     }
   }
 
-  return null;
+  const completionMode = normalizeOptionalLowercaseString(
+    params.delivery?.completionDestination?.mode,
+  );
+  if (mode === "announce" && completionMode === "webhook") {
+    const url = normalizeHttpWebhookUrl(params.delivery?.completionDestination?.to);
+    if (url && targets.every((target) => target.url !== url)) {
+      targets.push({ url, source: "completionDestination" });
+    }
+  }
+
+  return targets;
 }
 
 function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> {
@@ -75,6 +91,7 @@ function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> 
   return headers;
 }
 
+/** Posts a cron webhook without throwing back into scheduler completion flow. */
 async function postCronWebhook(params: {
   webhookUrl: string;
   webhookToken?: string;
@@ -125,6 +142,7 @@ async function postCronWebhook(params: {
   }
 }
 
+/** Sends the immediate failure alert for cron jobs that failed before normal completion delivery. */
 export async function sendGatewayCronFailureAlert(params: {
   deps: CliDeps;
   logger: CronLogger;
@@ -193,6 +211,7 @@ export async function sendGatewayCronFailureAlert(params: {
   });
 }
 
+/** Dispatches completion and failure-destination notifications after a cron run finishes. */
 export function dispatchGatewayCronFinishedNotifications(params: {
   evt: CronEvent;
   job?: CronJob;
@@ -200,55 +219,62 @@ export function dispatchGatewayCronFinishedNotifications(params: {
   logger: CronLogger;
   resolveCronAgent: CronAgentResolver;
   webhookToken?: unknown;
-  legacyWebhook?: unknown;
   globalFailureDestination?: CronFailureDestinationConfig;
-  warnedLegacyWebhookJobs: Set<string>;
 }): void {
   const webhookToken = normalizeOptionalString(params.webhookToken);
-  const legacyWebhook = normalizeOptionalString(params.legacyWebhook);
-  const legacyNotify = (params.job as { notify?: unknown } | undefined)?.notify === true;
-  const webhookTarget = resolveCronWebhookTarget({
+  const webhookTargets = resolveCronWebhookTargets({
     delivery:
       params.job?.delivery && typeof params.job.delivery.mode === "string"
-        ? { mode: params.job.delivery.mode, to: params.job.delivery.to }
+        ? {
+            mode: params.job.delivery.mode,
+            to: params.job.delivery.to,
+            completionDestination: params.job.delivery.completionDestination,
+          }
         : undefined,
-    legacyNotify,
-    legacyWebhook,
   });
 
-  if (!webhookTarget && params.job?.delivery?.mode === "webhook") {
+  if (
+    params.job?.delivery?.completionDestination?.mode === "webhook" &&
+    !normalizeHttpWebhookUrl(params.job.delivery.completionDestination.to)
+  ) {
     params.logger.warn(
       {
         jobId: params.evt.jobId,
-        deliveryTo: params.job.delivery.to,
+        deliveryTo: redactOptionalWebhookUrl(params.job.delivery.completionDestination.to),
+      },
+      "cron: skipped completion webhook delivery, delivery.completionDestination.to must be a valid http(s) URL",
+    );
+  }
+
+  if (
+    !webhookTargets.some((target) => target.source === "delivery") &&
+    params.job?.delivery?.mode === "webhook"
+  ) {
+    params.logger.warn(
+      {
+        jobId: params.evt.jobId,
+        deliveryTo: redactOptionalWebhookUrl(params.job.delivery.to),
       },
       "cron: skipped webhook delivery, delivery.to must be a valid http(s) URL",
     );
   }
 
-  if (webhookTarget?.source === "legacy" && !params.warnedLegacyWebhookJobs.has(params.evt.jobId)) {
-    params.warnedLegacyWebhookJobs.add(params.evt.jobId);
-    params.logger.warn(
-      {
-        jobId: params.evt.jobId,
-        legacyWebhook: redactWebhookUrl(webhookTarget.url),
-      },
-      "cron: deprecated notify+cron.webhook fallback in use, migrate to delivery.mode=webhook with delivery.to",
-    );
-  }
-
-  if (webhookTarget && params.evt.summary) {
-    void (async () => {
-      await postCronWebhook({
-        webhookUrl: webhookTarget.url,
-        webhookToken,
-        payload: params.evt,
-        logContext: { jobId: params.evt.jobId },
-        blockedLog: "cron: webhook delivery blocked by SSRF guard",
-        failedLog: "cron: webhook delivery failed",
-        logger: params.logger,
-      });
-    })();
+  if (params.evt.summary) {
+    for (const webhookTarget of webhookTargets) {
+      // Completion notification fanout is best-effort; the cron service has
+      // already recorded the run result and must not wait on slow webhooks.
+      void (async () => {
+        await postCronWebhook({
+          webhookUrl: webhookTarget.url,
+          webhookToken,
+          payload: params.evt,
+          logContext: { jobId: params.evt.jobId, source: webhookTarget.source },
+          blockedLog: "cron: webhook delivery blocked by SSRF guard",
+          failedLog: "cron: webhook delivery failed",
+          logger: params.logger,
+        });
+      })();
+    }
   }
 
   dispatchCronFailureDestinationNotifications({
@@ -294,6 +320,8 @@ function dispatchCronFailureDestinationNotifications(params: {
     if (failureDest.mode === "webhook" && failureDest.to) {
       const webhookUrl = normalizeHttpWebhookUrl(failureDest.to);
       if (webhookUrl) {
+        // Failure destinations mirror completion webhooks: notify in the
+        // background and log failures without rewriting the cron event result.
         void (async () => {
           await postCronWebhook({
             webhookUrl,

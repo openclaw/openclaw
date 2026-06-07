@@ -1,3 +1,4 @@
+// Covers SQLite WAL maintenance configuration.
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
@@ -22,8 +23,8 @@ describe("sqlite WAL maintenance", () => {
 
     configureSqliteWalMaintenance(db, { checkpointIntervalMs: 0 });
 
-    expect(db.exec).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
-    expect(db.exec).toHaveBeenNthCalledWith(
+    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
+    expect(db["exec"]).toHaveBeenNthCalledWith(
       2,
       `PRAGMA wal_autocheckpoint = ${DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES};`,
     );
@@ -34,17 +35,17 @@ describe("sqlite WAL maintenance", () => {
     const db = createMockDb();
 
     const maintenance = configureSqliteWalMaintenance(db, { checkpointIntervalMs: 100 });
-    expect(db.exec).toHaveBeenCalledTimes(2);
+    expect(db["exec"]).toHaveBeenCalledTimes(2);
 
     vi.advanceTimersByTime(100);
-    expect(db.exec).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
-    expect(db.exec).toHaveBeenCalledTimes(3);
+    expect(db["exec"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
+    expect(db["exec"]).toHaveBeenCalledTimes(3);
 
     expect(maintenance.close()).toBe(true);
-    expect(db.exec).toHaveBeenCalledTimes(4);
+    expect(db["exec"]).toHaveBeenCalledTimes(4);
 
     vi.advanceTimersByTime(200);
-    expect(db.exec).toHaveBeenCalledTimes(4);
+    expect(db["exec"]).toHaveBeenCalledTimes(4);
   });
 
   it("clamps oversized checkpoint intervals before arming timers", () => {
@@ -64,7 +65,7 @@ describe("sqlite WAL maintenance", () => {
     const db = createMockDb();
     const error = new Error("busy");
     const onCheckpointError = vi.fn();
-    vi.mocked(db.exec).mockImplementation((sql) => {
+    vi.mocked(db["exec"]).mockImplementation((sql) => {
       if (sql.includes("wal_checkpoint")) {
         throw error;
       }

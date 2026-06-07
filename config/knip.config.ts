@@ -1,3 +1,6 @@
+/**
+ * Knip configuration for OpenClaw root and bundled plugin dependency hygiene.
+ */
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 
 function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""): string {
@@ -144,6 +147,7 @@ const config = {
       entry: rootEntries,
       ignoreDependencies: [
         "@openclaw/*",
+        "file-type",
         "playwright-core",
         "sqlite-vec",
         "tree-sitter-bash",
@@ -157,7 +161,15 @@ const config = {
       ],
     },
     ui: {
-      entry: ["index.html!", "src/main.ts!", "vite.config.ts!", "vitest*.ts!"],
+      entry: [
+        "index.html!",
+        "src/main.ts!",
+        "src/ui/browser-redact.ts!",
+        "vite.config.ts!",
+        "vitest*.ts!",
+      ],
+      // Workboard lazy-loads Three.js at runtime; Knip's dependency pass misses it.
+      ignoreDependencies: ["three"],
       project: ["src/**/*.{ts,tsx}!"],
     },
     "packages/sdk": {
@@ -181,6 +193,14 @@ const config = {
       project: ["src/**/*.ts!"],
     },
     "packages/markdown-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/media-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/acp-core": {
       entry: ["src/*.ts!"],
       project: ["src/**/*.ts!"],
     },

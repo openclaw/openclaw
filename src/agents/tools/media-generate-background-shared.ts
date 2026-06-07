@@ -1,3 +1,8 @@
+/**
+ * Shared detached-task lifecycle for media generation tools.
+ *
+ * Image, video, and music generation use this to track tasks, wake sessions, and deliver generated media.
+ */
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
@@ -35,6 +40,7 @@ const MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS = new Set<SubagentAnnounceDeliveryF
   "visible_reply_missing",
 ]);
 
+/** Handle for a detached media generation task registered in the task ledger. */
 export type MediaGenerationTaskHandle = {
   taskId: string;
   runId: string;
@@ -43,10 +49,19 @@ export type MediaGenerationTaskHandle = {
   taskLabel: string;
 };
 
+/** Schedules detached media generation work. */
 export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
 
+/** Optional callback invoked when async media generation starts. */
 export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void> | void;
 
+/** Returns whether a media generation request should detach for a session. */
+export function shouldDetachMediaGenerationTask(sessionKey: string | undefined): boolean {
+  const normalizedSessionKey = sessionKey?.trim();
+  return Boolean(normalizedSessionKey);
+}
+
+/** Successful media generation output used to complete and wake detached tasks. */
 export type MediaGenerationExecutionResult = {
   provider: string;
   model: string;
@@ -144,6 +159,9 @@ function createMediaGenerationTaskRun(params: {
       lastEventAt: Date.now(),
       progressSummary: params.queuedProgressSummary,
     });
+    if (!task) {
+      return null;
+    }
     const handle = {
       taskId: task.taskId,
       runId,
@@ -183,6 +201,7 @@ function recordMediaGenerationTaskProgress(params: {
   });
 }
 
+/** Periodically refreshes task progress while a media generation operation runs. */
 export async function withMediaGenerationTaskKeepalive<T>(params: {
   handle: MediaGenerationTaskHandle | null;
   progressSummary: string;
@@ -283,19 +302,21 @@ function buildMediaGenerationReplyInstruction(params: {
   ].join(" ");
 }
 
+/** Creates the default microtask scheduler for detached media generation jobs. */
 export function createDefaultMediaGenerateBackgroundScheduler(params: {
   toolName: string;
   onCrash: (message: string, meta?: Record<string, unknown>) => void;
 }): MediaGenerateBackgroundScheduler {
   return (work) => {
     queueMicrotask(() => {
-      void work().catch((error) => {
+      void work().catch((error: unknown) => {
         params.onCrash(`Detached ${params.toolName} job crashed`, { error });
       });
     });
   };
 }
 
+/** Builds the immediate tool result returned after a background media task starts. */
 export function buildMediaGenerationStartedToolResult(params: {
   toolName: string;
   generationLabel: string;
@@ -331,10 +352,10 @@ export function buildMediaGenerationStartedToolResult(params: {
         : {}),
       ...params.detailExtras,
     },
-    terminate: true,
   };
 }
 
+/** Notifies an optional async-start observer and logs callback failures. */
 export async function notifyMediaGenerationAsyncTaskStarted(params: {
   callback?: MediaGenerateAsyncStartCallback;
   message: string;
@@ -357,6 +378,7 @@ export async function notifyMediaGenerationAsyncTaskStarted(params: {
   }
 }
 
+/** Schedules media generation work and wires result/failure handling into task lifecycle. */
 export function scheduleMediaGenerationTaskCompletion<
   T extends MediaGenerationExecutionResult,
 >(params: {
@@ -416,6 +438,7 @@ export function scheduleMediaGenerationTaskCompletion<
         mediaUrls: executed.mediaUrls,
       });
       if (!completionDelivered) {
+        // A generated result without confirmed delivery is terminally unsafe for task closeout.
         terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
           "completion delivery was not confirmed after successful generation",
         );
@@ -438,6 +461,7 @@ export function scheduleMediaGenerationTaskCompletion<
             ...mediaUrlsFromGeneratedAttachments(executed.attachments),
           ]),
         );
+        // If the wake agent path failed after successful generation, try direct channel delivery.
         const delivered = await tryDeliverMediaGenerationDirect({
           config: params.config,
           handle: params.handle,
@@ -564,6 +588,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
   const canTryDirectCompletionFallback =
     delivery.reason != null && MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS.has(delivery.reason);
   if (params.status === "ok" && canTryDirectCompletionFallback) {
+    // Direct fallback is only for successful media where missing attachments would lose the result.
     const label = `${params.completionLabel[0]?.toUpperCase() ?? "M"}${params.completionLabel.slice(1)}`;
     const delivered = await tryDeliverMediaGenerationDirect({
       config: params.config,
@@ -649,6 +674,7 @@ async function tryDeliverMediaGenerationDirect(params: {
   }
 }
 
+/** Creates a tool-specific detached media generation lifecycle facade. */
 export function createMediaGenerationTaskLifecycle(params: {
   toolName: string;
   taskKind: string;

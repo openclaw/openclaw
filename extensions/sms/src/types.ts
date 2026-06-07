@@ -1,3 +1,4 @@
+// Sms type declarations define plugin contracts.
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export type SmsChannelConfigFields = {
@@ -11,7 +12,7 @@ export type SmsChannelConfigFields = {
   publicWebhookUrl?: string;
   dangerouslyDisableSignatureValidation?: boolean;
   dmPolicy?: "pairing" | "open" | "allowlist" | "disabled";
-  allowFrom?: string | string[];
+  allowFrom?: string | Array<string | number>;
   textChunkLimit?: number;
 };
 

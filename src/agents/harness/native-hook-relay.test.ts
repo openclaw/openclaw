@@ -1,3 +1,4 @@
+// Covers native hook relay registration, bridge invocation, and approval state.
 import { randomUUID } from "node:crypto";
 import { rmSync, statSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -37,6 +38,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  // Relay bridge payloads cross a process boundary. Tests narrow unknown JSON
+  // before making assertions so malformed bridge responses fail clearly.
   if (!isRecord(value)) {
     throw new Error(`Expected ${label} to be an object`);
   }
@@ -90,6 +93,8 @@ async function writeForeignNativeHookRelayBridgeRecordForTests(
     expiresAtMs: number;
   },
 ): Promise<string> {
+  // Foreign bridge records simulate another process owning the relay server,
+  // without starting a second OpenClaw process in the unit test.
   const bridgeDir = testing.getNativeHookRelayBridgeDirForTests();
   await fs.mkdir(bridgeDir, { recursive: true, mode: 0o700 });
   const registryPath = testing.getNativeHookRelayBridgeRegistryPathForTests(relayId);
@@ -191,6 +196,8 @@ type NativeHookRelaySharedStateForTests = {
 };
 
 function getNativeHookRelaySharedStateForTests(): NativeHookRelaySharedStateForTests {
+  // Native relay state is intentionally shared on globalThis so duplicate
+  // module imports in one process still see one approval/bridge registry.
   const state = (
     globalThis as typeof globalThis & {
       [key: symbol]: NativeHookRelaySharedStateForTests | undefined;
@@ -525,6 +532,10 @@ describe("native hook relay registry", () => {
     expect(relay.shouldRelayEvent("post_tool_use")).toBe(false);
     expect(relay.shouldRelayEvent("before_agent_finalize")).toBe(false);
     expect(relay.shouldRelayEvent("permission_request")).toBe(true);
+    expect(relay.commandForEvent("pre_tool_use")).toBe(
+      "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
+        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --pre-tool-use-unavailable noop --timeout 1234`,
+    );
   });
 
   it("builds pre-tool relay commands only when before-tool policy is active", () => {
@@ -751,7 +762,9 @@ describe("native hook relay registry", () => {
       },
     });
     await staleRequest.connected;
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
 
     const second = registerNativeHookRelay({
       provider: "codex",
@@ -911,7 +924,9 @@ describe("native hook relay registry", () => {
       allowedEvents: ["pre_tool_use"],
       generationMismatchGraceMs: 1,
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
 
     await expect(
       invokeNativeHookRelayBridge({
@@ -941,7 +956,9 @@ describe("native hook relay registry", () => {
     });
     const before = await waitForNativeHookRelayBridgeRecord(relay.relayId);
 
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
     relay.renew(20_000);
 
     const after = await waitForNativeHookRelayBridgeRecord(relay.relayId);
@@ -3188,6 +3205,21 @@ describe("native hook relay command builder", () => {
       }),
     ).toBe(
       "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event permission_request --timeout 5000",
+    );
+  });
+
+  it("includes explicit unavailable noop mode only for PreToolUse", () => {
+    expect(
+      buildNativeHookRelayCommand({
+        provider: "codex",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "pre_tool_use",
+        preToolUseUnavailable: "noop",
+        executable: "openclaw",
+      }),
+    ).toBe(
+      "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use --pre-tool-use-unavailable noop --timeout 5000",
     );
   });
 });

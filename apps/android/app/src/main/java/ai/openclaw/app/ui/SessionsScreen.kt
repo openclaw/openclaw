@@ -13,11 +13,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -52,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/** Session browser for recent and currently-live chat sessions. */
 @Composable
 internal fun SessionsScreen(
   viewModel: MainViewModel,
@@ -81,12 +85,21 @@ internal fun SessionsScreen(
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
+      // Sessions are cheap to refresh on entry; subsequent sorting/filtering is
+      // local to avoid re-querying while the user explores the list.
       viewModel.refreshChatSessions(limit = 200)
     }
   }
 
-  ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 20.dp)) {
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+  ClawScaffold(
+    contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 6.dp),
+    contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+  ) {
+    LazyColumn(
+      modifier = Modifier.fillMaxSize(),
+      verticalArrangement = Arrangement.spacedBy(7.dp),
+      contentPadding = PaddingValues(bottom = 4.dp),
+    ) {
       item {
         Row(
           modifier = Modifier.fillMaxWidth(),
@@ -130,11 +143,16 @@ internal fun SessionsScreen(
 
       if (visibleSessions.isEmpty()) {
         item {
-          ClawEmptyState(
-            title = emptySessionTitle(filter),
-            body = emptySessionBody(filter),
-            action = { ClawPrimaryButton(text = "Start Chat", onClick = onOpenChat) },
-          )
+          Box(
+            modifier = Modifier.fillParentMaxHeight(0.56f).fillMaxWidth(),
+            contentAlignment = Alignment.Center,
+          ) {
+            ClawEmptyState(
+              title = emptySessionTitle(filter),
+              body = emptySessionBody(filter),
+              action = { ClawPrimaryButton(text = "Start Chat", onClick = onOpenChat) },
+            )
+          }
         }
       } else {
         items(visibleSessions, key = { it.key }) { session ->
@@ -151,10 +169,6 @@ internal fun SessionsScreen(
             },
           )
         }
-      }
-
-      item {
-        Spacer(modifier = Modifier.height(16.dp))
       }
     }
   }
@@ -309,18 +323,21 @@ private enum class SessionFilter {
   Live,
 }
 
+/** Empty-state title selected by the active session browser filter. */
 private fun emptySessionTitle(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> "No sessions yet"
     SessionFilter.Live -> "No live session"
   }
 
+/** Empty-state body selected by the active session browser filter. */
 private fun emptySessionBody(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> "Start a new conversation and it will show up here."
     SessionFilter.Live -> "Open Chat to start or resume the current session."
   }
 
+/** Formats session timestamps for compact mobile metadata. */
 private fun relativeSessionTime(updatedAtMs: Long): String {
   val deltaMs = (System.currentTimeMillis() - updatedAtMs).coerceAtLeast(0L)
   val minutes = deltaMs / 60_000L
@@ -331,4 +348,5 @@ private fun relativeSessionTime(updatedAtMs: Long): String {
   return "${hours / 24}d"
 }
 
+/** Falls back to the canonical main-session label when gateway display names are blank. */
 private fun displaySessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: "Main session"

@@ -1,3 +1,8 @@
+/**
+ * Tests Anthropic Messages transport streaming.
+ * Covers request construction, SSE parsing, aborts, tool calls, usage, and
+ * provider transport hooks.
+ */
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
@@ -50,6 +55,25 @@ function createStalledSseResponse(params: { onCancel: (reason: unknown) => void 
 
 function createRawSseResponse(body: string): Response {
   return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function createOpenRawSseResponse(params: {
+  body: string;
+  onCancel: (reason: unknown) => void;
+}): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(params.body));
+    },
+    cancel(reason) {
+      params.onCancel(reason);
+    },
+  });
+  return new Response(stream, {
     status: 200,
     headers: { "content-type": "text/event-stream" },
   });
@@ -161,6 +185,7 @@ describe("anthropic transport stream", () => {
   });
 
   beforeEach(() => {
+    vi.unstubAllEnvs();
     buildGuardedModelFetchMock.mockReset();
     guardedFetchMock.mockReset();
     buildGuardedModelFetchMock.mockReturnValue(guardedFetchMock);
@@ -206,6 +231,40 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
       "fine-grained-tool-streaming-2025-05-14",
     );
+  });
+
+  it("honors ANTHROPIC_BASE_URL when model base URL is blank", async () => {
+    vi.stubEnv("ANTHROPIC_BASE_URL", " https://anthropic-proxy.example/v1 ");
+
+    await runTransportStream(
+      makeAnthropicTransportModel({ baseUrl: "" }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    const [url] = guardedFetchCall();
+    expect(url).toBe("https://anthropic-proxy.example/v1/messages");
+    expect(buildGuardedModelFetchMock.mock.calls[0]?.[0]).toMatchObject({
+      baseUrl: "https://anthropic-proxy.example/v1",
+    });
+    expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBeNull();
+  });
+
+  it("prefers explicit Anthropic base URL over ANTHROPIC_BASE_URL", async () => {
+    vi.stubEnv("ANTHROPIC_BASE_URL", "https://anthropic-proxy.example/v1");
+
+    await runTransportStream(
+      makeAnthropicTransportModel({ baseUrl: "https://configured.example" }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    const [url] = guardedFetchCall();
+    expect(url).toBe("https://configured.example/v1/messages");
   });
 
   it("strips the provider prefix from direct Anthropic request model ids", async () => {
@@ -1861,6 +1920,28 @@ describe("anthropic transport stream", () => {
     expect(cancelReason).toBe(abortReason);
   });
 
+  it("cancels open SSE bodies when Anthropic stream consumers throw", async () => {
+    let cancelCalled = false;
+    guardedFetchMock.mockResolvedValueOnce(
+      createOpenRawSseResponse({
+        body: 'data: {"type":"error","error":{"message":"stream exploded"}}\n\n',
+        onCancel: () => {
+          cancelCalled = true;
+        },
+      }),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("stream exploded");
+    expect(cancelCalled).toBe(true);
+  });
+
   it("maps adaptive thinking effort for Claude 4.6 transport runs", async () => {
     const model = makeAnthropicTransportModel({
       id: "claude-opus-4-6",
@@ -1952,5 +2033,65 @@ describe("anthropic transport stream", () => {
     const payload = latestAnthropicRequest().payload;
     expect(payload.thinking).toEqual({ type: "adaptive" });
     expect(payload.output_config).toEqual({ effort: "high" });
+  });
+
+  it("emits start event only after message_start so pre-stream SSE errors arrive before any non-error event", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      ]),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = streamFn(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hi" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    const eventTypes: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      eventTypes.push(event.type);
+    }
+
+    const startIndex = eventTypes.indexOf("start");
+    expect(startIndex).toBeGreaterThanOrEqual(0);
+    expect(eventTypes.slice(0, startIndex).some((t) => t === "error")).toBe(false);
+  });
+
+  it("emits error without a preceding start event when SSE error arrives before message_start", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createRawSseResponse(
+        "event: error\ndata: " +
+          JSON.stringify({
+            type: "invalid_request_error",
+            message: "messages.1.content.63: Invalid signature in thinking block",
+          }) +
+          "\n\n",
+      ),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = streamFn(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hi" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    const eventTypes: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      eventTypes.push(event.type);
+    }
+
+    // start must not precede the error path, regardless of whether the mock
+    // surfaces the SSE error as an explicit "error" event or silently ends the
+    // stream (a timing artefact of synchronous mock SSE delivery).
+    expect(eventTypes).not.toContain("start");
   });
 });

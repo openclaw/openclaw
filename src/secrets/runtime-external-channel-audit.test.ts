@@ -1,3 +1,4 @@
+/** Tests runtime secret auditing for externalized channel plugin surfaces. */
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -152,18 +153,18 @@ function createGoogleChatSecretContractApi() {
       if (!refValue) {
         return;
       }
-      const path = `${pathKey}.serviceAccount`;
+      const pathLocal = `${pathKey}.serviceAccount`;
       if (!active) {
         params.context.warnings.push({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path,
-          message: `${path}: Google Chat account is disabled.`,
+          path: pathLocal,
+          message: `${pathLocal}: Google Chat account is disabled.`,
         });
         return;
       }
       params.context.assignments.push({
         ref: refValue,
-        path,
+        path: pathLocal,
         expected: "string-or-object",
         apply: (value) => {
           target.serviceAccount = value;

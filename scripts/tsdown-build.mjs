@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+// Runs the tsdown build with output cleanup, stale chunk pruning, and bounded
+// child-process diagnostics.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -20,7 +22,8 @@ const DEPENDENCY_PATH_MARKERS = ["node_modules/", "openclaw-pnpm-node-modules/"]
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
-const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 8192;
+const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 12288;
+const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
 const MIN_TSDOWN_MAX_OLD_SPACE_MB = 2048;
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
 const CGROUP_MEMORY_LIMIT_PATHS = [
@@ -67,6 +70,9 @@ function pruneStaleRuntimeSymlinks() {
   removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist-runtime"));
 }
 
+/**
+ * Removes build output roots while preserving explicitly protected artifacts.
+ */
 export function cleanTsdownOutputRoots(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
@@ -109,7 +115,7 @@ function hasProtectedChild({ rootPath, protectedPaths }) {
 }
 
 function cleanOutputRootExcept(rootPath, protectedPaths, fsImpl) {
-  let entries = [];
+  let entries;
   try {
     entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
   } catch {
@@ -162,7 +168,7 @@ function listExistingPreservedOutputPaths({ cwd, env, fs: fsImpl }) {
 }
 
 function collectDeclarationOutputPaths(rootPath, protectedPaths, fsImpl) {
-  let entries = [];
+  let entries;
   try {
     entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
   } catch {
@@ -184,7 +190,7 @@ export function pruneStaleRootChunkFiles(params = {}) {
   const fsImpl = params.fs ?? fs;
   const roots = listTsdownOutputRoots({ cwd, fs: fsImpl }).map((root) => path.join(cwd, root));
   for (const root of roots) {
-    let entries = [];
+    let entries;
     try {
       entries = fsImpl.readdirSync(root, { withFileTypes: true });
     } catch {
@@ -293,26 +299,34 @@ function findFatalUnresolvedImport(lines) {
   return null;
 }
 
-function parsePositiveInteger(value) {
+function parsePositiveIntegerEnv(value, name) {
   if (typeof value !== "string" || value.trim() === "") {
     return null;
   }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return null;
+  const text = value.trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${name} must be a positive integer`);
   }
-  return Math.trunc(parsed);
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive safe integer`);
+  }
+  return parsed;
 }
 
-function parseNonNegativeInteger(value) {
+function parseNonNegativeIntegerEnv(value, name) {
   if (typeof value !== "string" || value.trim() === "") {
     return null;
   }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return null;
+  const text = value.trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${name} must be a non-negative integer`);
   }
-  return Math.trunc(parsed);
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} must be a non-negative safe integer`);
+  }
+  return parsed;
 }
 
 function parseCgroupMemoryLimitBytes(value) {
@@ -382,21 +396,25 @@ function readProcMemTotalBytes(params = {}) {
 }
 
 function resolveTsdownMaxOldSpaceMb(params = {}) {
+  const defaultMaxOldSpaceMb =
+    (params.platform ?? process.platform) === "win32"
+      ? DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB
+      : DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
   const limitBytes = readCgroupMemoryLimitBytes(params) ?? readProcMemTotalBytes(params);
   if (limitBytes === null) {
-    return DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+    return defaultMaxOldSpaceMb;
   }
 
   const limitMb = Math.floor(limitBytes / 1024 / 1024);
   if (limitMb <= 0) {
-    return DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+    return defaultMaxOldSpaceMb;
   }
 
   const cgroupCap = Math.max(
     MIN_TSDOWN_MAX_OLD_SPACE_MB,
     limitMb - TSDOWN_CGROUP_MEMORY_HEADROOM_MB,
   );
-  return Math.min(DEFAULT_TSDOWN_MAX_OLD_SPACE_MB, cgroupCap);
+  return Math.min(defaultMaxOldSpaceMb, cgroupCap);
 }
 
 function parseMaxOldSpaceSizeMb(value, fallbackMb) {
@@ -577,9 +595,13 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   const stderr = params.stderr ?? process.stderr;
   const env = params.env ?? process.env;
   const scanner = params.scanner ?? createTsdownOutputScanner();
-  const timeoutMs = parsePositiveInteger(env.OPENCLAW_TSDOWN_TIMEOUT_MS);
+  const timeoutMs = parsePositiveIntegerEnv(
+    env.OPENCLAW_TSDOWN_TIMEOUT_MS,
+    "OPENCLAW_TSDOWN_TIMEOUT_MS",
+  );
   const heartbeatMs =
-    parseNonNegativeInteger(env.OPENCLAW_TSDOWN_HEARTBEAT_MS) ?? DEFAULT_HEARTBEAT_MS;
+    parseNonNegativeIntegerEnv(env.OPENCLAW_TSDOWN_HEARTBEAT_MS, "OPENCLAW_TSDOWN_HEARTBEAT_MS") ??
+    DEFAULT_HEARTBEAT_MS;
   let timedOut = false;
   let settled = false;
   let lastOutputAt = Date.now();

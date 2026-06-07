@@ -1,3 +1,4 @@
+// Verifies session status output across scoped stores, tasks, and runtime hooks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -54,6 +55,7 @@ let mockConfig: Record<string, unknown> = createMockConfig();
 const TASK_STATUS_SNAPSHOT_NOW = 1_000_000_000_000;
 
 function createScopedSessionStores() {
+  // Two stores simulate per-agent session files merged by gateway status paths.
   return new Map<string, Record<string, unknown>>([
     [
       "/tmp/main/sessions.json",
@@ -71,6 +73,7 @@ function createScopedSessionStores() {
 }
 
 function installScopedSessionStores(syncUpdates = false) {
+  // Tests choose whether session-store writes should mutate the backing map.
   const stores = createScopedSessionStores();
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
@@ -196,6 +199,7 @@ function formatStatusLines(primary: string, taskLineOverride: string | undefined
 }
 
 function createCommandsStatusRuntimeModuleMock() {
+  // Status text mock keeps model/task/session routing observable in one place.
   return {
     buildStatusText: async (params: {
       sessionKey: string;
@@ -615,6 +619,165 @@ describe("session_status tool", () => {
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:main");
     expect(details.statusText).toContain("OpenClaw");
+  });
+
+  it("reports origin, active, and persisted delivery route metadata for semantic current", async () => {
+    const sessionKey = "agent:main:discord:channel:1489550370136129537";
+    resetSessionStore({
+      [sessionKey]: {
+        sessionId: "s-discord-origin-webchat-active",
+        updatedAt: 10,
+        origin: { provider: "discord", accountId: "bot-primary" },
+        deliveryContext: {
+          channel: "discord",
+          to: "channel:1489550370136129537",
+          accountId: "bot-primary",
+          threadId: "thread-origin",
+        },
+      },
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: sessionKey,
+      runSessionKey: sessionKey,
+      activeDeliveryContext: {
+        channel: "webchat",
+        to: "control-ui-conversation",
+        accountId: "browser",
+        threadId: "webchat-thread",
+      },
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-current-route-context", { sessionKey: "current" });
+    const details = result.details as {
+      ok?: boolean;
+      sessionKey?: string;
+      statusText?: string;
+      origin?: { provider?: string; accountId?: string };
+      active?: { channel?: string; to?: string; accountId?: string; threadId?: string };
+      deliveryContext?: {
+        channel?: string;
+        to?: string;
+        accountId?: string;
+        threadId?: string;
+      };
+    };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe(sessionKey);
+    expect(details.origin).toEqual({ provider: "discord", accountId: "bot-primary" });
+    expect(details.active).toEqual({
+      channel: "webchat",
+      to: "control-ui-conversation",
+      accountId: "browser",
+      threadId: "webchat-thread",
+    });
+    expect(details.deliveryContext).toEqual({
+      channel: "discord",
+      to: "channel:1489550370136129537",
+      accountId: "bot-primary",
+      threadId: "thread-origin",
+    });
+    const text =
+      result.content.find((item): item is { type: "text"; text: string } => item.type === "text")
+        ?.text ?? "";
+    expect(text).toContain("Route context:");
+    expect(text).toContain('"origin"');
+    expect(text).toContain('"active"');
+    expect(text).toContain('"deliveryContext"');
+    expect(details.statusText).toContain('"active"');
+  });
+
+  it("does not report an active route for explicit non-live session lookups", async () => {
+    const currentKey = "agent:main:main";
+    const targetKey = "agent:main:discord:channel:1489550370136129537";
+    resetSessionStore({
+      [currentKey]: {
+        sessionId: "s-main",
+        updatedAt: 5,
+      },
+      [targetKey]: {
+        sessionId: "s-target",
+        updatedAt: 10,
+        deliveryContext: {
+          channel: "discord",
+          to: "channel:1489550370136129537",
+        },
+      },
+    });
+    mockConfig = {
+      ...mockConfig,
+      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true, allow: ["*"] } },
+    };
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: currentKey,
+      runSessionKey: currentKey,
+      activeDeliveryContext: {
+        channel: "webchat",
+        to: "control-ui-conversation",
+      },
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-explicit-non-live-route-context", {
+      sessionKey: targetKey,
+    });
+    const details = result.details as {
+      origin?: { provider?: string };
+      active?: { channel?: string };
+      deliveryContext?: { channel?: string; to?: string };
+    };
+    expect(details.origin).toEqual({ provider: "discord" });
+    expect(details.active).toBeUndefined();
+    expect(details.deliveryContext).toEqual({
+      channel: "discord",
+      to: "channel:1489550370136129537",
+    });
+  });
+
+  it("does not report an active route for an explicit stale policy-key lookup", async () => {
+    const policyKey = "agent:main:telegram:default:direct:1234";
+    const runKey = "agent:main:main";
+    resetSessionStore({
+      [policyKey]: {
+        sessionId: "s-policy",
+        updatedAt: 5,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:direct:1234",
+        },
+      },
+      [runKey]: {
+        sessionId: "s-run",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: policyKey,
+      runSessionKey: runKey,
+      activeDeliveryContext: {
+        channel: "webchat",
+        to: "control-ui-conversation",
+      },
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-explicit-stale-policy-key-route-context", {
+      sessionKey: policyKey,
+    });
+    const details = result.details as {
+      sessionKey?: string;
+      active?: { channel?: string };
+      deliveryContext?: { channel?: string; to?: string };
+    };
+    expect(details.sessionKey).toBe(policyKey);
+    expect(details.active).toBeUndefined();
+    expect(details.deliveryContext).toEqual({
+      channel: "telegram",
+      to: "telegram:direct:1234",
+    });
   });
 
   it("rejects explicit cross-session key under tree visibility even when it equals runSessionKey (#76708)", async () => {

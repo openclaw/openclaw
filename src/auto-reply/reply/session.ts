@@ -1,3 +1,4 @@
+// Manages reply session records, labels, ids, and route persistence.
 import crypto from "node:crypto";
 import path from "node:path";
 import {
@@ -13,7 +14,10 @@ import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/regist
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
+import {
+  hasTerminalMainSessionTranscriptNewerThanRegistry,
+  resolveSessionLifecycleTimestamps,
+} from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
@@ -297,8 +301,8 @@ export async function initSessionState(params: {
   let sessionId: string | undefined;
   let isNewSession = false;
   let bodyStripped: string | undefined;
-  let systemSent = false;
-  let abortedLastRun = false;
+  let systemSent;
+  let abortedLastRun;
   let resetTriggered = false;
 
   let persistedThinking: string | undefined;
@@ -466,10 +470,20 @@ export async function initSessionState(params: {
         skipConfiguredFallbackWhenActiveSessionNonAcp: false,
       }) ?? "",
     );
+  const terminalMainTranscriptNewerThanRegistry =
+    !isSystemEvent &&
+    (await hasTerminalMainSessionTranscriptNewerThanRegistry({
+      entry,
+      sessionScope,
+      sessionKey,
+      agentId,
+      mainKey,
+      storePath,
+    }));
   const freshEntry =
     (isSystemEvent && canReuseExistingEntry) ||
-    (entryFreshness?.fresh ?? false) ||
-    (softResetAllowed && canReuseExistingEntry);
+    (((entryFreshness?.fresh ?? false) || (softResetAllowed && canReuseExistingEntry)) &&
+      !terminalMainTranscriptNewerThanRegistry);
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
@@ -857,8 +871,8 @@ export async function initSessionState(params: {
     await retireSessionMcpRuntime({
       sessionId: previousSessionEntry.sessionId,
       reason: "reply-session-rollover",
-      onError: (error, sessionId) => {
-        log.warn(`failed to dispose bundle MCP runtime for session ${sessionId}`, {
+      onError: (error, sessionIdLocal) => {
+        log.warn(`failed to dispose bundle MCP runtime for session ${sessionIdLocal}`, {
           error: String(error),
         });
       },

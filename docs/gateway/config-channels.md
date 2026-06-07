@@ -597,6 +597,8 @@ BlueBubbles support was removed. `channels.bluebubbles` is not a supported runti
 
 If the Gateway is not running on the signed-in Messages Mac, keep `channels.imessage.enabled=true` and set `channels.imessage.cliPath` to an SSH wrapper that runs `imsg "$@"` on that Mac. The default local `imsg` path is macOS-only.
 
+Before relying on an SSH wrapper for production sends, verify an outbound `imsg send` through that exact wrapper. Some macOS TCC states assign Messages Automation to `/usr/libexec/sshd-keygen-wrapper`, which can make reads and probes work while sends fail with AppleEvents `-1743`; see [SSH wrapper sends fail with AppleEvents -1743](/channels/imessage#ssh-wrapper-sends-fail-with-appleevents-1743).
+
 ```json5
 {
   channels: {
@@ -793,6 +795,8 @@ Visible replies are controlled separately. Normal group, channel, and internal W
 Tool-only visible replies require a model/runtime that reliably calls tools, and are recommended for shared ambient rooms on latest-generation models such as GPT 5.5. Some weaker models can answer final text but fail to understand that source-visible output must be sent with `message(action=send)`. For those models, use `"automatic"` so the final assistant turn is the visible reply path. If the session log shows assistant text with `didSendViaMessagingTool: false`, the model produced private final text instead of calling the message tool. Switch to a stronger tool-calling model for that channel, inspect the gateway verbose log for the suppressed payload summary, or set `messages.groupChat.visibleReplies: "automatic"` to use visible final replies for every group/channel request.
 
 If the message tool is unavailable under the active tool policy, OpenClaw falls back to automatic visible replies instead of silently suppressing the response. `openclaw doctor` warns about this mismatch.
+
+This rule applies to normal agent final text. Plugin-owned conversation bindings use the owning plugin's returned reply as the visible response for claimed bound-thread turns; the plugin does not need to call `message(action=send)` for those binding replies.
 
 **Troubleshooting: group @mention triggers typing then silence (no error)**
 

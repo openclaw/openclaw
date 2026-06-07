@@ -1,3 +1,4 @@
+// Scans plugin manifest metadata without importing runtime entrypoints.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 
 type PluginManifestMetadataRecord = {
   pluginDir: string;
@@ -117,26 +119,23 @@ function manifestFileFingerprint(pluginDir: string): string {
 }
 
 function listPersistedIndexPluginDirs(env: NodeJS.ProcessEnv, startOrder: number): CandidateDir[] {
-  const index = readJsonObject(path.join(resolveStateDir(env), "plugins", "installs.json"));
-  if (!index || !Array.isArray(index.plugins)) {
+  const index = readPersistedInstalledPluginIndexSync({ env });
+  if (!index) {
     return [];
   }
 
   const dirs: CandidateDir[] = [];
   let order = startOrder;
-  for (const rawPlugin of index.plugins) {
-    if (!isRecord(rawPlugin)) {
-      continue;
-    }
-    const rootDir = normalizeTrimmedString(rawPlugin.rootDir);
+  for (const plugin of index.plugins) {
+    const rootDir = normalizeTrimmedString(plugin.rootDir);
     if (!rootDir) {
       continue;
     }
     dirs.push({
       pluginDir: resolveUserPath(rootDir, env),
-      rank: rawPlugin.origin === "bundled" ? 3 : 1,
+      rank: plugin.origin === "bundled" ? 3 : 1,
       order: order++,
-      origin: normalizeTrimmedString(rawPlugin.origin),
+      origin: normalizeTrimmedString(plugin.origin),
     });
   }
   return dirs;
@@ -164,6 +163,7 @@ function uniqueCandidateDirs(candidates: CandidateDir[]): CandidateDir[] {
   );
 }
 
+/** Lists plugin manifest metadata from installed, bundled, and global plugin roots. */
 export function listOpenClawPluginManifestMetadata(
   env: NodeJS.ProcessEnv = process.env,
 ): PluginManifestMetadataRecord[] {

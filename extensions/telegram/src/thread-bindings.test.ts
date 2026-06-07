@@ -1,3 +1,4 @@
+// Telegram tests cover thread bindings plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -61,8 +62,12 @@ function createTelegramThreadBindingManager(
 
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
-  await new Promise<void>((resolve) => queueMicrotask(resolve));
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    queueMicrotask(resolve);
+  });
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 describe("telegram thread bindings", () => {
