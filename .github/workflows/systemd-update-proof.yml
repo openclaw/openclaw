@@ -1,6 +1,17 @@
 name: Systemd Update Proof
 
 on:
+  push:
+    branches:
+      - fix/90930-update-systemd-supervision
+    paths:
+      - .github/workflows/systemd-update-proof.yml
+      - scripts/e2e/systemd-update-proof.sh
+      - src/cli/update-cli/**
+      - src/daemon/**
+      - src/infra/update-*.ts
+      - package.json
+      - pnpm-lock.yaml
   workflow_dispatch:
     inputs:
       baseline:
