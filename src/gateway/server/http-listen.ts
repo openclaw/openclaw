@@ -1,6 +1,7 @@
 // Gateway HTTP server listen helper with retry and lock-aware errors.
 import type { Server as HttpServer } from "node:http";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
+import { cancelStartupWatchdog } from "../../logging/gateway-startup-watchdog.js";
 import { sleep } from "../../utils.js";
 
 const EADDRINUSE_MAX_RETRIES = 20;
@@ -33,6 +34,11 @@ export async function listenGatewayHttpServer(params: {
         };
         const onListening = () => {
           httpServer.off("error", onError);
+          // Tell the startup watchdog the gateway HTTP socket bound
+          // successfully so it does not fire a stale diagnostic line
+          // later in startup. Idempotent and safe when no watchdog is
+          // armed (callers other than the CLI never arm one).
+          cancelStartupWatchdog();
           resolve();
         };
         httpServer.once("error", onError);

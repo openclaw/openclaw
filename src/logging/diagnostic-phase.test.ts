@@ -1,9 +1,11 @@
 // Diagnostic phase tests cover phase timing and diagnostic event emission.
 import { describe, expect, it } from "vitest";
 import {
+  getActiveDiagnosticPhases,
   getRecentDiagnosticPhases,
   recordDiagnosticPhase,
   resetDiagnosticPhasesForTest,
+  withDiagnosticPhase,
 } from "./diagnostic-phase.js";
 
 describe("getRecentDiagnosticPhases", () => {
@@ -62,5 +64,43 @@ describe("getRecentDiagnosticPhases", () => {
     const recent = getRecentDiagnosticPhases(1);
     expect(recent).toHaveLength(1);
     expect(recent[0]?.name).toBe("phase-b");
+  });
+});
+
+describe("getActiveDiagnosticPhases", () => {
+  it("returns an empty array when no phase is active", () => {
+    resetDiagnosticPhasesForTest();
+    expect(getActiveDiagnosticPhases()).toEqual([]);
+  });
+
+  it("snapshots in-flight phases outermost → innermost with elapsed time", async () => {
+    resetDiagnosticPhasesForTest();
+    let captured: Array<{ name: string; elapsedMs: number }> = [];
+    await withDiagnosticPhase("outer", async () => {
+      await withDiagnosticPhase("inner", async () => {
+        captured = getActiveDiagnosticPhases();
+      });
+    });
+    expect(captured.map((p) => p.name)).toEqual(["outer", "inner"]);
+    for (const phase of captured) {
+      expect(phase.elapsedMs).toBeGreaterThanOrEqual(0);
+      expect(Number.isFinite(phase.elapsedMs)).toBe(true);
+    }
+  });
+
+  it("returns a deep copy that does not share references with the active stack", async () => {
+    resetDiagnosticPhasesForTest();
+    let firstSnapshot: Array<{ name: string; elapsedMs: number }> = [];
+    let secondSnapshot: Array<{ name: string; elapsedMs: number }> = [];
+    await withDiagnosticPhase("outer", async () => {
+      firstSnapshot = getActiveDiagnosticPhases();
+      // Mutate the snapshot — a deep copy must not affect future snapshots.
+      firstSnapshot.push({ name: "injected", elapsedMs: 99 });
+      if (firstSnapshot[0]) {
+        firstSnapshot[0].name = "mutated";
+      }
+      secondSnapshot = getActiveDiagnosticPhases();
+    });
+    expect(secondSnapshot.map((p) => p.name)).toEqual(["outer"]);
   });
 });

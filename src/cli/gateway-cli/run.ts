@@ -38,6 +38,11 @@ import { GatewayLockError } from "../../infra/gateway-lock.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
+import {
+  armStartupWatchdog,
+  cancelStartupWatchdog,
+  resolveStartupWatchdogThresholdMs,
+} from "../../logging/gateway-startup-watchdog.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -814,6 +819,13 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
 
   gatewayLog.info("starting...");
   startupTrace.mark("cli.gateway-loop");
+  // Arm a one-shot diagnostic watchdog: if the HTTP server has not bound
+  // within the threshold we dump the in-flight diagnostic phase stack to
+  // stderr so operators can see WHICH startup step is wedged instead of
+  // just "silence for N minutes." Cancelled by listenGatewayHttpServer on
+  // listen-success and on hard failure paths below. No-op when the env
+  // var sets the threshold to 0.
+  armStartupWatchdog({ thresholdMs: resolveStartupWatchdogThresholdMs() });
   let startupConfigSnapshotReadForNextStart = startupConfigSnapshotRead;
   const deferStartupSidecars =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
@@ -850,6 +862,10 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
       log: gatewayLog,
     });
   } catch (err) {
+    // Stop the diagnostic watchdog before we start emitting failure
+    // messages so it cannot interleave a "stuck step" line on top of a
+    // real error already being reported.
+    cancelStartupWatchdog();
     if (isGatewayLockError(err)) {
       const errMessage = formatErrorMessage(err);
       defaultRuntime.error(

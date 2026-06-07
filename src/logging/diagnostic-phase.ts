@@ -40,6 +40,37 @@ export function getCurrentDiagnosticPhase(): string | undefined {
   return activePhaseStack.at(-1)?.name;
 }
 
+/**
+ * Snapshot of an in-flight (not-yet-completed) diagnostic phase.
+ *
+ * `elapsedMs` is the wall-clock time between the phase entering
+ * `withDiagnosticPhase` and the snapshot being taken.
+ */
+export type ActiveDiagnosticPhaseSnapshot = {
+  name: string;
+  elapsedMs: number;
+};
+
+/**
+ * Returns a deep copy snapshot of every diagnostic phase currently on the
+ * active stack, ordered outermost → innermost.
+ *
+ * Designed for diagnostic-only readers (e.g. the gateway startup watchdog)
+ * that must observe the in-flight phase tree without retaining any reference
+ * to the live mutable stack. The returned array and its members are fresh
+ * objects — mutating them does not affect future phase tracking.
+ *
+ * Safe to call from a synchronous timer callback even when the event loop
+ * is starved: the work is one stack walk plus N `performance.now()` reads.
+ */
+export function getActiveDiagnosticPhases(): ActiveDiagnosticPhaseSnapshot[] {
+  const now = performance.now();
+  return activePhaseStack.map((phase) => ({
+    name: phase.name,
+    elapsedMs: roundMetric(now - phase.startedWallMs, 1),
+  }));
+}
+
 function resolveRecentPhaseLimit(limit: number): number | null {
   if (!Number.isFinite(limit) || limit <= 0) {
     return null;
