@@ -1,7 +1,6 @@
 // Gateway HTTP server listen helper with retry and lock-aware errors.
 import type { Server as HttpServer } from "node:http";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
-import { cancelStartupWatchdog } from "../../logging/gateway-startup-watchdog.js";
 import { sleep } from "../../utils.js";
 
 const EADDRINUSE_MAX_RETRIES = 20;
@@ -34,11 +33,14 @@ export async function listenGatewayHttpServer(params: {
         };
         const onListening = () => {
           httpServer.off("error", onError);
-          // Tell the startup watchdog the gateway HTTP socket bound
-          // successfully so it does not fire a stale diagnostic line
-          // later in startup. Idempotent and safe when no watchdog is
-          // armed (callers other than the CLI never arm one).
-          cancelStartupWatchdog();
+          // NOTE: do NOT cancel the startup watchdog here. This callback
+          // fires after each individual bind (e.g. 127.0.0.1, then ::1 on
+          // dual-stack loopback). Cancelling on the first success would
+          // disarm the watchdog before subsequent binds complete, silently
+          // re-introducing the multi-bind hang we are trying to detect.
+          // The watchdog is cancelled after `startupTrace.mark("http.bound")`
+          // in server.impl.ts, the single point meaning "all bind hosts
+          // bound + listen complete".
           resolve();
         };
         httpServer.once("error", onError);

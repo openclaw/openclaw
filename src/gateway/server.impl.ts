@@ -39,6 +39,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
+import { cancelStartupWatchdog } from "../logging/gateway-startup-watchdog.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
@@ -1516,6 +1517,12 @@ export async function startGatewayServer(
     );
     await startupTrace.measure("http.listen", () => startListening());
     startupTrace.mark("http.bound");
+    // All bind hosts (incl. dual-stack 127.0.0.1 + ::1) have completed
+    // listen. Disarm the startup watchdog here — not in the per-bind
+    // callback in http-listen.ts — so a multi-bind hang cannot silently
+    // disarm us between the first bind success and the second bind
+    // attempt. Idempotent and safe when no watchdog is armed.
+    cancelStartupWatchdog();
     const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
     let postAttachRuntimeReturned = false;
     let scheduledServicesActivated = false;
