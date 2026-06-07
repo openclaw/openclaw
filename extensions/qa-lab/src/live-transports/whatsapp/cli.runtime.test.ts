@@ -25,7 +25,7 @@ vi.mock("./whatsapp-live.runtime.js", () => ({
 }));
 
 const tempDirs: string[] = [];
-let originalExitCode: string | number | undefined;
+let originalExitCode: typeof process.exitCode;
 
 afterEach(async () => {
   process.exitCode = originalExitCode;
