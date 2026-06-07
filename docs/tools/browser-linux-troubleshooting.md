@@ -158,9 +158,11 @@ Notes:
 
 - `user` is host-only. For Linux servers, containers, or remote hosts, prefer CDP profiles.
 - `user` / other `existing-session` profiles keep the current Chrome MCP limits:
-  ref-driven actions, one-file upload hooks, no dialog timeout overrides, no
-  `wait --load networkidle`, and no `responsebody`, PDF export, download
-  interception, or batch actions.
+  ref-driven actions, one-file upload hooks, bounded dialog hook timeouts, no
+  `dialogId` responses, no `responsebody`, PDF export, download interception, or batch actions. Debug
+  detail routes such as trace, heap snapshot, Lighthouse, screencast, console
+  message detail, and request detail require an explicit Chrome MCP diagnostics
+  capability opt-in for personal signed-in profiles.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; only set those for remote CDP.
 - Remote CDP profiles accept `http://`, `https://`, `ws://`, and `wss://`.
   Use HTTP(S) for `/json/version` discovery, or WS(S) when your browser

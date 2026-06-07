@@ -9,6 +9,24 @@ import { makeBrowserServerState } from "../server-context.test-harness.js";
 import { registerBrowserTabRoutes } from "./tabs.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
+const chromeMcpMock = vi.hoisted(() => ({
+  ensureChromeMcpAvailable: vi.fn(async () => {}),
+  listChromeMcpTabs: vi.fn(async () => [
+    {
+      targetId: "MCP-PAGE-1",
+      title: "",
+      url: "https://example.com/mcp",
+      type: "page",
+    },
+  ]),
+}));
+
+vi.mock("../chrome-mcp.js", () => chromeMcpMock);
+
+vi.mock("../chrome-mcp.runtime.js", () => ({
+  getChromeMcpModule: vi.fn(async () => chromeMcpMock),
+}));
+
 afterEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
@@ -80,6 +98,58 @@ describe("browser tab routes attachOnly loopback profiles", () => {
           title: "WordPress",
           url: "https://example.com/wp-login.php",
           wsUrl: "ws://127.0.0.1:9222/devtools/page/PAGE-1",
+          type: "page",
+        },
+      ],
+    });
+  });
+
+  it("uses the full Chrome MCP attach path before listing existing-session tabs", async () => {
+    const state = makeBrowserServerState({
+      profile: {
+        name: "chrome-live",
+        cdpUrl: "http://127.0.0.1:9223",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cdpPort: 0,
+        color: "#0066CC",
+        driver: "existing-session",
+        headless: false,
+        attachOnly: true,
+      },
+      resolvedOverrides: {
+        defaultProfile: "chrome-live",
+        ssrfPolicy: {},
+      },
+    });
+
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const { app, getHandlers } = createBrowserRouteApp();
+    registerBrowserTabRoutes(app, ctx as never);
+    const handler = getHandlers.get("/tabs");
+    expect(handler).toBeTypeOf("function");
+
+    const response = createBrowserRouteResponse();
+    await handler?.({ params: {}, query: { profile: "chrome-live" }, body: {} }, response.res);
+
+    expect(chromeMcpMock.ensureChromeMcpAvailable).toHaveBeenCalledWith(
+      "chrome-live",
+      expect.objectContaining({ driver: "existing-session", name: "chrome-live" }),
+    );
+    expect(chromeMcpMock.listChromeMcpTabs).toHaveBeenCalledWith(
+      "chrome-live",
+      expect.objectContaining({ driver: "existing-session", name: "chrome-live" }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({
+      running: true,
+      tabs: [
+        {
+          targetId: "MCP-PAGE-1",
+          suggestedTargetId: "t1",
+          tabId: "t1",
+          title: "",
+          url: "https://example.com/mcp",
           type: "page",
         },
       ],

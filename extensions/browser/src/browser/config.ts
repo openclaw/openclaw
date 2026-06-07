@@ -19,7 +19,7 @@ import {
   deriveDefaultBrowserControlPort,
 } from "../config/port-defaults.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { resolveUserPath } from "../utils.js";
+import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { parseBrowserHttpUrl, redactCdpUrl, isLoopbackHost } from "./cdp.helpers.js";
 import {
@@ -59,6 +59,9 @@ type BrowserSsrFPolicyCompat = NonNullable<BrowserConfig["ssrfPolicy"]> & {
    */
   allowPrivateNetwork?: boolean;
 };
+type ChromeMcpLegacyCapabilityDefaults = Partial<
+  Record<keyof ResolvedBrowserChromeMcpCapabilities, boolean>
+>;
 
 /** Browser config after defaults, derived ports, and profile defaults are applied. */
 export type ResolvedBrowserConfig = {
@@ -84,6 +87,7 @@ export type ResolvedBrowserConfig = {
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
   tabCleanup: ResolvedBrowserTabCleanupConfig;
+  chromeMcp?: BrowserConfig["chromeMcp"];
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
 };
@@ -94,6 +98,20 @@ export type ResolvedBrowserTabCleanupConfig = {
   idleMinutes: number;
   maxTabsPerSession: number;
   sweepMinutes: number;
+};
+
+export type ResolvedBrowserChromeMcpCapabilities = {
+  diagnostics: boolean;
+  extensions: boolean;
+  extensionMutation: boolean;
+  thirdPartyTools: boolean;
+  thirdPartyToolExecution: boolean;
+  webMcpTools: boolean;
+  webMcpToolExecution: boolean;
+};
+
+export type ResolvedBrowserChromeMcpConfig = {
+  capabilities: ResolvedBrowserChromeMcpCapabilities;
 };
 
 /** Runtime browser profile settings resolved from global and profile config. */
@@ -111,7 +129,10 @@ export type ResolvedBrowserProfile = {
   executablePath?: string;
   headless: boolean;
   headlessSource?: "profile" | "config" | "default";
+  noSandbox?: boolean;
   attachOnly: boolean;
+  chromeMcp?: ResolvedBrowserChromeMcpConfig;
+  cleanupBrowserProcesses?: boolean;
 };
 
 const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
@@ -256,6 +277,61 @@ function resolveBrowserTabCleanupConfig(
   };
 }
 
+function resolveChromeMcpCapability(
+  params: {
+    global?: BrowserConfig["chromeMcp"];
+    profile?: BrowserProfileConfig["chromeMcp"];
+    autoDefault: boolean;
+    legacyDefaults?: ChromeMcpLegacyCapabilityDefaults;
+  },
+  key: keyof ResolvedBrowserChromeMcpCapabilities,
+): boolean {
+  const raw = params.profile?.capabilities?.[key] ?? params.global?.capabilities?.[key];
+  if (raw !== undefined) {
+    return raw === "auto" ? params.autoDefault : raw;
+  }
+  return params.legacyDefaults?.[key] ?? params.autoDefault;
+}
+
+function resolveBrowserChromeMcpConfig(params: {
+  global?: BrowserConfig["chromeMcp"];
+  profile?: BrowserProfileConfig["chromeMcp"];
+  openClawManagedUserDataDir: boolean;
+  legacyDefaults?: ChromeMcpLegacyCapabilityDefaults;
+}): ResolvedBrowserChromeMcpConfig {
+  const policy = {
+    global: params.global,
+    profile: params.profile,
+    legacyDefaults: params.legacyDefaults,
+  };
+  return {
+    capabilities: {
+      diagnostics: resolveChromeMcpCapability(
+        { ...policy, autoDefault: params.openClawManagedUserDataDir },
+        "diagnostics",
+      ),
+      extensions: resolveChromeMcpCapability({ ...policy, autoDefault: false }, "extensions"),
+      extensionMutation: resolveChromeMcpCapability(
+        { ...policy, autoDefault: false },
+        "extensionMutation",
+      ),
+      thirdPartyTools: resolveChromeMcpCapability(
+        { ...policy, autoDefault: false },
+        "thirdPartyTools",
+      ),
+      thirdPartyToolExecution: resolveChromeMcpCapability(
+        { ...policy, autoDefault: false },
+        "thirdPartyToolExecution",
+      ),
+      webMcpTools: resolveChromeMcpCapability({ ...policy, autoDefault: false }, "webMcpTools"),
+      webMcpToolExecution: resolveChromeMcpCapability(
+        { ...policy, autoDefault: false },
+        "webMcpToolExecution",
+      ),
+    },
+  };
+}
+
 function resolveCdpPortRangeStart(
   rawStart: number | undefined,
   fallbackStart: number,
@@ -278,6 +354,46 @@ function resolveCdpPortRangeStart(
 }
 
 const normalizeStringList = normalizeOptionalTrimmedStringList;
+
+const CHROME_MCP_LEGACY_DIAGNOSTIC_FLAGS = new Set([
+  "--experimentalMemory",
+  "--experimentalScreencast",
+]);
+const CHROME_MCP_LEGACY_EXTENSION_FLAGS = new Set([
+  "--experimentalInteropTools",
+  "--categoryExtensions",
+]);
+const CHROME_MCP_LEGACY_THIRD_PARTY_FLAGS = new Set(["--categoryExperimentalThirdParty"]);
+const CHROME_MCP_LEGACY_WEB_MCP_FLAGS = new Set(["--categoryExperimentalWebmcp"]);
+
+function readChromeMcpFlagName(arg: string): string {
+  const [name] = arg.split("=", 1);
+  return name ?? arg;
+}
+
+function inferLegacyChromeMcpCapabilityDefaults(
+  mcpArgs: string[] | undefined,
+): ChromeMcpLegacyCapabilityDefaults {
+  const defaults: ChromeMcpLegacyCapabilityDefaults = {};
+
+  for (const arg of mcpArgs ?? []) {
+    const flag = readChromeMcpFlagName(arg);
+    if (CHROME_MCP_LEGACY_DIAGNOSTIC_FLAGS.has(flag)) {
+      defaults.diagnostics = true;
+    }
+    if (CHROME_MCP_LEGACY_EXTENSION_FLAGS.has(flag)) {
+      defaults.extensions = true;
+    }
+    if (CHROME_MCP_LEGACY_THIRD_PARTY_FLAGS.has(flag)) {
+      defaults.thirdPartyTools = true;
+    }
+    if (CHROME_MCP_LEGACY_WEB_MCP_FLAGS.has(flag)) {
+      defaults.webMcpTools = true;
+    }
+  }
+
+  return defaults;
+}
 
 function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
   const rawPolicy = cfg?.ssrfPolicy as BrowserSsrFPolicyCompat | undefined;
@@ -343,6 +459,16 @@ function ensureDefaultUserBrowserProfile(
     color: "#00AA00",
   };
   return result;
+}
+
+function isOpenClawManagedUserDataDir(profileName: string, userDataDir?: string): boolean {
+  if (!userDataDir) {
+    return false;
+  }
+  return (
+    path.resolve(userDataDir) ===
+    path.resolve(path.join(CONFIG_DIR, "browser", profileName, "user-data"))
+  );
 }
 
 /** Resolve raw browser config into runtime browser defaults. */
@@ -465,6 +591,7 @@ export function resolveBrowserConfig(
     defaultProfile,
     profiles,
     tabCleanup: resolveBrowserTabCleanupConfig(cfg),
+    chromeMcp: cfg?.chromeMcp,
     ssrfPolicy: resolveBrowserSsrFPolicy(cfg),
     extraArgs,
   };
@@ -492,21 +619,32 @@ export function resolveProfile(
 
   if (driver === "existing-session") {
     const existingSessionCdp = normalizeExistingSessionCdpUrl(rawProfileUrl, profileName);
+    const userDataDir = resolveUserPath(profile.userDataDir?.trim() || "") || undefined;
+    const openClawManagedUserDataDir = isOpenClawManagedUserDataDir(profileName, userDataDir);
+    const mcpArgs = normalizeStringList(profile.mcpArgs) ?? undefined;
     return {
       name: profileName,
       cdpPort: 0,
       cdpUrl: existingSessionCdp?.cdpUrl ?? "",
       cdpHost: existingSessionCdp?.cdpHost ?? "",
       cdpIsLoopback: existingSessionCdp?.cdpIsLoopback ?? true,
-      userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
+      userDataDir,
       mcpCommand: normalizeOptionalString(profile.mcpCommand),
-      mcpArgs: normalizeStringList(profile.mcpArgs) ?? undefined,
+      mcpArgs,
       color: profile.color,
       driver,
       executablePath,
       headless,
       headlessSource,
+      noSandbox: resolved.noSandbox,
       attachOnly: true,
+      chromeMcp: resolveBrowserChromeMcpConfig({
+        global: resolved.chromeMcp,
+        profile: profile.chromeMcp,
+        openClawManagedUserDataDir,
+        legacyDefaults: inferLegacyChromeMcpCapabilityDefaults(mcpArgs),
+      }),
+      ...(openClawManagedUserDataDir ? { cleanupBrowserProcesses: true } : {}),
     };
   }
 
@@ -554,7 +692,13 @@ export function resolveProfile(
     executablePath,
     headless,
     headlessSource,
+    noSandbox: resolved.noSandbox,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
+    chromeMcp: resolveBrowserChromeMcpConfig({
+      global: resolved.chromeMcp,
+      profile: profile.chromeMcp,
+      openClawManagedUserDataDir: false,
+    }),
   };
 }
 

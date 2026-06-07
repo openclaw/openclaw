@@ -4,9 +4,11 @@
  * Handles profile-aware snapshot generation across Playwright and Chrome MCP,
  * navigation policy checks, media storage, and screenshot normalization.
  */
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
-import { captureScreenshot, snapshotAria, snapshotRoleViaCdp } from "../cdp.js";
+import { captureScreenshot, printPdfViaCdp, snapshotAria, snapshotRoleViaCdp } from "../cdp.js";
 import {
   evaluateChromeMcpScript,
   navigateChromeMcpPage,
@@ -18,7 +20,9 @@ import {
   buildAiSnapshotFromChromeMcpSnapshot,
   flattenChromeMcpSnapshotToAriaNodes,
 } from "../chrome-mcp.snapshot.js";
+import { isChromeReachable } from "../chrome.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
+import { BrowserError } from "../errors.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
@@ -29,7 +33,7 @@ import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
-import type { BrowserRouteContext } from "../server-context.js";
+import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { appendSnapshotUrls, type SnapshotUrlEntry } from "../snapshot-urls.js";
 import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import {
@@ -54,6 +58,66 @@ import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { asyncBrowserRoute, jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
 
 const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
+const EXISTING_SESSION_PDF_CDP_PROBE_TIMEOUT_MS = 500;
+
+function defaultExistingSessionDevToolsDirs(): string[] {
+  const dirs = [path.join(os.homedir(), ".config", "google-chrome")];
+  if (process.platform === "linux") {
+    dirs.push(path.join(os.homedir(), ".config", "chromium"));
+  } else if (process.platform === "darwin") {
+    dirs.push(path.join(os.homedir(), "Library", "Application Support", "Google", "Chrome"));
+    dirs.push(path.join(os.homedir(), "Library", "Application Support", "Chromium"));
+  } else if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA?.trim();
+    if (localAppData) {
+      dirs.push(path.join(localAppData, "Google", "Chrome", "User Data"));
+      dirs.push(path.join(localAppData, "Chromium", "User Data"));
+    }
+  }
+  return dirs;
+}
+
+function readDevToolsActivePortCdpUrl(dir: string | undefined): string | undefined {
+  if (!dir) {
+    return undefined;
+  }
+  try {
+    const raw = fs.readFileSync(path.join(dir, "DevToolsActivePort"), "utf8");
+    const [portRaw] = raw.split(/\r?\n/);
+    const port = Number.parseInt(portRaw?.trim() ?? "", 10);
+    return Number.isInteger(port) && port > 0 && port <= 65535
+      ? `http://127.0.0.1:${port}`
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveExistingSessionPdfCdpUrl(
+  profileCtx: ProfileContext,
+  cdpUrl: string,
+  ssrfPolicy?: Parameters<typeof isChromeReachable>[2],
+): Promise<string> {
+  const explicit = cdpUrl.trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  for (const dir of [profileCtx.profile.userDataDir, ...defaultExistingSessionDevToolsDirs()]) {
+    const resolved = readDevToolsActivePortCdpUrl(dir);
+    if (
+      resolved &&
+      (await isChromeReachable(resolved, EXISTING_SESSION_PDF_CDP_PROBE_TIMEOUT_MS, ssrfPolicy))
+    ) {
+      return resolved;
+    }
+  }
+
+  throw new BrowserError(
+    `existing-session PDF requires browser.profiles.${profileCtx.profile.name}.cdpUrl or a reachable DevToolsActivePort HTTP CDP endpoint. Chrome MCP pipe sessions do not expose HTTP CDP for PDF generation; use screenshot/snapshot or configure a reachable cdpUrl.`,
+    501,
+  );
+}
 
 async function collectChromeMcpSnapshotUrls(params: {
   profileName: string;
@@ -322,7 +386,33 @@ export function registerBrowserAgentSnapshotRoutes(
         return;
       }
       if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-        return jsonError(res, 501, EXISTING_SESSION_LIMITS.snapshot.pdfUnsupported);
+        await withRouteTabContext({
+          req,
+          res,
+          ctx,
+          targetId,
+          enforceCurrentUrlAllowed: true,
+          run: async ({ cdpUrl, tab }) => {
+            const pdf = await printPdfViaCdp({
+              cdpUrl: await resolveExistingSessionPdfCdpUrl(
+                profileCtx,
+                cdpUrl,
+                ctx.state().resolved.ssrfPolicy,
+              ),
+              targetId: tab.targetId,
+              targetUrl: tab.url,
+            });
+            await saveBrowserMediaResponse({
+              res,
+              buffer: pdf.buffer,
+              contentType: "application/pdf",
+              maxBytes: pdf.buffer.byteLength,
+              targetId: tab.targetId,
+              url: tab.url,
+            });
+          },
+        });
+        return;
       }
       await withPlaywrightRouteContext({
         req,

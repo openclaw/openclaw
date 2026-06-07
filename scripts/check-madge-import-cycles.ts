@@ -7,6 +7,7 @@ import ts from "typescript";
 import {
   collectSourceFiles,
   collectStronglyConnectedComponents,
+  formatCycle,
 } from "./lib/import-cycle-graph.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -28,17 +29,46 @@ function loadCompilerOptions(): ts.CompilerOptions {
   return ts.parseJsonConfigFileContent(config.config, ts.sys, repoRoot).options;
 }
 
-function collectStaticModuleSpecifiers(sourceFile: ts.SourceFile): string[] {
+function importDeclarationHasRuntimeEdge(node: ts.ImportDeclaration): boolean {
+  if (!node.importClause) {
+    return true;
+  }
+  if (node.importClause.isTypeOnly) {
+    return false;
+  }
+  const bindings = node.importClause.namedBindings;
+  if (node.importClause.name || !bindings || ts.isNamespaceImport(bindings)) {
+    return true;
+  }
+  return bindings.elements.some((element) => !element.isTypeOnly);
+}
+
+function exportDeclarationHasRuntimeEdge(node: ts.ExportDeclaration): boolean {
+  if (!node.moduleSpecifier || node.isTypeOnly) {
+    return false;
+  }
+  const clause = node.exportClause;
+  if (!clause || ts.isNamespaceExport(clause)) {
+    return true;
+  }
+  return clause.elements.some((element) => !element.isTypeOnly);
+}
+
+function collectRuntimeStaticModuleSpecifiers(sourceFile: ts.SourceFile): string[] {
   const specifiers: string[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-      specifiers.push(node.moduleSpecifier.text);
+      if (importDeclarationHasRuntimeEdge(node)) {
+        specifiers.push(node.moduleSpecifier.text);
+      }
     } else if (
       ts.isExportDeclaration(node) &&
       node.moduleSpecifier &&
       ts.isStringLiteral(node.moduleSpecifier)
     ) {
-      specifiers.push(node.moduleSpecifier.text);
+      if (exportDeclarationHasRuntimeEdge(node)) {
+        specifiers.push(node.moduleSpecifier.text);
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -67,7 +97,7 @@ function createImportGraph(files: readonly string[]): Map<string, string[]> {
       ts.ScriptTarget.Latest,
       true,
     );
-    const imports = collectStaticModuleSpecifiers(sourceFile).flatMap((specifier) => {
+    const imports = collectRuntimeStaticModuleSpecifiers(sourceFile).flatMap((specifier) => {
       const resolved = ts.resolveModuleName(
         specifier,
         absoluteFile,
@@ -101,19 +131,17 @@ function main(): number {
   const graph = createImportGraph(files);
   const cycles = collectStronglyConnectedComponents(graph);
 
-  console.log(`Madge import cycle check: ${cycles.length} cycle(s).`);
+  console.log(`Madge import cycle check: ${cycles.length} runtime value cycle(s).`);
   if (cycles.length === 0) {
     return 0;
   }
 
   console.error("\nMadge circular dependencies:");
   for (const [index, cycle] of cycles.entries()) {
-    console.error(`\n# cycle ${index + 1}`);
-    console.error(`  ${cycle.join("\n  -> ")}`);
+    console.error(`\n# cycle ${index + 1} (component size ${cycle.length})`);
+    console.error(formatCycle(cycle, graph));
   }
-  console.error(
-    "\nBreak the cycle or extract a leaf contract instead of routing through a barrel.",
-  );
+  console.error("\nBreak the cycle or convert type-only edges to `import type`.");
   return 1;
 }
 

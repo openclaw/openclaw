@@ -780,6 +780,42 @@ describe("config schema", () => {
     });
   });
 
+  it("accepts Browser Chrome MCP capability policy in the runtime zod schema", () => {
+    const parsed = OpenClawSchema.parse({
+      browser: {
+        chromeMcp: {
+          capabilities: {
+            diagnostics: "auto",
+            extensions: false,
+            extensionMutation: true,
+            thirdPartyTools: false,
+            thirdPartyToolExecution: false,
+            webMcpTools: false,
+            webMcpToolExecution: false,
+          },
+        },
+        profiles: {
+          "agent-chrome": {
+            driver: "existing-session",
+            attachOnly: true,
+            color: "#00AA00",
+            chromeMcp: {
+              capabilities: {
+                extensions: true,
+                extensionMutation: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(parsed.browser?.chromeMcp?.capabilities?.diagnostics).toBe("auto");
+    expect(
+      parsed.browser?.profiles?.["agent-chrome"]?.chromeMcp?.capabilities?.extensionMutation,
+    ).toBe(true);
+  });
+
   it("accepts web fetch ssrfPolicy in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       web: {

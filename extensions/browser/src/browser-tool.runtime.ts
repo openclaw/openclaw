@@ -40,7 +40,9 @@ export {
   browserArmFileChooser,
   browserConsoleMessages,
   browserNavigate,
+  browserNetworkRequests,
   browserPdfSave,
+  browserRouteJson,
   browserScreenshotAction,
 } from "./browser/client-actions.js";
 export {

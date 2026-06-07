@@ -393,6 +393,17 @@ See [Inferred commitments](/concepts/commitments).
       maxTabsPerSession: 8,
       sweepMinutes: 5,
     },
+    chromeMcp: {
+      capabilities: {
+        diagnostics: "auto",
+        extensions: false,
+        extensionMutation: false,
+        thirdPartyTools: false,
+        thirdPartyToolExecution: false,
+        webMcpTools: false,
+        webMcpToolExecution: false,
+      },
+    },
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
       work: {
@@ -406,6 +417,13 @@ See [Inferred commitments](/concepts/commitments).
         attachOnly: true,
         userDataDir: "~/Library/Application Support/BraveSoftware/Brave-Browser",
         color: "#FB542B",
+      },
+      "chrome-proof": {
+        driver: "existing-session",
+        executablePath: "/usr/bin/google-chrome",
+        headless: true,
+        mcpArgs: ["--isolated", "--no-usage-statistics"],
+        color: "#00AA00",
       },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
     },
@@ -442,9 +460,28 @@ See [Inferred commitments](/concepts/commitments).
   the selected host or through a connected browser node.
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
+- For disposable Chrome MCP proof runs, use an `existing-session` profile with
+  `executablePath`, `headless`, and `mcpArgs` such as `["--isolated",
+"--no-usage-statistics"]` instead of `userDataDir`. That launches a temporary
+  Chrome MCP browser path without depending on signed-in browser state.
+- `chromeMcp.capabilities` gates higher-risk Chrome MCP routes on
+  `existing-session` profiles. `"auto"` enables diagnostics only for
+  OpenClaw-managed existing-session profile data dirs. Extension inventory
+  should be enabled explicitly only for Chrome MCP pipe-launch profiles because
+  Chrome DevTools MCP does not currently support that category for auto-connect,
+  browser URL, or websocket endpoint sessions.
+- Legacy Chrome MCP diagnostic/category flags in `mcpArgs` are accepted as
+  upgrade compatibility defaults when no explicit capability policy overrides
+  them. They are not a substitute for new configs: set
+  `chromeMcp.capabilities` directly, especially for mutation or page-provided
+  tool execution, which are never inferred from legacy category flags.
+- Deleting an OpenClaw-managed local browser profile removes that profile entry
+  and moves its managed data to Trash. Deleting an `existing-session` profile
+  removes only the OpenClaw profile entry; an explicit external `userDataDir` is
+  left untouched.
 - `existing-session` profiles keep the current Chrome MCP route limits:
   snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
-  hooks, no dialog timeout overrides, no `wait --load networkidle`, and no
+  hooks, bounded dialog hook timeouts, no `dialogId` responses, and no
   `responsebody`, PDF export, download interception, or batch actions.
 - Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; only
   set `cdpUrl` explicitly for remote CDP.

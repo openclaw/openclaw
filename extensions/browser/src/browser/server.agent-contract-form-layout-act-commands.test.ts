@@ -13,6 +13,7 @@ import {
 } from "./server.agent-contract.test-harness.js";
 import {
   getBrowserControlServerTestState,
+  getCdpMocks,
   getPwMocks,
   setBrowserControlServerSsrFPolicy,
   setBrowserControlServerTabUrl,
@@ -21,6 +22,7 @@ import { getBrowserTestFetch, type BrowserTestFetch } from "./test-support/fetch
 
 const state = getBrowserControlServerTestState();
 const pwMocks = getPwMocks();
+const cdpMocks = getCdpMocks();
 const realFetch: BrowserTestFetch = (input, init) => getBrowserTestFetch()(input, init);
 
 beforeAll(async () => {
@@ -551,11 +553,13 @@ describe("browser control server", () => {
     });
     expectOkResult(dialog);
     expectBrowserCallFields(pwMocks.armDialogViaPlaywright, {
+      cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
-      accept: true,
       dialogId: "d1",
-      timeoutMs: 5678,
+      accept: true,
+      timeoutMs: 5000,
     });
+    expect(cdpMocks.handleJavaScriptDialogViaCdp).not.toHaveBeenCalled();
 
     const waitDownload = await postJson(`${base}/wait/download`, {
       path: "report.pdf",

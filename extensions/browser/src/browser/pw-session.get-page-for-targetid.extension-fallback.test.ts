@@ -173,10 +173,10 @@ describe("pw-session getPageForTargetId", () => {
     }
   });
 
-  it("resolves pages from /json/list when page CDP probing fails", async () => {
+  it("resolves a requested target from /json/list before page CDP probing", async () => {
     const { newCDPSession, pages } = createExtensionFallbackBrowserHarness({
       urls: ["https://alpha.example", "https://beta.example"],
-      newCDPSessionError: "Target.attachToBrowserTarget: Not allowed",
+      newCDPSessionError: "Target.attachToBrowserTarget: page is blocked by dialog",
     });
     const [, pageB] = pages;
 
@@ -190,11 +190,34 @@ describe("pw-session getPageForTargetId", () => {
 
     try {
       const resolved = await getPageForTargetId({
-        cdpUrl: "http://127.0.0.1:19993",
+        cdpUrl: "http://127.0.0.1:19992",
         targetId: "TARGET_B",
       });
       expect(resolved).toBe(pageB);
-      expect(newCDPSession).toHaveBeenCalled();
+      expect(newCDPSession).not.toHaveBeenCalled();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("falls back to page CDP probing when /json/list target matching fails", async () => {
+    const bundle = makeBrowser([
+      { targetId: "TARGET_A", url: "https://alpha.example" },
+      { targetId: "TARGET_B", url: "https://beta.example" },
+    ]);
+    connectOverCdpSpy.mockResolvedValue(bundle.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("json/list down"));
+
+    try {
+      const resolved = await getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:19993",
+        targetId: "TARGET_B",
+      });
+      expect(resolved).toBe(bundle.pages[1]);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
     } finally {
       fetchSpy.mockRestore();
     }

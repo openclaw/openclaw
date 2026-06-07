@@ -24,6 +24,7 @@ import {
   uniqueStrings,
   uniqueValues,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -31,6 +32,10 @@ import { asRecord } from "../record-shared.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import type { BrowserTab } from "./client.types.js";
+import type {
+  ResolvedBrowserChromeMcpCapabilities,
+  ResolvedBrowserChromeMcpConfig,
+} from "./config.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
 
 const log = createSubsystemLogger("browser").child("chrome-mcp");
@@ -39,6 +44,62 @@ type ChromeMcpStructuredPage = {
   id: number;
   url?: string;
   selected?: boolean;
+};
+
+export type ChromeMcpConsoleMessage = {
+  id?: number;
+  type?: string;
+  text?: string;
+  argsCount?: number;
+  args?: unknown[];
+  stackTrace?: string;
+};
+
+export type ChromeMcpNetworkRequest = {
+  requestId?: number;
+  id?: string;
+  method?: string;
+  url?: string;
+  status?: string;
+  selectedInDevToolsUI?: boolean;
+  requestHeaders?: Record<string, string>;
+  responseHeaders?: Record<string, string>;
+  requestBody?: string;
+  responseBody?: string;
+};
+
+export type ChromeMcpPagination = {
+  currentPage?: number;
+  totalPages?: number;
+  hasNextPage?: boolean;
+  hasPreviousPage?: boolean;
+  startIndex?: number;
+  endIndex?: number;
+  invalidPage?: boolean;
+};
+
+export type ChromeMcpConsoleMessagesResult = {
+  messages: ChromeMcpConsoleMessage[];
+  pagination?: ChromeMcpPagination;
+};
+
+export type ChromeMcpNetworkRequestsResult = {
+  requests: ChromeMcpNetworkRequest[];
+  pagination?: ChromeMcpPagination;
+};
+
+export type ChromeMcpExtension = {
+  id?: string;
+  name?: string;
+  version?: string;
+  enabled?: boolean;
+  path?: string;
+  [key: string]: unknown;
+};
+
+export type ChromeMcpGenericToolResult = {
+  output: string;
+  structuredContent?: Record<string, unknown>;
 };
 
 type ChromeMcpToolResult = {
@@ -52,6 +113,7 @@ type ChromeMcpSession = {
   transport: StdioClientTransport;
   ready: Promise<void>;
   ownsProcessTree?: boolean;
+  options?: NormalizedChromeMcpProfileOptions;
 };
 
 type ChromeMcpCallOptions = {
@@ -64,6 +126,11 @@ type ChromeMcpCallOptions = {
 export type ChromeMcpProfileOptions = {
   userDataDir?: string;
   cdpUrl?: string;
+  executablePath?: string;
+  headless?: boolean;
+  noSandbox?: boolean;
+  cleanupBrowserProcesses?: boolean;
+  chromeMcp?: ResolvedBrowserChromeMcpConfig;
   mcpCommand?: string;
   mcpArgs?: string[];
 };
@@ -71,6 +138,11 @@ export type ChromeMcpProfileOptions = {
 type NormalizedChromeMcpProfileOptions = {
   userDataDir?: string;
   browserUrl?: string;
+  executablePath?: string;
+  headless?: boolean;
+  noSandbox?: boolean;
+  cleanupBrowserProcesses?: boolean;
+  chromeMcp?: ResolvedBrowserChromeMcpConfig;
   command: string;
   extraArgs: string[];
 };
@@ -120,14 +192,58 @@ export type ChromeMcpProcessCleanupDeps = {
 
 const DEFAULT_CHROME_MCP_COMMAND = "npx";
 const DEFAULT_CHROME_MCP_PACKAGE_ARGS = ["-y", "chrome-devtools-mcp@latest"];
-const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
+const DEFAULT_CHROME_MCP_BASE_FEATURE_ARGS = [
   "--no-usage-statistics",
   // Direct chrome-devtools-mcp launches do not enable structuredContent by default.
   "--experimentalStructuredContent",
   "--experimental-page-id-routing",
+  // Enables Chrome DevTools MCP's coordinate-based click_at tool for OpenClaw clickCoords.
+  "--experimentalVision",
 ];
+const DEFAULT_CHROME_MCP_DIAGNOSTIC_FEATURE_ARGS = [
+  // Enables Chrome DevTools MCP heap snapshot inspection tools.
+  "--experimentalMemory",
+  // Enables Chrome DevTools MCP screencast_start/stop tools.
+  "--experimentalScreencast",
+  // Enables Chrome DevTools MCP get_tab_id interoperability tool.
+  "--experimentalInteropTools",
+];
+const DEFAULT_CHROME_MCP_CATEGORY_FEATURE_ARGS = {
+  // Enables Chrome DevTools MCP page-exposed tool listing/execution surfaces.
+  thirdPartyTools: "--categoryExperimentalThirdParty",
+  webMcpTools: "--categoryExperimentalWebmcp",
+  // Enables Chrome DevTools MCP extension inventory/actions when the connected Chrome mode supports it.
+  extensions: "--categoryExtensions",
+} as const;
+const FALLBACK_CHROME_MCP_CAPABILITIES: ResolvedBrowserChromeMcpCapabilities = {
+  diagnostics: false,
+  extensions: false,
+  extensionMutation: false,
+  thirdPartyTools: false,
+  thirdPartyToolExecution: false,
+  webMcpTools: false,
+  webMcpToolExecution: false,
+};
 const CHROME_MCP_USAGE_STATISTICS_FLAG_RE = /^--(?:no-)?usage-?statistics(?:=.*)?$/i;
+const CHROME_MCP_POLICY_CONTROLLED_FEATURE_FLAGS = new Set([
+  ...DEFAULT_CHROME_MCP_DIAGNOSTIC_FEATURE_ARGS,
+  ...Object.values(DEFAULT_CHROME_MCP_CATEGORY_FEATURE_ARGS),
+]);
+const CHROME_MCP_PROCESS_SCAN_TIMEOUT_MS = 1_000;
+const CHROME_MCP_BROWSER_STOP_GRACE_MS = 1_500;
+
+const execFileAsync = promisify(execFile);
 const CHROME_MCP_CONNECTION_FLAGS = new Set([
+  "--autoConnect",
+  "--auto-connect",
+  "--browserUrl",
+  "--browser-url",
+  "--wsEndpoint",
+  "--ws-endpoint",
+  "--isolated",
+  "-w",
+]);
+const CHROME_MCP_LAUNCH_SUPPRESSING_CONNECTION_FLAGS = new Set([
   "--autoConnect",
   "--auto-connect",
   "--browserUrl",
@@ -137,6 +253,9 @@ const CHROME_MCP_CONNECTION_FLAGS = new Set([
   "-w",
 ]);
 const CHROME_MCP_USER_DATA_DIR_FLAGS = new Set(["--userDataDir", "--user-data-dir"]);
+const CHROME_MCP_EXECUTABLE_PATH_FLAGS = new Set(["--executablePath", "--executable-path", "-e"]);
+const CHROME_MCP_HEADLESS_FLAGS = new Set(["--headless", "--no-headless"]);
+const CHROME_MCP_CHROME_ARG_FLAGS = new Set(["--chromeArg", "--chrome-arg"]);
 const CHROME_MCP_NEW_PAGE_TIMEOUT_MS = 5_000;
 const CHROME_MCP_NAVIGATE_TIMEOUT_MS = 20_000;
 const CHROME_MCP_HANDSHAKE_TIMEOUT_MS = 30_000;
@@ -146,9 +265,15 @@ const CDP_URL_IN_TEXT_RE = /\b(?:https?|wss?):\/\/[^\s"'<>`]+/gi;
 const STALE_SELECTED_PAGE_ERROR =
   "The selected page has been closed. Call list_pages to see open pages.";
 
-const execFileAsync = promisify(execFile);
+type ChromeMcpTrackedEmulationState = {
+  networkConditions?: "Offline";
+  geolocation?: string;
+  colorScheme?: "dark" | "light";
+};
+
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, PendingChromeMcpSession>();
+const emulationStates = new Map<string, ChromeMcpTrackedEmulationState>();
 let sessionFactory: ChromeMcpSessionFactory | null = null;
 let chromeMcpProcessCleanupDepsForTest: ChromeMcpProcessCleanupDeps | null = null;
 
@@ -205,6 +330,46 @@ function extractStructuredContent(result: ChromeMcpToolResult): Record<string, u
   return asRecord(result.structuredContent) ?? {};
 }
 
+function toGenericToolResult(result: ChromeMcpToolResult): ChromeMcpGenericToolResult {
+  const structuredContent = extractStructuredContent(result);
+  return {
+    output: extractMessageText(result),
+    ...(Object.keys(structuredContent).length > 0 ? { structuredContent } : {}),
+  };
+}
+
+function extractTextExtensions(result: ChromeMcpToolResult): ChromeMcpExtension[] {
+  const extensions: ChromeMcpExtension[] = [];
+  for (const block of extractTextContent(result)) {
+    for (const line of block.split(/\r?\n/)) {
+      const match = line.match(/\bid=([^\s]+)\s+"([^"]+)"\s+v([^\s]+)(?:\s+(Enabled|Disabled))?/i);
+      if (!match) {
+        continue;
+      }
+      extensions.push({
+        id: match[1],
+        name: match[2],
+        version: match[3],
+        ...(match[4] ? { enabled: /^enabled$/i.test(match[4]) } : {}),
+      });
+    }
+  }
+  return extensions;
+}
+
+function extractExtensions(result: ChromeMcpToolResult): ChromeMcpExtension[] {
+  const textExtensions = extractTextExtensions(result);
+  const extensions = extractStructuredContent(result).extensions;
+  if (!Array.isArray(extensions)) {
+    return textExtensions;
+  }
+  const structuredExtensions = extensions
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is ChromeMcpExtension => Boolean(entry))
+    .filter((entry) => Object.keys(entry).length > 0);
+  return structuredExtensions.length > 0 ? structuredExtensions : textExtensions;
+}
+
 function extractTextContent(result: ChromeMcpToolResult): string[] {
   const content = Array.isArray(result.content) ? result.content : [];
   return content
@@ -236,6 +401,201 @@ function extractTextPages(result: ChromeMcpToolResult): ChromeMcpStructuredPage[
 function extractStructuredPages(result: ChromeMcpToolResult): ChromeMcpStructuredPage[] {
   const structured = asPages(extractStructuredContent(result).pages);
   return structured.length > 0 ? structured : extractTextPages(result);
+}
+
+function readNumberValue(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function readBooleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readStringRecord(value: unknown): Record<string, string> | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const out: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(record)) {
+    const stringEntry = readStringValue(entry);
+    if (stringEntry !== undefined) {
+      out[key] = stringEntry;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function readPagination(value: unknown): ChromeMcpPagination | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const pagination: ChromeMcpPagination = {
+    ...(readNumberValue(record.currentPage) !== undefined
+      ? { currentPage: readNumberValue(record.currentPage) }
+      : {}),
+    ...(readNumberValue(record.totalPages) !== undefined
+      ? { totalPages: readNumberValue(record.totalPages) }
+      : {}),
+    ...(readBooleanValue(record.hasNextPage) !== undefined
+      ? { hasNextPage: readBooleanValue(record.hasNextPage) }
+      : {}),
+    ...(readBooleanValue(record.hasPreviousPage) !== undefined
+      ? { hasPreviousPage: readBooleanValue(record.hasPreviousPage) }
+      : {}),
+    ...(readNumberValue(record.startIndex) !== undefined
+      ? { startIndex: readNumberValue(record.startIndex) }
+      : {}),
+    ...(readNumberValue(record.endIndex) !== undefined
+      ? { endIndex: readNumberValue(record.endIndex) }
+      : {}),
+    ...(readBooleanValue(record.invalidPage) !== undefined
+      ? { invalidPage: readBooleanValue(record.invalidPage) }
+      : {}),
+  };
+  return Object.values(pagination).some((entry) => entry !== undefined) ? pagination : undefined;
+}
+
+function readConsoleMessage(value: unknown): ChromeMcpConsoleMessage | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const id = readNumberValue(record.id) ?? readNumberValue(record.msgid);
+  return {
+    ...(id !== undefined ? { id } : {}),
+    ...(readStringValue(record.type) !== undefined ? { type: readStringValue(record.type) } : {}),
+    ...(readStringValue(record.text) !== undefined ? { text: readStringValue(record.text) } : {}),
+    ...(readNumberValue(record.argsCount) !== undefined
+      ? { argsCount: readNumberValue(record.argsCount) }
+      : {}),
+    ...(Array.isArray(record.args) ? { args: record.args } : {}),
+    ...(readStringValue(record.stackTrace) !== undefined
+      ? { stackTrace: readStringValue(record.stackTrace) }
+      : {}),
+  };
+}
+
+function extractTextConsoleMessages(result: ChromeMcpToolResult): ChromeMcpConsoleMessage[] {
+  const messages: ChromeMcpConsoleMessage[] = [];
+  for (const block of extractTextContent(result)) {
+    for (const line of block.split(/\r?\n/)) {
+      const match = line.match(
+        /^\s*msgid=(\d+)\s+\[([^\]]+)]\s+(.+?)(?:\s+\((\d+)\s+args\))?\s*$/i,
+      );
+      if (!match) {
+        continue;
+      }
+      messages.push({
+        id: Number.parseInt(match[1] ?? "", 10),
+        type: normalizeOptionalString(match[2]),
+        text: normalizeOptionalString(match[3]),
+        argsCount: match[4] ? Number.parseInt(match[4], 10) : undefined,
+      });
+    }
+  }
+  return messages;
+}
+
+function extractConsoleMessages(result: ChromeMcpToolResult): ChromeMcpConsoleMessagesResult {
+  const structured = extractStructuredContent(result);
+  const rawMessages = Array.isArray(structured.consoleMessages) ? structured.consoleMessages : [];
+  const messages = rawMessages
+    .map((entry) => readConsoleMessage(entry))
+    .filter((entry): entry is ChromeMcpConsoleMessage => entry !== null);
+  return {
+    messages: messages.length > 0 ? messages : extractTextConsoleMessages(result),
+    pagination: readPagination(structured.pagination),
+  };
+}
+
+function extractConsoleMessage(result: ChromeMcpToolResult): ChromeMcpConsoleMessage | null {
+  const structured = extractStructuredContent(result);
+  return readConsoleMessage(structured.consoleMessage);
+}
+
+function readNetworkRequest(value: unknown): ChromeMcpNetworkRequest | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const requestId = readNumberValue(record.requestId);
+  return {
+    ...(requestId !== undefined ? { requestId } : {}),
+    ...(requestId !== undefined
+      ? { id: String(requestId) }
+      : readStringValue(record.id) !== undefined
+        ? { id: readStringValue(record.id) }
+        : {}),
+    ...(readStringValue(record.method) !== undefined
+      ? { method: readStringValue(record.method) }
+      : {}),
+    ...(readStringValue(record.url) !== undefined ? { url: readStringValue(record.url) } : {}),
+    ...(readStringValue(record.status) !== undefined
+      ? { status: readStringValue(record.status) }
+      : {}),
+    ...(readBooleanValue(record.selectedInDevToolsUI) !== undefined
+      ? { selectedInDevToolsUI: readBooleanValue(record.selectedInDevToolsUI) }
+      : {}),
+    ...(readStringRecord(record.requestHeaders) !== undefined
+      ? { requestHeaders: readStringRecord(record.requestHeaders) }
+      : {}),
+    ...(readStringRecord(record.responseHeaders) !== undefined
+      ? { responseHeaders: readStringRecord(record.responseHeaders) }
+      : {}),
+    ...(readStringValue(record.requestBody) !== undefined
+      ? { requestBody: readStringValue(record.requestBody) }
+      : {}),
+    ...(readStringValue(record.responseBody) !== undefined
+      ? { responseBody: readStringValue(record.responseBody) }
+      : {}),
+  };
+}
+
+function extractTextNetworkRequests(result: ChromeMcpToolResult): ChromeMcpNetworkRequest[] {
+  const requests: ChromeMcpNetworkRequest[] = [];
+  for (const block of extractTextContent(result)) {
+    for (const line of block.split(/\r?\n/)) {
+      const match = line.match(/^\s*reqid=(\d+)\s+(\S+)\s+(.+?)\s+\[([^\]]+)]\s*$/i);
+      if (!match) {
+        continue;
+      }
+      const requestId = Number.parseInt(match[1] ?? "", 10);
+      requests.push({
+        requestId,
+        id: String(requestId),
+        method: normalizeOptionalString(match[2]),
+        url: normalizeOptionalString(match[3]),
+        status: normalizeOptionalString(match[4]),
+      });
+    }
+  }
+  return requests;
+}
+
+function extractNetworkRequests(result: ChromeMcpToolResult): ChromeMcpNetworkRequestsResult {
+  const structured = extractStructuredContent(result);
+  const rawRequests = Array.isArray(structured.networkRequests) ? structured.networkRequests : [];
+  const requests = rawRequests
+    .map((entry) => readNetworkRequest(entry))
+    .filter((entry): entry is ChromeMcpNetworkRequest => entry !== null);
+  return {
+    requests: requests.length > 0 ? requests : extractTextNetworkRequests(result),
+    pagination: readPagination(structured.pagination),
+  };
+}
+
+function extractNetworkRequest(result: ChromeMcpToolResult): ChromeMcpNetworkRequest | null {
+  const structured = extractStructuredContent(result);
+  return readNetworkRequest(structured.networkRequest);
 }
 
 function extractSnapshot(result: ChromeMcpToolResult): ChromeMcpSnapshotNode {
@@ -314,6 +674,11 @@ function normalizeChromeMcpOptions(
     command,
     userDataDir: normalizeChromeMcpUserDataDir(options.userDataDir),
     browserUrl: normalizeOptionalString(options.cdpUrl),
+    executablePath: normalizeOptionalString(options.executablePath),
+    headless: typeof options.headless === "boolean" ? options.headless : undefined,
+    noSandbox: options.noSandbox === true,
+    cleanupBrowserProcesses: options.cleanupBrowserProcesses === true,
+    chromeMcp: options.chromeMcp,
     extraArgs: normalizeChromeMcpStringList(options.mcpArgs),
   };
 }
@@ -329,6 +694,27 @@ function isChromeMcpWebSocketEndpoint(url: string): boolean {
   return /^wss?:\/\//i.test(url);
 }
 
+function isChromeMcpSelectedPageLookupUnavailable(error: unknown): boolean {
+  return formatErrorMessage(error).includes("Request not found for selected page");
+}
+
+function shouldLaunchChromeMcpBrowser(options: NormalizedChromeMcpProfileOptions): boolean {
+  if (
+    options.browserUrl ||
+    hasFlag(options.extraArgs, CHROME_MCP_LAUNCH_SUPPRESSING_CONNECTION_FLAGS)
+  ) {
+    return false;
+  }
+  return Boolean(
+    options.executablePath ||
+    typeof options.headless === "boolean" ||
+    options.noSandbox ||
+    hasFlag(options.extraArgs, CHROME_MCP_EXECUTABLE_PATH_FLAGS) ||
+    hasFlag(options.extraArgs, CHROME_MCP_HEADLESS_FLAGS) ||
+    hasFlag(options.extraArgs, CHROME_MCP_CHROME_ARG_FLAGS),
+  );
+}
+
 function buildChromeMcpConnectionArgs(options: NormalizedChromeMcpProfileOptions): string[] {
   if (hasFlag(options.extraArgs, CHROME_MCP_CONNECTION_FLAGS)) {
     return [];
@@ -338,7 +724,50 @@ function buildChromeMcpConnectionArgs(options: NormalizedChromeMcpProfileOptions
       ? ["--wsEndpoint", options.browserUrl]
       : ["--browserUrl", options.browserUrl];
   }
-  return ["--autoConnect"];
+  return shouldLaunchChromeMcpBrowser(options) ? [] : ["--autoConnect"];
+}
+
+function hasChromeArgValue(args: string[], value: string): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === value) {
+      return true;
+    }
+    if (arg === "--chromeArg" || arg === "--chrome-arg") {
+      if (args[i + 1] === value) {
+        return true;
+      }
+      i++;
+      continue;
+    }
+    if (arg === `--chromeArg=${value}` || arg === `--chrome-arg=${value}`) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildChromeMcpLaunchArgs(options: NormalizedChromeMcpProfileOptions): string[] {
+  if (
+    options.browserUrl ||
+    hasFlag(options.extraArgs, CHROME_MCP_LAUNCH_SUPPRESSING_CONNECTION_FLAGS)
+  ) {
+    return [];
+  }
+  const args: string[] = [];
+  if (options.executablePath && !hasFlag(options.extraArgs, CHROME_MCP_EXECUTABLE_PATH_FLAGS)) {
+    args.push("--executablePath", options.executablePath);
+  }
+  if (
+    typeof options.headless === "boolean" &&
+    !hasFlag(options.extraArgs, CHROME_MCP_HEADLESS_FLAGS)
+  ) {
+    args.push(options.headless ? "--headless" : "--no-headless");
+  }
+  if (options.noSandbox && !hasChromeArgValue(options.extraArgs, "--no-sandbox")) {
+    args.push("--chrome-arg=--no-sandbox");
+  }
+  return args;
 }
 
 function buildChromeMcpUserDataDirArgs(options: NormalizedChromeMcpProfileOptions): string[] {
@@ -362,7 +791,32 @@ function buildChromeMcpSessionCacheKey(
     options.userDataDir ?? "",
     options.browserUrl ?? "",
     options.command,
+    options.executablePath ?? "",
+    typeof options.headless === "boolean" ? String(options.headless) : "",
+    options.noSandbox ? "true" : "",
+    options.cleanupBrowserProcesses ? "true" : "",
+    options.chromeMcp?.capabilities ?? {},
     options.extraArgs,
+  ]);
+}
+
+function buildChromeMcpPageStateKey(
+  profileName: string,
+  options: NormalizedChromeMcpProfileOptions,
+  targetId: string,
+): string {
+  return JSON.stringify([
+    profileName,
+    options.userDataDir ?? "",
+    options.browserUrl ?? "",
+    options.command,
+    options.executablePath ?? "",
+    typeof options.headless === "boolean" ? String(options.headless) : "",
+    options.noSandbox ? "true" : "",
+    options.cleanupBrowserProcesses ? "true" : "",
+    options.chromeMcp?.capabilities ?? {},
+    options.extraArgs,
+    targetId,
   ]);
 }
 
@@ -382,11 +836,33 @@ function cacheKeyMatchesProfileName(cacheKey: string, profileName: string): bool
   }
 }
 
+function pageStateKeyMatchesProfileName(
+  stateKey: string,
+  profileName: string,
+  keepSessionKey?: string,
+): boolean {
+  try {
+    const parsed = JSON.parse(stateKey);
+    if (!Array.isArray(parsed) || parsed[0] !== profileName) {
+      return false;
+    }
+    if (!keepSessionKey) {
+      return true;
+    }
+    const keep = JSON.parse(keepSessionKey);
+    return !Array.isArray(keep) || JSON.stringify(parsed.slice(0, keep.length)) !== keepSessionKey;
+  } catch {
+    return false;
+  }
+}
+
 async function closeChromeMcpSessionsForProfile(
   profileName: string,
   keepKey?: string,
+  fallbackOptions?: ChromeMcpOptionsInput,
 ): Promise<boolean> {
   let closed = false;
+  const cleanupOptions: NormalizedChromeMcpProfileOptions[] = [];
 
   for (const [key, pending] of Array.from(pendingSessions.entries())) {
     if (key !== keepKey && cacheKeyMatchesProfileName(key, profileName)) {
@@ -400,27 +876,276 @@ async function closeChromeMcpSessionsForProfile(
     if (key !== keepKey && cacheKeyMatchesProfileName(key, profileName)) {
       sessions.delete(key);
       closed = true;
+      if (session.options) {
+        cleanupOptions.push(session.options);
+      }
       await closeChromeMcpSessionHandle(session);
+    }
+  }
+
+  if (fallbackOptions) {
+    cleanupOptions.push(normalizeChromeMcpOptions(fallbackOptions));
+  }
+
+  for (const key of Array.from(emulationStates.keys())) {
+    if (pageStateKeyMatchesProfileName(key, profileName, keepKey)) {
+      emulationStates.delete(key);
+    }
+  }
+
+  for (const options of dedupeChromeMcpCleanupOptions(cleanupOptions)) {
+    const killed = await terminateChromeMcpBrowserProcessesForOptions(options);
+    if (killed > 0) {
+      closed = true;
     }
   }
 
   return closed;
 }
 
+function dedupeChromeMcpCleanupOptions(
+  options: NormalizedChromeMcpProfileOptions[],
+): NormalizedChromeMcpProfileOptions[] {
+  const seen = new Set<string>();
+  const result: NormalizedChromeMcpProfileOptions[] = [];
+  for (const option of options) {
+    const key = JSON.stringify([
+      option.userDataDir ?? "",
+      option.browserUrl ?? "",
+      option.command,
+      option.extraArgs,
+      option.cleanupBrowserProcesses === true,
+    ]);
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(option);
+    }
+  }
+  return result;
+}
+
+function shouldCleanupChromeMcpBrowserProcesses(
+  options: NormalizedChromeMcpProfileOptions,
+): options is NormalizedChromeMcpProfileOptions & { userDataDir: string } {
+  if (
+    options.cleanupBrowserProcesses !== true ||
+    !options.userDataDir ||
+    options.browserUrl ||
+    hasFlag(options.extraArgs, CHROME_MCP_CONNECTION_FLAGS)
+  ) {
+    return false;
+  }
+  const resolved = path.resolve(options.userDataDir);
+  if (resolved === path.parse(resolved).root || resolved === path.resolve(os.homedir())) {
+    return false;
+  }
+  return true;
+}
+
+function collectChromeMcpBrowserProcessIdsForUserDataDir(
+  psOutput: string,
+  userDataDir: string,
+): number[] {
+  const resolvedUserDataDir = path.resolve(userDataDir);
+  const needles = [
+    `--user-data-dir=${resolvedUserDataDir}`,
+    `--userDataDir ${resolvedUserDataDir}`,
+    `--userDataDir=${resolvedUserDataDir}`,
+  ];
+  const pids: number[] = [];
+  const includesNeedleAsArg = (command: string, needle: string): boolean => {
+    let offset = 0;
+    for (;;) {
+      const index = command.indexOf(needle, offset);
+      if (index < 0) {
+        return false;
+      }
+      const before = index === 0 ? "" : command[index - 1];
+      const after = command[index + needle.length] ?? "";
+      const beforeOk = before === "" || /\s/.test(before);
+      const afterOk = after === "" || /\s/.test(after);
+      if (beforeOk && afterOk) {
+        return true;
+      }
+      offset = index + needle.length;
+    }
+  };
+  for (const line of psOutput.split("\n")) {
+    const match = line.match(/^\s*(\d+)\s+(.*)$/);
+    if (!match) {
+      continue;
+    }
+    const pid = Number(match[1]);
+    const command = match[2] ?? "";
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) {
+      continue;
+    }
+    if (needles.some((needle) => includesNeedleAsArg(command, needle))) {
+      pids.push(pid);
+    }
+  }
+  return [...new Set(pids)];
+}
+
+export function collectChromeMcpBrowserProcessIdsForUserDataDirForTest(
+  psOutput: string,
+  userDataDir: string,
+): number[] {
+  return collectChromeMcpBrowserProcessIdsForUserDataDir(psOutput, userDataDir);
+}
+
+function collectProcessTreeIdsFromPsOutput(psOutput: string, rootPid: number): number[] {
+  if (!Number.isInteger(rootPid) || rootPid <= 0 || rootPid === process.pid) {
+    return [];
+  }
+  const childrenByParent = new Map<number, number[]>();
+  for (const line of psOutput.split("\n")) {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s*$/);
+    if (!match) {
+      continue;
+    }
+    const pid = Number(match[1]);
+    const ppid = Number(match[2]);
+    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || pid <= 0 || pid === process.pid) {
+      continue;
+    }
+    const children = childrenByParent.get(ppid) ?? [];
+    children.push(pid);
+    childrenByParent.set(ppid, children);
+  }
+
+  const seen = new Set<number>();
+  const result: number[] = [];
+  const visit = (pid: number): void => {
+    if (seen.has(pid) || pid === process.pid) {
+      return;
+    }
+    seen.add(pid);
+    for (const childPid of childrenByParent.get(pid) ?? []) {
+      visit(childPid);
+    }
+    result.push(pid);
+  };
+  visit(rootPid);
+  return result;
+}
+
+export function collectChromeMcpProcessTreeIdsForTest(psOutput: string, rootPid: number): number[] {
+  return collectProcessTreeIdsFromPsOutput(psOutput, rootPid);
+}
+
+async function findChromeMcpBrowserProcessIdsForUserDataDir(
+  userDataDir: string,
+): Promise<number[]> {
+  if (process.platform === "win32") {
+    return [];
+  }
+  try {
+    const { stdout } = await execFileAsync("ps", ["-eo", "pid=,args="], {
+      encoding: "utf8",
+      maxBuffer: 1_000_000,
+      timeout: CHROME_MCP_PROCESS_SCAN_TIMEOUT_MS,
+    });
+    return collectChromeMcpBrowserProcessIdsForUserDataDir(stdout, userDataDir);
+  } catch {
+    return [];
+  }
+}
+
+function signalProcesses(pids: number[], signal: NodeJS.Signals): number {
+  let count = 0;
+  for (const pid of pids) {
+    try {
+      process.kill(pid, signal);
+      count += 1;
+    } catch {
+      // Process already exited or is unavailable.
+    }
+  }
+  return count;
+}
+
+async function terminateChromeMcpBrowserProcessesForOptions(
+  options: NormalizedChromeMcpProfileOptions,
+): Promise<number> {
+  if (!shouldCleanupChromeMcpBrowserProcesses(options)) {
+    return 0;
+  }
+  const pids = await findChromeMcpBrowserProcessIdsForUserDataDir(options.userDataDir);
+  const signaled = signalProcesses(pids, "SIGTERM");
+  if (signaled === 0) {
+    return 0;
+  }
+  await new Promise((resolve) => {
+    setTimeout(resolve, CHROME_MCP_BROWSER_STOP_GRACE_MS);
+  });
+  const remaining = await findChromeMcpBrowserProcessIdsForUserDataDir(options.userDataDir);
+  signalProcesses(remaining, "SIGKILL");
+  return signaled;
+}
+
+function resolveChromeMcpCapabilities(
+  options: NormalizedChromeMcpProfileOptions,
+): ResolvedBrowserChromeMcpCapabilities {
+  return options.chromeMcp?.capabilities ?? FALLBACK_CHROME_MCP_CAPABILITIES;
+}
+
+function buildChromeMcpFeatureArgs(options: NormalizedChromeMcpProfileOptions): string[] {
+  const capabilities = resolveChromeMcpCapabilities(options);
+  const args = [...DEFAULT_CHROME_MCP_BASE_FEATURE_ARGS];
+  if (capabilities.diagnostics) {
+    args.push(...DEFAULT_CHROME_MCP_DIAGNOSTIC_FEATURE_ARGS);
+  } else if (capabilities.extensions) {
+    args.push("--experimentalInteropTools");
+  }
+  if (capabilities.extensions || capabilities.extensionMutation) {
+    args.push(DEFAULT_CHROME_MCP_CATEGORY_FEATURE_ARGS.extensions);
+  }
+  if (capabilities.thirdPartyTools || capabilities.thirdPartyToolExecution) {
+    args.push(DEFAULT_CHROME_MCP_CATEGORY_FEATURE_ARGS.thirdPartyTools);
+  }
+  if (capabilities.webMcpTools || capabilities.webMcpToolExecution) {
+    args.push(DEFAULT_CHROME_MCP_CATEGORY_FEATURE_ARGS.webMcpTools);
+  }
+  if (options.extraArgs.some((arg) => CHROME_MCP_USAGE_STATISTICS_FLAG_RE.test(arg))) {
+    return args.filter((arg) => arg !== "--no-usage-statistics");
+  }
+  return args;
+}
+
+function readChromeMcpFlagName(arg: string): string {
+  const [name] = arg.split("=", 1);
+  return name ?? arg;
+}
+
+function isChromeMcpPolicyControlledFeatureArg(arg: string): boolean {
+  return CHROME_MCP_POLICY_CONTROLLED_FEATURE_FLAGS.has(readChromeMcpFlagName(arg));
+}
+
+function buildChromeMcpCompatibilityExtraArgs(
+  extraArgs: string[],
+  featureArgs: string[],
+): string[] {
+  const featureArgNames = new Set(featureArgs.map((arg) => readChromeMcpFlagName(arg)));
+  return extraArgs.filter(
+    (arg) =>
+      !isChromeMcpPolicyControlledFeatureArg(arg) ||
+      !featureArgNames.has(readChromeMcpFlagName(arg)),
+  );
+}
+
 function buildChromeMcpArgsFromOptions(options: NormalizedChromeMcpProfileOptions): string[] {
   const commandPrefix =
     options.command === DEFAULT_CHROME_MCP_COMMAND ? DEFAULT_CHROME_MCP_PACKAGE_ARGS : [];
-  const defaultFeatureArgs = options.extraArgs.some((arg) =>
-    CHROME_MCP_USAGE_STATISTICS_FLAG_RE.test(arg),
-  )
-    ? DEFAULT_CHROME_MCP_FEATURE_ARGS.filter((arg) => arg !== "--no-usage-statistics")
-    : DEFAULT_CHROME_MCP_FEATURE_ARGS;
+  const featureArgs = buildChromeMcpFeatureArgs(options);
+  const extraArgs = buildChromeMcpCompatibilityExtraArgs(options.extraArgs, featureArgs);
   return [
     ...commandPrefix,
     ...buildChromeMcpConnectionArgs(options),
-    ...defaultFeatureArgs,
+    ...featureArgs,
+    ...buildChromeMcpLaunchArgs(options),
     ...buildChromeMcpUserDataDirArgs(options),
-    ...options.extraArgs,
+    ...extraArgs,
   ];
 }
 
@@ -670,6 +1395,9 @@ async function closeChromeMcpSessionHandle(session: ChromeMcpSession): Promise<v
     transport: session.transport,
     ownsProcessTree: session.ownsProcessTree,
   });
+  if (session.options) {
+    await terminateChromeMcpBrowserProcessesForOptions(session.options);
+  }
 }
 
 async function withChromeMcpHandshakeTimeout<T>(task: Promise<T>): Promise<T> {
@@ -723,6 +1451,7 @@ async function createRealSession(
       );
     } catch (err) {
       await closeChromeMcpClientAndProcess({ client, transport, ownsProcessTree: true });
+      await terminateChromeMcpBrowserProcessesForOptions(options);
       const stderr = getStderr();
       if (stderr) {
         log.warn(
@@ -751,6 +1480,7 @@ async function createRealSession(
     transport,
     ready,
     ownsProcessTree: true,
+    options,
   };
 }
 
@@ -842,6 +1572,7 @@ async function createChromeMcpSession(
   let closedAfterAbort = false;
   try {
     const session = await waitForChromeMcpPendingSession(created, signal);
+    session.options = options;
     if (signal?.aborted) {
       closedAfterAbort = true;
       await closeChromeMcpSessionHandle(session);
@@ -1280,6 +2011,35 @@ async function callTool(
   throw new Error(`Chrome MCP tool "${name}" failed after reconnect.`);
 }
 
+function isChromeMcpToolNotFoundError(err: unknown, toolName: string): boolean {
+  return formatErrorMessage(err).includes(`Tool ${toolName} not found`);
+}
+
+// Chrome DevTools MCP source/docs renamed these tools to get_heapsnapshot_*,
+// while the current npm package can still expose the legacy memory names.
+async function callToolWithNameFallback(
+  profileName: string,
+  profileOptions: ChromeMcpOptionsInput | undefined,
+  calls: readonly [
+    { name: string; args?: Record<string, unknown> },
+    ...Array<{ name: string; args?: Record<string, unknown> }>,
+  ],
+  options: ChromeMcpCallOptions = {},
+): Promise<ChromeMcpToolResult> {
+  let lastError: unknown;
+  for (const call of calls) {
+    try {
+      return await callTool(profileName, profileOptions, call.name, call.args ?? {}, options);
+    } catch (err) {
+      lastError = err;
+      if (!isChromeMcpToolNotFoundError(err, call.name)) {
+        throw err;
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-chrome-mcp-"));
   const filePath = path.join(dir, randomUUID());
@@ -1326,8 +2086,11 @@ export function getChromeMcpPid(profileName: string): number | null {
 }
 
 /** Close cached Chrome MCP sessions for one profile. */
-export async function closeChromeMcpSession(profileName: string): Promise<boolean> {
-  return await closeChromeMcpSessionsForProfile(profileName);
+export async function closeChromeMcpSession(
+  profileName: string,
+  profileOptions?: string | ChromeMcpProfileOptions,
+): Promise<boolean> {
+  return await closeChromeMcpSessionsForProfile(profileName, undefined, profileOptions);
 }
 
 /** Close every cached Chrome MCP session. */
@@ -1542,11 +2305,22 @@ export async function clickChromeMcpCoords(params: {
   delayMs?: number;
 }): Promise<void> {
   const button = params.button ?? "left";
+  const delayMsValue = resolveNonNegativeIntegerOption(params.delayMs, 0);
+  if (button === "left" && delayMsValue === 0) {
+    await callTool(params.profileName, chromeMcpProfileOptionsFromParams(params), "click_at", {
+      pageId: parsePageId(params.targetId),
+      x: params.x,
+      y: params.y,
+      ...(params.doubleClick ? { dblClick: true } : {}),
+    });
+    return;
+  }
+
   const buttonCode = button === "middle" ? 1 : button === "right" ? 2 : 0;
   const pressedButtons = button === "middle" ? 4 : button === "right" ? 2 : 1;
   const x = JSON.stringify(params.x);
   const y = JSON.stringify(params.y);
-  const delayMs = JSON.stringify(resolveNonNegativeIntegerOption(params.delayMs, 0));
+  const delayMs = JSON.stringify(delayMsValue);
   const doubleClick = params.doubleClick ? "true" : "false";
   await evaluateChromeMcpScript({
     profileName: params.profileName,
@@ -1697,6 +2471,571 @@ export async function resizeChromeMcpPage(params: {
   });
 }
 
+export async function emulateChromeMcpPage(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  offline?: boolean;
+  geolocation?: { latitude: number; longitude: number } | null;
+  colorScheme?: "dark" | "light" | "auto";
+}): Promise<void> {
+  const profileOptions = chromeMcpProfileOptionsFromParams(params);
+  const stateKey = buildChromeMcpPageStateKey(
+    params.profileName,
+    normalizeChromeMcpOptions(profileOptions),
+    params.targetId,
+  );
+  const nextState: ChromeMcpTrackedEmulationState = { ...emulationStates.get(stateKey) };
+
+  if (params.offline !== undefined) {
+    if (params.offline) {
+      nextState.networkConditions = "Offline";
+    } else {
+      delete nextState.networkConditions;
+    }
+  }
+  if (Object.hasOwn(params, "geolocation")) {
+    if (params.geolocation) {
+      nextState.geolocation = `${params.geolocation.latitude},${params.geolocation.longitude}`;
+    } else {
+      delete nextState.geolocation;
+    }
+  }
+  if (params.colorScheme !== undefined) {
+    if (params.colorScheme === "auto") {
+      delete nextState.colorScheme;
+    } else {
+      nextState.colorScheme = params.colorScheme;
+    }
+  }
+
+  await callTool(params.profileName, profileOptions, "emulate", {
+    pageId: parsePageId(params.targetId),
+    ...(nextState.networkConditions ? { networkConditions: nextState.networkConditions } : {}),
+    ...(nextState.geolocation ? { geolocation: nextState.geolocation } : {}),
+    ...(nextState.colorScheme ? { colorScheme: nextState.colorScheme } : {}),
+  });
+
+  if (Object.keys(nextState).length > 0) {
+    emulationStates.set(stateKey, nextState);
+  } else {
+    emulationStates.delete(stateKey);
+  }
+}
+
+export async function startChromeMcpPerformanceTrace(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  reload?: boolean;
+  autoStop?: boolean;
+  filePath?: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "performance_start_trace",
+    {
+      pageId: parsePageId(params.targetId),
+      reload: params.reload ?? false,
+      autoStop: params.autoStop ?? false,
+      ...(params.filePath ? { filePath: params.filePath } : {}),
+    },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export async function stopChromeMcpPerformanceTrace(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  filePath?: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "performance_stop_trace",
+    {
+      pageId: parsePageId(params.targetId),
+      ...(params.filePath ? { filePath: params.filePath } : {}),
+    },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export async function analyzeChromeMcpPerformanceInsight(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  insightSetId: string;
+  insightName: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "performance_analyze_insight",
+    {
+      pageId: parsePageId(params.targetId),
+      insightSetId: params.insightSetId,
+      insightName: params.insightName,
+    },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export type ChromeMcpHeapSnapshotInspectionResult = {
+  output: string;
+  structuredContent?: Record<string, unknown>;
+};
+
+function toHeapSnapshotInspectionResult(
+  result: ChromeMcpToolResult,
+): ChromeMcpHeapSnapshotInspectionResult {
+  const structuredContent = extractStructuredContent(result);
+  return {
+    output: extractMessageText(result),
+    ...(Object.keys(structuredContent).length > 0 ? { structuredContent } : {}),
+  };
+}
+
+export async function takeChromeMcpHeapSnapshot(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  filePath: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callToolWithNameFallback(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    [
+      {
+        name: "take_heapsnapshot",
+        args: {
+          pageId: parsePageId(params.targetId),
+          filePath: params.filePath,
+        },
+      },
+      {
+        name: "take_memory_snapshot",
+        args: {
+          pageId: parsePageId(params.targetId),
+          filePath: params.filePath,
+        },
+      },
+    ],
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export async function getChromeMcpHeapSnapshotSummary(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  filePath: string;
+  timeoutMs?: number;
+}): Promise<ChromeMcpHeapSnapshotInspectionResult> {
+  const result = await callToolWithNameFallback(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    [
+      { name: "get_heapsnapshot_summary", args: { filePath: params.filePath } },
+      { name: "load_memory_snapshot", args: { filePath: params.filePath } },
+    ],
+    { timeoutMs: params.timeoutMs },
+  );
+  return toHeapSnapshotInspectionResult(result);
+}
+
+export async function getChromeMcpHeapSnapshotDetails(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  filePath: string;
+  pageIdx?: number;
+  pageSize?: number;
+  timeoutMs?: number;
+}): Promise<ChromeMcpHeapSnapshotInspectionResult> {
+  const result = await callToolWithNameFallback(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    [
+      {
+        name: "get_heapsnapshot_details",
+        args: {
+          filePath: params.filePath,
+          ...(params.pageIdx !== undefined ? { pageIdx: params.pageIdx } : {}),
+          ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+        },
+      },
+      {
+        name: "get_memory_snapshot_details",
+        args: {
+          filePath: params.filePath,
+          ...(params.pageIdx !== undefined ? { pageIdx: params.pageIdx } : {}),
+          ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+        },
+      },
+    ],
+    { timeoutMs: params.timeoutMs },
+  );
+  return toHeapSnapshotInspectionResult(result);
+}
+
+export async function getChromeMcpHeapSnapshotClassNodes(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  filePath: string;
+  id: number;
+  pageIdx?: number;
+  pageSize?: number;
+  timeoutMs?: number;
+}): Promise<ChromeMcpHeapSnapshotInspectionResult> {
+  const result = await callToolWithNameFallback(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    [
+      {
+        name: "get_heapsnapshot_class_nodes",
+        args: {
+          filePath: params.filePath,
+          id: params.id,
+          ...(params.pageIdx !== undefined ? { pageIdx: params.pageIdx } : {}),
+          ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+        },
+      },
+      {
+        name: "get_nodes_by_class",
+        args: {
+          filePath: params.filePath,
+          uid: params.id,
+          ...(params.pageIdx !== undefined ? { pageIdx: params.pageIdx } : {}),
+          ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+        },
+      },
+    ],
+    { timeoutMs: params.timeoutMs },
+  );
+  return toHeapSnapshotInspectionResult(result);
+}
+
+export async function getChromeMcpHeapSnapshotRetainers(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  filePath: string;
+  nodeId: number;
+  pageIdx?: number;
+  pageSize?: number;
+  timeoutMs?: number;
+}): Promise<ChromeMcpHeapSnapshotInspectionResult> {
+  const result = await callToolWithNameFallback(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    [
+      {
+        name: "get_heapsnapshot_retainers",
+        args: {
+          filePath: params.filePath,
+          nodeId: params.nodeId,
+          ...(params.pageIdx !== undefined ? { pageIdx: params.pageIdx } : {}),
+          ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+        },
+      },
+      {
+        name: "get_node_retainers",
+        args: {
+          filePath: params.filePath,
+          nodeId: params.nodeId,
+          ...(params.pageIdx !== undefined ? { pageIdx: params.pageIdx } : {}),
+          ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+        },
+      },
+    ],
+    { timeoutMs: params.timeoutMs },
+  );
+  return toHeapSnapshotInspectionResult(result);
+}
+
+export type ChromeMcpLighthouseAuditResult = {
+  output: string;
+  structuredContent?: Record<string, unknown>;
+};
+
+export async function runChromeMcpLighthouseAudit(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  mode?: "navigation" | "snapshot";
+  device?: "desktop" | "mobile";
+  outputDirPath?: string;
+  timeoutMs?: number;
+}): Promise<ChromeMcpLighthouseAuditResult> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "lighthouse_audit",
+    {
+      pageId: parsePageId(params.targetId),
+      ...(params.mode ? { mode: params.mode } : {}),
+      ...(params.device ? { device: params.device } : {}),
+      ...(params.outputDirPath ? { outputDirPath: params.outputDirPath } : {}),
+    },
+    { timeoutMs: params.timeoutMs },
+  );
+  const structuredContent = extractStructuredContent(result);
+  return {
+    output: extractMessageText(result),
+    ...(Object.keys(structuredContent).length > 0 ? { structuredContent } : {}),
+  };
+}
+
+export async function startChromeMcpScreencast(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  filePath?: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "screencast_start",
+    {
+      pageId: parsePageId(params.targetId),
+      ...(params.filePath ? { filePath: params.filePath } : {}),
+    },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export async function stopChromeMcpScreencast(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "screencast_stop",
+    { pageId: parsePageId(params.targetId) },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export async function listChromeMcpExtensions(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  timeoutMs?: number;
+}): Promise<ChromeMcpExtension[]> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "list_extensions",
+    {},
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractExtensions(result);
+}
+
+export async function installChromeMcpExtension(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  path: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "install_extension",
+    { path: params.path },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export async function uninstallChromeMcpExtension(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  id: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "uninstall_extension",
+    { id: params.id },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export async function reloadChromeMcpExtension(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  id: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "reload_extension",
+    { id: params.id },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export async function triggerChromeMcpExtensionAction(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  id: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "trigger_extension_action",
+    { id: params.id },
+    { timeoutMs: params.timeoutMs },
+  );
+  return extractMessageText(result);
+}
+
+export async function getChromeMcpTabId(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  timeoutMs?: number;
+}): Promise<string | undefined> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "get_tab_id",
+    { pageId: parsePageId(params.targetId) },
+    { timeoutMs: params.timeoutMs },
+  );
+  return (
+    readStringValue(extractStructuredContent(result).tabId) ??
+    normalizeOptionalString(extractMessageText(result))
+  );
+}
+
+export async function listChromeMcpThirdPartyDeveloperTools(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  timeoutMs?: number;
+}): Promise<ChromeMcpGenericToolResult> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "list_3p_developer_tools",
+    { pageId: parsePageId(params.targetId) },
+    { timeoutMs: params.timeoutMs },
+  );
+  return toGenericToolResult(result);
+}
+
+export async function executeChromeMcpThirdPartyDeveloperTool(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  toolName: string;
+  paramsJson?: string;
+  toolParams?: Record<string, unknown>;
+  timeoutMs?: number;
+}): Promise<ChromeMcpGenericToolResult> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "execute_3p_developer_tool",
+    {
+      pageId: parsePageId(params.targetId),
+      toolName: params.toolName,
+      ...(params.paramsJson !== undefined
+        ? { params: params.paramsJson }
+        : params.toolParams !== undefined
+          ? { params: JSON.stringify(params.toolParams) }
+          : {}),
+    },
+    { timeoutMs: params.timeoutMs },
+  );
+  return toGenericToolResult(result);
+}
+
+export async function listChromeMcpWebMcpTools(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  timeoutMs?: number;
+}): Promise<ChromeMcpGenericToolResult> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "list_webmcp_tools",
+    { pageId: parsePageId(params.targetId) },
+    { timeoutMs: params.timeoutMs },
+  );
+  return toGenericToolResult(result);
+}
+
+export async function executeChromeMcpWebMcpTool(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  toolName: string;
+  inputJson?: string;
+  input?: Record<string, unknown>;
+  timeoutMs?: number;
+}): Promise<ChromeMcpGenericToolResult> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "execute_webmcp_tool",
+    {
+      pageId: parsePageId(params.targetId),
+      toolName: params.toolName,
+      ...(params.inputJson !== undefined
+        ? { input: params.inputJson }
+        : params.input !== undefined
+          ? { input: JSON.stringify(params.input) }
+          : {}),
+    },
+    { timeoutMs: params.timeoutMs },
+  );
+  return toGenericToolResult(result);
+}
+
 /** Accept or dismiss a Chrome MCP browser dialog. */
 export async function handleChromeMcpDialog(params: {
   profileName: string;
@@ -1705,12 +3044,19 @@ export async function handleChromeMcpDialog(params: {
   targetId: string;
   action: "accept" | "dismiss";
   promptText?: string;
+  timeoutMs?: number;
 }): Promise<void> {
-  await callTool(params.profileName, chromeMcpProfileOptionsFromParams(params), "handle_dialog", {
-    pageId: parsePageId(params.targetId),
-    action: params.action,
-    ...(params.promptText ? { promptText: params.promptText } : {}),
-  });
+  await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "handle_dialog",
+    {
+      pageId: parsePageId(params.targetId),
+      action: params.action,
+      ...(params.promptText ? { promptText: params.promptText } : {}),
+    },
+    { timeoutMs: params.timeoutMs },
+  );
 }
 
 /** Evaluate a JavaScript function in a Chrome MCP page. */
@@ -1751,6 +3097,130 @@ export async function waitForChromeMcpText(params: {
   });
 }
 
+export async function listChromeMcpConsoleMessages(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  pageSize?: number;
+  pageIdx?: number;
+  types?: string[];
+  includePreservedMessages?: boolean;
+}): Promise<ChromeMcpConsoleMessagesResult> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "list_console_messages",
+    {
+      pageId: parsePageId(params.targetId),
+      ...(typeof params.pageSize === "number" ? { pageSize: params.pageSize } : {}),
+      ...(typeof params.pageIdx === "number" ? { pageIdx: params.pageIdx } : {}),
+      ...(params.types?.length ? { types: params.types } : {}),
+      ...(params.includePreservedMessages ? { includePreservedMessages: true } : {}),
+    },
+  );
+  return extractConsoleMessages(result);
+}
+
+export async function getChromeMcpConsoleMessage(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  msgid: number;
+}): Promise<ChromeMcpConsoleMessage | null> {
+  try {
+    const result = await callTool(
+      params.profileName,
+      chromeMcpProfileOptionsFromParams(params),
+      "get_console_message",
+      {
+        pageId: parsePageId(params.targetId),
+        msgid: params.msgid,
+      },
+    );
+    return extractConsoleMessage(result);
+  } catch (error) {
+    if (!isChromeMcpSelectedPageLookupUnavailable(error)) {
+      throw error;
+    }
+    const fallback = await listChromeMcpConsoleMessages({
+      profileName: params.profileName,
+      profile: params.profile,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+      includePreservedMessages: true,
+    });
+    return fallback.messages.find((message) => message.id === params.msgid) ?? null;
+  }
+}
+
+export async function listChromeMcpNetworkRequests(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  pageSize?: number;
+  pageIdx?: number;
+  resourceTypes?: string[];
+  includePreservedRequests?: boolean;
+}): Promise<ChromeMcpNetworkRequestsResult> {
+  const result = await callTool(
+    params.profileName,
+    chromeMcpProfileOptionsFromParams(params),
+    "list_network_requests",
+    {
+      pageId: parsePageId(params.targetId),
+      ...(typeof params.pageSize === "number" ? { pageSize: params.pageSize } : {}),
+      ...(typeof params.pageIdx === "number" ? { pageIdx: params.pageIdx } : {}),
+      ...(params.resourceTypes?.length ? { resourceTypes: params.resourceTypes } : {}),
+      ...(params.includePreservedRequests ? { includePreservedRequests: true } : {}),
+    },
+  );
+  return extractNetworkRequests(result);
+}
+
+export async function getChromeMcpNetworkRequest(params: {
+  profileName: string;
+  profile?: ChromeMcpProfileOptions;
+  userDataDir?: string;
+  targetId: string;
+  reqid?: number;
+  requestFilePath?: string;
+  responseFilePath?: string;
+}): Promise<ChromeMcpNetworkRequest | null> {
+  try {
+    const result = await callTool(
+      params.profileName,
+      chromeMcpProfileOptionsFromParams(params),
+      "get_network_request",
+      {
+        pageId: parsePageId(params.targetId),
+        ...(typeof params.reqid === "number" ? { reqid: params.reqid } : {}),
+        ...(params.requestFilePath ? { requestFilePath: params.requestFilePath } : {}),
+        ...(params.responseFilePath ? { responseFilePath: params.responseFilePath } : {}),
+      },
+    );
+    return extractNetworkRequest(result);
+  } catch (error) {
+    if (!isChromeMcpSelectedPageLookupUnavailable(error) || typeof params.reqid !== "number") {
+      throw error;
+    }
+    const fallback = await listChromeMcpNetworkRequests({
+      profileName: params.profileName,
+      profile: params.profile,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+      includePreservedRequests: true,
+    });
+    return (
+      fallback.requests.find(
+        (request) => request.requestId === params.reqid || Number(request.id) === params.reqid,
+      ) ?? null
+    );
+  }
+}
+
 /** Replace Chrome MCP session creation for focused tests. */
 export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFactory | null): void {
   sessionFactory = factory;
@@ -1770,6 +3240,7 @@ export async function resetChromeMcpSessionsForTest(): Promise<void> {
     abortPendingChromeMcpSession(pending, new Error("Chrome MCP sessions reset for test"));
   }
   pendingSessions.clear();
+  emulationStates.clear();
   await stopAllChromeMcpSessions();
   chromeMcpProcessCleanupDepsForTest = null;
 }

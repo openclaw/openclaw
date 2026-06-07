@@ -1,12 +1,14 @@
 ---
 name: browser-automation
-description: Use when controlling web pages with the OpenClaw browser tool, especially multi-step flows, login checks, tab management, or recovery from stale refs/timeouts.
+description: Use when controlling web pages with the OpenClaw browser tool, including multi-step flows, login checks, Chrome MCP capability boundaries, tab management, or stale refs/timeouts.
 user-invocable: false
 ---
 
 # Browser Automation
 
-Use this skill when you need the `browser` tool for anything beyond a single page check.
+Use this skill when you need the `browser` tool for anything beyond a single page check, including dynamic pages, signed-in sessions, screenshots, UI actions, console/network inspection, Chrome MCP diagnostics, Lighthouse, screencasts, heap snapshots, extension surfaces, or WebMCP/page-provided tool surfaces.
+
+For public information lookup or a one-shot page read, prefer `web_search` or `web_fetch`. Use `browser` when page state, login state, JavaScript, visual layout, files, dialogs, or interaction matters.
 
 ## Operating Loop
 
@@ -78,6 +80,35 @@ If an action fails with a missing or stale ref:
 Use `profile="user"` only when existing cookies/login matter. This attaches to the user's running Chromium-based browser.
 
 For `profile="user"` and other existing-session profiles, omit `timeoutMs` on `act:type`, `evaluate`, `hover`, `scrollIntoView`, `drag`, `select`, and `fill`; that driver rejects per-call timeout overrides for those actions.
+
+## Profile Choice For Advanced Work
+
+Choose the least-private profile that can do the job:
+
+- Use `openclaw` for normal page automation, screenshots, forms, and visual proof. It is isolated from the user's personal browser.
+- Use a dedicated OpenClaw-owned existing-session profile, such as `agent-chrome`, for Chrome MCP diagnostics, Lighthouse, screencast, heap snapshots, extension inventory, or other advanced Chrome MCP work when existing personal cookies are not required.
+- Use `profile="user"` only for tasks that truly need the user's current signed-in Chrome cookies. Treat this as privacy-sensitive and inspect only the requested target.
+
+Before advanced work, prove the selected profile with `doctor`, `status`, and `tabs`. If `doctor` reports missing `DevToolsActivePort`, a refused remote-debugging port, a profile lock, or a disabled capability, stop and report the blocker plus the config/profile path instead of trying another profile silently.
+
+## Chrome MCP Capability Boundaries
+
+Existing-session profiles can expose enhanced Chrome MCP actions such as `console-message`, `request-detail`, `trace`, `heap-snapshot`, `lighthouse`, `screencast`, `extensions`, `third-party-tools`, and `web-mcp-tools`.
+
+Treat these as higher-risk because they can expose private browser state or mutate the attached profile:
+
+- Prefer the isolated `openclaw` profile unless the task needs existing login/cookies.
+- Prefer a dedicated OpenClaw-owned existing-session profile for advanced Chrome MCP capability proof when personal cookies are not required.
+- Use a signed-in or personal profile only for the requested target; avoid unrelated tabs and private content.
+- If a route reports a disabled Chrome MCP capability, do not work around it. Report the config path and stop for the next approval gate.
+- Extension mutation and page-provided tool execution require explicit opt-in on trusted automation profiles.
+- Browser config/profile changes, remote CDP token setup, Gateway restarts, external submits/sends/purchases/deletes, and public PR actions require an exact approval boundary.
+
+Relevant policy paths include `browser.chromeMcp.capabilities.*` and per-profile `browser.profiles.<name>.chromeMcp.capabilities.*`. Verify current docs/source/config before asserting exact defaults.
+
+## Capability Proof
+
+When asked whether enhanced web capabilities work, verify current state instead of relying on memory. Report the selected profile, tool state, commands or tests run, pass/fail counts, artifact paths, and what was not done.
 
 ## Google Meet Notes
 

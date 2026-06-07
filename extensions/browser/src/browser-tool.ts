@@ -8,6 +8,7 @@ import crypto from "node:crypto";
 import {
   executeActAction,
   executeConsoleAction,
+  executeRequestsAction,
   executeSnapshotAction,
   executeTabsAction,
 } from "./browser-tool.actions.js";
@@ -25,6 +26,7 @@ import {
   browserNavigate,
   browserOpenTab,
   browserPdfSave,
+  browserRouteJson,
   browserProfiles,
   browserScreenshotAction,
   browserStart,
@@ -68,6 +70,7 @@ const browserToolDeps = {
   browserNavigate,
   browserOpenTab,
   browserPdfSave,
+  browserRouteJson,
   browserProfiles,
   browserScreenshotAction,
   browserStart,
@@ -97,6 +100,7 @@ export const testing = {
       browserNavigate: typeof browserNavigate;
       browserOpenTab: typeof browserOpenTab;
       browserPdfSave: typeof browserPdfSave;
+      browserRouteJson: typeof browserRouteJson;
       browserProfiles: typeof browserProfiles;
       browserScreenshotAction: typeof browserScreenshotAction;
       browserStart: typeof browserStart;
@@ -124,6 +128,7 @@ export const testing = {
     browserToolDeps.browserNavigate = overrides?.browserNavigate ?? browserNavigate;
     browserToolDeps.browserOpenTab = overrides?.browserOpenTab ?? browserOpenTab;
     browserToolDeps.browserPdfSave = overrides?.browserPdfSave ?? browserPdfSave;
+    browserToolDeps.browserRouteJson = overrides?.browserRouteJson ?? browserRouteJson;
     browserToolDeps.browserProfiles = overrides?.browserProfiles ?? browserProfiles;
     browserToolDeps.browserScreenshotAction =
       overrides?.browserScreenshotAction ?? browserScreenshotAction;
@@ -447,6 +452,158 @@ function readToolTimeoutMs(params: Record<string, unknown>) {
   });
 }
 
+function readNumberParam(params: Record<string, unknown>, key: string): number | undefined {
+  const value = params[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  const normalized = typeof value === "string" ? normalizeOptionalString(value) : undefined;
+  if (!normalized) {
+    return undefined;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function readRecordParam(params: Record<string, unknown>, key: string) {
+  const value = params[key];
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readDebugOperation(params: Record<string, unknown>, fallback: string) {
+  return normalizeOptionalString(params.operation) ?? fallback;
+}
+
+async function executeBrowserRouteAction(params: {
+  baseUrl?: string;
+  profile?: string;
+  proxyRequest:
+    | ((opts: {
+        method: string;
+        path: string;
+        query?: Record<string, string | number | boolean | undefined>;
+        body?: unknown;
+        timeoutMs?: number;
+        profile?: string;
+      }) => Promise<unknown>)
+    | null;
+  method: "GET" | "POST" | "DELETE";
+  path: string;
+  query?: Record<string, string | number | boolean | undefined>;
+  body?: unknown;
+  timeoutMs?: number;
+}) {
+  const query = { ...params.query, profile: params.profile };
+  const result = params.proxyRequest
+    ? await params.proxyRequest({
+        method: params.method,
+        path: params.path,
+        profile: params.profile,
+        query: params.query,
+        body: params.body,
+        timeoutMs: params.timeoutMs,
+      })
+    : await browserToolDeps.browserRouteJson(params.baseUrl, {
+        method: params.method,
+        path: params.path,
+        query,
+        body: params.body,
+        timeoutMs: params.timeoutMs,
+      });
+  return jsonResult(result);
+}
+
+function heapSnapshotRoute(params: Record<string, unknown>): {
+  path: string;
+  body: Record<string, unknown>;
+} {
+  const operation = readDebugOperation(params, "take");
+  const body = {
+    targetId: normalizeOptionalString(params.targetId),
+    path: normalizeOptionalString(params.path) ?? normalizeOptionalString(params.filePath),
+    filePath: normalizeOptionalString(params.filePath),
+    pageIdx: readNumberParam(params, "pageIdx"),
+    pageSize: readNumberParam(params, "pageSize"),
+    id: readNumberParam(params, "id"),
+    nodeId: readNumberParam(params, "nodeId"),
+    timeoutMs: readNumberParam(params, "timeoutMs"),
+  };
+  switch (operation) {
+    case "take":
+      return { path: "/heap-snapshot/take", body };
+    case "summary":
+      return { path: "/heap-snapshot/summary", body };
+    case "details":
+      return { path: "/heap-snapshot/details", body };
+    case "class-nodes":
+      return { path: "/heap-snapshot/class-nodes", body };
+    case "retainers":
+      return { path: "/heap-snapshot/retainers", body };
+    default:
+      throw new Error("operation must be take|summary|details|class-nodes|retainers");
+  }
+}
+
+function extensionRoute(params: Record<string, unknown>): {
+  method: "GET" | "POST";
+  path: string;
+  query?: Record<string, string | number | boolean | undefined>;
+  body?: Record<string, unknown>;
+} {
+  const operation = readDebugOperation(params, "list");
+  const targetId = normalizeOptionalString(params.targetId);
+  switch (operation) {
+    case "list":
+      return { method: "GET", path: "/extensions", query: { targetId } };
+    case "install":
+      return {
+        method: "POST",
+        path: "/extensions/install",
+        body: {
+          targetId,
+          path: normalizeOptionalString(params.path),
+          timeoutMs: readNumberParam(params, "timeoutMs"),
+        },
+      };
+    case "uninstall":
+      return {
+        method: "POST",
+        path: "/extensions/uninstall",
+        body: {
+          targetId,
+          id: normalizeOptionalString(params.id),
+          timeoutMs: readNumberParam(params, "timeoutMs"),
+        },
+      };
+    case "reload":
+      return {
+        method: "POST",
+        path: "/extensions/reload",
+        body: {
+          targetId,
+          id: normalizeOptionalString(params.id),
+          timeoutMs: readNumberParam(params, "timeoutMs"),
+        },
+      };
+    case "action":
+      return {
+        method: "POST",
+        path: "/extensions/action",
+        body: {
+          targetId,
+          id: normalizeOptionalString(params.id),
+          timeoutMs: readNumberParam(params, "timeoutMs"),
+        },
+      };
+    case "tab-id":
+      return { method: "GET", path: "/extensions/tab-id", query: { targetId } };
+    default:
+      throw new Error("operation must be list|install|uninstall|reload|action|tab-id");
+  }
+}
+
 /** Create the Browser tool exposed to agents. */
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
@@ -473,13 +630,16 @@ export function createBrowserTool(opts?: {
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
       "Browser choice: omit profile by default for the isolated OpenClaw-managed browser (`openclaw`).",
+      'For advanced Chrome MCP diagnostics or extension/tool inventory, prefer a dedicated OpenClaw-owned automation profile after doctor/status/tabs pass; use profile="user" only when existing signed-in cookies are required.',
       'For the logged-in user browser, use profile="user". A supported Chromium-based browser (v144+) must be running on the selected host or browser node. Use only when existing logins/cookies matter and the user is present.',
       'For profile="user" or other existing-session profiles, omit timeoutMs on act:type, evaluate, hover, scrollIntoView, drag, select, and fill; that driver rejects per-call timeout overrides for those actions.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc). For tab operations, targetId also accepts tabId handles (t1) and labels from action=tabs.",
       "For multi-step browser work, login checks, stale refs, duplicate tabs, or Google Meet flows, use the bundled browser-automation skill when it is available.",
+      "Enhanced Chrome MCP actions such as console-message, request-detail, trace, heap-snapshot, lighthouse, screencast, extensions, third-party-tools, and web-mcp-tools are capability-gated; report disabled-capability errors instead of bypassing policy.",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
+      "For alert/confirm/prompt flows triggered by your next click, prefer action=dialog with accept/dismiss and no dialogId before the click; use dialogId only when responding to a dialog already reported as pending.",
       `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
       hostHint,
     ].join(" "),
@@ -901,6 +1061,249 @@ export function createBrowserTool(opts?: {
             profile,
             proxyRequest,
           });
+        case "requests":
+          return await executeRequestsAction({
+            input: params,
+            baseUrl,
+            profile,
+            proxyRequest,
+          });
+        case "console-message":
+          return await executeBrowserRouteAction({
+            baseUrl,
+            profile,
+            proxyRequest,
+            method: "GET",
+            path: "/console/message",
+            query: {
+              targetId: normalizeOptionalString(params.targetId),
+              msgid: readNumberParam(params, "msgid"),
+            },
+            timeoutMs: toolTimeoutMs,
+          });
+        case "request-detail":
+          return await executeBrowserRouteAction({
+            baseUrl,
+            profile,
+            proxyRequest,
+            method: "GET",
+            path: "/requests/request",
+            query: {
+              targetId: normalizeOptionalString(params.targetId),
+              reqid: readNumberParam(params, "reqid"),
+              requestFilePath: normalizeOptionalString(params.requestFilePath),
+              responseFilePath: normalizeOptionalString(params.responseFilePath),
+            },
+            timeoutMs: toolTimeoutMs,
+          });
+        case "trace": {
+          const operation = readDebugOperation(params, "start");
+          if (operation !== "start" && operation !== "stop" && operation !== "insight") {
+            throw new Error("operation must be start|stop|insight");
+          }
+          return await executeBrowserRouteAction({
+            baseUrl,
+            profile,
+            proxyRequest,
+            method: "POST",
+            path:
+              operation === "start"
+                ? "/trace/start"
+                : operation === "stop"
+                  ? "/trace/stop"
+                  : "/trace/insight",
+            body: {
+              targetId: normalizeOptionalString(params.targetId),
+              path:
+                normalizeOptionalString(params.path) ?? normalizeOptionalString(params.filePath),
+              screenshots: typeof params.screenshots === "boolean" ? params.screenshots : undefined,
+              snapshots: typeof params.snapshots === "boolean" ? params.snapshots : undefined,
+              sources: typeof params.sources === "boolean" ? params.sources : undefined,
+              insightSetId: normalizeOptionalString(params.insightSetId),
+              insightName: normalizeOptionalString(params.insightName),
+            },
+            timeoutMs: toolTimeoutMs,
+          });
+        }
+        case "heap-snapshot": {
+          const route = heapSnapshotRoute(params);
+          return await executeBrowserRouteAction({
+            baseUrl,
+            profile,
+            proxyRequest,
+            method: "POST",
+            path: route.path,
+            body: route.body,
+            timeoutMs: toolTimeoutMs,
+          });
+        }
+        case "lighthouse":
+          return await executeBrowserRouteAction({
+            baseUrl,
+            profile,
+            proxyRequest,
+            method: "POST",
+            path: "/lighthouse",
+            body: {
+              targetId: normalizeOptionalString(params.targetId),
+              mode: normalizeOptionalString(params.mode),
+              device: normalizeOptionalString(params.device),
+              outputDirPath: normalizeOptionalString(params.outputDirPath),
+              timeoutMs: readNumberParam(params, "timeoutMs"),
+            },
+            timeoutMs: toolTimeoutMs,
+          });
+        case "screencast": {
+          const operation = readDebugOperation(params, "start");
+          if (operation !== "start" && operation !== "stop") {
+            throw new Error("operation must be start|stop");
+          }
+          return await executeBrowserRouteAction({
+            baseUrl,
+            profile,
+            proxyRequest,
+            method: "POST",
+            path: operation === "start" ? "/screencast/start" : "/screencast/stop",
+            body: {
+              targetId: normalizeOptionalString(params.targetId),
+              path:
+                normalizeOptionalString(params.path) ?? normalizeOptionalString(params.filePath),
+              filePath: normalizeOptionalString(params.filePath),
+              timeoutMs: readNumberParam(params, "timeoutMs"),
+            },
+            timeoutMs: toolTimeoutMs,
+          });
+        }
+        case "extensions": {
+          const route = extensionRoute(params);
+          return await executeBrowserRouteAction({
+            baseUrl,
+            profile,
+            proxyRequest,
+            method: route.method,
+            path: route.path,
+            query: route.query,
+            body: route.body,
+            timeoutMs: toolTimeoutMs,
+          });
+        }
+        case "third-party-tools": {
+          const operation = readDebugOperation(params, "list");
+          if (operation !== "list" && operation !== "execute") {
+            throw new Error("operation must be list|execute");
+          }
+          return await executeBrowserRouteAction({
+            baseUrl,
+            profile,
+            proxyRequest,
+            method: operation === "list" ? "GET" : "POST",
+            path: operation === "list" ? "/third-party-tools" : "/third-party-tools/execute",
+            query:
+              operation === "list"
+                ? { targetId: normalizeOptionalString(params.targetId) }
+                : undefined,
+            body:
+              operation === "execute"
+                ? {
+                    targetId: normalizeOptionalString(params.targetId),
+                    toolName: normalizeOptionalString(params.toolName),
+                    paramsJson: normalizeOptionalString(params.paramsJson),
+                    toolParams: readRecordParam(params, "toolParams"),
+                    timeoutMs: readNumberParam(params, "timeoutMs"),
+                  }
+                : undefined,
+            timeoutMs: toolTimeoutMs,
+          });
+        }
+        case "web-mcp-tools": {
+          const operation = readDebugOperation(params, "list");
+          if (operation !== "list" && operation !== "execute") {
+            throw new Error("operation must be list|execute");
+          }
+          return await executeBrowserRouteAction({
+            baseUrl,
+            profile,
+            proxyRequest,
+            method: operation === "list" ? "GET" : "POST",
+            path: operation === "list" ? "/web-mcp-tools" : "/web-mcp-tools/execute",
+            query:
+              operation === "list"
+                ? { targetId: normalizeOptionalString(params.targetId) }
+                : undefined,
+            body:
+              operation === "execute"
+                ? {
+                    targetId: normalizeOptionalString(params.targetId),
+                    toolName: normalizeOptionalString(params.toolName),
+                    inputJson: normalizeOptionalString(params.inputJson),
+                    input: readRecordParam(params, "input"),
+                    timeoutMs: readNumberParam(params, "timeoutMs"),
+                  }
+                : undefined,
+            timeoutMs: toolTimeoutMs,
+          });
+        }
+        case "emulate": {
+          const operation = readDebugOperation(params, "offline");
+          const targetId = normalizeOptionalString(params.targetId);
+          switch (operation) {
+            case "offline":
+              return await executeBrowserRouteAction({
+                baseUrl,
+                profile,
+                proxyRequest,
+                method: "POST",
+                path: "/set/offline",
+                body: {
+                  targetId,
+                  offline: typeof params.offline === "boolean" ? params.offline : true,
+                },
+                timeoutMs: toolTimeoutMs,
+              });
+            case "headers":
+              return await executeBrowserRouteAction({
+                baseUrl,
+                profile,
+                proxyRequest,
+                method: "POST",
+                path: "/set/headers",
+                body: { targetId, headers: readRecordParam(params, "headers") },
+                timeoutMs: toolTimeoutMs,
+              });
+            case "geolocation":
+              return await executeBrowserRouteAction({
+                baseUrl,
+                profile,
+                proxyRequest,
+                method: "POST",
+                path: "/set/geolocation",
+                body: {
+                  targetId,
+                  latitude: readNumberParam(params, "latitude"),
+                  longitude: readNumberParam(params, "longitude"),
+                  accuracy: readNumberParam(params, "accuracy"),
+                  origin: normalizeOptionalString(params.origin),
+                },
+                timeoutMs: toolTimeoutMs,
+              });
+            case "media":
+              return await executeBrowserRouteAction({
+                baseUrl,
+                profile,
+                proxyRequest,
+                method: "POST",
+                path: "/set/media",
+                body: {
+                  targetId,
+                  colorScheme: normalizeOptionalString(params.colorScheme),
+                  reducedMotion: normalizeOptionalString(params.reducedMotion),
+                },
+                timeoutMs: toolTimeoutMs,
+              });
+            default:
+              throw new Error("operation must be offline|headers|geolocation|media");
+          }
+        }
         case "pdf": {
           const targetId = normalizeOptionalString(params.targetId);
           const result = proxyRequest

@@ -95,6 +95,7 @@ function resolveProfileForTest(
     headless: rawProfile.headless ?? state.resolved.headless,
     headlessSource:
       typeof rawProfile.headless === "boolean" ? "profile" : state.resolved.headlessSource,
+    noSandbox: state.resolved.noSandbox,
     attachOnly: rawProfile.attachOnly ?? state.resolved.attachOnly,
     userDataDir: rawProfile.userDataDir,
   };

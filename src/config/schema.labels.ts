@@ -177,6 +177,20 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.profiles.*.executablePath": "Browser Profile Executable Path",
   "browser.profiles.*.headless": "Browser Profile Headless Mode",
   "browser.profiles.*.attachOnly": "Browser Profile Attach-only Mode",
+  "browser.profiles.*.chromeMcp": "Browser Profile Chrome MCP Policy",
+  "browser.profiles.*.chromeMcp.capabilities": "Browser Profile Chrome MCP Capabilities",
+  "browser.profiles.*.chromeMcp.capabilities.diagnostics": "Browser Profile Chrome MCP Diagnostics",
+  "browser.profiles.*.chromeMcp.capabilities.extensions": "Browser Profile Chrome MCP Extensions",
+  "browser.profiles.*.chromeMcp.capabilities.extensionMutation":
+    "Browser Profile Chrome MCP Extension Mutation",
+  "browser.profiles.*.chromeMcp.capabilities.thirdPartyTools":
+    "Browser Profile Chrome MCP Third-Party Tools",
+  "browser.profiles.*.chromeMcp.capabilities.thirdPartyToolExecution":
+    "Browser Profile Chrome MCP Third-Party Tool Execution",
+  "browser.profiles.*.chromeMcp.capabilities.webMcpTools":
+    "Browser Profile Chrome MCP WebMCP Tools",
+  "browser.profiles.*.chromeMcp.capabilities.webMcpToolExecution":
+    "Browser Profile Chrome MCP WebMCP Tool Execution",
   "browser.profiles.*.color": "Browser Profile Accent Color",
   tools: "Tools",
   "tools.allow": "Tool Allowlist",
@@ -794,6 +808,16 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.tabCleanup.idleMinutes": "Browser Tab Cleanup Idle Minutes",
   "browser.tabCleanup.maxTabsPerSession": "Browser Tab Cleanup Max Tabs Per Session",
   "browser.tabCleanup.sweepMinutes": "Browser Tab Cleanup Sweep Minutes",
+  "browser.chromeMcp": "Browser Chrome MCP Policy",
+  "browser.chromeMcp.capabilities": "Browser Chrome MCP Capabilities",
+  "browser.chromeMcp.capabilities.diagnostics": "Browser Chrome MCP Diagnostics",
+  "browser.chromeMcp.capabilities.extensions": "Browser Chrome MCP Extensions",
+  "browser.chromeMcp.capabilities.extensionMutation": "Browser Chrome MCP Extension Mutation",
+  "browser.chromeMcp.capabilities.thirdPartyTools": "Browser Chrome MCP Third-Party Tools",
+  "browser.chromeMcp.capabilities.thirdPartyToolExecution":
+    "Browser Chrome MCP Third-Party Tool Execution",
+  "browser.chromeMcp.capabilities.webMcpTools": "Browser Chrome MCP WebMCP Tools",
+  "browser.chromeMcp.capabilities.webMcpToolExecution": "Browser Chrome MCP WebMCP Tool Execution",
   "browser.ssrfPolicy": "Browser SSRF Policy",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork": "Browser Dangerously Allow Private Network",
   "browser.ssrfPolicy.allowedHostnames": "Browser Allowed Hostnames",

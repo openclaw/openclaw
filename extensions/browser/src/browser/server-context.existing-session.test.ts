@@ -18,7 +18,7 @@ const chromeMcpMock = vi.hoisted(() => ({
     type: "page",
   })),
   closeChromeMcpTab: vi.fn(async () => {}),
-  getChromeMcpPid: vi.fn(() => 4321),
+  getChromeMcpPid: vi.fn<() => number | null>(() => 4321),
 }));
 
 vi.mock("./chrome-mcp.js", () => chromeMcpMock);
@@ -106,8 +106,9 @@ describe("browser server-context existing-session profile", () => {
     const state = makeState();
     const ctx = createBrowserRouteContext({ getState: () => state });
 
-    vi.mocked(chromeMcp.ensureChromeMcpAvailable).mockResolvedValueOnce();
-    vi.mocked(chromeMcp.listChromeMcpTabs).mockRejectedValueOnce(new Error("No page selected"));
+    vi.mocked(chromeMcp.listChromeMcpTabs)
+      .mockRejectedValueOnce(new Error("No page selected"))
+      .mockRejectedValueOnce(new Error("No page selected"));
 
     const profiles = await ctx.listProfiles();
     expect(profiles).toHaveLength(1);
@@ -116,16 +117,7 @@ describe("browser server-context existing-session profile", () => {
     expect(profiles[0]?.running).toBe(true);
     expect(profiles[0]?.tabCount).toBe(0);
 
-    const [, ensuredProfile, ensureOptions] =
-      (
-        vi.mocked(chromeMcp.ensureChromeMcpAvailable).mock.calls as unknown as Array<
-          [string, ChromeLiveProfile, { ephemeral?: boolean; timeoutMs?: number }]
-        >
-      )[0] ?? [];
-    expect(ensuredProfile?.name).toBe("chrome-live");
-    expect(ensuredProfile?.driver).toBe("existing-session");
-    expect(ensuredProfile?.userDataDir).toBe("/tmp/brave-profile");
-    expect(ensureOptions).toEqual({ ephemeral: true, timeoutMs: 300 });
+    expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
     const [, listedProfile, listOptions] =
       (
         vi.mocked(chromeMcp.listChromeMcpTabs).mock.calls as unknown as Array<
@@ -135,7 +127,23 @@ describe("browser server-context existing-session profile", () => {
     expect(listedProfile?.name).toBe("chrome-live");
     expect(listedProfile?.driver).toBe("existing-session");
     expect(listedProfile?.userDataDir).toBe("/tmp/brave-profile");
-    expect(listOptions).toEqual({ ephemeral: true });
+    expect(listOptions).toEqual({ ephemeral: true, timeoutMs: 300 });
+  });
+
+  it("does not start Chrome MCP while listing a stopped attach-only profile", async () => {
+    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
+    vi.mocked(chromeMcp.getChromeMcpPid).mockReturnValueOnce(null);
+    const state = makeState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+
+    const profiles = await ctx.listProfiles();
+
+    expect(profiles).toHaveLength(1);
+    expect(profiles[0]?.name).toBe("chrome-live");
+    expect(profiles[0]?.running).toBe(false);
+    expect(profiles[0]?.tabCount).toBe(0);
+    expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
+    expect(chromeMcp.listChromeMcpTabs).not.toHaveBeenCalled();
   });
 
   it("keeps the next real attach on the normal sticky session path after an idle status probe", async () => {
@@ -144,7 +152,9 @@ describe("browser server-context existing-session profile", () => {
     const ctx = createBrowserRouteContext({ getState: () => state });
     const live = ctx.forProfile("chrome-live");
 
-    vi.mocked(chromeMcp.listChromeMcpTabs).mockRejectedValueOnce(new Error("No page selected"));
+    vi.mocked(chromeMcp.listChromeMcpTabs)
+      .mockRejectedValueOnce(new Error("No page selected"))
+      .mockRejectedValueOnce(new Error("No page selected"));
 
     const profiles = await ctx.listProfiles();
     expect(profiles).toHaveLength(1);
@@ -242,7 +252,14 @@ describe("browser server-context existing-session profile", () => {
     expect(focusCall?.[1]).toBe("7");
     expect(focusCall?.[2]?.name).toBe("chrome-live");
     expect(focusCall?.[2]?.driver).toBe("existing-session");
-    expect(chromeMcp.closeChromeMcpSession).toHaveBeenCalledWith("chrome-live");
+    expect(chromeMcp.closeChromeMcpSession).toHaveBeenCalledWith(
+      "chrome-live",
+      expect.objectContaining({
+        name: "chrome-live",
+        driver: "existing-session",
+        userDataDir: "/tmp/brave-profile",
+      }),
+    );
   });
 
   it("surfaces DevToolsActivePort attach failures instead of a generic tab timeout", async () => {

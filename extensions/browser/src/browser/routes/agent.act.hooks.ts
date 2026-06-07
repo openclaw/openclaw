@@ -5,7 +5,12 @@
  * OpenClaw profiles and Chrome MCP existing-session profiles.
  */
 import { formatErrorMessage } from "../../infra/errors.js";
-import { evaluateChromeMcpScript, uploadChromeMcpFile } from "../chrome-mcp.js";
+import { handleJavaScriptDialogViaCdp } from "../cdp.js";
+import {
+  evaluateChromeMcpScript,
+  handleChromeMcpDialog,
+  uploadChromeMcpFile,
+} from "../chrome-mcp.js";
 import { resolveExistingUploadPaths } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
@@ -25,6 +30,21 @@ import {
   toStringArray,
   toStringOrEmpty,
 } from "./utils.js";
+
+function isChromeMcpNoOpenDialogError(error: unknown): boolean {
+  return error instanceof Error && /no open dialog/i.test(error.message);
+}
+
+function isChromeMcpDialogTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /handle_dialog.*timed out|timed out.*handle_dialog/i.test(error.message)
+  );
+}
+
+function boundedDialogTimeoutMs(timeoutMs: number | undefined): number {
+  return Math.min(Math.max(timeoutMs ?? 2000, 250), 5000);
+}
 
 /** Register file chooser and dialog hook endpoints on the browser control server. */
 export function registerBrowserAgentActHookRoutes(
@@ -150,9 +170,34 @@ export function registerBrowserAgentActHookRoutes(
             if (dialogId) {
               return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.dialogId);
             }
-            if (timeoutMs) {
-              return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.dialogTimeout);
+            try {
+              await handleChromeMcpDialog({
+                profileName: profileCtx.profile.name,
+                profile: profileCtx.profile,
+                targetId: tab.targetId,
+                action: accept ? "accept" : "dismiss",
+                promptText,
+                timeoutMs: boundedDialogTimeoutMs(timeoutMs),
+              });
+              return res.json({ ok: true });
+            } catch (error) {
+              if (isChromeMcpDialogTimeoutError(error)) {
+                await handleJavaScriptDialogViaCdp({
+                  cdpUrl,
+                  targetId: tab.targetId,
+                  targetUrl: tab.url,
+                  accept,
+                  promptText,
+                  ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                  timeoutMs: boundedDialogTimeoutMs(timeoutMs),
+                });
+                return res.json({ ok: true });
+              }
+              if (!isChromeMcpNoOpenDialogError(error)) {
+                throw error;
+              }
             }
+
             await evaluateChromeMcpScript({
               profileName: profileCtx.profile.name,
               profile: profileCtx.profile,
@@ -205,15 +250,35 @@ export function registerBrowserAgentActHookRoutes(
           if (!pw) {
             return;
           }
-          await pw.armDialogViaPlaywright({
-            cdpUrl,
-            targetId: tab.targetId,
-            dialogId,
-            accept,
-            promptText,
-            timeoutMs: timeoutMs ?? undefined,
-          });
-          res.json({ ok: true });
+          try {
+            await pw.armDialogViaPlaywright({
+              cdpUrl,
+              targetId: tab.targetId,
+              dialogId,
+              accept,
+              promptText,
+              timeoutMs: dialogId ? boundedDialogTimeoutMs(timeoutMs) : (timeoutMs ?? undefined),
+            });
+            return res.json({ ok: true });
+          } catch (error) {
+            if (!dialogId) {
+              throw error;
+            }
+            try {
+              await handleJavaScriptDialogViaCdp({
+                cdpUrl,
+                targetId: tab.targetId,
+                targetUrl: tab.url,
+                accept,
+                promptText,
+                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                timeoutMs: boundedDialogTimeoutMs(timeoutMs),
+              });
+              return res.json({ ok: true });
+            } catch {
+              throw error;
+            }
+          }
         },
       });
     }),

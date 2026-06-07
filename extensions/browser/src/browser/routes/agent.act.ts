@@ -16,6 +16,7 @@ import {
   hoverChromeMcpElement,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  waitForChromeMcpText,
   type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
@@ -211,6 +212,11 @@ function buildExistingSessionWaitPredicate(params: {
     checks.push(`document.readyState === "interactive" || document.readyState === "complete"`);
   } else if (params.loadState === "load") {
     checks.push(`document.readyState === "complete"`);
+  } else if (params.loadState === "networkidle") {
+    checks.push(`document.readyState === "complete"`);
+    checks.push(
+      `(() => { const entries = performance.getEntriesByType("resource"); const latest = entries.reduce((max, entry) => Math.max(max, Number(entry.responseEnd) || Number(entry.startTime) || 0), 0); return latest === 0 || performance.now() - latest >= 500; })()`,
+    );
   }
   if (params.fn) {
     checks.push(`Boolean(await (${params.fn})())`);
@@ -237,6 +243,24 @@ async function waitForExistingSessionCondition(params: {
 }): Promise<void> {
   if (params.timeMs && params.timeMs > 0) {
     await sleep(params.timeMs);
+  }
+  if (
+    params.text &&
+    !params.textGone &&
+    !params.selector &&
+    !params.url &&
+    !params.loadState &&
+    !params.fn
+  ) {
+    await waitForChromeMcpText({
+      profileName: params.profileName,
+      profile: params.profile,
+      userDataDir: params.userDataDir,
+      targetId: params.targetId,
+      text: [params.text],
+      timeoutMs: params.timeoutMs,
+    });
+    return;
   }
   const predicate = buildExistingSessionWaitPredicate(params);
   if (!predicate && !params.url) {
@@ -342,9 +366,7 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
     case "fill":
       return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.fillTimeout : null;
     case "wait":
-      return action.loadState === "networkidle"
-        ? EXISTING_SESSION_LIMITS.act.waitNetworkIdle
-        : null;
+      return null;
     case "evaluate":
       return action.timeoutMs !== undefined ? EXISTING_SESSION_LIMITS.act.evaluateTimeout : null;
     case "batch":
@@ -577,12 +599,29 @@ export function registerBrowserAgentActRoutes(
               case "select":
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
-                    fillChromeMcpElement({
+                    evaluateChromeMcpScript({
                       profileName,
                       profile: profileCtx.profile,
                       targetId: tab.targetId,
-                      uid: action.ref!,
-                      value: action.values[0] ?? "",
+                      args: [action.ref!],
+                      fn: `(el) => {
+                      if (!(el instanceof HTMLSelectElement)) {
+                        throw new Error("select ref must resolve to a <select> element");
+                      }
+                      const requested = ${JSON.stringify(action.values[0] ?? "")};
+                      const option = Array.from(el.options).find((candidate) =>
+                        candidate.value === requested ||
+                        candidate.label === requested ||
+                        candidate.text === requested
+                      );
+                      if (!option) {
+                        throw new Error("select option not found: " + requested);
+                      }
+                      el.value = option.value;
+                      el.dispatchEvent(new Event("input", { bubbles: true }));
+                      el.dispatchEvent(new Event("change", { bubbles: true }));
+                      return { value: el.value };
+                    }`,
                     }),
                   guard: existingSessionNavigationGuard,
                 });

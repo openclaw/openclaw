@@ -187,6 +187,7 @@ function createProfile(overrides: Partial<ResolvedBrowserProfile>): ResolvedBrow
     attachOnly: false,
     ...overrides,
     headless: overrides.headless ?? false,
+    noSandbox: overrides.noSandbox ?? false,
   };
 }
 
