@@ -2,10 +2,14 @@
 import { randomUUID } from "node:crypto";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
-import { resolveDefaultAgentId, resolveSessionAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveDefaultAgentId,
+  resolveSessionAgentId,
+} from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveModelRuntimeLabel } from "../agents/model-selection-cli.js";
+import { resolveModelIntegrationLabel } from "../agents/model-selection-cli.js";
 import {
   buildAllowedModelSet,
   buildConfiguredModelCatalog,
@@ -572,13 +576,19 @@ export class EmbeddedTuiBackend implements TuiBackend {
       defaultProvider: DEFAULT_PROVIDER,
     });
     const entries = allowedCatalog.length > 0 ? allowedCatalog : catalog;
+    const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
     return entries.map((entry) => ({
       id: entry.id,
       name: entry.name ?? entry.id,
       provider: entry.provider,
       contextWindow: entry.contextWindow,
       reasoning: entry.reasoning,
-      runtimeLabel: resolveModelRuntimeLabel(entry.provider, entry.id, cfg),
+      runtimeLabel: resolveModelIntegrationLabel({
+        provider: entry.provider,
+        modelId: entry.id,
+        cfg,
+        agentDir,
+      }),
     }));
   }
 
