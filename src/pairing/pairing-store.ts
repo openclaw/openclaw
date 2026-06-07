@@ -296,7 +296,8 @@ function normalizeAllowEntry(entry: string, pairingAdapter?: ChannelPairingAdapt
   const normalized = pairingAdapter?.normalizeAllowEntry
     ? pairingAdapter.normalizeAllowEntry(trimmed)
     : trimmed;
-  return normalizeOptionalString(normalized) ?? "";
+  const normalizedEntry = normalizeOptionalString(normalized) ?? "";
+  return normalizedEntry === "*" ? "" : normalizedEntry;
 }
 
 function normalizeAllowFromList(

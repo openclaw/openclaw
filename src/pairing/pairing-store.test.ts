@@ -341,10 +341,19 @@ describe("pairing store", () => {
         stateDir,
         channel: "telegram",
         accountId: "main",
-        allowFrom: ["telegram:1002"],
+        allowFrom: ["telegram:1002", "telegram:*"],
       });
       clearPairingAllowFromReadCacheForTest();
       expect(await readChannelAllowFromStore("telegram", env, "main")).toEqual(["1002"]);
+
+      await expect(
+        addChannelAllowFromStoreEntry({
+          channel: "telegram",
+          entry: "telegram:*",
+          accountId: "main",
+          env,
+        }),
+      ).resolves.toMatchObject({ changed: false, allowFrom: ["1002"] });
 
       await expect(
         removeChannelAllowFromStoreEntry({
