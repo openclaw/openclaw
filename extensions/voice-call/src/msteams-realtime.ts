@@ -57,6 +57,13 @@ const MSTEAMS_REALTIME_CONSULT_SYSTEM_PROMPT = [
   "Be accurate, brief, and speakable.",
 ].join(" ");
 
+const MSTEAMS_REALTIME_LOOK_SYSTEM_PROMPT = [
+  "You are the configured OpenClaw agent looking at a still frame captured from a live Microsoft Teams call —",
+  "the caller's shared screen or camera. Answer the caller's question about what is visible.",
+  "Read on-screen text verbatim when asked. Be concise and speakable (1-2 sentences);",
+  "if the image is unclear or the thing asked about is not visible, say so briefly.",
+].join(" ");
+
 /** Tool the realtime model calls to hand a long-running task to the background agent. */
 const MSTEAMS_AGENT_TASK_TOOL_NAME = "openclaw_agent_task";
 const MSTEAMS_AGENT_TASK_TOOL: RealtimeVoiceTool = {
@@ -78,6 +85,38 @@ const MSTEAMS_AGENT_TASK_TOOL: RealtimeVoiceTool = {
     },
     required: ["task"],
   },
+};
+
+/** Tool the realtime model calls to "see" what the caller is showing (camera / screen-share). */
+const MSTEAMS_LOOK_TOOL_NAME = "look_at_screen";
+const MSTEAMS_LOOK_TOOL: RealtimeVoiceTool = {
+  type: "function",
+  name: MSTEAMS_LOOK_TOOL_NAME,
+  description:
+    "Look at what the caller is currently showing on the Teams call — their shared screen or " +
+    "camera — and answer a question about it. Use this whenever the caller refers to something " +
+    'visual ("what\'s on my screen?", "read this error", "what am I holding?"). ' +
+    "Defaults to the screen-share when present, otherwise the camera.",
+  parameters: {
+    type: "object",
+    properties: {
+      question: {
+        type: "string",
+        description: "What the caller wants to know about what they are showing.",
+      },
+      source: {
+        type: "string",
+        enum: ["screenshare", "camera"],
+        description: "Which video to look at; defaults to screen-share, then camera.",
+      },
+    },
+    required: ["question"],
+  },
+};
+
+/** Returned when the caller asks the agent to look but no video frame has arrived yet. */
+const MSTEAMS_LOOK_NO_FRAME = {
+  text: "I can't see anything yet — make sure your camera or screen-share is on, then ask again.",
 };
 
 /** Spoken acknowledgement returned to the model when a background task is accepted. */
@@ -142,6 +181,14 @@ export interface MsteamsRealtimeDeps {
   voiceConfig?: VoiceCallConfig;
   /** Consult tool policy; controls which agent tools the consult run may use. */
   toolPolicy?: RealtimeVoiceAgentConsultToolPolicy;
+  /**
+   * Latest sampled inbound video frame (camera / screen-share) for the `look_at_screen` tool, so
+   * the agent can describe what the caller is showing. Provided by the provider; undefined disables
+   * the tool. Structural type avoids a circular import with the provider.
+   */
+  getLatestFrame?: (
+    source?: "camera" | "screenshare",
+  ) => { dataBase64: string; mime: string; width: number; height: number } | undefined;
 
   /**
    * Suppress caller-leg input while assistant audio is playing (self-echo guard).
@@ -229,9 +276,15 @@ export function createMsteamsRealtimeCall(params: {
   // which is only available under the "owner" tool policy.
   const asyncTasksEnabled =
     Boolean(deps.agentRuntime && deps.voiceConfig && deps.cfg) && consultToolPolicy === "owner";
-  const bridgeTools = asyncTasksEnabled
-    ? [...(deps.tools ?? []), MSTEAMS_AGENT_TASK_TOOL]
-    : deps.tools;
+  // Vision: expose look_at_screen when the agent runtime + a frame source are available.
+  const visionEnabled = Boolean(
+    deps.agentRuntime && deps.voiceConfig && deps.cfg && deps.getLatestFrame,
+  );
+  const bridgeTools = [
+    ...(deps.tools ?? []),
+    ...(asyncTasksEnabled ? [MSTEAMS_AGENT_TASK_TOOL] : []),
+    ...(visionEnabled ? [MSTEAMS_LOOK_TOOL] : []),
+  ];
 
   const realtime = createRealtimeVoiceBridgeSession({
     provider: deps.provider,
@@ -277,6 +330,10 @@ export function createMsteamsRealtimeCall(params: {
     onToolCall: (event, rtSession) => {
       if (event.name === MSTEAMS_AGENT_TASK_TOOL_NAME) {
         handleAsyncTask(event, rtSession);
+        return;
+      }
+      if (event.name === MSTEAMS_LOOK_TOOL_NAME) {
+        void handleLook(event, rtSession);
         return;
       }
       void handleToolCall(event, rtSession);
@@ -380,6 +437,88 @@ export function createMsteamsRealtimeCall(params: {
       rtSession.submitToolResult(event.callId, {
         text: "Sorry, I ran into a problem while working on that.",
       });
+    }
+  }
+
+  /** Run a vision-capable agent over the latest inbound video frame and speak the answer. */
+  async function handleLook(
+    event: RealtimeVoiceToolCallEvent,
+    rtSession: RealtimeVoiceBridgeSession,
+  ): Promise<void> {
+    // Media Access API: do not process call video before recording is active.
+    if (recordingGateBlocks()) {
+      logger?.debug?.(`MsteamsRealtime: look refused for ${callId} — recording not active`);
+      rtSession.submitToolResult(event.callId, MSTEAMS_RECORDING_BLOCKED);
+      return;
+    }
+    const { agentRuntime, voiceConfig, cfg } = deps;
+    if (!agentRuntime || !voiceConfig || !cfg || !deps.getLatestFrame) {
+      rtSession.submitToolResult(event.callId, {
+        text: "The assistant can't look at video right now.",
+      });
+      return;
+    }
+
+    const sourceArg = readArgString(event.args, "source");
+    const source = sourceArg === "camera" || sourceArg === "screenshare" ? sourceArg : undefined;
+    const frame = deps.getLatestFrame(source);
+    if (!frame) {
+      rtSession.submitToolResult(event.callId, MSTEAMS_LOOK_NO_FRAME);
+      return;
+    }
+
+    const agentId = voiceConfig.agentId ?? "main";
+    const sessionKey = `agent:${agentId}:subagent:msteams:${callId}`;
+    const toolPolicy = deps.toolPolicy ?? voiceConfig.realtime.toolPolicy;
+
+    try {
+      // Speak a short filler while the vision run completes (if the provider supports it).
+      if (rtSession.bridge?.supportsToolResultContinuation) {
+        rtSession.submitToolResult(
+          event.callId,
+          buildRealtimeVoiceAgentConsultWorkingResponse("caller"),
+          { willContinue: true },
+        );
+      }
+
+      const { provider: agentProvider, model } = resolveVoiceResponseModel({
+        voiceConfig,
+        agentRuntime,
+      });
+      const thinkLevel =
+        voiceConfig.realtime.consultThinkingLevel ??
+        agentRuntime.resolveThinkingDefault({ cfg, provider: agentProvider, model });
+
+      const result = await consultRealtimeVoiceAgent({
+        cfg,
+        agentRuntime,
+        logger: { warn: (message) => logger?.warn(message) },
+        agentId,
+        sessionKey,
+        messageProvider: "voice",
+        lane: "voice",
+        runIdPrefix: `voice-realtime-look:${callId}`,
+        args: event.args,
+        images: [{ type: "image", data: frame.dataBase64, mimeType: frame.mime }],
+        transcript: [...transcript],
+        surface: "a live Microsoft Teams call (the caller is sharing video)",
+        userLabel: "Caller",
+        assistantLabel: "Agent",
+        questionSourceLabel: "caller",
+        provider: agentProvider,
+        model,
+        thinkLevel,
+        fastMode: voiceConfig.realtime.consultFastMode,
+        timeoutMs: voiceConfig.responseTimeoutMs,
+        toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(toolPolicy),
+        extraSystemPrompt: MSTEAMS_REALTIME_LOOK_SYSTEM_PROMPT,
+      });
+      rtSession.submitToolResult(event.callId, result);
+    } catch (err) {
+      logger?.warn(
+        `MsteamsRealtime: look failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
+      );
+      rtSession.submitToolResult(event.callId, { text: "Sorry, I had trouble seeing that." });
     }
   }
 
