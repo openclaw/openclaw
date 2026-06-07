@@ -12,14 +12,15 @@ export function classifyPortListener(listener: PortListener, port: number): Port
     return "gateway";
   }
   if (raw.includes("ssh")) {
+    // Only an SSH -L/-R forward bound to *this* port is the actionable "ssh" case
+    // (the hint tells the user to close the tunnel or move the local -L port). Other
+    // ssh-named processes on the port (sshd, paths containing "ssh") are unknown
+    // listeners; classifying them as tunnels emits a false "close the tunnel" hint.
     const portToken = String(port);
     const tunnelPattern = new RegExp(
       `-(l|r)\\s*${portToken}\\b|-(l|r)${portToken}\\b|:${portToken}\\b`,
     );
-    if (!raw || tunnelPattern.test(raw)) {
-      return "ssh";
-    }
-    return "ssh";
+    return tunnelPattern.test(raw) ? "ssh" : "unknown";
   }
   return "unknown";
 }
