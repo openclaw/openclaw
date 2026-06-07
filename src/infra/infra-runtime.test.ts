@@ -324,6 +324,16 @@ describe("infra runtime", () => {
       }
     });
 
+    it("reports emitHooksQueued=false for hookless coalesced restart requests", () => {
+      const first = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "first" });
+      const second = scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "second" });
+
+      expect(first.coalesced).toBe(false);
+      expect(first.emitHooksQueued).toBe(false);
+      expect(second.coalesced).toBe(true);
+      expect(second.emitHooksQueued).toBe(false);
+    });
+
     it("rejects coalesced emit hooks from a different session and reports emitHooksQueued=false (#86742)", async () => {
       const sessionAHooks = vi.fn(async () => {});
       const sessionBHooks = vi.fn(async () => {});

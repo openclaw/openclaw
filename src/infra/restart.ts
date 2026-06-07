@@ -463,7 +463,7 @@ function updatePendingRestartEmitHooks(
     return false;
   }
   if (!hooks) {
-    return true;
+    return false;
   }
   pendingRestartEmitHooks = hooks;
   if (sessionKey !== undefined) {
