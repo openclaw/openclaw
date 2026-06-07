@@ -30,6 +30,74 @@ async function makeEnv(overrides: Partial<QaSuiteRuntimeEnv> = {}): Promise<QaSu
   };
 }
 
+async function writeQaSessionTranscript(
+  env: QaSuiteRuntimeEnv,
+  sessionKey: string,
+  messages: Array<Record<string, unknown>>,
+) {
+  const sessionsDir = path.join(env.gateway.tempRoot, "state", "agents", "qa", "sessions");
+  await fs.mkdir(sessionsDir, { recursive: true });
+  const sessionId = sessionKey.replace(/[^a-z0-9]+/giu, "-");
+  const storePath = path.join(sessionsDir, "sessions.json");
+  let store: Record<string, unknown> = {};
+  try {
+    store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  store[sessionKey] = { sessionId, sessionFile: `${sessionId}.jsonl` };
+  await fs.writeFile(storePath, JSON.stringify(store), "utf8");
+  await fs.writeFile(
+    path.join(sessionsDir, `${sessionId}.jsonl`),
+    messages.map((message) => JSON.stringify({ message })).join("\n"),
+    "utf8",
+  );
+}
+
+async function writeLiveRuntimeToolEvidence(env: QaSuiteRuntimeEnv, toolName = "read") {
+  await writeQaSessionTranscript(env, `agent:qa:runtime-tool:${toolName}:happy`, [
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: `call-${toolName}-happy`,
+          name: toolName,
+          input: { path: "README.md" },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      toolName,
+      tool_call_id: `call-${toolName}-happy`,
+      content: "README contents",
+    },
+  ]);
+  await writeQaSessionTranscript(env, `agent:qa:runtime-tool:${toolName}:failure`, [
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: `call-${toolName}-failure`,
+          name: toolName,
+          input: { path: "/missing" },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      toolName,
+      tool_call_id: `call-${toolName}-failure`,
+      isError: true,
+      content: "outside allowed scope",
+    },
+  ]);
+}
+
 afterEach(async () => {
   await Promise.all(
     tempRoots.splice(0).map((tempRoot) => fs.rm(tempRoot, { recursive: true, force: true })),
@@ -39,6 +107,7 @@ afterEach(async () => {
 describe("runtime tool fixture", () => {
   it("checks effective tools on the same session used for the happy prompt", async () => {
     const env = await makeEnv();
+    await writeLiveRuntimeToolEvidence(env);
     const createdKeys: string[] = [];
     const promptKeys: string[] = [];
     const readEffectiveTools = vi.fn(async (_env, sessionKey: string) => {
@@ -78,6 +147,124 @@ describe("runtime tool fixture", () => {
       "agent:qa:runtime-tool:read:happy",
       "agent:qa:runtime-tool:read:failure",
     ]);
+  });
+
+  it("requires live runtime tool fixtures to produce transcript tool output", async () => {
+    const env = await makeEnv();
+    await writeQaSessionTranscript(env, "agent:qa:runtime-tool:read:happy", [
+      { role: "assistant", content: "I checked README.md and it looks good." },
+    ]);
+    await writeQaSessionTranscript(env, "agent:qa:runtime-tool:read:failure", [
+      { role: "assistant", content: "The denied-input path looks good." },
+    ]);
+
+    await expect(
+      runRuntimeToolFixture(
+        env,
+        {
+          toolName: "read",
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+          },
+        },
+        {
+          createSession: vi.fn(async (_env, _label, key) => key!),
+          readEffectiveTools: vi.fn(async () => new Set(["read"])),
+          runAgentPrompt: vi.fn(async () => ({})),
+          fetchJson: vi.fn(),
+          ensureImageGenerationConfigured: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("expected live happy-path tool call for read");
+  });
+
+  it("accepts live runtime tool fixtures only after transcript tool output", async () => {
+    const env = await makeEnv();
+    await writeLiveRuntimeToolEvidence(env);
+
+    const details = await runRuntimeToolFixture(
+      env,
+      {
+        toolName: "read",
+        toolCoverage: {
+          bucket: "openclaw-dynamic-integration",
+          expectedLayer: "openclaw-dynamic",
+        },
+      },
+      {
+        createSession: vi.fn(async (_env, _label, key) => key!),
+        readEffectiveTools: vi.fn(async () => new Set(["read"])),
+        runAgentPrompt: vi.fn(async () => ({})),
+        fetchJson: vi.fn(),
+        ensureImageGenerationConfigured: vi.fn(),
+      },
+    );
+
+    expect(details).toContain("read live provider happy planned args");
+    expect(details).toContain("read live provider failure planned args");
+  });
+
+  it("requires live failure fixtures to produce failure-shaped tool output", async () => {
+    const env = await makeEnv();
+    await writeQaSessionTranscript(env, "agent:qa:runtime-tool:read:happy", [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call-read-happy",
+            name: "read",
+            input: { path: "README.md" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolName: "read",
+        tool_call_id: "call-read-happy",
+        content: "README contents",
+      },
+    ]);
+    await writeQaSessionTranscript(env, "agent:qa:runtime-tool:read:failure", [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call-read-failure",
+            name: "read",
+            input: { path: "/missing" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolName: "read",
+        tool_call_id: "call-read-failure",
+        content: "README contents",
+      },
+    ]);
+
+    await expect(
+      runRuntimeToolFixture(
+        env,
+        {
+          toolName: "read",
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+          },
+        },
+        {
+          createSession: vi.fn(async (_env, _label, key) => key!),
+          readEffectiveTools: vi.fn(async () => new Set(["read"])),
+          runAgentPrompt: vi.fn(async () => ({})),
+          fetchJson: vi.fn(),
+          ensureImageGenerationConfigured: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("expected live failure-path tool failure output for read");
   });
 
   it("does not fail Codex-native fixtures solely because OpenClaw dynamic exposure is absent", async () => {
