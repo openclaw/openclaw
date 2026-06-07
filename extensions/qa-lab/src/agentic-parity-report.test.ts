@@ -262,13 +262,13 @@ describe("qa agentic parity report", () => {
   });
 
   it("fails the parity gate when candidate and baseline cover different non-parity scenarios", () => {
-    const baselineScenarios = [
-      { name: "Approval turn tool followthrough", status: "pass" as const },
-      { name: "Compaction retry after mutating tool", status: "pass" as const },
-      { name: "Model switch with tool continuity", status: "pass" as const },
-      { name: "Source and docs discovery report", status: "pass" as const },
-      { name: "Image understanding from attachment", status: "pass" as const },
-      { name: "Extra non-parity lane", status: "pass" as const },
+    const baselineScenarios: QaParityReportScenario[] = [
+      { name: "Approval turn tool followthrough", status: "pass" },
+      { name: "Compaction retry after mutating tool", status: "pass" },
+      { name: "Model switch with tool continuity", status: "pass" },
+      { name: "Source and docs discovery report", status: "pass" },
+      { name: "Image understanding from attachment", status: "pass" },
+      { name: "Extra non-parity lane", status: "pass" },
     ];
     const comparison = buildQaAgenticParityComparison({
       candidateLabel: "openai/gpt-5.5",

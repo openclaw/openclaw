@@ -7,7 +7,7 @@ import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
-type QaRuntimeToolFixtureConfig = {
+type QaRuntimeToolFixtureConfig = Record<string, unknown> & {
   toolName?: unknown;
   happyPrompt?: unknown;
   failurePrompt?: unknown;
@@ -86,6 +86,10 @@ function isQaRuntimeToolFixtureRequest(value: unknown): value is QaRuntimeToolFi
 
 function readQaRuntimeToolFixtureRequests(value: unknown): QaRuntimeToolFixtureRequest[] {
   return Array.isArray(value) ? value.filter(isQaRuntimeToolFixtureRequest) : [];
+}
+
+function formatPlannedToolArgs(value: unknown) {
+  return JSON.stringify(value ?? {}) ?? "undefined";
 }
 
 function requestMatchesPrompt(request: QaRuntimeToolFixtureRequest, promptSnippet: string) {
@@ -487,10 +491,10 @@ function formatCodexNativeWorkspaceDetails(params: {
     params.reason ? `reason: ${params.reason}` : undefined,
     `available OpenClaw dynamic tools: ${[...params.tools].toSorted().join(", ")}`,
     params.happyRequest
-      ? `${params.toolName} mock provider happy planned args (diagnostic only): ${JSON.stringify(params.happyRequest.plannedToolArgs ?? {})}`
+      ? `${params.toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs(params.happyRequest.plannedToolArgs)}`
       : undefined,
     params.failureRequest
-      ? `${params.toolName} mock provider failure planned args (diagnostic only): ${JSON.stringify(params.failureRequest.plannedToolArgs ?? {})}`
+      ? `${params.toolName} mock provider failure planned args (diagnostic only): ${formatPlannedToolArgs(params.failureRequest.plannedToolArgs)}`
       : undefined,
   ]
     .filter(Boolean)
@@ -538,7 +542,7 @@ export async function runRuntimeToolFixture(
   );
   const tools = await deps.readEffectiveTools(env, happySessionKey);
   const metadata = readRuntimeToolCoverageMetadata({
-    config: config as Record<string, unknown>,
+    config,
   });
   const dynamicExposureIntentionallyExcluded =
     env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === "codex" &&
@@ -709,7 +713,7 @@ export async function runRuntimeToolFixture(
   }
 
   return [
-    `${toolName} mock provider happy planned args (diagnostic only): ${JSON.stringify(happyRequest.plannedRequest.plannedToolArgs ?? {})}`,
-    `${toolName} mock provider failure planned args (diagnostic only): ${JSON.stringify(failureRequest.plannedRequest.plannedToolArgs ?? {})}`,
+    `${toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs(happyRequest.plannedRequest.plannedToolArgs)}`,
+    `${toolName} mock provider failure planned args (diagnostic only): ${formatPlannedToolArgs(failureRequest.plannedRequest.plannedToolArgs)}`,
   ].join("\n");
 }
