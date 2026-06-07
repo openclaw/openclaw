@@ -1,7 +1,5 @@
 import OpenClawKit
 import SwiftUI
-import UIKit
-import UserNotifications
 
 struct SettingsProTab: View {
     @Environment(NodeAppModel.self) var appModel
@@ -71,9 +69,9 @@ struct SettingsProTab: View {
                         self.gatewaySection
                         self.settingsListSection
                     }
-                    .padding(.vertical, 18)
+                    .padding(.top, 18)
+                    .padding(.bottom, 18)
                 }
-                .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
             }
             .navigationBarHidden(true)
             .navigationDestination(for: SettingsRoute.self) { route in
@@ -136,6 +134,9 @@ struct SettingsProTab: View {
                 QRScannerView(
                     onGatewayLink: { link in
                         self.handleScannedGatewayLink(link)
+                    },
+                    onSetupCode: { code in
+                        self.handleScannedSetupCode(code)
                     },
                     onError: { error in
                         self.showQRScanner = false

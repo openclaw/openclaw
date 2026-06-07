@@ -1,3 +1,6 @@
+/**
+ * Installs context guards for oversized tool-result histories.
+ */
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
@@ -324,12 +327,15 @@ export function installContextEngineLoopHook(params: {
   sessionFile: string;
   tokenBudget?: number;
   modelId: string;
+  repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
   onAfterTurnCheckpoint?: (messageCount: number) => void;
   getRuntimeContext?: (params: {
     messages: AgentMessage[];
     prePromptMessageCount: number;
   }) => ContextEngineRuntimeContext | undefined;
+  /** True when this turn belongs to a heartbeat run. */
+  isHeartbeat?: boolean;
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
   const mutableAgent = params.agent as GuardableAgentRecord;
@@ -394,6 +400,7 @@ export function installContextEngineLoopHook(params: {
             messages: transcriptMessages,
             prePromptMessageCount,
           }),
+          isHeartbeat: params.isHeartbeat,
         });
       } else {
         const newMessages = transcriptMessages.slice(prePromptMessageCount);
@@ -403,6 +410,7 @@ export function installContextEngineLoopHook(params: {
               sessionId,
               sessionKey,
               messages: newMessages,
+              isHeartbeat: params.isHeartbeat,
             });
           } else {
             for (const message of newMessages) {
@@ -410,6 +418,7 @@ export function installContextEngineLoopHook(params: {
                 sessionId,
                 sessionKey,
                 message,
+                isHeartbeat: params.isHeartbeat,
               });
             }
           }
@@ -425,13 +434,13 @@ export function installContextEngineLoopHook(params: {
         tokenBudget,
         model: modelId,
       });
-      if (
-        assembled &&
-        Array.isArray(assembled.messages) &&
-        assembled.messages !== providerMessages
-      ) {
-        lastAssembledView = assembled.messages;
-        return assembled.messages;
+      if (assembled && Array.isArray(assembled.messages)) {
+        const repairedMessages =
+          params.repairAssembledMessages?.(assembled.messages) ?? assembled.messages;
+        if (repairedMessages !== providerMessages || assembled.messages !== providerMessages) {
+          lastAssembledView = repairedMessages;
+          return repairedMessages;
+        }
       }
       lastAssembledView = null;
     } catch {

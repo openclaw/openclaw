@@ -1,3 +1,4 @@
+// Verifies OpenAI-compatible streaming payloads, failures, and transport wrapping.
 import { createServer } from "node:http";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
@@ -99,6 +100,7 @@ function createAzureResponsesModel(): Model<"azure-openai-responses"> {
 }
 
 function neverYieldsStream(): AsyncIterable<unknown> {
+  // Simulates an HTTP stream that opened but never delivered the first SSE event.
   return {
     [Symbol.asyncIterator]() {
       return {
@@ -116,6 +118,7 @@ async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<never> 
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  // Shared assertion helper for parsed transport payload/event records.
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
   }
@@ -141,6 +144,7 @@ describe("openai transport stream", () => {
   });
 
   it("observes detail-less Responses failures without leaking request ids", async () => {
+    // Observation should preserve hashes/metadata shape while dropping raw request ids.
     const model = createAzureResponsesModel();
     const event = {
       type: "response.failed",
@@ -10096,5 +10100,38 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
 
     const assistant = getAssistantMessage(params);
     expect(assistant.reasoning_details).toEqual([reasoningDetail]);
+  });
+
+  // issue #89660: a custom OpenAI-compatible proxy (not auto-detected as DeepSeek/
+  // Xiaomi/Kimi) can opt into the DeepSeek reasoning-content replay contract by
+  // setting compat.requiresReasoningContentOnAssistantMessages in config. getCompat
+  // must resolve `compat.X ?? detected.X` (matching every sibling field) instead of
+  // using `detected.X` alone, so the explicit config flag is honored in this transport.
+  const customReasoningProxyModel = {
+    id: "my-proxy/r1-pro",
+    name: "Custom Reasoning Proxy",
+    api: "openai-completions",
+    provider: "custom-openai-proxy",
+    baseUrl: "https://my-proxy.example.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8_192,
+  } satisfies Model<"openai-completions">;
+
+  it("honors compat.requiresReasoningContentOnAssistantMessages from config on a custom provider (#89660)", () => {
+    const resolved = testing.getCompat({
+      ...customReasoningProxyModel,
+      compat: { requiresReasoningContentOnAssistantMessages: true },
+    } as never);
+
+    expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(true);
+  });
+
+  it("falls back to detection (false) for the same custom provider when the flag is absent", () => {
+    const resolved = testing.getCompat(customReasoningProxyModel as never);
+
+    expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(false);
   });
 });

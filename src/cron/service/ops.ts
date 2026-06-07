@@ -1,3 +1,4 @@
+/** Public cron service operations for lifecycle, CRUD, listing, and manual runs. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -85,6 +86,8 @@ function markInterruptedStartupRun(params: {
   nowMs: number;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
+  // A persisted running marker means the gateway stopped mid-run; mark it as a
+  // normal failed run so retries, alerts, and run logs all see one outcome.
   const failureNotificationStatus = resolveInterruptedStartupFailureNotificationStatus({
     state: params.state,
     job,
@@ -228,7 +231,9 @@ export async function start(state: CronServiceState) {
           delivered: false,
           deliveryStatus: "unknown",
           deliveryError: STARTUP_INTERRUPTED_ERROR,
-          failureNotificationDelivery: job ? failureNotificationDeliveryFromJobState(job) : undefined,
+          failureNotificationDelivery: job
+            ? failureNotificationDeliveryFromJobState(job)
+            : undefined,
           runAtMs: interrupted.runAtMs,
           durationMs: interrupted.durationMs,
           nextRunAtMs: job?.state.nextRunAtMs,
@@ -349,6 +354,7 @@ function sortJobs(jobs: CronJob[], sortBy: CronJobsSortBy, sortDir: CronSortDir)
     if (cmp !== 0) {
       return cmp * dir;
     }
+    // Stable id tiebreaker keeps pagination deterministic when sort keys match.
     const aId = typeof a.id === "string" ? a.id : "";
     const bId = typeof b.id === "string" ? b.id : "";
     return aId.localeCompare(bId);

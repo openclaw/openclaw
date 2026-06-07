@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover cron validators behavior.
 import { describe, expect, it } from "vitest";
 import {
   validateCronAddParams,
@@ -9,6 +10,14 @@ import {
   validateCronUpdateParams,
 } from "./index.js";
 
+/**
+ * Cron validator regressions for public scheduler RPC payloads.
+ *
+ * The cases cover both canonical `id` selectors and legacy `jobId` aliases,
+ * delivery routing, update clears, and run-log path traversal guards.
+ */
+
+/** Smallest valid cron job create payload shared by add/update variations. */
 const minimalAddParams = {
   name: "daily-summary",
   schedule: { kind: "every", everyMs: 60_000 },

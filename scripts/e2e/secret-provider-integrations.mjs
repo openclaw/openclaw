@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Runs secret-provider integration E2E checks with fixture processes.
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -19,16 +20,35 @@ const MANUAL_EXEC_TOKEN = "proof-manual-exec-token";
 const PLUGIN_EXEC_TOKEN = "proof-plugin-exec-token";
 const OPENAI_PROFILE = "openai:secretref-proof";
 const OPENAI_LIVE_PROOF_MODEL = "openai/gpt-5.5";
-const COMMAND_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS, 120000);
-const READY_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_READY_MS, 120000);
-const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_SECRET_PROOF_RPC_MS, 15000);
+const COMMAND_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS,
+  120000,
+  "OPENCLAW_SECRET_PROOF_COMMAND_MS",
+);
+const READY_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_READY_MS,
+  120000,
+  "OPENCLAW_SECRET_PROOF_READY_MS",
+);
+const RPC_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_RPC_MS,
+  15000,
+  "OPENCLAW_SECRET_PROOF_RPC_MS",
+);
 const TEARDOWN_GRACE_MS = readPositiveInt(
   process.env.OPENCLAW_SECRET_PROOF_TEARDOWN_GRACE_MS,
   5000,
+  "OPENCLAW_SECRET_PROOF_TEARDOWN_GRACE_MS",
 );
 const OUTPUT_CAPTURE_LIMIT_BYTES = readPositiveInt(
   process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES,
   4 * 1024 * 1024,
+  "OPENCLAW_SECRET_PROOF_OUTPUT_BYTES",
+);
+const RESOLVER_STDIN_LIMIT_BYTES = readPositiveInt(
+  process.env.OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES,
+  1024 * 1024,
+  "OPENCLAW_SECRET_PROOF_RESOLVER_STDIN_BYTES",
 );
 const RESULTS_PATH =
   process.env.OPENCLAW_SECRET_PROOF_RESULTS_PATH?.trim() ||
@@ -41,13 +61,42 @@ function requireFullMatrix() {
   return process.env.OPENCLAW_SECRET_PROOF_FULL === "1";
 }
 
-function readPositiveInt(raw, fallback) {
+function allowProofSkips() {
+  return process.env.OPENCLAW_SECRET_PROOF_ALLOW_SKIPS === "1";
+}
+
+function skipProof(evidence) {
+  return { status: "skip", evidence };
+}
+
+function isSkippedProofResult(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    value.status === "skip" &&
+    typeof value.evidence === "string"
+  );
+}
+
+function collectBlockingProofResults(entries = results) {
+  return entries.filter(
+    (entry) => entry.status === "fail" || (entry.status === "skip" && !allowProofSkips()),
+  );
+}
+
+function readPositiveInt(raw, fallback, label) {
   const text = String(raw ?? "").trim();
-  if (!/^\d+$/u.test(text)) {
+  if (!text) {
     return fallback;
   }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
   const parsed = Number(text);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
+  return parsed;
 }
 
 function remainingDeadlineMs(started, timeoutMs) {
@@ -122,6 +171,12 @@ function createOutputCapture(label, options = {}) {
     },
     text() {
       return output;
+    },
+    reset() {
+      output = "";
+      bytes = 0;
+      truncated = false;
+      scanTail = "";
     },
     leakedForbiddenValue() {
       return leakedForbiddenValue;
@@ -203,19 +258,26 @@ function makeEnv(name) {
   return { root, home, stateDir, env };
 }
 
-async function cleanupEnv(root) {
+async function cleanupEnv(root, options = {}) {
   if (process.env.OPENCLAW_SECRET_PROOF_KEEP_TMP === "1") {
     console.log(`[keep] ${root}`);
     return;
   }
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  const attempts = options.attempts ?? 5;
+  const retryDelayMs = options.retryDelayMs ?? 250;
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       fs.rmSync(root, { recursive: true, force: true });
       return;
-    } catch {
-      await delay(250);
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) {
+        await delay(retryDelayMs);
+      }
     }
   }
+  throw new Error(`failed to remove secret proof temp root ${root}`, { cause: lastError });
 }
 
 function runCommand(command, args, options = {}) {
@@ -232,13 +294,29 @@ function runCommand(command, args, options = {}) {
     const stdout = createOutputCapture("stdout");
     const stderr = createOutputCapture("stderr");
     let timedOut = false;
+    let aborted = false;
     let killTimer;
+    const abort = () => {
+      if (childHasExited(child)) {
+        return;
+      }
+      aborted = true;
+      terminateProcessTree(child, "SIGTERM");
+      killTimer ??= setTimeout(() => terminateProcessTree(child, "SIGKILL"), 1000);
+      killTimer.unref();
+    };
     const timer = setTimeout(() => {
       timedOut = true;
       terminateProcessTree(child, "SIGTERM");
       killTimer = setTimeout(() => terminateProcessTree(child, "SIGKILL"), 1000);
       killTimer.unref();
     }, timeoutMs);
+    const abortSignal = options.signal;
+    if (abortSignal?.aborted) {
+      abort();
+    } else {
+      abortSignal?.addEventListener("abort", abort, { once: true });
+    }
     child.stdout?.on("data", (chunk) => {
       stdout.append(chunk);
     });
@@ -268,6 +346,7 @@ function runCommand(command, args, options = {}) {
       if (killTimer) {
         clearTimeout(killTimer);
       }
+      abortSignal?.removeEventListener("abort", abort);
       removeParentSignalHandlers();
       reject(error instanceof Error ? error : new Error(formatErrorMessage(error)));
     });
@@ -276,11 +355,28 @@ function runCommand(command, args, options = {}) {
       if (killTimer) {
         clearTimeout(killTimer);
       }
+      abortSignal?.removeEventListener("abort", abort);
       removeParentSignalHandlers();
-      const result = { code: code ?? 0, signal, stdout: stdout.text(), stderr: stderr.text() };
+      const result = { code, signal, stdout: stdout.text(), stderr: stderr.text() };
+      if (aborted) {
+        reject(new Error(scrub(`command aborted: ${command} ${args.join(" ")}`)));
+        return;
+      }
       if (timedOut) {
         terminateProcessTree(child, "SIGKILL");
         reject(new Error(scrub(`command timed out: ${command} ${args.join(" ")}`)));
+        return;
+      }
+      if (result.signal && options.allowFailure !== true) {
+        reject(
+          new Error(
+            scrub(
+              `command terminated by signal (${result.signal}): ${command} ${args.join(" ")}\n${
+                result.stderr || result.stdout
+              }`,
+            ),
+          ),
+        );
         return;
       }
       if (result.code !== 0 && options.allowFailure !== true) {
@@ -534,15 +630,36 @@ if (!storePath) {
   console.error("missing PROOF_SECRET_STORE_PATH");
   process.exit(4);
 }
+const stdinLimitBytes = ${RESOLVER_STDIN_LIMIT_BYTES};
 
 function readStdin() {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let body = "";
+    let bytes = 0;
+    let failed = false;
+    const fail = (error) => {
+      if (failed) {
+        return;
+      }
+      failed = true;
+      reject(error);
+    };
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (chunk) => {
+      bytes += Buffer.byteLength(chunk, "utf8");
+      if (bytes > stdinLimitBytes) {
+        fail(new Error(\`resolver stdin exceeded \${stdinLimitBytes} bytes\`));
+        process.stdin.destroy();
+        return;
+      }
       body += chunk;
     });
-    process.stdin.on("end", () => resolve(body));
+    process.stdin.on("error", fail);
+    process.stdin.on("end", () => {
+      if (!failed) {
+        resolve(body);
+      }
+    });
   });
 }
 
@@ -658,30 +775,65 @@ async function startGateway(envCtx, port, token = TOKEN_V1) {
   child.stderr.on("data", (chunk) => {
     stderr.append(chunk);
   });
+  const gatewayExit = new Promise((resolve) => {
+    child.once("error", (error) => {
+      resolve({
+        kind: "gateway-error",
+        error: error instanceof Error ? error : new Error(formatErrorMessage(error)),
+      });
+    });
+    child.once("exit", (code, signal) => {
+      resolve({ kind: "gateway-exit", code, signal });
+    });
+  });
   const started = Date.now();
   let lastHealthResult;
   let lastHealthError;
   while (Date.now() - started < READY_TIMEOUT_MS) {
-    if (child.exitCode !== null) {
+    if (childHasExited(child)) {
+      const exit = child.signalCode ? `signal ${child.signalCode}` : `code ${child.exitCode}`;
       throw new Error(
-        scrub(
-          `gateway exited during startup (${child.exitCode})\n${stderr.text() || stdout.text()}`,
-        ),
+        scrub(`gateway exited during startup (${exit})\n${stderr.text() || stdout.text()}`),
       );
     }
     const remainingMs = remainingDeadlineMs(started, READY_TIMEOUT_MS);
-    try {
-      const health = await gatewayCall(
-        envCtx.env,
-        port,
-        token,
-        "health",
-        {},
-        {
-          allowFailure: true,
-          timeoutMs: Math.min(RPC_TIMEOUT_MS + 10000, remainingMs),
-        },
+    const healthAbort = new AbortController();
+    const healthProbe = (async () => {
+      try {
+        const health = await gatewayCall(
+          envCtx.env,
+          port,
+          token,
+          "health",
+          {},
+          {
+            allowFailure: true,
+            signal: healthAbort.signal,
+            timeoutMs: Math.min(RPC_TIMEOUT_MS + 10000, remainingMs),
+          },
+        );
+        return { kind: "health", health };
+      } catch (error) {
+        return { kind: "health-error", error };
+      }
+    })();
+    const outcome = await Promise.race([healthProbe, gatewayExit]);
+    if (outcome.kind === "gateway-error") {
+      healthAbort.abort();
+      throw new Error(scrub(`gateway failed to start: ${outcome.error.message}`));
+    }
+    if (outcome.kind === "gateway-exit") {
+      healthAbort.abort();
+      const exit = outcome.signal ? `signal ${outcome.signal}` : `code ${outcome.code}`;
+      throw new Error(
+        scrub(`gateway exited during startup (${exit})\n${stderr.text() || stdout.text()}`),
       );
+    }
+    try {
+      if (outcome.kind === "health-error") {
+        throw outcome.error;
+      }
+      const health = outcome.health;
       lastHealthResult = health;
       if (health.code === 0) {
         return {
@@ -806,7 +958,11 @@ async function gatewayCall(env, port, token, method, params = {}, options = {}) 
       OPENCLAW_STATE_DIR: clientStateDir,
       OPENCLAW_HOME: clientStateDir,
     },
-    { timeoutMs: options.timeoutMs ?? RPC_TIMEOUT_MS + 10000, allowFailure: options.allowFailure },
+    {
+      timeoutMs: options.timeoutMs ?? RPC_TIMEOUT_MS + 10000,
+      allowFailure: options.allowFailure,
+      signal: options.signal,
+    },
   );
 }
 
@@ -974,10 +1130,18 @@ async function runWithProof(name, description, fn) {
   try {
     const evidence = await fn();
     const elapsedMs = Date.now() - started;
-    results.push({ name, status: "pass", elapsedMs, evidence });
+    if (isSkippedProofResult(evidence)) {
+      const entry = { name, status: "skip", elapsedMs, evidence: evidence.evidence };
+      results.push(entry);
+      console.log(`[SKIP] ${name} ${description} (${elapsedMs}ms) ${scrub(evidence.evidence)}`);
+      return entry;
+    }
+    const entry = { name, status: "pass", elapsedMs, evidence };
+    results.push(entry);
     console.log(
       `[PASS] ${name} ${description} (${elapsedMs}ms) ${evidence ? scrub(evidence) : ""}`,
     );
+    return entry;
   } catch (error) {
     const elapsedMs = Date.now() - started;
     const message = error instanceof Error ? error.message : String(error);
@@ -1101,6 +1265,15 @@ async function p3ThroughP6StaticReloadAndCommandSnapshot() {
   return "static capture, reload success, reload LKG, and command snapshot resolution proved";
 }
 
+function assertAllowedFailureCommandSucceeded(result, label, combinedOutput) {
+  if (result.signal) {
+    throw new Error(`${label} terminated by signal ${result.signal}: ${combinedOutput}`);
+  }
+  if (result.code !== 0) {
+    throw new Error(`${label} failed (${String(result.code)}): ${combinedOutput}`);
+  }
+}
+
 async function p7AuthProfileSecretRefPersistsAndResolves() {
   await withProofEnv("p7", async (envCtx, _plugin, storePath) => {
     const port = await allocatePort();
@@ -1152,6 +1325,11 @@ async function p7AuthProfileSecretRefPersistsAndResolves() {
         `auth-profile SecretRef did not resolve through plugin integration: ${combined}`,
       );
     }
+    assertAllowedFailureCommandSucceeded(
+      result,
+      "auth-profile SecretRef model status probe",
+      combined,
+    );
     const callsAfter = readJson(storePath).calls;
     if (callsAfter <= callsBefore) {
       throw new Error("auth-profile proof did not invoke the plugin-managed resolver");
@@ -1168,7 +1346,9 @@ async function p8ManagedServiceEnvProof() {
     if (requireFullMatrix()) {
       throw new Error("OPENCLAW_SECRET_PROOF_SERVICE=1 is required for full matrix service proof");
     }
-    return "not run in local rehearsal; final matrix must set OPENCLAW_SECRET_PROOF_SERVICE=1 on a service-capable host";
+    return skipProof(
+      "not run in local rehearsal; final matrix must set OPENCLAW_SECRET_PROOF_SERVICE=1 on a service-capable host",
+    );
   }
   await withProofEnv("p8", async (envCtx) => {
     const port = await allocatePort();
@@ -1398,7 +1578,9 @@ async function p12OpenAiLiveProof() {
     if (requireFullMatrix()) {
       throw new Error("OPENAI_API_KEY is required for full matrix OpenAI proof");
     }
-    return "OPENAI_API_KEY not present; final live matrix must forward the provided OpenAI env profile";
+    return skipProof(
+      "OPENAI_API_KEY not present; final live matrix must forward the provided OpenAI env profile",
+    );
   }
   await withProofEnv(
     "p12",
@@ -1479,7 +1661,7 @@ async function runPtySecretsConfigurePreset(envCtx) {
     cwd: command.options.cwd ?? process.cwd(),
     env: command.options.env ?? envCtx.env,
   });
-  let output = "";
+  const output = createOutputCapture("secrets configure stdout");
   let phase = "providers-menu";
   const sendKeys = (keys) => {
     keys.forEach((key, index) => {
@@ -1489,22 +1671,23 @@ async function runPtySecretsConfigurePreset(envCtx) {
   return await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill();
-      reject(new Error(`secrets configure preset timed out: ${scrub(output)}`));
+      reject(new Error(`secrets configure preset timed out: ${scrub(output.text())}`));
     }, 60000);
     child.onData((data) => {
-      output += data;
-      if (phase === "providers-menu" && output.includes("Configure secret providers")) {
+      output.append(data);
+      const outputText = output.text();
+      if (phase === "providers-menu" && outputText.includes("Configure secret providers")) {
         phase = "selecting-preset";
         sendKeys(["\x1b[B", "\r"]);
         return;
       }
-      if (phase === "selecting-preset" && output.includes("Select plugin preset")) {
+      if (phase === "selecting-preset" && outputText.includes("Select plugin preset")) {
         phase = "preset-selected";
         sendKeys(["\r"]);
-        output = "";
+        output.reset();
         return;
       }
-      if (phase === "preset-selected" && output.includes("Configure secret providers")) {
+      if (phase === "preset-selected" && outputText.includes("Configure secret providers")) {
         phase = "continue-selected";
         sendKeys(["\x1b[A", "\r"]);
       }
@@ -1512,10 +1695,10 @@ async function runPtySecretsConfigurePreset(envCtx) {
     child.onExit(({ exitCode }) => {
       clearTimeout(timer);
       if (exitCode !== 0) {
-        reject(new Error(`secrets configure preset failed (${exitCode}): ${scrub(output)}`));
+        reject(new Error(`secrets configure preset failed (${exitCode}): ${scrub(output.text())}`));
         return;
       }
-      resolve(output);
+      resolve(output.text());
     });
   });
 }
@@ -1721,18 +1904,25 @@ async function main() {
   if (runError) {
     throw toLintErrorObject(runError, "Non-Error thrown");
   }
-  const failed = results.filter((entry) => entry.status !== "pass");
-  if (failed.length > 0) {
+  const blockingResults = collectBlockingProofResults();
+  if (blockingResults.length > 0) {
     process.exitCode = 1;
   }
 }
 
 export {
+  assertAllowedFailureCommandSucceeded,
+  collectBlockingProofResults,
+  cleanupEnv,
   expectGatewayStartupFails,
   gatewayCall,
+  runPtySecretsConfigurePreset,
+  runWithProof,
   runCommand,
+  skipProof,
   startGateway,
   waitForManagedGatewayStatus,
+  writeProofPlugin,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
