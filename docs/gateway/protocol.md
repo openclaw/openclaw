@@ -631,6 +631,18 @@ terminal summary, and sanitized error text.
 - `"configured"`: picker-sized behavior. If `agents.defaults.models` is configured, it still wins, including provider-scoped discovery for `provider/*` entries. Without an allowlist, the response uses explicit `models.providers.*.models` entries, falling back to the full catalog only when no configured model rows exist.
 - `"all"`: full Gateway catalog, bypassing `agents.defaults.models`. Use this for diagnostics and discovery UIs, not normal model pickers.
 
+Each returned model choice includes stable selector fields such as `id`, `name`, `provider`, and optional metadata including `alias`, `available`, `contextWindow`, and `reasoning`. When a model is resolved through a non-default agent runtime backend, the response may also include optional `agentRuntime` metadata:
+
+- `agentRuntime.id`: runtime backend id used for the model choice, such as `codex`.
+- `agentRuntime.label`: human-readable runtime label for picker display.
+- `agentRuntime.source`: where the runtime assignment came from:
+  - `"implicit"`: default runtime implied by provider/model routing.
+  - `"model"`: explicit runtime metadata on the configured model row.
+  - `"provider"`: explicit runtime metadata inherited from the configured provider.
+  - `"session-key"`: runtime selected from session-key model/routing metadata.
+
+Clients should treat `agentRuntime` as optional and preserve `id` as the canonical model value for requests; `label` is display metadata only.
+
 ## Exec approvals
 
 - When an exec request needs approval, the gateway broadcasts `exec.approval.requested`.
