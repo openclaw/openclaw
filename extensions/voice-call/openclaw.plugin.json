@@ -320,6 +320,15 @@
           },
           "requireRecordingStatus": {
             "type": "boolean"
+          },
+          "outbound": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "workerBaseUrl": { "type": "string" },
+              "tenantId": { "type": "string" }
+            }
           }
         }
       },
