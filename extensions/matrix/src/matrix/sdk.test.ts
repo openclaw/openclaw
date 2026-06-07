@@ -4,7 +4,9 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installMatrixTestRuntime } from "../test-runtime.js";
 
 function requestUrl(input: RequestInfo | URL | undefined): string {
   if (!input) {
@@ -301,6 +303,8 @@ const { MatrixClient } = await import("./sdk.js");
 
 describe("MatrixClient request hardening", () => {
   beforeEach(() => {
+    resetPluginStateStoreForTests();
+    installMatrixTestRuntime();
     matrixJsClient = createMatrixJsClientStub();
     lastCreateClientOpts = null;
     vi.useRealTimers();
@@ -312,6 +316,7 @@ describe("MatrixClient request hardening", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     clearTestUndiciRuntimeDepsOverride();
+    resetPluginStateStoreForTests();
   });
 
   it("blocks absolute endpoints unless explicitly allowed", async () => {
@@ -659,11 +664,10 @@ describe("MatrixClient request hardening", () => {
 
   it("wires the sync store into the SDK and flushes it on shutdown", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sdk-store-"));
-    const storagePath = path.join(tempDir, "bot-storage.json");
 
     try {
       const client = new MatrixClient("https://matrix.example.org", "token", {
-        storagePath,
+        storageRootDir: tempDir,
       });
 
       const store = lastCreateClientOpts?.store as { flush: () => Promise<void> } | undefined;
