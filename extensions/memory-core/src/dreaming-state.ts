@@ -31,6 +31,20 @@ type WorkspaceValue<T> = {
   value: T;
 };
 
+export type MemoryCoreWorkspaceEntry<T> = { key: string; value: T };
+
+type MemoryCoreWorkspaceParams = {
+  namespace: string;
+  workspaceDir: string;
+};
+
+type WriteMemoryCoreWorkspaceEntriesParams<T> = MemoryCoreWorkspaceParams & {
+  entries: Array<MemoryCoreWorkspaceEntry<T>>;
+};
+
+type WriteMemoryCoreWorkspaceEntryParams<T> = MemoryCoreWorkspaceParams &
+  MemoryCoreWorkspaceEntry<T>;
+
 let configuredOpenKeyedStore: MemoryCoreOpenKeyedStore | undefined;
 
 export function configureMemoryCoreDreamingState(openKeyedStore: MemoryCoreOpenKeyedStore): void {
@@ -88,27 +102,28 @@ function openWorkspaceStore<T>(namespace: string): PluginStateKeyedStore<Workspa
 }
 
 // Caller owns typed decoding for values read from plugin state.
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters
-export async function readMemoryCoreWorkspaceEntries<T>(params: {
-  namespace: string;
-  workspaceDir: string;
-}): Promise<Array<{ key: string; value: T }>> {
+export function readMemoryCoreWorkspaceEntries<T>(
+  params: MemoryCoreWorkspaceParams,
+): Promise<Array<MemoryCoreWorkspaceEntry<T>>>;
+export async function readMemoryCoreWorkspaceEntries(
+  params: MemoryCoreWorkspaceParams,
+): Promise<Array<MemoryCoreWorkspaceEntry<unknown>>> {
   const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
   const prefix = `${workspaceKey}:`;
-  const entries = await openWorkspaceStore<T>(params.namespace).entries();
+  const entries = await openWorkspaceStore<unknown>(params.namespace).entries();
   return entries
     .filter((entry) => entry.key.startsWith(prefix) && entry.value.workspaceKey === workspaceKey)
     .map((entry) => ({ key: entry.value.key, value: entry.value.value }));
 }
 
 // Caller owns typed encoding for values written to plugin state.
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters
-export async function writeMemoryCoreWorkspaceEntries<T>(params: {
-  namespace: string;
-  workspaceDir: string;
-  entries: Array<{ key: string; value: T }>;
-}): Promise<void> {
-  const store = openWorkspaceStore<T>(params.namespace);
+export function writeMemoryCoreWorkspaceEntries<T>(
+  params: WriteMemoryCoreWorkspaceEntriesParams<T>,
+): Promise<void>;
+export async function writeMemoryCoreWorkspaceEntries(
+  params: WriteMemoryCoreWorkspaceEntriesParams<unknown>,
+): Promise<void> {
+  const store = openWorkspaceStore<unknown>(params.namespace);
   const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
   const prefix = `${workspaceKey}:`;
   const replacementKeys = new Set<string>();
@@ -131,15 +146,14 @@ export async function writeMemoryCoreWorkspaceEntries<T>(params: {
 }
 
 // Caller owns typed encoding for values written to plugin state.
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters
-export async function writeMemoryCoreWorkspaceEntry<T>(params: {
-  namespace: string;
-  workspaceDir: string;
-  key: string;
-  value: T;
-}): Promise<void> {
+export function writeMemoryCoreWorkspaceEntry<T>(
+  params: WriteMemoryCoreWorkspaceEntryParams<T>,
+): Promise<void>;
+export async function writeMemoryCoreWorkspaceEntry(
+  params: WriteMemoryCoreWorkspaceEntryParams<unknown>,
+): Promise<void> {
   const workspaceKey = memoryCoreWorkspaceStateKey(params.workspaceDir);
-  await openWorkspaceStore<T>(params.namespace).register(
+  await openWorkspaceStore<unknown>(params.namespace).register(
     memoryCoreWorkspaceEntryKey(params.workspaceDir, params.key),
     {
       version: 1,
