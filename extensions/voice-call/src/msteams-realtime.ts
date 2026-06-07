@@ -38,6 +38,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps } from "./core-bridge.js";
+import type { GroupCallGateConfig } from "./group-call-gate.js";
 import type { MsteamsLogger, MsteamsSession } from "./msteams-media-stream.js";
 import type { MsteamsVideoFrame } from "./msteams-video-frame.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
@@ -166,6 +167,30 @@ function readArgString(args: unknown, key: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Append the group-call gate as a model instruction. The realtime bridge owns turn-taking and
+ * exposes no response-suppression hook, so the gate is enforced by telling the model to stay silent
+ * in a meeting until addressed by name. Inert when the gate is off or has no wake phrases.
+ */
+function withGroupGateInstruction(
+  instructions: string | undefined,
+  gate: GroupCallGateConfig | undefined,
+): string | undefined {
+  const phrases = gate?.wakePhrases?.filter((p) => p.trim().length > 0) ?? [];
+  if (!gate?.requireAddress || phrases.length === 0) {
+    return instructions;
+  }
+  const names = phrases.map((p) => `"${p}"`).join(", ");
+  const clause = [
+    "GROUP-CALL ETIQUETTE: If more than one person is on this call (a group meeting), do NOT reply",
+    `unless someone addresses you by name (${names}) or clearly directs a question to you. When you`,
+    "are not addressed, stay silent and just listen — do not narrate, acknowledge, or interject.",
+    "Once addressed, you may continue a short back-and-forth until the topic moves on. In a",
+    "one-on-one call (only you and one person), respond normally to everything.",
+  ].join(" ");
+  return instructions ? `${instructions}\n\n${clause}` : clause;
+}
+
 export interface MsteamsRealtimeDeps {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
@@ -207,6 +232,13 @@ export interface MsteamsRealtimeDeps {
    * and gating input would also defeat the model's barge-in detection.
    */
   suppressInputDuringPlayback?: boolean;
+
+  /**
+   * Group-call gate. The realtime model owns turn-taking, so (unlike the deterministic streaming
+   * gate) this is applied as an instruction: in a meeting the model is told to stay silent until
+   * addressed by name. Undefined / requireAddress=false ⇒ respond normally.
+   */
+  groupCallGate?: GroupCallGateConfig;
 
   logger?: MsteamsLogger;
 }
@@ -310,7 +342,7 @@ export function createMsteamsRealtimeCall(params: {
     cfg: deps.cfg,
     providerConfig: deps.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-    instructions: deps.instructions,
+    instructions: withGroupGateInstruction(deps.instructions, deps.groupCallGate),
     initialGreetingInstructions: deps.greetingInstructions,
     triggerGreetingOnReady: Boolean(deps.greetingInstructions),
     autoRespondToAudio: true,
