@@ -63,10 +63,12 @@ function diagnosticErrors(messages: string[]) {
 }
 
 function runAssertInstalled({
+  allInspectPayload,
   diagnostics = [],
   env = {},
   inspectPayload,
 }: {
+  allInspectPayload?: unknown;
   diagnostics?: Array<{ level: string; message: string }>;
   env?: NodeJS.ProcessEnv;
   inspectPayload?: ReturnType<typeof fullSurfaceInspectPayload>;
@@ -89,8 +91,9 @@ function runAssertInstalled({
       diagnostics,
       plugins: [{ id: pluginId, status: "loaded" }],
     });
-    writeJson(inspectJsonPath, inspectPayload ?? fullSurfaceInspectPayload(pluginId));
-    writeJson(inspectAllJsonPath, { diagnostics: [] });
+    const pluginInspectPayload = inspectPayload ?? fullSurfaceInspectPayload(pluginId);
+    writeJson(inspectJsonPath, pluginInspectPayload);
+    writeJson(inspectAllJsonPath, allInspectPayload ?? [pluginInspectPayload]);
     writeJson(installsPath, {
       installRecords: {
         [pluginId]: {
@@ -150,7 +153,7 @@ function runAssertClawhubInstalled({
       plugins: [{ id: pluginId, status: "loaded" }],
     });
     writeJson(inspectJsonPath, inspectPayload);
-    writeJson(inspectAllJsonPath, { diagnostics: [] });
+    writeJson(inspectAllJsonPath, [inspectPayload]);
     writeJson(installsPath, {
       installRecords: {
         [pluginId]: {
@@ -222,6 +225,33 @@ function runSweepShell(script: string, env: NodeJS.ProcessEnv = {}) {
 }
 
 describe("kitchen-sink plugin assertions", () => {
+  it("bounds expected-failure output before matching failure diagnostics", () => {
+    const scratchRoot = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-failure-cap-"));
+    const outputPath = path.join(scratchRoot, "expected-failure.log");
+    try {
+      writeFileSync(outputPath, "x".repeat(128));
+
+      const result = spawnSync(
+        process.execPath,
+        [ASSERTIONS_SCRIPT, "expect-failure", outputPath],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            KITCHEN_SINK_EXPECT_FAILURE_OUTPUT_MAX_BYTES: "64",
+            KITCHEN_SINK_SOURCE: "npm",
+            KITCHEN_SINK_SPEC: "npm:@openclaw/kitchen-sink@0.0.0",
+          },
+        },
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("expected failure output exceeded 64 bytes");
+    } finally {
+      rmSync(scratchRoot, { force: true, recursive: true });
+    }
+  });
+
   it("fails full-surface installs when stable diagnostic canaries disappear", () => {
     const result = runAssertInstalled();
 
@@ -237,6 +267,34 @@ describe("kitchen-sink plugin assertions", () => {
     });
 
     expect(result.status).toBe(0);
+  });
+
+  it("requires kitchen-sink plugins to appear in inspect-all output", () => {
+    const result = runAssertInstalled({
+      allInspectPayload: [fullSurfaceInspectPayload("other-plugin")],
+      diagnostics: diagnosticErrors(REQUIRED_FULL_DIAGNOSTIC_CANARIES),
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain(
+      "kitchen-sink plugin missing from inspect --all output",
+    );
+  });
+
+  it("fails kitchen-sink inspect-all diagnostics for the installed plugin", () => {
+    const inspectPayload = fullSurfaceInspectPayload("openclaw-kitchen-sink-fixture");
+    const result = runAssertInstalled({
+      allInspectPayload: [
+        {
+          ...inspectPayload,
+          diagnostics: [{ level: "error", message: "inspect-all runtime failed" }],
+        },
+      ],
+      diagnostics: diagnosticErrors(REQUIRED_FULL_DIAGNOSTIC_CANARIES),
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain("inspect-all runtime failed");
   });
 
   it("requires the full kitchen-sink tool surface in full mode", () => {
@@ -327,6 +385,13 @@ describe("kitchen-sink plugin assertions", () => {
     } finally {
       rmSync(parent, { force: true, recursive: true });
     }
+  });
+
+  it("streams kitchen-sink log directories instead of sorting full child lists", () => {
+    const source = readFileSync(ASSERTIONS_SCRIPT, "utf8");
+
+    expect(source).toContain("fs.opendirSync(entry)");
+    expect(source).not.toContain("fs.readdirSync(entry).toSorted");
   });
 
   it("does not allow dirty error lines just because they mention zero errors", () => {
@@ -644,6 +709,60 @@ test -d "$SCRATCH_ROOT"
       );
       expect(existsSync(fixtureDir)).toBe(false);
       expect(existsSync(scratchRoot)).toBe(true);
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
+  it("bounds ClawHub fixture server logs on startup timeout", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-clawhub-log-"));
+    const fakeBin = path.join(parent, "bin");
+    const scratchRoot = path.join(parent, "scratch");
+    const fixtureDir = path.join(scratchRoot, "clawhub-fixture");
+    const nodeShim = path.join(fakeBin, "node");
+    try {
+      mkdirSync(fakeBin, { recursive: true });
+      mkdirSync(fixtureDir, { recursive: true });
+      writeFileSync(
+        nodeShim,
+        [
+          "#!/usr/bin/env bash",
+          "printf 'DO_NOT_DUMP_CLAWHUB_PREFIX\\n'",
+          "head -c 2048 /dev/zero | tr '\\0' x",
+          "printf '\\nFIXTURE_TAIL_MARKER\\n'",
+          "sleep 30",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(nodeShim, 0o755);
+
+      const result = runSweepShell(
+        `
+set -euo pipefail
+export PATH="$FAKE_BIN:$PATH"
+export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
+export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
+export OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS=5
+export OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES=64
+source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
+set +e
+start_kitchen_sink_clawhub_fixture_server "$FIXTURE_DIR"
+status="$?"
+set -e
+cleanup_kitchen_sink_sweep
+exit "$status"
+`,
+        {
+          FAKE_BIN: fakeBin,
+          FIXTURE_DIR: fixtureDir,
+          SCRATCH_ROOT: scratchRoot,
+        },
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain("truncated: showing last 64");
+      expect(result.stdout).toContain("FIXTURE_TAIL_MARKER");
+      expect(result.stdout).not.toContain("DO_NOT_DUMP_CLAWHUB_PREFIX");
     } finally {
       rmSync(parent, { force: true, recursive: true });
     }

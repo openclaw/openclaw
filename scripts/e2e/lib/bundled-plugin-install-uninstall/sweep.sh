@@ -79,7 +79,7 @@ for plugin_entry in "${plugin_entries[@]}"; do
     docker_e2e_print_log "$install_log"
   fi
   install_finished_at="$(now_ms)"
-  node "$probe" assert-installed "$plugin_id" "$plugin_dir" "$requires_config"
+  node "$probe" assert-installed "$plugin_id" "$plugin_dir" "$requires_config" "$plugin_root"
   installed_asserted_at="$(now_ms)"
   if [[ "${OPENCLAW_BUNDLED_PLUGIN_RUNTIME_SMOKE:-1}" != "0" ]]; then
     echo "Running bundled plugin runtime smoke: $plugin_id ($plugin_dir)"

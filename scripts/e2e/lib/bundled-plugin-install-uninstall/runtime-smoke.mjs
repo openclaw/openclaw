@@ -663,7 +663,7 @@ export async function waitForReady(params) {
 }
 
 async function fetchHttpProbeStatus(port, pathName, options = {}) {
-  const { timeoutMs = HTTP_PROBE_TIMEOUT_MS } = options;
+  const { parseJson = false, timeoutMs = HTTP_PROBE_TIMEOUT_MS } = options;
   const controller = new AbortController();
   const clearProbeTimer = timeoutMs
     ? setTimeout(() => {
@@ -674,7 +674,19 @@ async function fetchHttpProbeStatus(port, pathName, options = {}) {
     const res = await fetch(`http://127.0.0.1:${port}${pathName}`, {
       signal: controller.signal,
     });
-    const status = { ok: res.ok, status: res.status };
+    const status = { ok: res.ok, status: res.status, body: undefined, bodyText: undefined };
+    if (parseJson) {
+      const text = await res.text();
+      status.bodyText = text;
+      if (text.trim()) {
+        try {
+          status.body = JSON.parse(text);
+        } catch {
+          status.body = undefined;
+        }
+      }
+      return status;
+    }
     await res.body?.cancel().catch(() => {});
     return status;
   } finally {
@@ -706,7 +718,7 @@ async function assertHttpOk(port, pathName) {
     } catch (error) {
       lastError = error;
     }
-    await delay(500);
+    await delay(Math.min(500, Math.max(1, RPC_READY_TIMEOUT_MS - (Date.now() - started))));
   }
   throw toLintErrorObject(
     lastError ?? new Error(`${pathName} did not return HTTP 200`),
@@ -714,26 +726,65 @@ async function assertHttpOk(port, pathName) {
   );
 }
 
-async function assertReadyzProbe(options) {
+function listReadyzFailingComponents(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return undefined;
+  }
+  if (body.ready !== false || !Array.isArray(body.failing)) {
+    return undefined;
+  }
+  const failing = body.failing.filter((entry) => typeof entry === "string" && entry.length > 0);
+  if (failing.length !== body.failing.length || failing.length === 0) {
+    return undefined;
+  }
+  return failing;
+}
+
+function isAllowedDegradedReadyz(res, allowedFailures) {
+  if (res.status !== 503 || allowedFailures.size === 0) {
+    return false;
+  }
+  const failing = listReadyzFailingComponents(res.body);
+  if (!failing) {
+    return false;
+  }
+  return failing.every((entry) => allowedFailures.has(entry));
+}
+
+function formatHttpProbeBody(res) {
+  if (res.body !== undefined) {
+    return JSON.stringify(res.body);
+  }
+  const text = typeof res.bodyText === "string" ? res.bodyText.trim() : "";
+  if (!text) {
+    return "null";
+  }
+  return JSON.stringify(text.length > 500 ? `${text.slice(0, 500)}...` : text);
+}
+
+export async function assertReadyzProbe(options) {
+  const allowedFailures = new Set(options.allowedDegradedReadyzFailures ?? []);
   const started = Date.now();
   let lastError;
   while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
     try {
-      const res = await fetchHttpProbeStatus(options.port, "/readyz");
+      const res = await fetchHttpProbeStatus(options.port, "/readyz", { parseJson: true });
       if (res.ok) {
         return;
       }
-      if (options.allowDegradedReadyz) {
+      if (isAllowedDegradedReadyz(res, allowedFailures)) {
         console.log(
-          `Runtime readyz smoke degraded for ${options.pluginId}: /readyz returned HTTP ${res.status}`,
+          `Runtime readyz smoke degraded for ${options.pluginId}: /readyz failing ${JSON.stringify(
+            listReadyzFailingComponents(res.body),
+          )}`,
         );
         return;
       }
-      lastError = new Error(`/readyz returned HTTP ${res.status}`);
+      lastError = new Error(`/readyz returned HTTP ${res.status}: ${formatHttpProbeBody(res)}`);
     } catch (error) {
       lastError = error;
     }
-    await delay(500);
+    await delay(Math.min(500, Math.max(1, RPC_READY_TIMEOUT_MS - (Date.now() - started))));
   }
   throw toLintErrorObject(
     lastError ?? new Error("/readyz did not return HTTP 200"),
@@ -940,7 +991,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
       port,
       env,
       pluginId,
-      allowDegradedReadyz: plan.channels.length > 0,
+      allowedDegradedReadyzFailures: plan.channels,
     });
     await runManifestProbes(plan, { entrypoint, port, env, pluginId });
     await runWatchdog({ child, logPath, port, entrypoint, env, pluginId });
