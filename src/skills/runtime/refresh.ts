@@ -400,8 +400,11 @@ export function shouldIgnoreSkillsWatchPath(
   if (!stats) {
     return false;
   }
-  const normalized = watchPath.replaceAll("\\", "/");
-  return path.posix.basename(normalized) !== "SKILL.md";
+  // Ignore all regular files to avoid chokidar opening a persistent
+  // file descriptor per SKILL.md (which leaks FDs over the gateway
+  // lifetime). SKILL.md changes are detected via the `raw` event
+  // handler in createSkillsPathWatcher.
+  return true;
 }
 
 function resolveWatchDebounceMs(config?: OpenClawConfig): number {
@@ -444,6 +447,12 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
     subscribers: new Set<string>(),
   };
 
+  // Helper: check if a watch event path refers to a SKILL.md file.
+  function isSkillMdPath(p: string): boolean {
+    const normalized = p.replaceAll("\\", "/");
+    return path.posix.basename(normalized) === "SKILL.md";
+  }
+
   const schedule = (changedPath?: string) => {
     state.pendingPath = changedPath ?? state.pendingPath;
     if (state.timer) {
@@ -466,10 +475,18 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
     }, debounceMs);
   };
 
-  watcher.on("add", (p) => schedule(p));
-  watcher.on("change", (p) => schedule(p));
-  watcher.on("unlink", (p) => schedule(p));
+  // Directory-level events still fire because directories are not ignored.
+  // These detect skill add/remove.
+  watcher.on("addDir", (p) => schedule(p));
   watcher.on("unlinkDir", (p) => schedule(p));
+  // The raw event fires for all OS-level file-system events before the
+  // `ignored` filter runs. We use it to detect SKILL.md file changes
+  // (add/change/unlink) without keeping a persistent FD open per file.
+  watcher.on("raw", (eventName: string, p: string) => {
+    if (p && isSkillMdPath(p)) {
+      schedule(p);
+    }
+  });
   watcher.on("error", (err) => {
     log.warn(`skills watcher error (${target.path}): ${String(err)}`);
   });

@@ -5,20 +5,20 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillsChangeEvent } from "./refresh.js";
 
-type WatchEvent = "add" | "change" | "unlink" | "unlinkDir" | "error";
-type WatchCallback = (watchPath: string) => void;
+type WatchEvent = "add" | "change" | "unlink" | "unlinkDir" | "addDir" | "error" | "raw";
+type WatchCallback = (...args: string[]) => void;
 
 function createMockWatcher() {
-  const handlers = new Map<WatchEvent, WatchCallback[]>();
+  const handlers = new Map<string, WatchCallback[]>();
   const watcher = {
-    on: vi.fn((event: WatchEvent, callback: WatchCallback) => {
+    on: vi.fn((event: string, callback: WatchCallback) => {
       handlers.set(event, [...(handlers.get(event) ?? []), callback]);
       return watcher;
     }),
     close: vi.fn(async () => undefined),
-    emit: (event: WatchEvent, watchPath: string) => {
+    emit: (event: string, ...args: string[]) => {
       for (const callback of handlers.get(event) ?? []) {
-        callback(watchPath);
+        callback(...args);
       }
     },
   };
@@ -100,12 +100,17 @@ describe("ensureSkillsWatcher", () => {
       expect(ignored("/tmp/workspace/skills/build/output.js")).toBe(true);
       expect(ignored("/tmp/workspace/skills/.cache/data.json")).toBe(true);
 
-      // Should NOT ignore normal skill files
+      // Should NOT ignore directories or symlinks
+      // Paths without stats return false (not ignored) since chokidar
+      // must fall back to watching. Only explicit regular-file paths
+      // with stats are ignored to prevent FD leaks.
       expect(ignored("/tmp/.hidden/skills/index.md")).toBe(false);
       expect(ignored("/tmp/workspace/skills/my-skill", { isDirectory: () => true })).toBe(false);
       expect(ignored("/tmp/workspace/skills/my-skill", { isSymbolicLink: () => true })).toBe(false);
+      // All regular files are now ignored to prevent FD leaks via chokidar.
+      // SKILL.md changes are detected via the `raw` event instead.
       expect(ignored("/tmp/workspace/skills/my-skill/README.md", {})).toBe(true);
-      expect(ignored("/tmp/workspace/skills/my-skill/SKILL.md", {})).toBe(false);
+      expect(ignored("/tmp/workspace/skills/my-skill/SKILL.md", {})).toBe(true);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -132,7 +137,9 @@ describe("ensureSkillsWatcher", () => {
       expect(calls[firstIndex]?.[1]?.depth).toBe(7);
 
       const changedPath = path.join(workspaceDir, "skills", "group", "demo", "SKILL.md");
-      createdWatchers[firstIndex]?.emit("change", changedPath);
+      // SKILL.md changes are now detected via the `raw` event (which passes
+      // event name and path as separate arguments).
+      createdWatchers[firstIndex]?.emit("raw", "change", changedPath);
       await vi.advanceTimersByTimeAsync(10);
 
       expect(seen).toEqual([
@@ -529,8 +536,8 @@ describe("ensureSkillsWatcher", () => {
     },
   );
 
-  it.each(["add", "change", "unlink", "unlinkDir"] as const)(
-    "refreshes skills snapshots on %s",
+  it.each(["add", "change", "unlink"] as const)(
+    "refreshes skills snapshots on raw %s for SKILL.md",
     async (event) => {
       vi.useFakeTimers();
       const seen: SkillsChangeEvent[] = [];
@@ -542,7 +549,8 @@ describe("ensureSkillsWatcher", () => {
         config: { skills: { load: { watchDebounceMs: 10 } } },
       });
 
-      createdWatchers[0]?.emit(event, "/tmp/workspace/skills/demo/SKILL.md");
+      // SKILL.md file events come through the raw event now.
+      createdWatchers[0]?.emit("raw", event, "/tmp/workspace/skills/demo/SKILL.md");
       await vi.advanceTimersByTimeAsync(10);
 
       expect(seen).toEqual([
@@ -550,6 +558,32 @@ describe("ensureSkillsWatcher", () => {
           workspaceDir: "/tmp/workspace",
           reason: "watch",
           changedPath: "/tmp/workspace/skills/demo/SKILL.md",
+        },
+      ]);
+    },
+  );
+
+  it.each(["addDir", "unlinkDir"] as const)(
+    "refreshes skills snapshots on %s for directories",
+    async (event) => {
+      vi.useFakeTimers();
+      const seen: SkillsChangeEvent[] = [];
+      refreshModule.registerSkillsChangeListener((change) => {
+        seen.push(change);
+      });
+      refreshModule.ensureSkillsWatcher({
+        workspaceDir: "/tmp/workspace",
+        config: { skills: { load: { watchDebounceMs: 10 } } },
+      });
+
+      createdWatchers[0]?.emit(event, "/tmp/workspace/skills/demo");
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(seen).toEqual([
+        {
+          workspaceDir: "/tmp/workspace",
+          reason: "watch",
+          changedPath: "/tmp/workspace/skills/demo",
         },
       ]);
     },
@@ -622,7 +656,7 @@ describe("ensureSkillsWatcher", () => {
     const sharedIndex = callPaths.findIndex((target) => target.includes("/tmp/shared"));
     expect(sharedIndex).toBeGreaterThanOrEqual(0);
 
-    createdWatchers[sharedIndex]?.emit("change", "/tmp/shared/demo/SKILL.md");
+    createdWatchers[sharedIndex]?.emit("raw", "change", "/tmp/shared/demo/SKILL.md");
     await vi.advanceTimersByTimeAsync(10);
 
     expect(seen).toContainEqual({
@@ -664,7 +698,7 @@ describe("ensureSkillsWatcher", () => {
     const sharedIndex = callPaths.findIndex((target) => target.includes("/tmp/shared"));
     expect(sharedIndex).toBeGreaterThanOrEqual(0);
 
-    createdWatchers[sharedIndex]?.emit("change", "/tmp/shared/demo/SKILL.md");
+    createdWatchers[sharedIndex]?.emit("raw", "change", "/tmp/shared/demo/SKILL.md");
     await vi.advanceTimersByTimeAsync(10);
 
     expect(seen).toContainEqual({
@@ -798,7 +832,7 @@ describe("ensureSkillsWatcher", () => {
     expect(callPaths2.filter((target) => target === "/tmp/shared/skills")).toHaveLength(2);
     const liveSharedIndex = sharedIndices[sharedIndices.length - 1] ?? -1;
 
-    createdWatchers[liveSharedIndex]?.emit("change", "/tmp/shared/demo/SKILL.md");
+    createdWatchers[liveSharedIndex]?.emit("raw", "change", "/tmp/shared/demo/SKILL.md");
     await vi.advanceTimersByTimeAsync(50);
 
     expect(seen).toContainEqual({
