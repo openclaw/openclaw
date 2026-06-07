@@ -730,7 +730,7 @@ async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<v
   const { noteWorkspaceStatus } = await import("../commands/doctor-workspace-status.js");
   await noteWorkspaceStatus(ctx.cfg, {
     env: ctx.env ?? process.env,
-    gatewayVersion: ctx.gatewayStatus?.gateway?.version ?? undefined,
+    gatewayVersion: undefined, // probe context not available in doctor flow; falls back to VERSION
   });
 }
 
