@@ -104,8 +104,20 @@ async function maybeSendDiscordWebhookText(params: {
   return result;
 }
 
+// Discord public sends must pass through the gateway-owned durable delivery
+// path so gateway-scoped message_sending/message_sent hooks (including Action
+// Gate ownership checks) run for ALL callers — gateway agents, direct CLI, and
+// tool-action callers alike. The gateway handler still performs the final
+// platform send through this adapter, avoiding a send loop while ensuring every
+// outbound path is gateway-hooked.
+//
+// This was changed from deliveryMode:"direct" because the direct path bypassed
+// the gateway's message_sending/message_sent hooks, meaning Action Gate's
+// non_owner_denied enforcement on protected Discord scopes never fired for
+// local CLI sends. With deliveryMode:"gateway", the gateway route always runs
+// those hooks regardless of caller origin.
 export const discordOutbound: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
+  deliveryMode: "gateway",
   chunker: (text, limit, ctx) =>
     chunkDiscordTextWithMode(text, {
       maxChars: limit,
