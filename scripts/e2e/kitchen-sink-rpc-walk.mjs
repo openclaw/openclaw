@@ -33,6 +33,11 @@ const DEFAULT_PORT = 19000 + Math.floor(Math.random() * 1000);
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
 const LOG_TAIL_BYTES = 256 * 1024;
+const JSON_PREVIEW_STRING_HEAD_CHARS = 256;
+const JSON_PREVIEW_STRING_TAIL_CHARS = 256;
+const JSON_PREVIEW_ARRAY_ITEMS = 20;
+const JSON_PREVIEW_OBJECT_KEYS = 40;
+const JSON_PREVIEW_MAX_DEPTH = 4;
 const POSIX_PROCESS_SNAPSHOT_ARGS = ["-ww", "-axo", "pid=,ppid=,rss=,pcpu=,command="];
 const ERROR_LOG_DENY_PATTERNS = [
   /\buncaught exception\b/iu,
@@ -437,6 +442,79 @@ function parseJsonOutput(stdout) {
   throw new Error(`JSON output was not parseable:\n${tailText(trimmed)}`);
 }
 
+function boundedJsonPreview(value, space) {
+  try {
+    return JSON.stringify(previewJsonValue(value), null, space) ?? String(value);
+  } catch (error) {
+    return `[unserializable: ${error?.message ?? String(error)}]`;
+  }
+}
+
+function previewJsonValue(value, depth = 0, seen = new WeakSet()) {
+  if (typeof value === "string") {
+    return previewJsonString(value);
+  }
+  if (value === null || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return `${value}n`;
+  }
+  if (value === undefined || typeof value === "symbol" || typeof value === "function") {
+    return String(value);
+  }
+  if (typeof value !== "object") {
+    return String(value);
+  }
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  if (depth >= JSON_PREVIEW_MAX_DEPTH) {
+    return Array.isArray(value) ? `[Array(${value.length})]` : "[Object]";
+  }
+
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const preview = value
+        .slice(0, JSON_PREVIEW_ARRAY_ITEMS)
+        .map((entry) => previewJsonValue(entry, depth + 1, seen));
+      if (value.length > JSON_PREVIEW_ARRAY_ITEMS) {
+        preview.push(`[${value.length - JSON_PREVIEW_ARRAY_ITEMS} more item(s)]`);
+      }
+      return preview;
+    }
+
+    const preview = {};
+    let included = 0;
+    for (const key in value) {
+      if (!Object.hasOwn(value, key)) {
+        continue;
+      }
+      if (included >= JSON_PREVIEW_OBJECT_KEYS) {
+        preview.truncatedKeys = "more keys omitted";
+        break;
+      }
+      preview[key] = previewJsonValue(value[key], depth + 1, seen);
+      included += 1;
+    }
+    return preview;
+  } finally {
+    seen.delete(value);
+  }
+}
+
+function previewJsonString(value) {
+  const limit = JSON_PREVIEW_STRING_HEAD_CHARS + JSON_PREVIEW_STRING_TAIL_CHARS;
+  if (value.length <= limit) {
+    return value;
+  }
+  const omitted = value.length - limit;
+  return `${value.slice(0, JSON_PREVIEW_STRING_HEAD_CHARS)}... [truncated ${omitted} chars] ...${value.slice(
+    -JSON_PREVIEW_STRING_TAIL_CHARS,
+  )}`;
+}
+
 function extractBalancedJsonObjects(text) {
   const candidates = [];
   for (let index = 0; index < text.length; index += 1) {
@@ -491,7 +569,7 @@ function hasOwnPayloadField(raw, field) {
 
 export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
-    throw new Error(`gateway RPC failed: ${JSON.stringify(raw.error ?? raw)}`);
+    throw new Error(`gateway RPC failed: ${boundedJsonPreview(raw.error ?? raw)}`);
   }
   if (hasOwnPayloadField(raw, "result")) {
     return raw.result;
@@ -1016,7 +1094,7 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
       if (readyz.ok && readyz.body?.ready === true) {
         return;
       }
-      lastError = `/readyz HTTP ${readyz.status} body=${JSON.stringify(readyz.body)}`;
+      lastError = `/readyz HTTP ${readyz.status} body=${boundedJsonPreview(readyz.body)}`;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
@@ -1030,23 +1108,6 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
     throw new Error(`gateway exited before ready\n${tailFile(logPath)}`);
   }
   throw new Error(`gateway did not become ready: ${lastError}\n${tailFile(logPath)}`);
-}
-
-function valuesForKey(value, key) {
-  if (!value || typeof value !== "object") {
-    return [];
-  }
-  if (Array.isArray(value)) {
-    return value.flatMap((entry) => valuesForKey(entry, key));
-  }
-  const values = [];
-  for (const [entryKey, entryValue] of Object.entries(value)) {
-    if (entryKey === key) {
-      values.push(entryValue);
-    }
-    values.push(...valuesForKey(entryValue, key));
-  }
-  return values;
 }
 
 export function extractPluginCommandNames(payload) {
@@ -1074,20 +1135,18 @@ export function extractToolEntries(payload) {
   );
 }
 
-function extractProviderIds(payload) {
-  return valuesForKey(payload, "id").filter(isNonEmptyString);
-}
-
 function assertIncludesAny(actual, expected, label) {
   if (!expected.some((value) => actual.includes(value))) {
-    throw new Error(`${label} missing one of ${expected.join(", ")}: ${JSON.stringify(actual)}`);
+    throw new Error(
+      `${label} missing one of ${expected.join(", ")}: ${boundedJsonPreview(actual)}`,
+    );
   }
 }
 
 function assertIncludesAll(actual, expected, label) {
   const missing = expected.filter((value) => !actual.includes(value));
   if (missing.length > 0) {
-    throw new Error(`${label} missing ${missing.join(", ")}: ${JSON.stringify(actual)}`);
+    throw new Error(`${label} missing ${missing.join(", ")}: ${boundedJsonPreview(actual)}`);
   }
 }
 
@@ -1108,40 +1167,88 @@ export function assertExpectedKitchenSinkToolEntries(
         source: entry?.source,
       }));
     if (wrongProvenance.length > 0) {
-      throw new Error(`${label} plugin provenance mismatch: ${JSON.stringify(wrongProvenance)}`);
+      throw new Error(
+        `${label} plugin provenance mismatch: ${boundedJsonPreview(wrongProvenance)}`,
+      );
     }
   }
   return ids;
 }
 
-function assertChannelAccountRunning(payload) {
+export function assertChannelAccountRunning(payload) {
   const accounts = Array.isArray(payload?.channelAccounts?.[CHANNEL_ID])
     ? payload.channelAccounts[CHANNEL_ID]
     : [];
-  const account = accounts.find((entry) => entry?.accountId === CHANNEL_ACCOUNT_ID) ?? accounts[0];
+  const account = accounts.find((entry) => entry?.accountId === CHANNEL_ACCOUNT_ID);
+  if (!account) {
+    const accountIds = accounts.map((entry) => entry?.accountId).filter(isNonEmptyString);
+    throw new Error(
+      `Kitchen Sink channel account ${CHANNEL_ACCOUNT_ID} was not reported. Available account ids: ${boundedJsonPreview(
+        accountIds,
+      )}`,
+    );
+  }
   if (!account?.running || !account?.configured) {
-    throw new Error(`Kitchen Sink channel is not running+configured: ${JSON.stringify(payload)}`);
+    throw new Error(
+      `Kitchen Sink channel is not running+configured: ${boundedJsonPreview(payload)}`,
+    );
   }
   return account;
 }
 
+export function extractTtsProviderIds(payload, surface) {
+  const entries =
+    surface === "providers"
+      ? payload?.providers
+      : surface === "status"
+        ? payload?.providerStates
+        : null;
+  return (Array.isArray(entries) ? entries : []).map((entry) => entry?.id).filter(isNonEmptyString);
+}
+
+export function assertTtsProviderCoverage(payload, surface) {
+  const entries =
+    surface === "providers"
+      ? payload?.providers
+      : surface === "status"
+        ? payload?.providerStates
+        : null;
+  if (!Array.isArray(entries)) {
+    throw new Error(
+      `tts.${surface} returned invalid provider list: ${boundedJsonPreview(payload)}`,
+    );
+  }
+  const ids = extractTtsProviderIds(payload, surface);
+  assertIncludesAny(ids, EXPECTED_SPEECH_PROVIDERS, `tts.${surface}`);
+  const configuredEntry = entries.find(
+    (entry) => EXPECTED_SPEECH_PROVIDERS.includes(entry?.id) && entry.configured === true,
+  );
+  if (!configuredEntry) {
+    throw new Error(
+      `tts.${surface} did not report a configured Kitchen Sink speech provider: ${boundedJsonPreview(
+        entries,
+      )}`,
+    );
+  }
+}
+
 export function assertKitchenSinkSearchInvokeResult(payload) {
   if (payload?.ok !== true || payload?.source !== "plugin") {
-    throw new Error(`Kitchen Sink search tool invoke failed: ${JSON.stringify(payload)}`);
+    throw new Error(`Kitchen Sink search tool invoke failed: ${boundedJsonPreview(payload)}`);
   }
   const output = assertObjectPayload(payload.output, "Kitchen Sink search tool output");
   const results = Array.isArray(output.results) ? output.results : [];
   const hasFixture = results.some((entry) => entry?.title === "Kitchen Sink image fixture");
   if (!hasFixture) {
     throw new Error(
-      `Kitchen Sink search tool output missed expected fixture: ${JSON.stringify(output).slice(0, 1000)}`,
+      `Kitchen Sink search tool output missed expected fixture: ${boundedJsonPreview(output)}`,
     );
   }
 }
 
 export function assertKitchenSinkTextInvokeResult(payload) {
   if (payload?.ok !== true || payload?.source !== "plugin") {
-    throw new Error(`Kitchen Sink text tool invoke failed: ${JSON.stringify(payload)}`);
+    throw new Error(`Kitchen Sink text tool invoke failed: ${boundedJsonPreview(payload)}`);
   }
   const output = assertObjectPayload(payload.output, "Kitchen Sink text tool output");
   if (
@@ -1150,7 +1257,7 @@ export function assertKitchenSinkTextInvokeResult(payload) {
     !output.text.includes("Kitchen Sink")
   ) {
     throw new Error(
-      `Kitchen Sink text tool output missed expected fixture: ${JSON.stringify(output).slice(0, 1000)}`,
+      `Kitchen Sink text tool output missed expected fixture: ${boundedJsonPreview(output)}`,
     );
   }
 }
@@ -1158,7 +1265,9 @@ export function assertKitchenSinkTextInvokeResult(payload) {
 export function assertDiagnosticStabilityClean(payload) {
   const problems = [];
   if (!payload || typeof payload !== "object") {
-    throw new Error(`diagnostics.stability returned invalid payload: ${JSON.stringify(payload)}`);
+    throw new Error(
+      `diagnostics.stability returned invalid payload: ${boundedJsonPreview(payload)}`,
+    );
   }
   if ((payload.dropped ?? 0) > 0) {
     problems.push(`dropped=${payload.dropped}`);
@@ -1179,7 +1288,7 @@ export function assertDiagnosticStabilityClean(payload) {
   if (problems.length > 0) {
     throw new Error(
       `diagnostics.stability reported instability: ${problems.join(", ")}\n${tailText(
-        JSON.stringify(payload, null, 2),
+        boundedJsonPreview(payload, 2),
       )}`,
     );
   }
@@ -1187,7 +1296,7 @@ export function assertDiagnosticStabilityClean(payload) {
 
 function assertObjectPayload(payload, label) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new Error(`${label} returned invalid payload: ${JSON.stringify(payload)}`);
+    throw new Error(`${label} returned invalid payload: ${boundedJsonPreview(payload)}`);
   }
   return payload;
 }
@@ -1227,7 +1336,9 @@ export function assertGatewayHealthPayload(payload) {
     problems.push("sessions summary");
   }
   if (problems.length > 0) {
-    throw new Error(`health payload missing ${problems.join(", ")}: ${JSON.stringify(payload)}`);
+    throw new Error(
+      `health payload missing ${problems.join(", ")}: ${boundedJsonPreview(payload)}`,
+    );
   }
 }
 
@@ -1274,7 +1385,9 @@ export function assertGatewayStatusPayload(payload) {
     problems.push("sessions summary");
   }
   if (problems.length > 0) {
-    throw new Error(`status payload missing ${problems.join(", ")}: ${JSON.stringify(payload)}`);
+    throw new Error(
+      `status payload missing ${problems.join(", ")}: ${boundedJsonPreview(payload)}`,
+    );
   }
 }
 
@@ -1815,7 +1928,9 @@ export async function main() {
       ).stdout,
     );
     if (inspect?.plugin?.status !== "loaded") {
-      throw new Error(`Kitchen Sink plugin did not inspect as loaded: ${JSON.stringify(inspect)}`);
+      throw new Error(
+        `Kitchen Sink plugin did not inspect as loaded: ${boundedJsonPreview(inspect)}`,
+      );
     }
     const inspectPlugin = inspect.plugin ?? {};
     const inspectProviders = [
@@ -1859,10 +1974,10 @@ export async function main() {
     const healthz = await fetchJson(`http://127.0.0.1:${port}/healthz`);
     const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`);
     if (!healthz.ok || healthz.body?.status !== "live") {
-      throw new Error(`/healthz did not report live: ${JSON.stringify(healthz)}`);
+      throw new Error(`/healthz did not report live: ${boundedJsonPreview(healthz)}`);
     }
     if (!readyz.ok || readyz.body?.ready !== true) {
-      throw new Error(`/readyz did not report ready: ${JSON.stringify(readyz)}`);
+      throw new Error(`/readyz did not report ready: ${boundedJsonPreview(readyz)}`);
     }
 
     const health = await retryRpcCall("health", {}, rpcOptions);
@@ -1909,6 +2024,7 @@ export async function main() {
     assertExpectedKitchenSinkToolEntries(
       extractToolEntries(effective),
       "tools.effective plugin tools",
+      { requirePluginProvenance: true },
     );
 
     const searchInvoked = await retryRpcCall(
@@ -1939,13 +2055,13 @@ export async function main() {
 
     const ttsProviders = await retryRpcCall("tts.providers", {}, rpcOptions);
     const ttsStatus = await retryRpcCall("tts.status", {}, rpcOptions);
-    assertIncludesAny(extractProviderIds(ttsProviders), EXPECTED_SPEECH_PROVIDERS, "tts.providers");
-    assertIncludesAny(extractProviderIds(ttsStatus), EXPECTED_SPEECH_PROVIDERS, "tts.status");
+    assertTtsProviderCoverage(ttsProviders, "providers");
+    assertTtsProviderCoverage(ttsStatus, "status");
 
     const uiDescriptors = await retryRpcCall("plugins.uiDescriptors", {}, rpcOptions);
     if (!uiDescriptors || typeof uiDescriptors !== "object") {
       throw new Error(
-        `plugins.uiDescriptors returned invalid payload: ${JSON.stringify(uiDescriptors)}`,
+        `plugins.uiDescriptors returned invalid payload: ${boundedJsonPreview(uiDescriptors)}`,
       );
     }
     const stability = await retryRpcCall("diagnostics.stability", {}, rpcOptions);

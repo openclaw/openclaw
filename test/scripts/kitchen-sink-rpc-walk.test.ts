@@ -14,6 +14,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendBoundedOutput,
+  assertChannelAccountRunning,
   assertCommandResourceCeiling,
   assertDiagnosticStabilityClean,
   assertExpectedKitchenSinkToolEntries,
@@ -22,10 +23,12 @@ import {
   assertKitchenSinkSearchInvokeResult,
   assertKitchenSinkTextInvokeResult,
   assertResourceCeiling,
+  assertTtsProviderCoverage,
   cleanupKitchenSinkEnv,
   createGatewayReadyLogScanner,
   createRpcCliRunOptions,
   extractPluginCommandNames,
+  extractTtsProviderIds,
   fetchJson,
   findErrorLogFindings,
   findDistCallGatewayModuleFiles,
@@ -51,6 +54,15 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
+
+function captureSyncError(action: () => void): Error {
+  try {
+    action();
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error("expected action to throw");
+}
 
 describe("kitchen-sink RPC isolated state", () => {
   it("prints help without creating temp state or installing the plugin", async () => {
@@ -682,6 +694,22 @@ describe("kitchen-sink RPC payload unwrapping", () => {
     expect(unwrapRpcPayload({ payload: null, data: { stale: true } })).toBeNull();
     expect(unwrapRpcPayload({ data: 0 })).toBe(0);
   });
+
+  it("bounds failed RPC payload diagnostics", () => {
+    const error = captureSyncError(() =>
+      unwrapRpcPayload({
+        ok: false,
+        error: {
+          message: `rpc failed ${"x".repeat(4096)} DO_NOT_DUMP_RPC_MIDDLE ${"y".repeat(4096)} end`,
+        },
+      }),
+    );
+
+    expect(error.message).toContain("gateway RPC failed");
+    expect(error.message).toContain("truncated");
+    expect(error.message).not.toContain("DO_NOT_DUMP_RPC_MIDDLE");
+    expect(error.message.length).toBeLessThan(1200);
+  });
 });
 
 describe("kitchen-sink RPC command catalog assertions", () => {
@@ -750,6 +778,87 @@ describe("kitchen-sink RPC command catalog assertions", () => {
     ).toEqual(["kitchen_sink_text", "kitchen_sink_search", "kitchen_sink_image_job"]);
   });
 
+  it("requires provenance for effective Kitchen Sink plugin tools too", () => {
+    expect(() =>
+      assertExpectedKitchenSinkToolEntries(
+        [
+          { id: "kitchen_sink_text", source: "plugin", pluginId: "openclaw-kitchen-sink-fixture" },
+          {
+            id: "kitchen_sink_search",
+            source: "plugin",
+            pluginId: "openclaw-kitchen-sink-fixture",
+          },
+          {
+            id: "kitchen_sink_image_job",
+            source: "core",
+            pluginId: "openclaw-kitchen-sink-fixture",
+          },
+        ],
+        "tools.effective plugin tools",
+        { requirePluginProvenance: true },
+      ),
+    ).toThrow("tools.effective plugin tools plugin provenance mismatch");
+  });
+
+  it("requires the exact Kitchen Sink channel account", () => {
+    expect(() =>
+      assertChannelAccountRunning({
+        channelAccounts: {
+          "kitchen-sink-channel": [{ accountId: "other", configured: true, running: true }],
+        },
+      }),
+    ).toThrow("Kitchen Sink channel account local was not reported");
+  });
+
+  it("checks TTS providers on the exact response surfaces", () => {
+    expect(extractTtsProviderIds({ providers: [{ id: "nested-miss" }] }, "providers")).toEqual([
+      "nested-miss",
+    ]);
+    expect(
+      extractTtsProviderIds(
+        {
+          metadata: { id: "kitchen-sink-speech" },
+          providers: [{ id: "other", configured: true }],
+        },
+        "providers",
+      ),
+    ).toEqual(["other"]);
+
+    expect(() =>
+      assertTtsProviderCoverage(
+        {
+          providers: [{ id: "kitchen-sink-speech", configured: true }],
+        },
+        "providers",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertTtsProviderCoverage(
+        {
+          providerStates: [{ id: "kitchen-sink-speech-provider", configured: true }],
+        },
+        "status",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertTtsProviderCoverage(
+        {
+          metadata: { id: "kitchen-sink-speech" },
+          providers: [{ id: "other", configured: true }],
+        },
+        "providers",
+      ),
+    ).toThrow("tts.providers missing one of");
+    expect(() =>
+      assertTtsProviderCoverage(
+        {
+          providerStates: [{ id: "kitchen-sink-speech", configured: false }],
+        },
+        "status",
+      ),
+    ).toThrow("did not report a configured Kitchen Sink speech provider");
+  });
+
   it("checks search and text tool invocation fixtures separately", () => {
     expect(() =>
       assertKitchenSinkSearchInvokeResult({
@@ -793,6 +902,23 @@ describe("kitchen-sink RPC command catalog assertions", () => {
         output: { text: "Kitchen Sink prompt echoed tool:kitchen_sink_text" },
       }),
     ).toThrow("Kitchen Sink text tool output missed expected fixture");
+  });
+
+  it("bounds failed tool invocation diagnostics", () => {
+    const error = captureSyncError(() =>
+      assertKitchenSinkSearchInvokeResult({
+        ok: false,
+        source: "plugin",
+        output: {
+          text: `prefix ${"x".repeat(4096)} DO_NOT_DUMP_TOOL_MIDDLE ${"y".repeat(4096)} suffix`,
+        },
+      }),
+    );
+
+    expect(error.message).toContain("Kitchen Sink search tool invoke failed");
+    expect(error.message).toContain("truncated");
+    expect(error.message).not.toContain("DO_NOT_DUMP_TOOL_MIDDLE");
+    expect(error.message.length).toBeLessThan(1400);
   });
 });
 
@@ -891,6 +1017,34 @@ describe("kitchen-sink RPC health/status assertions", () => {
         },
       }),
     ).not.toThrow();
+  });
+
+  it("bounds failed health and status payload diagnostics", () => {
+    const oversizedValue = `start ${"x".repeat(4096)} DO_NOT_DUMP_STATUS_MIDDLE ${"y".repeat(
+      4096,
+    )} end`;
+
+    const healthError = captureSyncError(() =>
+      assertGatewayHealthPayload({
+        ok: false,
+        oversizedValue,
+      }),
+    );
+    const statusError = captureSyncError(() =>
+      assertGatewayStatusPayload({
+        heartbeat: {},
+        oversizedValue,
+      }),
+    );
+
+    expect(healthError.message).toContain("health payload missing");
+    expect(statusError.message).toContain("status payload missing");
+    expect(`${healthError.message}\n${statusError.message}`).toContain("truncated");
+    expect(`${healthError.message}\n${statusError.message}`).not.toContain(
+      "DO_NOT_DUMP_STATUS_MIDDLE",
+    );
+    expect(healthError.message.length).toBeLessThan(1600);
+    expect(statusError.message.length).toBeLessThan(1600);
   });
 });
 
