@@ -11,12 +11,17 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { replaceDreamsManagedBlock } from "./dreaming-narrative.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
   light: "## Light Sleep",
   rem: "## REM Sleep",
 };
+
+const DEEP_SLEEP_HEADING = "## Deep Sleep";
+const DEEP_SLEEP_START_MARKER = "<!-- openclaw:dreaming:deep:start -->";
+const DEEP_SLEEP_END_MARKER = "<!-- openclaw:dreaming:deep:end -->";
 
 const DAILY_PHASE_LABELS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
   light: "light",
@@ -130,14 +135,37 @@ export async function writeDeepDreamingReport(params: {
   timezone?: string;
   storage: MemoryDreamingStorageConfig;
 }): Promise<string | undefined> {
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   if (!shouldWriteSeparate(params.storage)) {
+    const body =
+      params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
+    await replaceDreamsManagedBlock({
+      workspaceDir: params.workspaceDir,
+      heading: DEEP_SLEEP_HEADING,
+      startMarker: DEEP_SLEEP_START_MARKER,
+      endMarker: DEEP_SLEEP_END_MARKER,
+      body,
+    });
+    await appendMemoryHostEvent(params.workspaceDir, {
+      type: "memory.dream.completed",
+      timestamp: resolveMemoryCoreTimestamp(nowMs),
+      phase: "deep",
+      lineCount: params.bodyLines.length,
+      storageMode: params.storage.mode,
+    });
     return undefined;
   }
-  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const reportPath = resolveSeparateReportPath(params.workspaceDir, "deep", nowMs, params.timezone);
   await fs.mkdir(path.dirname(reportPath), { recursive: true });
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
   await fs.writeFile(reportPath, `# Deep Sleep\n\n${body}\n`, "utf-8");
+  await replaceDreamsManagedBlock({
+    workspaceDir: params.workspaceDir,
+    heading: DEEP_SLEEP_HEADING,
+    startMarker: DEEP_SLEEP_START_MARKER,
+    endMarker: DEEP_SLEEP_END_MARKER,
+    body,
+  });
   await appendMemoryHostEvent(params.workspaceDir, {
     type: "memory.dream.completed",
     timestamp: resolveMemoryCoreTimestamp(nowMs),
