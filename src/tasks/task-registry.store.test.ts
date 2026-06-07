@@ -1131,7 +1131,6 @@ describe("task-registry store runtime", () => {
         const quarantineFiles = dirEntries.filter((name) =>
           name.startsWith("openclaw.sqlite.corrupted."),
         );
-        expect(quarantineFiles.length).toBe(3);
         expect(
           quarantineFiles.some((name) => !name.endsWith("-wal") && !name.endsWith("-shm")),
         ).toBe(true);

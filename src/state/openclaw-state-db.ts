@@ -741,22 +741,23 @@ function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string
 function openInitializedOpenClawStateDatabase(pathname: string): OpenClawStateDatabase {
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
-  const walMaintenance = configureSqliteWalMaintenance(db, {
-    databaseLabel: "openclaw-state",
-    databasePath: pathname,
-  });
+  let walMaintenance: SqliteWalMaintenance | null = null;
   try {
+    walMaintenance = configureSqliteWalMaintenance(db, {
+      databaseLabel: "openclaw-state",
+      databasePath: pathname,
+    });
     db.exec("PRAGMA synchronous = NORMAL;");
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     db.exec("PRAGMA foreign_keys = ON;");
     ensureSchema(db, pathname);
+    return { db, path: pathname, walMaintenance };
   } catch (err) {
-    walMaintenance.close();
+    walMaintenance?.close();
     clearNodeSqliteKyselyCacheForDatabase(db);
     db.close();
     throw err;
   }
-  return { db, path: pathname, walMaintenance };
 }
 
 function openOrRecoverOpenClawStateDatabase(

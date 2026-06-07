@@ -29,6 +29,19 @@ function createTempStateDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-db-"));
 }
 
+function listOpenFileDescriptorTargets(): string[] {
+  if (process.platform !== "linux") {
+    return [];
+  }
+  return fs.readdirSync("/proc/self/fd").flatMap((fd) => {
+    try {
+      return [fs.readlinkSync(path.join("/proc/self/fd", fd))];
+    } catch {
+      return [];
+    }
+  });
+}
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
@@ -63,6 +76,27 @@ describe("openclaw state database", () => {
       createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
     );
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
+  });
+
+  it("closes corrupted database handles before WAL setup recovery retry", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    fs.writeFileSync(databasePath, Buffer.from("not a sqlite database"));
+
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    const quarantineFiles = fs
+      .readdirSync(path.dirname(databasePath))
+      .filter((name) => name.startsWith("openclaw.sqlite.corrupted."));
+    expect(quarantineFiles.length).toBe(1);
+    const quarantinePath = path.join(path.dirname(databasePath), quarantineFiles[0]);
+    expect(
+      listOpenFileDescriptorTargets().filter((target) => target.startsWith(quarantinePath)),
+    ).toEqual([]);
+    expect(database.db.isOpen).toBe(true);
   });
 
   it("opens databases with early cron tables before creating cron indexes", () => {
