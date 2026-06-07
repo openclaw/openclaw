@@ -64,10 +64,6 @@ type QaRuntimeToolFixtureDeps = {
   ensureImageGenerationConfigured: (env: QaSuiteRuntimeEnv) => Promise<unknown>;
 };
 
-function isRecord(raw: unknown): raw is Record<string, unknown> {
-  return Boolean(raw && typeof raw === "object" && !Array.isArray(raw));
-}
-
 function readString(raw: unknown, fallback = "") {
   return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : fallback;
 }
@@ -126,7 +122,7 @@ function stringifyTranscriptToolResult(value: unknown): string {
   try {
     return JSON.stringify(value);
   } catch {
-    return String(value);
+    return "";
   }
 }
 

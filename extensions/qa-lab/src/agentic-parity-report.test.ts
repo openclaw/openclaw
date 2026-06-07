@@ -109,6 +109,14 @@ function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
   };
 }
 
+function firstRuntimeParityScenario() {
+  const scenario = makeRuntimeParitySummary().scenarios[0];
+  if (!scenario) {
+    throw new Error("missing runtime parity scenario fixture");
+  }
+  return scenario;
+}
+
 describe("qa agentic parity report", () => {
   it("computes first-wave parity metrics from suite summaries", () => {
     const summary: QaParitySuiteSummary = {
@@ -216,7 +224,7 @@ describe("qa agentic parity report", () => {
 
   it("counts passing runtime parity scenarios with tool calls in both runtimes", () => {
     const metrics = computeQaAgenticParityMetrics({
-      scenarios: [makeRuntimeParitySummary().scenarios[0]!],
+      scenarios: [firstRuntimeParityScenario()],
     });
 
     expect(metrics.validToolCallCount).toBe(1);
