@@ -164,11 +164,37 @@ function formatOptionalPressureMetric(label: string, value: number | undefined):
   return typeof value === "number" && Number.isFinite(value) ? ` ${label}=${value}` : "";
 }
 
+function formatBytes(value: number | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "n/a";
+  }
+  const units = ["B", "KiB", "MiB", "GiB"];
+  let amount = Math.max(0, value);
+  let unitIndex = 0;
+  while (amount >= 1024 && unitIndex < units.length - 1) {
+    amount /= 1024;
+    unitIndex += 1;
+  }
+  const digits = unitIndex === 0 || amount >= 100 ? 0 : 1;
+  return `${amount.toFixed(digits)} ${units[unitIndex]}`;
+}
+
 function logMemoryPressure(params: {
   pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">;
   writeCriticalBundle: boolean;
 }): void {
   const { pressure } = params;
+  const thresholdPercent =
+    typeof pressure.thresholdBytes === "number" && Number.isFinite(pressure.thresholdBytes)
+      ? Math.round((pressure.memory.rssBytes / pressure.thresholdBytes) * 100)
+      : undefined;
+  const readableSuffix =
+    ` rss=${formatBytes(pressure.memory.rssBytes)}` +
+    ` heap=${formatBytes(pressure.memory.heapUsedBytes)}` +
+    (typeof pressure.thresholdBytes === "number"
+      ? ` threshold=${formatBytes(pressure.thresholdBytes)}`
+      : "") +
+    (typeof thresholdPercent === "number" ? ` (${thresholdPercent}%)` : "");
   const message =
     `memory pressure: level=${pressure.level} reason=${pressure.reason}` +
     ` rssBytes=${pressure.memory.rssBytes}` +
@@ -176,14 +202,11 @@ function logMemoryPressure(params: {
     formatOptionalPressureMetric("thresholdBytes", pressure.thresholdBytes) +
     formatOptionalPressureMetric("rssGrowthBytes", pressure.rssGrowthBytes) +
     formatOptionalPressureMetric("windowMs", pressure.windowMs) +
+    readableSuffix +
     (pressure.level === "critical"
       ? ` memoryPressureSnapshot=${params.writeCriticalBundle ? "enabled" : "disabled"}`
       : "");
-  if (pressure.level === "critical") {
-    log.warn(message);
-  } else {
-    log.info(message);
-  }
+  log.warn(message);
 }
 
 export function emitDiagnosticMemorySample(options?: {

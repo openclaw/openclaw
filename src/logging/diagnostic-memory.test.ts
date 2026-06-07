@@ -347,15 +347,22 @@ describe("diagnostic memory", () => {
       stop();
     }
 
+    const criticalRecord = records.find((r) =>
+      r.message?.includes("memory pressure: level=critical reason=rss_threshold"),
+    );
+    expect(criticalRecord).toEqual(
+      expect.objectContaining({
+        level: "WARN",
+        message: expect.stringContaining("rss=3.9 KiB"),
+        attributes: expect.objectContaining({
+          subsystem: "gateway/diagnostics/memory",
+        }),
+      }),
+    );
+    expect(criticalRecord?.message).toContain("heap=2.9 KiB");
+    expect(criticalRecord?.message).toContain("threshold=2.9 KiB");
     expect(records).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          level: "WARN",
-          message: expect.stringContaining("memory pressure: level=critical reason=rss_threshold"),
-          attributes: expect.objectContaining({
-            subsystem: "gateway/diagnostics/memory",
-          }),
-        }),
         expect.objectContaining({
           level: "WARN",
           message:
@@ -366,6 +373,44 @@ describe("diagnostic memory", () => {
         }),
       ]),
     );
+  });
+
+  it("logs warning pressure at WARN level with readable format", async () => {
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+    const records: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+    const stop = onInternalDiagnosticEvent((event) => {
+      if (event.type === "log.record") {
+        records.push(event);
+      }
+    });
+    try {
+      emitDiagnosticMemorySample({
+        now: Date.parse("2026-04-22T12:00:00.000Z"),
+        memoryUsage: memoryUsage({ rss: 2000, heapUsed: 500 }),
+        thresholds: {
+          rssWarningBytes: 1000,
+          rssCriticalBytes: 4000,
+          pressureRepeatMs: 60_000,
+        },
+      });
+      await flushDiagnosticEvents();
+    } finally {
+      stop();
+    }
+
+    const warningRecord = records.find((r) =>
+      r.message?.includes("memory pressure: level=warning reason=rss_threshold"),
+    );
+    expect(warningRecord).toEqual(
+      expect.objectContaining({
+        level: "WARN",
+        message: expect.stringContaining("rss=2.0 KiB"),
+        attributes: expect.objectContaining({
+          subsystem: "gateway/diagnostics/memory",
+        }),
+      }),
+    );
+    expect(warningRecord?.message).toContain("(200%)");
   });
 
   it("writes a stability bundle when critical pressure is emitted", () => {
