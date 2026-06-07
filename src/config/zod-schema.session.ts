@@ -92,6 +92,11 @@ export const SessionSchema = z
         resetArchiveRetention: z.union([z.string(), z.number(), z.literal(false)]).optional(),
         maxDiskBytes: z.union([z.string(), z.number()]).optional(),
         highWaterBytes: z.union([z.string(), z.number()]).optional(),
+        /**
+         * Session keys that should never be pruned (e.g., ["agent:ceo:main"]).
+         * Supports exact key matches only. Merged with runtime preserve sets.
+         */
+        preserveKeys: z.array(z.string()).optional(),
       })
       .strict()
       .superRefine((val, ctx) => {

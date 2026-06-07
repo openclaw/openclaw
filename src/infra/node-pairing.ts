@@ -229,14 +229,16 @@ function newToken() {
 }
 
 export async function listNodePairing(baseDir?: string): Promise<NodePairingList> {
-  const state = await loadState(baseDir);
-  const pending = Object.values(state.pendingById)
-    .toSorted((a, b) => b.ts - a.ts)
-    .map(toPendingNodePairingEntry);
-  const paired = Object.values(state.pairedByNodeId).toSorted(
-    (a, b) => b.approvedAtMs - a.approvedAtMs,
-  );
-  return { pending, paired };
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const pending = Object.values(state.pendingById)
+      .toSorted((a, b) => b.ts - a.ts)
+      .map(toPendingNodePairingEntry);
+    const paired = Object.values(state.pairedByNodeId).toSorted(
+      (a, b) => b.approvedAtMs - a.approvedAtMs,
+    );
+    return { pending, paired };
+  });
 }
 
 /** Return one paired node by normalized node id. */
@@ -244,8 +246,10 @@ export async function getPairedNode(
   nodeId: string,
   baseDir?: string,
 ): Promise<NodePairingPairedNode | null> {
-  const state = await loadState(baseDir);
-  return state.pairedByNodeId[normalizeNodeId(nodeId)] ?? null;
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    return state.pairedByNodeId[normalizeNodeId(nodeId)] ?? null;
+  });
 }
 
 /** Create or refresh a pending node pairing request for operator approval. */
@@ -380,13 +384,15 @@ export async function verifyNodeToken(
   token: string,
   baseDir?: string,
 ): Promise<{ ok: boolean; node?: NodePairingPairedNode }> {
-  const state = await loadState(baseDir);
-  const normalized = normalizeNodeId(nodeId);
-  const node = state.pairedByNodeId[normalized];
-  if (!node) {
-    return { ok: false };
-  }
-  return verifyPairingToken(token, node.token) ? { ok: true, node } : { ok: false };
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const normalized = normalizeNodeId(nodeId);
+    const node = state.pairedByNodeId[normalized];
+    if (!node) {
+      return { ok: false };
+    }
+    return verifyPairingToken(token, node.token) ? { ok: true, node } : { ok: false };
+  });
 }
 
 /** Update non-auth metadata for a paired node heartbeat/status refresh. */
