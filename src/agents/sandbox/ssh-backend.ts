@@ -259,21 +259,19 @@ class SshSandboxBackendImpl {
     ) {
       return;
     }
+    await this.clearRemoteDirectory(session, this.params.runtimePaths.remoteSkillsWorkspaceDir);
     if (!(await isExistingDirectory(this.params.createParams.skillsWorkspaceDir))) {
       return;
     }
-    await this.replaceRemoteDirectoryFromLocal(
+    await uploadDirectoryToSshTarget({
       session,
-      this.params.createParams.skillsWorkspaceDir,
-      this.params.runtimePaths.remoteSkillsWorkspaceDir,
-    );
+      localDir: this.params.createParams.skillsWorkspaceDir,
+      remoteDir: this.params.runtimePaths.remoteSkillsWorkspaceDir,
+      remoteRootDir: this.params.runtimePaths.runtimeRootDir,
+    });
   }
 
-  private async replaceRemoteDirectoryFromLocal(
-    session: SshSandboxSession,
-    localDir: string,
-    remoteDir: string,
-  ): Promise<void> {
+  private async clearRemoteDirectory(session: SshSandboxSession, remoteDir: string): Promise<void> {
     await runSshSandboxCommand({
       session,
       remoteCommand: buildRemoteCommand([
@@ -285,6 +283,14 @@ class SshSandboxBackendImpl {
         this.params.runtimePaths.runtimeRootDir,
       ]),
     });
+  }
+
+  private async replaceRemoteDirectoryFromLocal(
+    session: SshSandboxSession,
+    localDir: string,
+    remoteDir: string,
+  ): Promise<void> {
+    await this.clearRemoteDirectory(session, remoteDir);
     await uploadDirectoryToSshTarget({
       session,
       localDir,

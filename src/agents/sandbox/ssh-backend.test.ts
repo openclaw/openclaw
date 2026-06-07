@@ -387,6 +387,38 @@ describe("ssh sandbox backend", () => {
     });
   });
 
+  it("clears stale remote materialized skills when the local copy is missing", async () => {
+    const tmpDir = await createTempDir("openclaw-ssh-skills-");
+    const skillsWorkspaceDir = path.join(tmpDir, "missing");
+    const backend = await createSshSandboxBackend({
+      sessionKey: "agent:worker:task",
+      scopeKey: "agent:worker",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      skillsWorkspaceDir,
+      cfg: createBackendSandboxConfig({
+        target: "peter@example.com:2222",
+      }),
+    });
+
+    const execSpec = await backend.buildExecSpec({
+      command: "pwd",
+      env: {},
+      usePty: false,
+    });
+
+    expect(sshMocks.uploadDirectoryToSshTarget).not.toHaveBeenCalled();
+    const commandParams = requireSshRunCommandParams(1);
+    expect(commandParams.remoteCommand).toContain("openclaw-sandbox-clear");
+    expect(commandParams.remoteCommand).toContain("/workspace/.openclaw/sandbox-skills");
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: execSpec.finalizeToken,
+    });
+  });
+
   it("disposes the exec ssh session when materialized skills refresh fails", async () => {
     const skillsWorkspaceDir = await createTempDir("openclaw-ssh-skills-");
     await fs.mkdir(path.join(skillsWorkspaceDir, "skills"), { recursive: true });
