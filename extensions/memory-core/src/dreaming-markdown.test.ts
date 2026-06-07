@@ -27,13 +27,6 @@ function requireInlinePath(result: { inlinePath?: string }): string {
   return result.inlinePath;
 }
 
-function requireReportPath(reportPath: string | undefined): string {
-  if (!reportPath) {
-    throw new Error("Expected deep dreaming report path");
-  }
-  return reportPath;
-}
-
 describe("dreaming markdown storage", () => {
   const nowMs = Date.parse("2026-04-05T10:00:00Z");
   const timezone = "UTC";
@@ -141,7 +134,7 @@ describe("dreaming markdown storage", () => {
   it("still writes deep reports to the per-phase report directory", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
 
-    const reportPath = await writeDeepDreamingReport({
+    const result = await writeDeepDreamingReport({
       workspaceDir,
       bodyLines: ["- Promoted: durable preference"],
       storage: {
@@ -152,14 +145,112 @@ describe("dreaming markdown storage", () => {
       timezone: "UTC",
     });
 
-    const requiredReportPath = requireReportPath(reportPath);
-    expect(requiredReportPath).toBe(
+    expect(result?.reportPath).toBe(
       path.join(workspaceDir, "memory", "dreaming", "deep", "2026-04-05.md"),
     );
-    const content = await fs.readFile(requiredReportPath, "utf-8");
+    const content = await fs.readFile(result!.reportPath!, "utf-8");
     expect(content).toContain("# Deep Sleep");
     expect(content).toContain("- Promoted: durable preference");
 
+    // separate mode does not write inline DREAMS.md
     await expectPathMissing(path.join(workspaceDir, "DREAMS.md"));
+  });
+
+  it("writes deep sleep summary into DREAMS.md with inline storage", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+
+    const result = await writeDeepDreamingReport({
+      workspaceDir,
+      bodyLines: ["- Ranked 3 candidates", "- Promoted 1 candidate(s) into MEMORY.md."],
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+      nowMs: Date.parse("2026-04-05T10:00:00Z"),
+      timezone: "UTC",
+    });
+
+    expect(result?.inlinePath).toBe(path.join(workspaceDir, "DREAMS.md"));
+    const content = await fs.readFile(result!.inlinePath!, "utf-8");
+    expect(content).toContain("## Deep Sleep");
+    expect(content).toContain("- Ranked 3 candidates");
+    expect(content).toContain("- Promoted 1 candidate(s) into MEMORY.md.");
+    expect(content).toContain("<!-- openclaw:dreaming:deep:start -->");
+    expect(content).toContain("<!-- openclaw:dreaming:deep:end -->");
+
+    // inline mode does not write separate deep report
+    expect(result?.reportPath).toBeUndefined();
+  });
+
+  it("updates an existing DREAMS.md deep sleep block on subsequent runs", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+
+    await writeDeepDreamingReport({
+      workspaceDir,
+      bodyLines: ["- First run: promoted 2 candidates."],
+      storage: { mode: "inline", separateReports: false },
+      nowMs: Date.parse("2026-04-05T10:00:00Z"),
+      timezone: "UTC",
+    });
+
+    await writeDeepDreamingReport({
+      workspaceDir,
+      bodyLines: ["- Second run: promoted 1 candidate."],
+      storage: { mode: "inline", separateReports: false },
+      nowMs: Date.parse("2026-04-06T10:00:00Z"),
+      timezone: "UTC",
+    });
+
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain("## Deep Sleep");
+    expect(content).toContain("- Second run: promoted 1 candidate.");
+    // Old content should be replaced, not appended
+    expect(content).not.toContain("- First run: promoted 2 candidates.");
+    // Should still have exactly one heading and one marker pair
+    expect(content.match(/## Deep Sleep/g)?.length).toBe(1);
+    expect(content.match(/openclaw:dreaming:deep:start/g)?.length).toBe(1);
+    expect(content.match(/openclaw:dreaming:deep:end/g)?.length).toBe(1);
+  });
+
+  it("preserves DREAMS.md diary marker blocks when writing deep sleep summary", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+
+    // Pre-populate DREAMS.md with a diary block (simulating narrative output)
+    await fs.writeFile(
+      dreamsPath,
+      [
+        "# Dreams",
+        "",
+        "## Deep Sleep",
+        "<!-- openclaw:dreaming:deep:start -->",
+        "- Pre-existing deep summary.",
+        "<!-- openclaw:dreaming:deep:end -->",
+        "",
+        "## Dream Diary",
+        "<!-- openclaw:dreaming:diary:start -->",
+        "I walked through a forest of data structures...",
+        "<!-- openclaw:dreaming:diary:end -->",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await writeDeepDreamingReport({
+      workspaceDir,
+      bodyLines: ["- New deep summary."],
+      storage: { mode: "inline", separateReports: false },
+      nowMs: Date.parse("2026-04-07T10:00:00Z"),
+      timezone: "UTC",
+    });
+
+    const content = await fs.readFile(dreamsPath, "utf-8");
+    // Deep sleep block updated
+    expect(content).toContain("- New deep summary.");
+    expect(content).not.toContain("- Pre-existing deep summary.");
+    // Diary block preserved
+    expect(content).toContain("<!-- openclaw:dreaming:diary:start -->");
+    expect(content).toContain("I walked through a forest of data structures...");
+    expect(content).toContain("<!-- openclaw:dreaming:diary:end -->");
   });
 });

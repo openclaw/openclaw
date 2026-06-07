@@ -123,28 +123,68 @@ export async function writeDailyDreamingPhaseBlock(params: {
   };
 }
 
+const DEEP_SLEEP_MARKERS = {
+  start: "<!-- openclaw:dreaming:deep:start -->",
+  end: "<!-- openclaw:dreaming:deep:end -->",
+} as const;
+
+function resolveDreamsPath(workspaceDir: string): string {
+  return path.join(workspaceDir, "DREAMS.md");
+}
+
 export async function writeDeepDreamingReport(params: {
   workspaceDir: string;
   bodyLines: string[];
   nowMs?: number;
   timezone?: string;
   storage: MemoryDreamingStorageConfig;
-}): Promise<string | undefined> {
-  if (!shouldWriteSeparate(params.storage)) {
+}): Promise<{ inlinePath?: string; reportPath?: string } | undefined> {
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
+  let inlinePath: string | undefined;
+  let reportPath: string | undefined;
+
+  if (shouldWriteInline(params.storage)) {
+    inlinePath = resolveDreamsPath(params.workspaceDir);
+    await fs.mkdir(path.dirname(inlinePath), { recursive: true });
+    const original = await fs.readFile(inlinePath, "utf-8").catch((err: unknown) => {
+      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+        return "";
+      }
+      throw err;
+    });
+    const updated = replaceManagedMarkdownBlock({
+      original,
+      heading: "## Deep Sleep",
+      startMarker: DEEP_SLEEP_MARKERS.start,
+      endMarker: DEEP_SLEEP_MARKERS.end,
+      body,
+    });
+    await fs.writeFile(inlinePath, withTrailingNewline(updated), "utf-8");
+  }
+
+  if (shouldWriteSeparate(params.storage)) {
+    reportPath = resolveSeparateReportPath(params.workspaceDir, "deep", nowMs, params.timezone);
+    await fs.mkdir(path.dirname(reportPath), { recursive: true });
+    await fs.writeFile(reportPath, `# Deep Sleep\n\n${body}\n`, "utf-8");
+  }
+
+  if (!inlinePath && !reportPath) {
     return undefined;
   }
-  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
-  const reportPath = resolveSeparateReportPath(params.workspaceDir, "deep", nowMs, params.timezone);
-  await fs.mkdir(path.dirname(reportPath), { recursive: true });
-  const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
-  await fs.writeFile(reportPath, `# Deep Sleep\n\n${body}\n`, "utf-8");
+
   await appendMemoryHostEvent(params.workspaceDir, {
     type: "memory.dream.completed",
     timestamp: resolveMemoryCoreTimestamp(nowMs),
     phase: "deep",
-    reportPath,
+    ...(inlinePath ? { inlinePath } : {}),
+    ...(reportPath ? { reportPath } : {}),
     lineCount: params.bodyLines.length,
     storageMode: params.storage.mode,
   });
-  return reportPath;
+
+  return {
+    ...(inlinePath ? { inlinePath } : {}),
+    ...(reportPath ? { reportPath } : {}),
+  };
 }
