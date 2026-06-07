@@ -838,6 +838,8 @@ export function collectFailedSamples(result: SuiteResult): string[] {
         failures.push(`${label}: exited via signal ${sample.signal}`);
       } else if (!expectedExitCodes.has(sample.exitCode ?? -1)) {
         failures.push(`${label}: exited with code ${String(sample.exitCode)}`);
+      } else if (sample.maxRssMb === null) {
+        failures.push(`${label}: did not report max RSS`);
       } else if (sample.exitCode !== 0) {
         const output = `${sample.stdoutTail ?? ""}\n${sample.stderrTail ?? ""}`;
         const missing = (commandCase.expectedNonzeroOutputIncludes ?? []).filter(

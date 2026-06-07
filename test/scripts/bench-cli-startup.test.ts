@@ -91,6 +91,38 @@ describe("bench-cli-startup", () => {
     ]);
   });
 
+  it("fails reports with samples that did not report RSS", () => {
+    expect(
+      testing.collectFailedSamples({
+        entry: "openclaw.mjs",
+        cases: [
+          {
+            id: "version",
+            name: "--version",
+            args: ["--version"],
+            contract: null,
+            samples: [
+              {
+                ms: 10,
+                firstOutputMs: 5,
+                maxRssMb: null,
+                exitCode: 0,
+                signal: null,
+              },
+            ],
+            summary: {
+              sampleCount: 1,
+              durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+              firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
+              maxRssMb: null,
+              exitSummary: "code:0x1",
+            },
+          },
+        ],
+      }),
+    ).toEqual(["openclaw.mjs version sample 1: did not report max RSS"]);
+  });
+
   it("allows declared nonzero exit codes for clean-state probes", () => {
     const sample = {
       ms: 10,

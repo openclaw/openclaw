@@ -71,6 +71,7 @@ export function parseArgs(argv) {
     buildTimeoutMs: 600_000,
     qaTimeoutMs: 900_000,
     allowEmpty: false,
+    failOnObservation: process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_FAIL_ON_OBSERVATION === "1",
     keepRunRoot: process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_KEEP_RUN_ROOT === "1",
   };
   const envIds = normalizeCsv(process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS);
@@ -172,6 +173,9 @@ export function parseArgs(argv) {
       case "--allow-empty":
         options.allowEmpty = true;
         break;
+      case "--fail-on-observation":
+        options.failOnObservation = true;
+        break;
       case "--help":
         printHelp();
         process.exit(0);
@@ -208,6 +212,7 @@ Options:
   --skip-qa                     Skip QA Lab RPC conversation runs
   --skip-slash-help             Skip CLI help probes for plugin-declared command aliases
   --allow-empty                 Allow zero-command runs when every active phase is skipped
+  --fail-on-observation         Treat RSS/CPU/wall observation rows as guard failures
   --keep-run-root               Preserve isolated HOME/state/log temp root after success
 `);
 }
@@ -229,6 +234,17 @@ function readOptionalPositiveIntEnv(name) {
 function readOptionalNonNegativeIntEnv(name) {
   const raw = process.env[name];
   return raw ? parseNonNegativeInt(raw, name) : undefined;
+}
+
+export function buildObservationGuardFailures(observations, enabled = false) {
+  if (!enabled) {
+    return [];
+  }
+  return observations.map((observation) => ({
+    kind: `observation:${observation.kind ?? "unknown"}`,
+    message: `Gauntlet observation threshold exceeded: ${observation.kind ?? "unknown"}`,
+    observation,
+  }));
 }
 
 /**
@@ -878,6 +894,7 @@ async function main() {
     const failures = rows.filter(
       (row) => row.status !== 0 || row.timedOut || row.diagnosticFailure,
     );
+    const observations = [...metricObservations, ...qaBaselineObservations, ...gatewayObservations];
     const guardFailures =
       !hasGauntletWorkRows(rows) && !options.allowEmpty
         ? [
@@ -888,6 +905,7 @@ async function main() {
             },
           ]
         : [];
+    guardFailures.push(...buildObservationGuardFailures(observations, options.failOnObservation));
     const hasFailures = failures.length > 0 || guardFailures.length > 0;
     preserveRunRoot = preserveRunRoot || hasFailures;
     let cleanupError = null;
@@ -917,6 +935,7 @@ async function main() {
         qaPluginChunkSize: options.qaPluginChunkSize,
         qaBaseline: options.qaBaseline,
         allowEmpty: options.allowEmpty,
+        failOnObservation: options.failOnObservation,
         keepRunRoot: options.keepRunRoot,
         skipLifecycle: options.skipLifecycle,
         skipQa: options.skipQa,
@@ -935,7 +954,7 @@ async function main() {
       matrix,
       selectedPlugins,
       rows,
-      observations: [...metricObservations, ...qaBaselineObservations, ...gatewayObservations],
+      observations,
       failures,
       guardFailures,
     };

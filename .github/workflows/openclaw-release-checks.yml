@@ -132,7 +132,7 @@ jobs:
             fi
           fi
           if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release-ci/[0-9a-f]{12}-[0-9]+$ ]] && [[ "${tideclaw_alpha_check}" != "true" ]]; then
-            echo "Release checks must be dispatched from main, release/YYYY.M.D, a Full Release Validation release-ci/<sha>-<timestamp> ref, or a Tideclaw alpha branch for alpha prereleases." >&2
+            echo "Release checks must be dispatched from main, release/YYYY.M.PATCH, a Full Release Validation release-ci/<sha>-<timestamp> ref, or a Tideclaw alpha branch for alpha prereleases." >&2
             exit 1
           fi
 
@@ -346,6 +346,7 @@ jobs:
             discord_selected=false
             whatsapp_selected=false
             slack_selected=false
+            disabled_required_lanes=()
 
             IFS=', ' read -r -a filter_tokens <<< "$filter"
             for token in "${filter_tokens[@]}"; do
@@ -361,6 +362,9 @@ jobs:
                   discord_selected="$qa_live_discord_ci_enabled"
                   whatsapp_selected="$qa_live_whatsapp_ci_enabled"
                   slack_selected="$qa_live_slack_ci_enabled"
+                  [[ "$qa_live_discord_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-discord")
+                  [[ "$qa_live_whatsapp_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-whatsapp")
+                  [[ "$qa_live_slack_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-slack")
                   ;;
                 qa-live-non-slack|qa-non-slack|non-slack|no-slack|without-slack)
                   qa_filter_seen=true
@@ -368,6 +372,8 @@ jobs:
                   telegram_selected=true
                   discord_selected="$qa_live_discord_ci_enabled"
                   whatsapp_selected="$qa_live_whatsapp_ci_enabled"
+                  [[ "$qa_live_discord_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-discord")
+                  [[ "$qa_live_whatsapp_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-whatsapp")
                   ;;
                 qa-live-matrix|qa-matrix|matrix)
                   qa_filter_seen=true
@@ -380,17 +386,26 @@ jobs:
                 qa-live-discord|qa-discord|discord)
                   qa_filter_seen=true
                   discord_selected="$qa_live_discord_ci_enabled"
+                  [[ "$qa_live_discord_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-discord")
                   ;;
                 qa-live-whatsapp|qa-whatsapp|whatsapp)
                   qa_filter_seen=true
                   whatsapp_selected="$qa_live_whatsapp_ci_enabled"
+                  [[ "$qa_live_whatsapp_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-whatsapp")
                   ;;
                 qa-live-slack|qa-slack|slack)
                   qa_filter_seen=true
                   slack_selected="$qa_live_slack_ci_enabled"
+                  [[ "$qa_live_slack_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-slack")
                   ;;
               esac
             done
+
+            if [[ "${#disabled_required_lanes[@]}" -gt 0 ]]; then
+              echo "live_suite_filter explicitly requested disabled QA live lane(s): ${disabled_required_lanes[*]}" >&2
+              echo "Enable the matching OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED repo variable or remove the lane from live_suite_filter." >&2
+              exit 1
+            fi
 
             if [[ "$qa_filter_seen" == "true" ]]; then
               qa_live_matrix_enabled="$matrix_selected"
@@ -1481,7 +1496,7 @@ jobs:
   qa_live_discord_release_checks:
     name: Run QA Lab live Discord lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_discord_enabled == 'true' && vars.OPENCLAW_RELEASE_QA_DISCORD_LIVE_CI_ENABLED == 'true'
+    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_discord_enabled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1621,7 +1636,7 @@ jobs:
   qa_live_whatsapp_release_checks:
     name: Run QA Lab live WhatsApp lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_whatsapp_enabled == 'true' && vars.OPENCLAW_RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED == 'true'
+    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_whatsapp_enabled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1764,7 +1779,7 @@ jobs:
   qa_live_slack_release_checks:
     name: Run QA Lab live Slack lane
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_slack_enabled == 'true' && vars.OPENCLAW_RELEASE_QA_SLACK_LIVE_CI_ENABLED == 'true'
+    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_slack_enabled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -2021,10 +2036,6 @@ jobs:
                     continue
                     ;;
                 esac
-              fi
-              if [[ "$name" == qa_* ]]; then
-                echo "::warning::${name} ended with ${result}; QA release-check lanes are advisory and do not block release validation."
-                continue
               fi
               echo "::error::${name} ended with ${result}"
               failed=1
