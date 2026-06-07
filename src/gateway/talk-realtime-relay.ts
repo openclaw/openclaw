@@ -90,7 +90,16 @@ type TalkRealtimeRelayEventPayload =
     }
   | { relaySessionId: string; type: "toolResult"; callId: string }
   | { relaySessionId: string; type: "toolProgress"; result: RealtimeVoiceAgentControlResult }
-  | { relaySessionId: string; type: "error"; message: string }
+  | {
+      relaySessionId: string;
+      type: "error";
+      message: string;
+      code?: TalkRealtimeRelayIssueCode;
+      provider?: string;
+      model?: string;
+      transport?: "gateway-relay";
+      phase?: string;
+    }
   | { relaySessionId: string; type: "close"; reason: "completed" | "error" };
 
 type TalkRealtimeRelayEvent = TalkRealtimeRelayEventPayload & { talkEvent?: TalkEvent };
@@ -109,6 +118,25 @@ type RelaySession = {
   completedAgentToolCalls: Set<string>;
   forcedConsults: RealtimeVoiceForcedConsultCoordinator;
   transcript: RealtimeVoiceTranscriptEntry[];
+};
+
+type TalkRealtimeRelayIssueCode =
+  | "credential_invalid"
+  | "credential_missing"
+  | "provider_unavailable"
+  | "model_unavailable"
+  | "gateway_config_invalid"
+  | "network_error"
+  | "provider_closed_before_ready"
+  | "unknown";
+
+type TalkRealtimeRelayIssue = {
+  code: TalkRealtimeRelayIssueCode;
+  message: string;
+  provider: string;
+  model?: string;
+  transport: "gateway-relay";
+  phase: string;
 };
 
 type CreateTalkRealtimeRelaySessionParams = {
@@ -139,6 +167,62 @@ const relaySessions = new Map<string, RelaySession>();
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function classifyRealtimeRelayIssue(params: {
+  error: unknown;
+  provider: string;
+  model?: string;
+  phase: string;
+}): TalkRealtimeRelayIssue {
+  const message = formatError(params.error);
+  const lower = message.toLowerCase();
+  const code: TalkRealtimeRelayIssueCode =
+    lower.includes("api key") ||
+    lower.includes("unauthorized") ||
+    lower.includes("401") ||
+    lower.includes("credential") ||
+    lower.includes("auth")
+      ? lower.includes("missing")
+        ? "credential_missing"
+        : "credential_invalid"
+      : lower.includes("model") &&
+          (lower.includes("not found") ||
+            lower.includes("unsupported") ||
+            lower.includes("unavailable"))
+        ? "model_unavailable"
+        : lower.includes("network") ||
+            lower.includes("socket") ||
+            lower.includes("connection") ||
+            lower.includes("closed")
+          ? "network_error"
+          : lower.includes("provider") || lower.includes("unavailable")
+            ? "provider_unavailable"
+            : "unknown";
+  return {
+    code,
+    message,
+    provider: params.provider,
+    ...(params.model ? { model: params.model } : {}),
+    transport: "gateway-relay",
+    phase: params.phase,
+  };
+}
+
+function relayIssuePayload(
+  relaySessionId: string,
+  issue: TalkRealtimeRelayIssue,
+): Extract<TalkRealtimeRelayEventPayload, { type: "error" }> {
+  return {
+    relaySessionId,
+    type: "error",
+    message: issue.message,
+    code: issue.code,
+    provider: issue.provider,
+    ...(issue.model ? { model: issue.model } : {}),
+    transport: issue.transport,
+    phase: issue.phase,
+  };
 }
 
 function isWorkingToolResult(result: unknown): boolean {
@@ -193,8 +277,20 @@ function broadcastToOwner(
   context: GatewayRequestContext,
   connId: string,
   event: TalkRealtimeRelayEvent,
+  options: { dropIfSlow?: boolean } = { dropIfSlow: true },
 ): void {
-  context.broadcastToConnIds(RELAY_EVENT, event, new Set([connId]), { dropIfSlow: true });
+  context.broadcastToConnIds(RELAY_EVENT, event, new Set([connId]), options);
+}
+
+function relayEventDeliveryOptions(event: TalkRealtimeRelayEventPayload): { dropIfSlow?: boolean } {
+  switch (event.type) {
+    case "ready":
+    case "error":
+    case "close":
+      return { dropIfSlow: false };
+    default:
+      return { dropIfSlow: true };
+  }
 }
 
 function abortRelayAgentRuns(session: RelaySession, reason: string): void {
@@ -353,12 +449,19 @@ export function createTalkRealtimeRelaySession(
     { onEvent: recordTalkObservabilityEvent },
   );
   const emit = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) =>
-    broadcastToOwner(params.context, params.connId, {
-      ...event,
-      ...(talkEvent ? { talkEvent: talk.emit(talkEvent) } : {}),
-    });
+    broadcastToOwner(
+      params.context,
+      params.connId,
+      {
+        ...event,
+        ...(talkEvent ? { talkEvent: talk.emit(talkEvent) } : {}),
+      },
+      relayEventDeliveryOptions(event),
+    );
   let currentOutputItemId: string | undefined;
   let currentOutputResponseId: string | undefined;
+  let ready = false;
+  let failureEmitted = false;
   const relayRef: { current?: RelaySession } = {};
   const bridge = createRealtimeVoiceBridgeSession({
     provider: params.provider,
@@ -547,13 +650,24 @@ export function createTalkRealtimeRelaySession(
         },
       );
     },
-    onReady: () =>
-      emit({ relaySessionId, type: "ready" }, { type: "session.ready", payload: null }),
-    onError: (error) =>
-      emit(
-        { relaySessionId, type: "error", message: error.message },
-        { type: "session.error", payload: { message: error.message }, final: true },
-      ),
+    onReady: () => {
+      ready = true;
+      emit({ relaySessionId, type: "ready" }, { type: "session.ready", payload: null });
+    },
+    onError: (error) => {
+      const issue = classifyRealtimeRelayIssue({
+        error,
+        provider: params.provider.id,
+        model: params.model,
+        phase: ready ? "stream" : "connect",
+      });
+      failureEmitted = true;
+      emit(relayIssuePayload(relaySessionId, issue), {
+        type: "session.error",
+        payload: issue,
+        final: true,
+      });
+    },
     onClose: (reason) => {
       const active = relaySessions.get(relaySessionId);
       if (!active) {
@@ -564,6 +678,21 @@ export function createTalkRealtimeRelaySession(
       forgetUnifiedTalkSession(relaySessionId);
       clearTimeout(active.cleanupTimer);
       abortRelayAgentRuns(active, "relay-closed");
+      if (!ready && !failureEmitted) {
+        const issue: TalkRealtimeRelayIssue = {
+          code: "provider_closed_before_ready",
+          message: "Realtime provider closed before the session became ready.",
+          provider: params.provider.id,
+          ...(params.model ? { model: params.model } : {}),
+          transport: "gateway-relay",
+          phase: "connect",
+        };
+        emit(relayIssuePayload(relaySessionId, issue), {
+          type: "session.error",
+          payload: issue,
+          final: true,
+        });
+      }
       emit(
         { relaySessionId, type: "close", reason },
         { type: "session.closed", payload: { reason }, final: true },
@@ -594,7 +723,18 @@ export function createTalkRealtimeRelaySession(
   relay.cleanupTimer.unref?.();
   relaySessions.set(relaySessionId, relay);
   bridge.connect().catch((error: unknown) => {
-    emit({ relaySessionId, type: "error", message: formatError(error) });
+    const issue = classifyRealtimeRelayIssue({
+      error,
+      provider: params.provider.id,
+      model: params.model,
+      phase: "connect",
+    });
+    failureEmitted = true;
+    emit(relayIssuePayload(relaySessionId, issue), {
+      type: "session.error",
+      payload: issue,
+      final: true,
+    });
     const active = relaySessions.get(relaySessionId);
     if (active) {
       closeRelaySession(active, "error");

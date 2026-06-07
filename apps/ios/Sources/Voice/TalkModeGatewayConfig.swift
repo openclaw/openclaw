@@ -7,6 +7,146 @@ enum TalkModeExecutionMode {
     case realtimeRelay
 }
 
+struct TalkRuntimeIssue: Equatable {
+    enum Code: String {
+        case credentialInvalid = "credential_invalid"
+        case credentialMissing = "credential_missing"
+        case providerUnavailable = "provider_unavailable"
+        case modelUnavailable = "model_unavailable"
+        case gatewayConfigInvalid = "gateway_config_invalid"
+        case networkError = "network_error"
+        case providerClosedBeforeReady = "provider_closed_before_ready"
+        case unknown
+    }
+
+    let code: Code
+    let message: String
+    let provider: String?
+    let model: String?
+    let transport: String?
+    let phase: String?
+    let occurredAt: Date
+
+    init(
+        code: Code,
+        message: String,
+        provider: String? = nil,
+        model: String? = nil,
+        transport: String? = nil,
+        phase: String? = nil,
+        occurredAt: Date = Date())
+    {
+        self.code = code
+        self.message = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.model = model?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.transport = transport?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.phase = phase?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.occurredAt = occurredAt
+    }
+
+    var displayMessage: String {
+        if !self.message.isEmpty { return self.message }
+        switch self.code {
+        case .credentialInvalid:
+            return "Realtime credentials were rejected."
+        case .credentialMissing:
+            return "Realtime credentials are missing."
+        case .providerUnavailable:
+            return "The realtime provider is unavailable."
+        case .modelUnavailable:
+            return "The realtime model is unavailable."
+        case .gatewayConfigInvalid:
+            return "Gateway realtime configuration is invalid."
+        case .networkError:
+            return "Realtime network connection failed."
+        case .providerClosedBeforeReady:
+            return "Realtime closed before it became ready."
+        case .unknown:
+            return "Realtime voice failed."
+        }
+    }
+
+    var fallbackStatusText: String {
+        "Listening (iOS Speech fallback)"
+    }
+
+    var fallbackBannerTitle: String {
+        "Using iOS Speech fallback"
+    }
+
+    var fallbackBannerOwnerLabel: String {
+        switch self.code {
+        case .credentialInvalid, .credentialMissing, .providerUnavailable, .modelUnavailable, .gatewayConfigInvalid:
+            "Fix on gateway"
+        case .networkError:
+            "Check network"
+        case .providerClosedBeforeReady, .unknown:
+            "Needs attention"
+        }
+    }
+
+    var fallbackBannerMessage: String {
+        "Realtime voice is unavailable. Talk is still running with iOS speech recognition and TTS."
+    }
+
+    var technicalDetails: String {
+        var lines = [
+            "code: \(self.code.rawValue)",
+            "message: \(self.displayMessage)",
+        ]
+        if let provider, !provider.isEmpty { lines.append("provider: \(provider)") }
+        if let model, !model.isEmpty { lines.append("model: \(model)") }
+        if let transport, !transport.isEmpty { lines.append("transport: \(transport)") }
+        if let phase, !phase.isEmpty { lines.append("phase: \(phase)") }
+        return lines.joined(separator: "\n")
+    }
+
+    var diagnosticSummary: String {
+        var parts = [self.displayMessage]
+        if let provider, !provider.isEmpty { parts.append("provider: \(provider)") }
+        if let model, !model.isEmpty { parts.append("model: \(model)") }
+        if let transport, !transport.isEmpty { parts.append("transport: \(transport)") }
+        if let phase, !phase.isEmpty { parts.append("phase: \(phase)") }
+        return parts.joined(separator: " • ")
+    }
+
+    static func classify(
+        message: String,
+        provider: String? = nil,
+        model: String? = nil,
+        transport: String? = nil,
+        phase: String? = nil) -> TalkRuntimeIssue
+    {
+        let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let code: Code = if normalized.contains("api key") || normalized.contains("unauthorized") || normalized
+            .contains("401")
+        {
+            normalized.contains("missing") ? .credentialMissing : .credentialInvalid
+        } else if normalized.contains("credential") || normalized.contains("auth") {
+            normalized.contains("missing") ? .credentialMissing : .credentialInvalid
+        } else if normalized.contains("model") && (
+            normalized.contains("not found") || normalized.contains("unsupported") || normalized.contains(
+                "unavailable"))
+        {
+            .modelUnavailable
+        } else if normalized.contains("network") || normalized.contains("socket") || normalized.contains("connection") {
+            .networkError
+        } else if normalized.contains("provider") || normalized.contains("unavailable") {
+            .providerUnavailable
+        } else {
+            .unknown
+        }
+        return TalkRuntimeIssue(
+            code: code,
+            message: message,
+            provider: provider,
+            model: model,
+            transport: transport,
+            phase: phase)
+    }
+}
+
 struct TalkVoiceModeDescriptor: Equatable {
     let title: String
     let subtitle: String?

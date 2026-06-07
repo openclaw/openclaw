@@ -144,7 +144,51 @@ function respondInvalidRequest(respond: RespondFn, message: string) {
 }
 
 function respondUnavailable(respond: RespondFn, err: unknown) {
-  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+  const message = formatForLog(err);
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.UNAVAILABLE, message, {
+      details: {
+        talkIssue: {
+          code: classifyTalkUnavailableIssue(message),
+          message,
+          phase: "request",
+        },
+      },
+    }),
+  );
+}
+
+function classifyTalkUnavailableIssue(message: string): string {
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("api key") ||
+    lower.includes("unauthorized") ||
+    lower.includes("401") ||
+    lower.includes("credential") ||
+    lower.includes("auth")
+  ) {
+    return lower.includes("missing") ? "credential_missing" : "credential_invalid";
+  }
+  if (
+    lower.includes("model") &&
+    (lower.includes("not found") || lower.includes("unsupported") || lower.includes("unavailable"))
+  ) {
+    return "model_unavailable";
+  }
+  if (
+    lower.includes("network") ||
+    lower.includes("socket") ||
+    lower.includes("connection") ||
+    lower.includes("closed")
+  ) {
+    return "network_error";
+  }
+  if (lower.includes("provider") || lower.includes("unavailable")) {
+    return "provider_unavailable";
+  }
+  return "unknown";
 }
 
 function respondOk(respond: RespondFn, payload: unknown = { ok: true }) {
