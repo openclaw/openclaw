@@ -22,6 +22,7 @@ import {
   type MsteamsRealtimeDeps,
 } from "../msteams-realtime.js";
 import type { MsteamsTtsProvider } from "../msteams-tts.js";
+import type { MsteamsVideoFrame } from "../msteams-video-frame.js";
 import { generateVoiceResponse } from "../response-generator.js";
 import { chunkAudio } from "../telephony-audio.js";
 import type {
@@ -89,17 +90,9 @@ interface MsteamsCallState {
   lastVisionFrame?: string;
 }
 
-/** A sampled inbound video frame the agent can "look" at (camera or screen-share). */
-export interface MsteamsVideoFrame {
-  /** Base64-encoded image (JPEG) ready to attach to a vision model. */
-  dataBase64: string;
-  /** MIME type, e.g. "image/jpeg". */
-  mime: string;
-  width: number;
-  height: number;
-  /** Worker capture timestamp (epoch ms). */
-  ts: number;
-}
+// MsteamsVideoFrame now lives in ../msteams-video-frame.ts (shared with msteams-realtime.ts).
+// Re-exported here so existing importers of this module keep working.
+export type { MsteamsVideoFrame };
 
 /** PCM 16 kHz, 16-bit mono — the wire format both directions of the Teams bridge. */
 const MSTEAMS_SAMPLE_RATE_HZ = 16_000;
@@ -1047,12 +1040,21 @@ export class MsteamsProvider implements VoiceCallProvider {
       if (signal.aborted) {
         return;
       }
-      state.session.send({
-        type: "audio.frame",
-        seq: state.outboundSeq,
-        timestampMs: state.outboundTimestampMs,
-        payloadBase64: frame.toString("base64"),
-      });
+      try {
+        state.session.send({
+          type: "audio.frame",
+          seq: state.outboundSeq,
+          timestampMs: state.outboundTimestampMs,
+          payloadBase64: frame.toString("base64"),
+        });
+      } catch (err) {
+        // WS send failed (socket closed mid-playback, e.g. caller hung up). Surface it and stop
+        // streaming rather than silently dropping every remaining frame against a dead socket.
+        this.logger?.warn(
+          `MsteamsProvider: audio.frame send failed for ${state.providerCallId} — ${describeError(err)}; stopping playback`,
+        );
+        return;
+      }
       state.outboundSeq += 1;
       state.outboundTimestampMs += FRAME_DURATION_MS;
 
