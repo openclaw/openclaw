@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import {
   resolveAuthProfileDatabasePath,
@@ -343,6 +345,134 @@ describe("ensureOpenClawModelsJson fingerprint cache", () => {
     expect(resolveImplicitProvidersCallCount).toBe(5);
     await ensureOpenClawModelsJson(cfg, agentDir);
     expect(resolveImplicitProvidersCallCount).toBe(5);
+  }, 30_000);
+
+  it("forces a re-plan when the SQLite auth store is unreadable/corrupt (fail-closed, Codex P1 #90741)", async () => {
+    // The durable-review P1: `readAuthProfilesStableOutcome` must distinguish a
+    // legitimately ABSENT auth store (missing DB / row) from an UNREADABLE one
+    // (SQLite open/query failure or malformed JSON cell).  Before the fix the
+    // raw reader swallowed both failure shapes to `null`, so a corrupt or
+    // partially-migrated auth DB fingerprinted as `absent` — a cacheable
+    // outcome — and let stale provider/auth discovery ride a ready-cache hit
+    // instead of forcing a fail-closed re-plan.  With the fix the corrupt store
+    // reads `unreadable` → `uncacheable`, which never compares equal (not even
+    // to itself), so EVERY call must re-plan while the store stays corrupt.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    // Warm the cache with a valid small store: a steady-state cache hit.
+    writeAuthProfiles(agentDir, {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "***", // pragma: allowlist secret
+        },
+      },
+    });
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Corrupt the on-disk SQLite auth DB so the read-only open / query throws.
+    // This is the "unreadable store" the durable review flagged: it must NOT be
+    // treated like a missing store.  Close pooled handles first so the file is
+    // not held open, then overwrite with garbage.  (WAL/SHM sidecars from the
+    // prior write would otherwise let SQLite recover, so clear them too.)
+    closeOpenClawAgentDatabasesForTest();
+    const authDbPath = resolveAuthProfileDatabasePath(agentDir);
+    await fs.writeFile(authDbPath, "this is not a valid sqlite database file");
+    await fs.rm(`${authDbPath}-wal`, { force: true });
+    await fs.rm(`${authDbPath}-shm`, { force: true });
+
+    // First corrupt read: cache miss → re-plan.
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(2);
+
+    // Repeat with the byte-identical corrupt store.  `uncacheable` never
+    // compares equal, so the cache stays bypassed and we re-plan again — the
+    // fail-closed contract.  Under the buggy code this would be a cache hit
+    // (corrupt store read as `absent`, two `absent` reads compare equal) and
+    // the count would stay at 2.
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(3);
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(4);
+
+    // Restoring a valid store re-enables caching.  Remove the corrupt file so
+    // the writer can create a fresh DB (opening the garbage file writably would
+    // itself throw "file is not a database"), then seed a valid (different)
+    // store: the next call re-plans once, then the steady state hits again.
+    closeOpenClawAgentDatabasesForTest();
+    await fs.rm(authDbPath, { force: true });
+    writeAuthProfiles(agentDir, {
+      version: 1,
+      profiles: {
+        "google:default": {
+          type: "token",
+          provider: "google",
+          token: "google-restored", // pragma: allowlist secret
+        },
+      },
+    });
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(5);
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(5);
+  }, 30_000);
+
+  it("forces a re-plan when the auth store row holds malformed JSON (fail-closed, Codex P1 #90741)", async () => {
+    // Companion to the corrupt-DB case: the store row EXISTS and the SQLite
+    // file opens cleanly, but the `store_json` cell holds a non-empty string
+    // that `JSON.parse` rejects (partial write / truncation / external
+    // tampering).  The old `parseJsonCell` swallowed the parse error to `null`,
+    // so the fingerprint path read it as `absent` (cacheable).  The fix routes
+    // a malformed cell to `unreadable` → `uncacheable`, so the store cannot be
+    // trusted and every call re-plans until a valid payload is restored.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    // Warm with a valid store first.
+    writeAuthProfiles(agentDir, {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "***", // pragma: allowlist secret
+        },
+      },
+    });
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Overwrite the store row's JSON cell with a malformed (non-JSON) payload,
+    // simulating a truncated/garbled persisted blob.  First close any pooled
+    // agent DB handles so the file is not locked, then open a direct writable
+    // SQLite connection and UPDATE the cell to a string that is NOT valid JSON.
+    closeOpenClawAgentDatabasesForTest();
+    const authDbPath = resolveAuthProfileDatabasePath(agentDir);
+    const sqlite = requireNodeSqlite();
+    const rawDb = new sqlite.DatabaseSync(authDbPath);
+    try {
+      rawDb.exec(
+        "UPDATE auth_profile_store SET store_json = 'not-json-{' WHERE store_key = 'primary'",
+      );
+    } finally {
+      rawDb.close();
+    }
+
+    // The malformed cell reads `unreadable` → `uncacheable`: every call
+    // re-plans.  Under the buggy code this would read `absent` and stay a hit
+    // (count frozen at 1).
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(2);
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(3);
   }, 30_000);
 
   it("invalidates the cache when models.json becomes unhashable (Codex P1 round-4 on #73260)", async () => {

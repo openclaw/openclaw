@@ -11,6 +11,11 @@
  *   [P2] Restore the root models.json byte-equality write guard for
  *        plugin-catalog-only write plans (round-2;
  *        src/agents/models-config.ts:1512)
+ *   [P1] Treat auth-store read failures as uncacheable — distinguish a
+ *        legitimately absent store from an unreadable/corrupt one so a
+ *        malformed/unreadable SQLite auth DB fails closed (re-plan) instead of
+ *        riding a stale ready-cache hit (round-3; src/agents/models-config.ts:301,
+ *        src/agents/auth-profiles/sqlite.ts:readPersistedAuthProfileStoreRawOutcome)
  *
  * This script does NOT mock the seam under test.  It drives the real
  * `ensureOpenClawModelsJson` against:
@@ -20,13 +25,13 @@
  *   - the real `readPluginCatalogsContentOutcome` sidecar validation,
  *   - the real `readyCache` populate / drift-detect cycle,
  *   - the real auth-profile fingerprint read (`readAuthProfilesStableOutcome`
- *     → no-create read-only `readPersistedAuthProfileStoreRaw`).
+ *     → no-create read-only `readPersistedAuthProfileStoreRawOutcome`).
  *
  * Only the network edge is avoided: provider discovery is not mocked, but the
  * config uses a static `apiKey` so no live provider fetch is attempted (the
  * cold plan still runs the real planner / catalog-write / reconcile path).
  *
- * It pins the contract from four angles:
+ * It pins the contract from five angles:
  *
  *   1. sidecar-drift-busts-cache-and-reconciles (security + correctness)
  *      Warm the readyCache with no sidecars, then plant a TAMPERED generated
@@ -68,6 +73,22 @@
  *      write: we pin that the root file's inode + mtime are preserved across a
  *      sidecar-only reconcile while the sidecar itself is (re)written.
  *
+ *   5. unreadable-auth-store-fails-closed (P1, round-3, security)
+ *      Drives the REAL exported `readPersistedAuthProfileStoreRawOutcome` — the
+ *      discriminated reader the fingerprint path now consumes — across all four
+ *      real states (no mocks: real SQLite, real file I/O, real JSON.parse):
+ *      (a) missing DB → `absent`, (b) valid store → `present`, (c) garbage
+ *      SQLite file → `unreadable`, (d) row present but malformed `store_json`
+ *      cell → `unreadable`.  Pre-fix the raw reader swallowed (c)/(d) to `null`
+ *      and the fingerprint read them as a cacheable `absent`, letting stale
+ *      provider/auth discovery ride a warm hit when auth state could not be
+ *      trusted.  Post-fix they read `unreadable`, which the fingerprint maps to
+ *      `uncacheable` (fail closed).  Note: the round-2 byte-equality write guard
+ *      means a forced re-plan with identical output does NOT rewrite
+ *      models.json, so the reader outcome — not an inode/mtime delta — is the
+ *      ground-truth signal here.  A final positive control restores a valid
+ *      store and confirms a steady-state warm hit (stable inode/mtime).
+ *
  * The proof is self-checking: any regression throws and exits non-zero.
  * Captured output must show "All runtime assertions passed." on success.
  *
@@ -77,13 +98,19 @@
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveAuthProfileDatabasePath } from "../src/agents/auth-profiles/sqlite.js";
+import {
+  readPersistedAuthProfileStoreRawOutcome,
+  resolveAuthProfileDatabasePath,
+  writePersistedAuthProfileStoreRaw,
+} from "../src/agents/auth-profiles/sqlite.js";
 import { ensureOpenClawModelsJson } from "../src/agents/models-config.js";
 import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
 } from "../src/agents/plugin-model-catalog.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { requireNodeSqlite } from "../src/infra/node-sqlite.js";
+import { closeOpenClawAgentDatabasesForTest } from "../src/state/openclaw-agent-db.js";
 
 // ----- helpers ------------------------------------------------------------
 function createOpenAiConfig(): OpenClawConfig {
@@ -136,7 +163,7 @@ async function exists(p: string): Promise<boolean> {
 
 // ----- scenarios ---------------------------------------------------------
 async function scenarioSidecarDriftBustsCacheAndReconciles(): Promise<void> {
-  console.log("[1/4] sidecar-drift-busts-cache-and-reconciles");
+  console.log("[1/5] sidecar-drift-busts-cache-and-reconciles");
   const agentDir = await makeAgentDir("drift");
   const cfg = createOpenAiConfig();
   const sidecarPath = path.join(agentDir, encodePluginModelCatalogRelativePath("acme-plugin"));
@@ -168,7 +195,7 @@ async function scenarioSidecarDriftBustsCacheAndReconciles(): Promise<void> {
 }
 
 async function scenarioFingerprintReadDoesNotCreateAgentDb(): Promise<void> {
-  console.log("[2/4] fingerprint-read-does-not-create-agent-db");
+  console.log("[2/5] fingerprint-read-does-not-create-agent-db");
   const agentDir = await makeAgentDir("nodb");
   const cfg = createOpenAiConfig();
   const authDbPath = resolveAuthProfileDatabasePath(agentDir);
@@ -189,7 +216,7 @@ async function scenarioFingerprintReadDoesNotCreateAgentDb(): Promise<void> {
 }
 
 async function scenarioStableNoSidecarStillHits(): Promise<void> {
-  console.log("[3/4] stable-no-sidecar-still-hits");
+  console.log("[3/5] stable-no-sidecar-still-hits");
   const agentDir = await makeAgentDir("stable");
   const cfg = createOpenAiConfig();
   const modelsPath = path.join(agentDir, "models.json");
@@ -267,7 +294,7 @@ function createOwnerSnapshotForProvider(params: {
 }
 
 async function scenarioPluginCatalogOnlyWritePreservesRoot(): Promise<void> {
-  console.log("[4/4] plugin-catalog-only-write-preserves-root");
+  console.log("[4/5] plugin-catalog-only-write-preserves-root");
   const agentDir = await makeAgentDir("catalog-only");
   const pluginId = "zai-plugin";
   const providerId = "zai";
@@ -333,12 +360,135 @@ async function scenarioPluginCatalogOnlyWritePreservesRoot(): Promise<void> {
   console.log("    ok");
 }
 
+async function scenarioUnreadableAuthStoreFailsClosed(): Promise<void> {
+  console.log("[5/5] unreadable-auth-store-fails-closed");
+  const agentDir = await makeAgentDir("corrupt-auth");
+  const authDbPath = resolveAuthProfileDatabasePath(agentDir);
+
+  // This scenario proves the P1 contract at its real seam: the exported
+  // `readPersistedAuthProfileStoreRawOutcome` — the discriminated reader the
+  // models-config fingerprint path now consumes — must distinguish a
+  // legitimately ABSENT store from an UNREADABLE one across all four real
+  // states (no mocks: real SQLite, real file I/O, real `JSON.parse`).  The
+  // fingerprint's fail-closed branch keys entirely on the `unreadable` kind, so
+  // pinning the reader's discrimination pins the security contract directly.
+  //
+  // Why prove the reader directly rather than via a models.json rewrite: the
+  // round-2 byte-equality write guard (scenario 4) means a forced re-plan that
+  // produces identical content does NOT rewrite models.json, so inode/mtime is
+  // NOT a reliable proxy for "a re-plan ran".  The reader outcome is the
+  // ground-truth signal; the fingerprint maps `unreadable → uncacheable` and
+  // `uncacheable` never compares equal (proven by the round-4 #73260 contract
+  // exercised in scenario 3's sibling unit coverage).
+
+  // (a) ABSENT — no DB file on disk → absent (cacheable steady state).
+  const absentOutcome = readPersistedAuthProfileStoreRawOutcome(agentDir);
+  console.log(`    no-db outcome.kind=${absentOutcome.kind}`);
+  assert(absentOutcome.kind === "absent", "a missing auth DB must read as absent, not unreadable");
+
+  // (b) PRESENT — a valid persisted store → present (cacheable, hashed).
+  writePersistedAuthProfileStoreRaw(
+    {
+      version: 1,
+      profiles: {
+        // pragma: allowlist secret
+        "anthropic:default": { type: "token", provider: "anthropic", token: "***" },
+      },
+    },
+    agentDir,
+  );
+  closeOpenClawAgentDatabasesForTest();
+  const presentOutcome = readPersistedAuthProfileStoreRawOutcome(agentDir);
+  console.log(`    valid-store outcome.kind=${presentOutcome.kind}`);
+  assert(presentOutcome.kind === "present", "a valid persisted store must read as present");
+  assert(
+    presentOutcome.kind === "present" &&
+      typeof presentOutcome.data === "object" &&
+      presentOutcome.data !== null,
+    "a present store must carry its parsed payload",
+  );
+
+  // (c) UNREADABLE (corrupt DB) — overwrite the SQLite file with garbage so the
+  // read-only open/query throws.  PRE-FIX the raw reader swallowed this to
+  // `null` and the fingerprint path read it as a cacheable `absent`, letting
+  // stale provider/auth discovery ride a warm hit.  POST-FIX it reads
+  // `unreadable` → the fingerprint returns `uncacheable` (fail closed).
+  closeOpenClawAgentDatabasesForTest();
+  await fsPromises.writeFile(authDbPath, "this is not a valid sqlite database file");
+  await fsPromises.rm(`${authDbPath}-wal`, { force: true });
+  await fsPromises.rm(`${authDbPath}-shm`, { force: true });
+  const corruptOutcome = readPersistedAuthProfileStoreRawOutcome(agentDir);
+  console.log(`    corrupt-db outcome.kind=${corruptOutcome.kind}`);
+  assert(
+    corruptOutcome.kind === "unreadable",
+    "a corrupt/unreadable SQLite auth DB must read as unreadable, NOT absent (fail closed)",
+  );
+
+  // (d) UNREADABLE (malformed JSON cell) — the row exists and the DB opens
+  // cleanly, but `store_json` holds a non-empty string that `JSON.parse`
+  // rejects (truncated/garbled blob).  PRE-FIX `parseJsonCell` swallowed the
+  // parse error to `null` (looked absent); POST-FIX it routes to `unreadable`.
+  closeOpenClawAgentDatabasesForTest();
+  await fsPromises.rm(authDbPath, { force: true });
+  writePersistedAuthProfileStoreRaw(
+    {
+      version: 1,
+      // pragma: allowlist secret
+      profiles: { "google:default": { type: "token", provider: "google", token: "g" } },
+    },
+    agentDir,
+  );
+  closeOpenClawAgentDatabasesForTest();
+  const sqlite = requireNodeSqlite();
+  const rawDb = new sqlite.DatabaseSync(authDbPath);
+  try {
+    rawDb.exec(
+      "UPDATE auth_profile_store SET store_json = 'not-json-{' WHERE store_key = 'primary'",
+    );
+  } finally {
+    rawDb.close();
+  }
+  const malformedOutcome = readPersistedAuthProfileStoreRawOutcome(agentDir);
+  console.log(`    malformed-json-cell outcome.kind=${malformedOutcome.kind}`);
+  assert(
+    malformedOutcome.kind === "unreadable",
+    "a malformed JSON store cell must read as unreadable, NOT absent (fail closed)",
+  );
+
+  // (e) End-to-end positive control: a restored VALID store re-enables caching.
+  // Remove the garbled file, seed a valid store, then confirm a warm hit leaves
+  // models.json untouched (inode/mtime steady) — caching resumed once the auth
+  // store is trustworthy again.
+  const cfg = createOpenAiConfig();
+  const modelsPath = path.join(agentDir, "models.json");
+  closeOpenClawAgentDatabasesForTest();
+  await fsPromises.rm(authDbPath, { force: true });
+  writePersistedAuthProfileStoreRaw(
+    {
+      version: 1,
+      // pragma: allowlist secret
+      profiles: { "google:default": { type: "token", provider: "google", token: "g2" } },
+    },
+    agentDir,
+  );
+  await ensureOpenClawModelsJson(cfg, agentDir);
+  const restoredStat = await fsPromises.stat(modelsPath);
+  await ensureOpenClawModelsJson(cfg, agentDir);
+  const restoredWarmStat = await fsPromises.stat(modelsPath);
+  assert(
+    restoredWarmStat.ino === restoredStat.ino && restoredWarmStat.mtimeMs === restoredStat.mtimeMs,
+    "a valid restored auth store must hit the cache again (no rewrite on the steady-state call)",
+  );
+  console.log("    ok");
+}
+
 // ----- main ---------------------------------------------------------------
 async function main(): Promise<void> {
   await scenarioSidecarDriftBustsCacheAndReconciles();
   await scenarioFingerprintReadDoesNotCreateAgentDb();
   await scenarioStableNoSidecarStillHits();
   await scenarioPluginCatalogOnlyWritePreservesRoot();
+  await scenarioUnreadableAuthStoreFailsClosed();
   console.log("\nAll runtime assertions passed.");
 }
 

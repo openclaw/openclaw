@@ -27,7 +27,10 @@ import {
   resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
-import { readPersistedAuthProfileStoreRaw } from "./auth-profiles/sqlite.js";
+import {
+  type AuthProfileStoreRawReadOutcome,
+  readPersistedAuthProfileStoreRawOutcome,
+} from "./auth-profiles/sqlite.js";
 import { MODELS_JSON_STATE, type ContentHashOutcome } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 import { normalizeProviderSpecificConfig } from "./models-config.providers.policy.js";
@@ -281,29 +284,58 @@ async function safeReadFileOutcome(pathname: string, maxBytes: number): Promise<
  *    per-type volatile session fields (`getVolatileFieldsForProfileObject`)
  *    so OAuth token rotation does not bust the cache while structural /
  *    static-credential / token-expiry changes still do.
- *  - `{ kind: "uncacheable" }` on a DB read failure, or a store whose
- *    stripped serialization exceeds MAX_AUTH_PROFILES_BYTES.  The caller
- *    MUST bypass the readyCache in this state (fail closed) so a transient
- *    read error or pathological payload cannot grant a stale cache hit.
+ *  - `{ kind: "uncacheable" }` when the store cannot be trusted: a SQLite
+ *    open/query failure, a present-but-malformed JSON cell that `JSON.parse`
+ *    rejects, a partially-migrated/corrupt store, or a store whose stripped
+ *    serialization exceeds MAX_AUTH_PROFILES_BYTES.  The caller MUST bypass
+ *    the readyCache in this state (fail closed) so a transient read error,
+ *    corrupt/unreadable auth DB, or pathological payload cannot grant a stale
+ *    cache hit on stale provider/auth discovery (Codex P1 on PR #90741).
  */
 function readAuthProfilesStableOutcome(agentDir: string): ContentHashOutcome {
-  let parsed: unknown;
+  let outcome: AuthProfileStoreRawReadOutcome;
   try {
     // Use the read-only, no-create path: call without an explicit DB handle so
-    // `readPersistedAuthProfileStoreRaw` checks `fs.existsSync` first (returning
-    // `null` for an absent store) and otherwise opens the SQLite file with
-    // `{ readOnly: true }`.  Passing `openAuthProfileDatabase(agentDir)` here
-    // would route through `openOpenClawAgentDatabase`, which `mkdirSync`s the
-    // agent dir, creates the schema, and registers the database in the shared
-    // pool — turning a fingerprint-only cache-key read into a write-side effect
-    // that materializes agent SQLite state for no-auth / skip / noop calls
+    // `readPersistedAuthProfileStoreRawOutcome` checks `fs.existsSync` first
+    // (returning `{ kind: "absent" }` for an absent store) and otherwise opens
+    // the SQLite file with `{ readOnly: true }`.  Passing
+    // `openAuthProfileDatabase(agentDir)` here would route through
+    // `openOpenClawAgentDatabase`, which `mkdirSync`s the agent dir, creates
+    // the schema, and registers the database in the shared pool — turning a
+    // fingerprint-only cache-key read into a write-side effect that
+    // materializes agent SQLite state for no-auth / skip / noop calls
     // (Codex P2 on PR #90741, models-config.ts:295).
-    parsed = readPersistedAuthProfileStoreRaw(agentDir);
-  } catch {
-    // DB open/read failure — fail closed rather than masquerade as absent.
+    //
+    // We read a DISCRIMINATED outcome (not the plain `unknown` reader) so an
+    // unreadable / malformed / partially-migrated SQLite auth store does NOT
+    // masquerade as a legitimately absent store.  The plain reader swallows
+    // SQLite open/query failures and malformed-JSON cells to `null`, which the
+    // old `parsed === null` branch then treated as a cacheable `absent` —
+    // letting stale provider/auth discovery ride a ready-cache hit when auth
+    // state could not be trusted (Codex P1 on PR #90741, models-config.ts:301).
+    outcome = readPersistedAuthProfileStoreRawOutcome(agentDir);
+  } catch (error) {
+    // Defensive: the outcome reader catches its own SQLite failures, but a
+    // failure resolving the DB path / `fs.existsSync` would surface here.
+    // Fail closed rather than masquerade as absent.
+    outcome = { kind: "unreadable", error };
+  }
+  if (outcome.kind === "unreadable") {
+    // Unreadable / corrupt / malformed auth store: fail closed.  The store
+    // exists in some form but cannot be trusted, so it MUST NOT be cacheable —
+    // force a re-plan instead of granting a stale hit on stale provider/auth
+    // discovery (Codex P1 on PR #90741).
     return { kind: "uncacheable" };
   }
+  if (outcome.kind === "absent") {
+    // No persisted store (missing DB / missing row / empty cell).  Stable
+    // absence is a valid steady-state hit.
+    return { kind: "absent" };
+  }
+  const parsed = outcome.data;
   if (parsed === null || parsed === undefined) {
+    // A present row whose JSON payload is literally `null` — treat as absent
+    // (no profiles configured), matching the prior raw-reader contract.
     return { kind: "absent" };
   }
   const stable = stripAuthProfilesVolatileFields(parsed, 0);
