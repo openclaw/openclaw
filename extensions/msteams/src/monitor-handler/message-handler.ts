@@ -825,6 +825,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       extra: {
         GroupSubject: !isDirectMessage ? conversationType : undefined,
         ReplyToIsQuote: quoteInfo ? true : undefined,
+        // The sender's Azure AD object id, exposed unambiguously so tools (e.g. the
+        // voice-call tool placing a Teams call back) can target this user without
+        // guessing whether sender.id is an AAD id or a Bot Framework service id.
+        MsteamsAadObjectId: from?.aadObjectId,
         ...mediaPayload,
       },
     });
