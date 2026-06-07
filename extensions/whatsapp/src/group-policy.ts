@@ -1,3 +1,4 @@
+import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 // Whatsapp plugin module implements group policy behavior.
 import {
   resolveChannelGroupPolicy,
@@ -26,10 +27,27 @@ function normalizeGroupCandidate(value?: string | null): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function shouldMatchMutableWhatsAppGroupNames(params: WhatsAppGroupContext): boolean {
+  const whatsapp = params.cfg.channels?.whatsapp as
+    | {
+        dangerouslyAllowGroupNameMatching?: boolean;
+        accounts?: Record<string, { dangerouslyAllowGroupNameMatching?: boolean } | undefined>;
+      }
+    | undefined;
+  const accountConfig = resolveAccountEntry(whatsapp?.accounts, params.accountId);
+  if (typeof accountConfig?.dangerouslyAllowGroupNameMatching === "boolean") {
+    return accountConfig.dangerouslyAllowGroupNameMatching;
+  }
+  return whatsapp?.dangerouslyAllowGroupNameMatching === true;
+}
+
 function whatsappGroupCandidates(params: WhatsAppGroupContext): string[] {
+  const mutableNameCandidates = shouldMatchMutableWhatsAppGroupNames(params)
+    ? [params.groupSubject, params.groupChannel]
+    : [];
   return Array.from(
     new Set(
-      [params.groupId, params.groupSubject, params.groupChannel]
+      [params.groupId, ...mutableNameCandidates]
         .map((candidate) => normalizeGroupCandidate(candidate))
         .filter((candidate): candidate is string => Boolean(candidate)),
     ),

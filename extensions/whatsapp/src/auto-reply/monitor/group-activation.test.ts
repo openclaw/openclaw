@@ -196,6 +196,7 @@ describe("resolveGroupActivationFor", () => {
       cfg: {
         channels: {
           whatsapp: {
+            dangerouslyAllowGroupNameMatching: true,
             groups: {
               "Family Chat": {
                 requireMention: false,

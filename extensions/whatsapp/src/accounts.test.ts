@@ -106,6 +106,7 @@ describe("resolveWhatsAppAuthDir", () => {
                 allowFrom: ["+15550001111"],
                 groupPolicy: "open",
                 groupAllowFrom: ["+15550002222"],
+                dangerouslyAllowGroupNameMatching: true,
                 defaultTo: "+15550003333",
                 reactionLevel: "extensive",
                 historyLimit: 42,
@@ -125,6 +126,7 @@ describe("resolveWhatsAppAuthDir", () => {
     expect(resolved.allowFrom).toEqual(["+15550001111"]);
     expect(resolved.groupPolicy).toBe("open");
     expect(resolved.groupAllowFrom).toEqual(["+15550002222"]);
+    expect(resolved.dangerouslyAllowGroupNameMatching).toBe(true);
     expect(resolved.defaultTo).toBe("+15550003333");
     expect(resolved.reactionLevel).toBe("extensive");
     expect(resolved.historyLimit).toBe(42);

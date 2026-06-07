@@ -119,4 +119,20 @@ describe("whatsapp config schema", () => {
       },
     });
   });
+
+  it("accepts dangerous group-name matching at root and account scope", () => {
+    const res = expectWhatsAppConfigValid({
+      dangerouslyAllowGroupNameMatching: true,
+      accounts: {
+        work: {
+          dangerouslyAllowGroupNameMatching: false,
+        },
+      },
+    });
+
+    if (res.success) {
+      expect(res.data.dangerouslyAllowGroupNameMatching).toBe(true);
+      expect(res.data.accounts?.work?.dangerouslyAllowGroupNameMatching).toBe(false);
+    }
+  });
 });

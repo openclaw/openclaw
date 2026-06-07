@@ -41,6 +41,7 @@ describe("whatsapp group policy", () => {
       channels: {
         whatsapp: {
           groupPolicy: "allowlist",
+          dangerouslyAllowGroupNameMatching: true,
           groups: {
             "Family Chat": {
               requireMention: false,
@@ -81,10 +82,49 @@ describe("whatsapp group policy", () => {
     ).toEqual({ allow: ["message.send"] });
   });
 
+  it("ignores group subjects unless dangerous group-name matching is enabled", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          groups: {
+            "Family Chat": {
+              requireMention: false,
+              tools: { allow: ["message.send"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveWhatsAppChannelGroupPolicy({
+        cfg,
+        groupId: "1203630@g.us",
+        groupSubject: "Family Chat",
+      }).allowed,
+    ).toBe(false);
+    expect(
+      resolveWhatsAppGroupRequireMention({
+        cfg,
+        groupId: "1203630@g.us",
+        groupSubject: "Family Chat",
+      }),
+    ).toBe(true);
+    expect(
+      resolveWhatsAppGroupToolPolicy({
+        cfg,
+        groupId: "1203630@g.us",
+        groupSubject: "Family Chat",
+      }),
+    ).toBeUndefined();
+  });
+
   it("prefers stable JID config over a group subject when both match", () => {
     const cfg = {
       channels: {
         whatsapp: {
+          dangerouslyAllowGroupNameMatching: true,
           groups: {
             "1203630@g.us": { requireMention: true, tools: { deny: ["exec"] } },
             "Family Chat": {
@@ -116,6 +156,7 @@ describe("whatsapp group policy", () => {
     const cfg = {
       channels: {
         whatsapp: {
+          dangerouslyAllowGroupNameMatching: true,
           groups: {
             "Family Chat": {
               tools: { deny: ["exec"] },
@@ -132,5 +173,32 @@ describe("whatsapp group policy", () => {
         groupChannel: "Family Chat",
       }),
     ).toEqual({ deny: ["exec"] });
+  });
+
+  it("lets account-scoped dangerous group-name matching override the root setting", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          dangerouslyAllowGroupNameMatching: true,
+          accounts: {
+            work: {
+              dangerouslyAllowGroupNameMatching: false,
+              groups: {
+                "Family Chat": { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveWhatsAppChannelGroupPolicy({
+        cfg,
+        accountId: "work",
+        groupId: "1203630@g.us",
+        groupSubject: "Family Chat",
+      }).allowed,
+    ).toBe(false);
   });
 });

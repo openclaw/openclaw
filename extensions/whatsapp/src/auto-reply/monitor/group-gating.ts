@@ -155,11 +155,11 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
           accountId,
           groupsPath,
         },
-        `WhatsApp group ${params.conversationId} not in ${groupsPath} — inbound dropped. Add the group JID or exact group name to ${groupsPath} (or add "*" there to admit all groups). Sender authorization still applies.`,
+        `WhatsApp group ${params.conversationId} not in ${groupsPath} — inbound dropped. Add the group JID to ${groupsPath} (or add "*" there to admit all groups). Exact group-name keys require channels.whatsapp.dangerouslyAllowGroupNameMatching=true. Sender authorization still applies.`,
       );
     }
     params.logVerbose(
-      `Dropping message from unregistered WhatsApp group ${params.conversationId}. Add the group JID or exact group name to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.`,
+      `Dropping message from unregistered WhatsApp group ${params.conversationId}. Add the group JID to channels.whatsapp.groups, or add "*" there to admit all groups. Exact group-name keys require channels.whatsapp.dangerouslyAllowGroupNameMatching=true. Sender authorization still applies.`,
     );
     return { shouldProcess: false };
   }

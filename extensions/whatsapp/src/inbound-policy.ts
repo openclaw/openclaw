@@ -70,12 +70,14 @@ function maybeSamePhoneDmAllowFrom(params: {
 function buildResolvedWhatsAppGroupConfig(params: {
   groupPolicy: GroupPolicy;
   groups: ResolvedWhatsAppAccount["groups"];
+  dangerouslyAllowGroupNameMatching?: boolean;
 }): OpenClawConfig {
   return {
     channels: {
       whatsapp: {
         groupPolicy: params.groupPolicy,
         groups: params.groups,
+        dangerouslyAllowGroupNameMatching: params.dangerouslyAllowGroupNameMatching,
       },
     },
   } as OpenClawConfig;
@@ -111,6 +113,7 @@ export function resolveWhatsAppInboundPolicy(params: {
   const resolvedGroupCfg = buildResolvedWhatsAppGroupConfig({
     groupPolicy,
     groups: account.groups,
+    dangerouslyAllowGroupNameMatching: account.dangerouslyAllowGroupNameMatching,
   });
   const isSamePhone = (value?: string | null) =>
     typeof value === "string" && typeof params.selfE164 === "string" && value === params.selfE164;

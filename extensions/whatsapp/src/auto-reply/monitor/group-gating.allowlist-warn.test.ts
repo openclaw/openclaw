@@ -89,7 +89,7 @@ describe("applyGroupGating allowlist drop warning", () => {
     expect(result).toEqual({ shouldProcess: false });
     expect(warn).toHaveBeenCalledTimes(1);
     expect(params.logVerbose).toHaveBeenCalledWith(
-      'Dropping message from unregistered WhatsApp group unregistered@g.us. Add the group JID or exact group name to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.',
+      'Dropping message from unregistered WhatsApp group unregistered@g.us. Add the group JID to channels.whatsapp.groups, or add "*" there to admit all groups. Exact group-name keys require channels.whatsapp.dangerouslyAllowGroupNameMatching=true. Sender authorization still applies.',
     );
     const [context, message] = warn.mock.calls[0] ?? [];
     expect(context).toMatchObject({
@@ -111,6 +111,7 @@ describe("applyGroupGating allowlist drop warning", () => {
       channels: {
         whatsapp: {
           groupPolicy: "allowlist",
+          dangerouslyAllowGroupNameMatching: true,
           groups: {
             "Registered Group": {},
           },

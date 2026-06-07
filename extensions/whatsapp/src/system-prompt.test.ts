@@ -172,6 +172,7 @@ describe("resolveWhatsAppSystemPrompt", () => {
         groupId: "1203630@g.us",
         groupSubject: "Family Chat",
         accountConfig: {
+          dangerouslyAllowGroupNameMatching: true,
           groups: {
             "Family Chat": { systemPrompt: "family prompt" },
           },
@@ -186,6 +187,7 @@ describe("resolveWhatsAppSystemPrompt", () => {
         groupId: "1203630@g.us",
         groupSubject: "Family Chat",
         accountConfig: {
+          dangerouslyAllowGroupNameMatching: true,
           groups: {
             "1203630@g.us": { systemPrompt: "jid prompt" },
             "Family Chat": { systemPrompt: "family prompt" },
@@ -201,8 +203,24 @@ describe("resolveWhatsAppSystemPrompt", () => {
         groupId: "1203630@g.us",
         groupSubject: "Family Chat",
         accountConfig: {
+          dangerouslyAllowGroupNameMatching: true,
           groups: {
             "1203630@g.us": {},
+            "Family Chat": { systemPrompt: "family prompt" },
+            "*": { systemPrompt: "wildcard prompt" },
+          },
+        },
+      }),
+    ).toBe("wildcard prompt");
+  });
+
+  it("ignores group subject prompts unless dangerous group-name matching is enabled", () => {
+    expect(
+      resolveWhatsAppGroupSystemPrompt({
+        groupId: "1203630@g.us",
+        groupSubject: "Family Chat",
+        accountConfig: {
+          groups: {
             "Family Chat": { systemPrompt: "family prompt" },
             "*": { systemPrompt: "wildcard prompt" },
           },
