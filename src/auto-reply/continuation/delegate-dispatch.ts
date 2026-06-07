@@ -12,7 +12,7 @@
  * RFC: docs/design/continue-work-signal-v2.md §3.2, §3.4
  */
 
-import crypto from "node:crypto";
+import { deriveContinuationDelegateChildSessionKeyFromParent } from "../../agents/subagent-continuation-ids.js";
 import {
   getSubagentRunByChildSessionKey,
   hasLiveContinuationDelegateChildRun,
@@ -20,8 +20,10 @@ import {
 } from "../../agents/subagent-registry-read.js";
 import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import type { SpawnSubagentContext } from "../../agents/subagent-spawn.js";
-import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   emitContinuationDelegateFireSpan,
@@ -32,6 +34,7 @@ import {
 import { generateChainId } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import {
   consumePendingDelegates,
@@ -44,6 +47,7 @@ import { checkContinuationBudget, type ChainState } from "./scheduler.js";
 import {
   registerContinuationTimerHandle,
   retainContinuationTimerRef,
+  persistContinuationChainState,
   unregisterContinuationTimerHandle,
   loadContinuationChainState,
 } from "./state.js";
@@ -179,13 +183,6 @@ export type DelegateDispatchContext = {
  * Each delegate goes through chain/cost enforcement and is spawned via spawnSubagentDirect.
  */
 
-function deriveContinuationChildSessionKey(sessionKey: string, flowId: string): string {
-  const agentId = sessionKey.startsWith("agent:") ? sessionKey.split(":")[1] : undefined;
-  const targetAgentId = agentId && agentId.length > 0 ? agentId : "main";
-  const digest = crypto.createHash("sha256").update(flowId).digest("hex").slice(0, 32);
-  return `agent:${targetAgentId}:subagent:continuation-${digest}`;
-}
-
 function hasActiveSubagentRegistryRun(childSessionKey: string): boolean {
   return isSubagentRunLive(getSubagentRunByChildSessionKey(childSessionKey));
 }
@@ -225,6 +222,7 @@ export async function dispatchToolDelegates(params: {
    */
   loadFreshChainState?: () => ChainState;
   recoverRunningDelegates?: boolean;
+  includeRunningUpdatedAtOrBefore?: number;
   /**
    * Optional callback used by hedge-fired dispatches, where there is no
    * enclosing runner finalize frame to persist the advanced chain state.
@@ -235,6 +233,7 @@ export async function dispatchToolDelegates(params: {
   const config = params.config ?? resolveContinuationRuntimeConfig();
   const toolDelegates = consumePendingDelegates(sessionKey, {
     includeRunning: params.recoverRunningDelegates === true,
+    includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore,
   });
 
   // Arm (or re-arm) a hedge timer for any unmatured queued delegates so they
@@ -385,7 +384,7 @@ export async function dispatchToolDelegates(params: {
       });
       const spawnTraceparent = dispatchSpan.traceparent?.() ?? outboundTraceparent;
       const childSessionKey = delegate.flowId
-        ? deriveContinuationChildSessionKey(sessionKey, delegate.flowId)
+        ? deriveContinuationDelegateChildSessionKeyFromParent(sessionKey, delegate.flowId)
         : undefined;
       if (
         childSessionKey &&
@@ -499,32 +498,50 @@ export async function recoverPendingContinuationDelegates(
     return { sessions: 0, dispatched: 0, rejected: 0 };
   }
   const sessionKeys = listPendingDelegateSessionKeysForRecovery();
-  // Load the persisted session store once so recovery re-dispatches each
-  // delegate against its TRUE chain budget (depth/tokens/started/chainId),
-  // not a reset-to-zero synthetic state. Re-arming at 0/maxChainLength would
-  // launder the chain budget across the restart — a delegate at 199/200
-  // pre-restart could otherwise replay at 0/200 and dispatch past the cap.
-  const storePath = params.storePath ?? resolveDefaultSessionStorePath();
-  let sessionStore: Record<string, SessionEntry> = {};
-  try {
-    sessionStore = loadSessionStore(storePath);
-  } catch (err) {
-    log.warn(
-      `[continuation:delegate-recovery-store-load-failed] falling back to zero chain state: ${formatErrorMessage(err)}`,
-    );
-  }
+  const includeRunningUpdatedAtOrBefore = Date.now();
+  const storeByPath = new Map<string, Record<string, SessionEntry>>();
+  const runtimeConfigSnapshot = getRuntimeConfig();
   let dispatched = 0;
   let rejected = 0;
   for (const sessionKey of sessionKeys) {
+    const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+    const storePath =
+      params.storePath ?? resolveStorePath(runtimeConfigSnapshot.session?.store, { agentId });
+    let sessionStore = storeByPath.get(storePath);
+    if (!sessionStore) {
+      try {
+        sessionStore = loadSessionStore(storePath);
+      } catch (err) {
+        log.warn(
+          `[continuation:delegate-recovery-store-load-failed] path=${storePath} falling back to zero chain state: ${formatErrorMessage(err)}`,
+        );
+        sessionStore = {};
+      }
+      storeByPath.set(storePath, sessionStore);
+    }
     const result = await dispatchToolDelegates({
       sessionKey,
       chainState: params.chainState ?? loadContinuationChainState(sessionStore[sessionKey]),
       ctx: { ...params.ctx, sessionKey },
       maxChainLength: params.maxChainLength ?? runtimeConfig.maxChainLength,
       recoverRunningDelegates: true,
+      includeRunningUpdatedAtOrBefore,
     });
     dispatched += result.dispatched;
     rejected += result.rejected;
+    if (!params.chainState && (result.dispatched > 0 || result.rejected > 0)) {
+      await updateSessionStore(storePath, (store) => {
+        const sessionEntry = store[sessionKey] ?? {};
+        persistContinuationChainState({
+          sessionEntry,
+          count: result.chainState.currentChainCount,
+          startedAt: result.chainState.chainStartedAt,
+          tokens: result.chainState.accumulatedChainTokens,
+          ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
+        });
+        store[sessionKey] = sessionEntry;
+      });
+    }
   }
   return { sessions: sessionKeys.length, dispatched, rejected };
 }

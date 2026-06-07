@@ -3,8 +3,8 @@
  *
  * Combines persisted snapshots with in-memory live runs for UI, announce, control, and recovery paths.
  */
-import crypto from "node:crypto";
 import { getAgentRunContext } from "../infra/agent-events.js";
+import { deriveContinuationDelegateChildRunId } from "./subagent-continuation-ids.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildSubagentRunReadIndexFromRuns,
@@ -62,11 +62,6 @@ export function getSubagentRunByChildSessionKey(childSessionKey: string): Subage
     getSubagentRunsSnapshotForRead(subagentRuns),
     childSessionKey,
   );
-}
-
-function deriveContinuationDelegateChildRunId(flowId: string): string {
-  const digest = crypto.createHash("sha256").update(flowId).digest("hex").slice(0, 32);
-  return `continuation-delegate-${digest}`;
 }
 
 /** Returns whether a continuation child was accepted before its registry row was written. */

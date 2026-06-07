@@ -63,6 +63,10 @@ import {
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
+import {
+  deriveContinuationDelegateChildRunId,
+  deriveContinuationDelegateChildSessionKey,
+} from "./subagent-continuation-ids.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import {
@@ -204,16 +208,6 @@ export type SpawnSubagentParams = {
   /** Durable continuation delegate flow id; used to derive idempotent child session/run keys. */
   continuationDelegateFlowId?: string;
 };
-
-function deriveContinuationDelegateChildSessionKey(targetAgentId: string, flowId: string): string {
-  const digest = crypto.createHash("sha256").update(flowId).digest("hex").slice(0, 32);
-  return `agent:${targetAgentId}:subagent:continuation-${digest}`;
-}
-
-function deriveContinuationDelegateChildRunId(flowId: string): string {
-  const digest = crypto.createHash("sha256").update(flowId).digest("hex").slice(0, 32);
-  return `continuation-delegate-${digest}`;
-}
 
 export type SpawnSubagentContext = {
   agentSessionKey?: string;

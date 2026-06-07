@@ -343,6 +343,25 @@ describe("tool delegate dispatch contract", () => {
     });
   });
 
+  it("derives deterministic child session keys from canonical agent session parsing", async () => {
+    const sessionKey = "AGENT:Work:root";
+    enqueuePendingDelegate(sessionKey, { task: "mixed-case parent key" });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    const expectedChildSessionKey =
+      "agent:work:subagent:continuation-" +
+      crypto.createHash("sha256").update("flow-1").digest("hex").slice(0, 32);
+    expect(mockFlows.get("flow-1")?.stateJson).toMatchObject({
+      childSessionKey: expectedChildSessionKey,
+    });
+  });
+
   it("caps dispatch at maxDelegatesPerTurn and surfaces over-limit delegates", async () => {
     const sessionKey = "session-delegate-cap";
     for (let index = 0; index < 6; index++) {
@@ -1038,5 +1057,24 @@ describe("recoverPendingContinuationDelegates", () => {
       status: "succeeded",
       stateJson: expect.objectContaining({ childSessionKey: deterministicChildKey }),
     });
+  });
+
+  it("does not replay running delegates claimed after recovery starts", async () => {
+    const sessionKey = "agent:main:recovery-race";
+    enqueuePendingDelegate(sessionKey, { task: "skip live-claimed running row" });
+    const flow = mockFlows.get("flow-1");
+    expect(flow).toBeDefined();
+    flow!.status = "running";
+    flow!.currentStep = "Released to continuation scheduler";
+    flow!.revision = 1;
+    flow!.updatedAt = Date.now() + 2_000;
+
+    await recoverPendingContinuationDelegates({
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      maxChainLength: 10,
+    });
+
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")?.status).toBe("running");
   });
 });

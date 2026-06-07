@@ -183,12 +183,16 @@ function isRecoverablePendingFlow(flow: TaskFlowRecord): boolean {
 
 function listRecoverablePendingFlows(
   sessionKey: string,
-  options: { includeRunning?: boolean } = {},
+  options: { includeRunning?: boolean; includeRunningUpdatedAtOrBefore?: number } = {},
 ): TaskFlowRecord[] {
   return listTaskFlowsForOwnerKey(sessionKey)
     .filter((flow) =>
       options.includeRunning
-        ? isRecoverablePendingFlow(flow)
+        ? isPendingDelegateFlow(flow) &&
+          (flow.status === "queued" ||
+            (flow.status === "running" &&
+              (options.includeRunningUpdatedAtOrBefore === undefined ||
+                flow.updatedAt <= options.includeRunningUpdatedAtOrBefore)))
         : isPendingDelegateFlow(flow) && flow.status === "queued",
     )
     .toSorted((a, b) => a.createdAt - b.createdAt);
@@ -465,7 +469,7 @@ export function listPendingDelegateSessionKeysForRecovery(): string[] {
 
 export function consumePendingDelegates(
   sessionKey: string,
-  options: { includeRunning?: boolean } = {},
+  options: { includeRunning?: boolean; includeRunningUpdatedAtOrBefore?: number } = {},
 ): PendingContinuationDelegate[] {
   const delegates: PendingContinuationDelegate[] = [];
   const now = Date.now();
