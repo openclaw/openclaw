@@ -23,6 +23,12 @@ import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { type RawData, WebSocket, WebSocketServer } from "ws";
 import { z } from "zod";
 
+/**
+ * The Teams bridge wire format is PCM 16 kHz, 16-bit, mono in both directions. Single source of
+ * truth for the sample rate shared by the provider, realtime bridge, and TTS adapter.
+ */
+export const MSTEAMS_PCM_SAMPLE_RATE_HZ = 16_000;
+
 const RecordingStatusSchema = z.enum(["active", "inactive", "unknown"]);
 
 const SessionStartSchema = z.object({

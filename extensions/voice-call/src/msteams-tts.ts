@@ -14,10 +14,11 @@ import { TtsConfigSchema } from "../api.js";
 import type { VoiceCallTtsConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import { deepMergeDefined } from "./deep-merge.js";
+import { MSTEAMS_PCM_SAMPLE_RATE_HZ } from "./msteams-media-stream.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 
 /** Teams wire format: PCM 16 kHz, 16-bit mono, little-endian. */
-export const MSTEAMS_TTS_SAMPLE_RATE_HZ = 16_000;
+export const MSTEAMS_TTS_SAMPLE_RATE_HZ = MSTEAMS_PCM_SAMPLE_RATE_HZ;
 
 export interface MsteamsTtsProvider {
   /**

@@ -18,6 +18,7 @@ import {
 import type { CallManager } from "../manager.js";
 import {
   MsteamsMediaStream,
+  MSTEAMS_PCM_SAMPLE_RATE_HZ,
   type MsteamsLogger,
   type MsteamsRecordingStatus,
   type MsteamsSession,
@@ -106,7 +107,7 @@ interface MsteamsCallState {
 }
 
 /** PCM 16 kHz, 16-bit mono — the wire format both directions of the Teams bridge. */
-const MSTEAMS_SAMPLE_RATE_HZ = 16_000;
+const MSTEAMS_SAMPLE_RATE_HZ = MSTEAMS_PCM_SAMPLE_RATE_HZ;
 const FRAME_DURATION_MS = 20;
 const BYTES_PER_SAMPLE = 2;
 /** 16000 Hz * 0.02 s * 2 bytes = 640 bytes per 20 ms mono frame. */
