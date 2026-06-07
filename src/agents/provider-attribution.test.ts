@@ -38,6 +38,16 @@ const providerEndpointPlugins = vi.hoisted(() => [
       },
       {
         endpointClass: "google-vertex",
+        hosts: ["aiplatform.eu.rep.googleapis.com"],
+        googleVertexRegion: "eu",
+      },
+      {
+        endpointClass: "google-vertex",
+        hosts: ["aiplatform.us.rep.googleapis.com"],
+        googleVertexRegion: "us",
+      },
+      {
+        endpointClass: "google-vertex",
         hostSuffixes: ["-aiplatform.googleapis.com"],
         googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
       },
