@@ -323,6 +323,63 @@ describe("createMsteamsRealtimeCall", () => {
     expect(arg.images?.[0]).toMatchObject({ type: "image", data: "AQID", mimeType: "image/jpeg" });
   });
 
+  it("look_at_screen caches the answer for an unchanged frame and re-runs when it changes", async () => {
+    consultSpy.mockClear();
+    consultSpy.mockResolvedValue({ text: "A stack trace." });
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    let frameData = "AQID";
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        tools: [CONSULT_TOOL],
+        toolPolicy: "owner",
+        agentRuntime: { resolveThinkingDefault: () => "high" } as unknown as CoreAgentDeps,
+        voiceConfig: { realtime: {}, agentId: "main" } as unknown as VoiceCallConfig,
+        cfg: {} as unknown as OpenClawConfig,
+        getLatestFrame: () => ({
+          dataBase64: frameData,
+          mime: "image/jpeg",
+          width: 100,
+          height: 100,
+        }),
+      },
+    });
+    const req = mock.getRequest();
+
+    req.onToolCall?.({
+      itemId: "i1",
+      callId: "c1",
+      name: "look_at_screen",
+      args: { question: "x" },
+    });
+    await vi.waitFor(() => expect(consultSpy).toHaveBeenCalledTimes(1));
+
+    // Same frame again → cache hit, no second vision run.
+    req.onToolCall?.({
+      itemId: "i2",
+      callId: "c2",
+      name: "look_at_screen",
+      args: { question: "x2" },
+    });
+    await new Promise<void>((r) => {
+      setTimeout(r, 30);
+    });
+    expect(consultSpy).toHaveBeenCalledTimes(1);
+
+    // Frame changed → re-runs.
+    frameData = "BAUG";
+    req.onToolCall?.({
+      itemId: "i3",
+      callId: "c3",
+      name: "look_at_screen",
+      args: { question: "now?" },
+    });
+    await vi.waitFor(() => expect(consultSpy).toHaveBeenCalledTimes(2));
+  });
+
   it("refuses a consult tool call until Teams recording status is active (Media Access API)", () => {
     const ctx = createMockSession("inactive");
     const mock = createMockProvider();

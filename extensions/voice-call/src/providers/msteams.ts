@@ -82,6 +82,8 @@ interface MsteamsCallState {
   recordingActive: boolean;
   /** Caller audio captured before the STT session finished connecting. */
   pendingAudio: Buffer[];
+  /** Last video frame (bytes) already attached to a streaming turn, to skip re-sending it unchanged. */
+  lastVisionFrame?: string;
 }
 
 /** A sampled inbound video frame the agent can "look" at (camera or screen-share). */
@@ -539,10 +541,14 @@ export class MsteamsProvider implements VoiceCallProvider {
     // so the agent can answer visual questions in the same turn (the realtime path uses the
     // look_at_screen tool; the streaming agent runs per-turn, so we attach the frame directly).
     // getLatestVideoFrame only returns recording-gated frames, so this is off until recording is active.
+    // Rate-limit: only attach the frame when it changed since the last turn — a static screen isn't
+    // re-sent every turn (the agent retains it in context), bounding image cost.
     const frame = this.getLatestVideoFrame(state.providerCallId);
-    const images = frame
-      ? [{ type: "image" as const, data: frame.dataBase64, mimeType: frame.mime }]
-      : undefined;
+    let images: Array<{ type: "image"; data: string; mimeType: string }> | undefined;
+    if (frame && frame.dataBase64 !== state.lastVisionFrame) {
+      images = [{ type: "image", data: frame.dataBase64, mimeType: frame.mime }];
+      state.lastVisionFrame = frame.dataBase64;
+    }
 
     const result = await generateVoiceResponse({
       voiceConfig: effectiveConfig,

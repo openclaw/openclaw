@@ -245,6 +245,14 @@ export function createMsteamsRealtimeCall(params: {
   /** Rolling consult context built from the model's final transcripts. */
   const transcript: RealtimeVoiceAgentConsultTranscriptEntry[] = [];
 
+  /**
+   * Vision rate-limit: cache the last look_at_screen answer keyed by the exact frame bytes, so
+   * repeated "what's on my screen?" on an unchanged frame returns instantly without re-running the
+   * (expensive) vision agent. A new frame (changed screen) misses the cache and re-runs.
+   */
+  let lastLookData: string | undefined;
+  let lastLookText: string | undefined;
+
   function recordTranscript(role: "user" | "assistant", text: string): void {
     // Media Access API: never retain media-derived transcript text before Teams
     // recording status is active. Otherwise pre-recording turns would sit in the
@@ -467,6 +475,13 @@ export function createMsteamsRealtimeCall(params: {
       return;
     }
 
+    // Rate-limit: the same frame was already described → return the cached answer without a re-run.
+    if (lastLookData === frame.dataBase64 && lastLookText) {
+      logger?.debug?.(`MsteamsRealtime: look cache hit for ${callId} (unchanged frame)`);
+      rtSession.submitToolResult(event.callId, { text: lastLookText });
+      return;
+    }
+
     const agentId = voiceConfig.agentId ?? "main";
     const sessionKey = `agent:${agentId}:subagent:msteams:${callId}`;
     const toolPolicy = deps.toolPolicy ?? voiceConfig.realtime.toolPolicy;
@@ -513,6 +528,8 @@ export function createMsteamsRealtimeCall(params: {
         toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(toolPolicy),
         extraSystemPrompt: MSTEAMS_REALTIME_LOOK_SYSTEM_PROMPT,
       });
+      lastLookData = frame.dataBase64;
+      lastLookText = result.text;
       rtSession.submitToolResult(event.callId, result);
     } catch (err) {
       logger?.warn(
