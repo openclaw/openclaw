@@ -418,7 +418,9 @@ export function createSessionActions(context: SessionActionContext) {
             sessionKey: state.currentSessionKey,
             ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
           })
-          .catch((err) => ({ runtimePluginsPrewarm: { status: "failed", error: String(err) } }))
+          .catch((err: unknown) => ({
+            runtimePluginsPrewarm: { status: "failed", error: String(err) },
+          }))
       : undefined;
     try {
       const history = await client.loadHistory({
