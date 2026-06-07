@@ -100,12 +100,13 @@ describe("ensureSkillsWatcher", () => {
       expect(ignored("/tmp/workspace/skills/build/output.js")).toBe(true);
       expect(ignored("/tmp/workspace/skills/.cache/data.json")).toBe(true);
 
-      // Should NOT ignore normal skill files
-      expect(ignored("/tmp/.hidden/skills/index.md")).toBe(false);
+      // Directories and symlinks are watched; regular files (including SKILL.md) are ignored
+      // to avoid per-file FD leaks
+      expect(ignored("/tmp/.hidden/skills/index.md")).toBe(true);
       expect(ignored("/tmp/workspace/skills/my-skill", { isDirectory: () => true })).toBe(false);
       expect(ignored("/tmp/workspace/skills/my-skill", { isSymbolicLink: () => true })).toBe(false);
       expect(ignored("/tmp/workspace/skills/my-skill/README.md", {})).toBe(true);
-      expect(ignored("/tmp/workspace/skills/my-skill/SKILL.md", {})).toBe(false);
+      expect(ignored("/tmp/workspace/skills/my-skill/SKILL.md", {})).toBe(true);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -131,8 +132,8 @@ describe("ensureSkillsWatcher", () => {
       const firstIndex = calls.findIndex(([p]) => p.replaceAll("\\", "/") === workspaceSkillsRoot);
       expect(calls[firstIndex]?.[1]?.depth).toBe(7);
 
-      const changedPath = path.join(workspaceDir, "skills", "group", "demo", "SKILL.md");
-      createdWatchers[firstIndex]?.emit("change", changedPath);
+      const changedPath = path.join(workspaceDir, "skills", "group", "new-skill");
+      createdWatchers[firstIndex]?.emit("add", changedPath);
       await vi.advanceTimersByTimeAsync(10);
 
       expect(seen).toEqual([
