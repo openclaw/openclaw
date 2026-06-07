@@ -304,6 +304,74 @@ describe("openshell backend manager", () => {
     ).rejects.toThrow(/unresolved placeholder token <name>/);
     expect(cliMocks.runOpenShellCli).not.toHaveBeenCalled();
   });
+
+  it("preserves a local sandbox skills shadow when mirror sync crosses filesystems", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
+    const shadowFile = path.join(workspaceDir, ".openclaw", "sandbox-skills", "user-note.txt");
+    await fs.mkdir(path.dirname(shadowFile), { recursive: true });
+    await fs.writeFile(shadowFile, "local shadow", "utf8");
+
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      const source = String(from);
+      const target = String(to);
+      const shadowDir = path.dirname(shadowFile);
+      const isFallbackStagedMove = path.basename(source).startsWith(".fs-safe-move-");
+      if (source === shadowDir || (target === shadowDir && !isFallbackStagedMove)) {
+        throw Object.assign(new Error("cross-device link not permitted"), { code: "EXDEV" });
+      }
+      return await originalRename(from, to);
+    });
+    cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
+      if (args[0] === "sandbox" && args[1] === "download") {
+        const tmpDir = args[4];
+        await fs.writeFile(path.join(tmpDir, "from-remote.txt"), "remote", "utf8");
+        await fs.mkdir(path.join(tmpDir, ".openclaw", "sandbox-skills", "skills"), {
+          recursive: true,
+        });
+        await fs.writeFile(
+          path.join(tmpDir, ".openclaw", "sandbox-skills", "skills", "generated.txt"),
+          "generated",
+          "utf8",
+        );
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    });
+
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({
+        command: "openshell",
+        mode: "mirror",
+      }),
+    });
+    const backend = await factory({
+      sessionKey: "agent:main:turn",
+      scopeKey: "agent:main",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg: createOpenShellBackendSandboxConfig(),
+    });
+
+    try {
+      await backend.finalizeExec?.({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: undefined,
+      });
+
+      expect(renameSpy).toHaveBeenCalled();
+      await expect(fs.readFile(shadowFile, "utf8")).resolves.toBe("local shadow");
+      await expect(fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8")).resolves.toBe(
+        "remote",
+      );
+      await expectPathMissing(
+        path.join(workspaceDir, ".openclaw", "sandbox-skills", "skills", "generated.txt"),
+      );
+    } finally {
+      renameSpy.mockRestore();
+    }
+  });
 });
 
 const tempDirs: string[] = [];

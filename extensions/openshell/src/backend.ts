@@ -31,6 +31,7 @@ import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from
 import { createOpenShellFsBridge } from "./fs-bridge.js";
 import {
   DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
+  movePathWithCopyFallback,
   replaceDirectoryContents,
   stageDirectoryContents,
 } from "./mirror.js";
@@ -614,7 +615,7 @@ async function moveMaterializedSkillsShadowAside(params: {
     path.join(path.dirname(params.tmpDir), "openclaw-openshell-preserve-"),
   );
   const preservedPath = path.join(preserveRoot, "sandbox-skills");
-  await fs.rename(shadowPath, preservedPath);
+  await movePathWithCopyFallback({ from: shadowPath, to: preservedPath });
   return { preservedPath, preserveRoot };
 }
 
@@ -634,7 +635,10 @@ async function restoreMaterializedSkillsShadow(params: {
     }
     await fs.mkdir(parentPath, { recursive: true });
     await fs.rm(shadowPath, { recursive: true, force: true });
-    await fs.rename(params.preserved.preservedPath, shadowPath);
+    await movePathWithCopyFallback({
+      from: params.preserved.preservedPath,
+      to: shadowPath,
+    });
   } finally {
     await fs.rm(params.preserved.preserveRoot, { recursive: true, force: true });
   }
