@@ -53,24 +53,24 @@ function writeAgentsDeleteConfig() {
 }
 
 function assertAgentsDeleteResult([outputPath]) {
-  outputPath = requireArg(outputPath, "outputPath");
-  const outputStat = fs.statSync(outputPath);
+  const resolvedOutputPath = requireArg(outputPath, "outputPath");
+  const outputStat = fs.statSync(resolvedOutputPath);
   if (outputStat.isFile() && outputStat.size > AGENTS_DELETE_OUTPUT_MAX_BYTES) {
     throw new Error(
       `agents delete --json output exceeded ${AGENTS_DELETE_OUTPUT_MAX_BYTES} bytes:\nstdout tail=${readTextFileTail(
-        outputPath,
+        resolvedOutputPath,
         ERROR_DETAIL_TAIL_BYTES,
       )}`,
     );
   }
   let parsed;
   try {
-    parsed = readJson(outputPath);
+    parsed = readJson(resolvedOutputPath);
   } catch (error) {
     console.error("agents delete --json did not emit valid JSON:");
-    console.error(readTextFileTail(outputPath, ERROR_DETAIL_TAIL_BYTES).trim());
+    console.error(readTextFileTail(resolvedOutputPath, ERROR_DETAIL_TAIL_BYTES).trim());
     const message = error instanceof Error ? error.message.split("\n").at(0) : String(error);
-    throw new Error(`agents delete --json parse failed: ${message}`);
+    throw new Error(`agents delete --json parse failed: ${message}`, { cause: error });
   }
   for (const [actual, expected, label] of [
     [parsed.agentId, "ops", "agentId"],
