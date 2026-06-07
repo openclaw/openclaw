@@ -523,14 +523,18 @@ async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 }
 
 async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairGatewayServiceConfig, maybeScanExtraGatewayServices } =
-    await import("../commands/doctor-gateway-services.js");
+  const {
+    maybeRepairGatewayServiceConfig,
+    maybeScanExtraGatewayServices,
+    maybeResolveDuelingSystemdGatewayScopes,
+  } = await import("../commands/doctor-gateway-services.js");
   const {
     noteMacLaunchAgentOverrides,
     noteMacLaunchctlGatewayEnvOverrides,
     noteMacStaleOpenClawUpdateLaunchdJobs,
   } = await import("../commands/doctor-platform-notes.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
+  await maybeResolveDuelingSystemdGatewayScopes(ctx.runtime, ctx.prompter);
   await maybeRepairGatewayServiceConfig(
     ctx.cfg,
     resolveDoctorMode(ctx.cfg),
