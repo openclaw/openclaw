@@ -324,7 +324,7 @@ describe("legacy memory search config migrate", () => {
     ]);
   });
 
-  it("does not report a skipped codex merge when blocked provider needs no mutation", () => {
+  it("reports blocked codex merges after legacy api normalization already ran", () => {
     const res = migrateLegacyConfigForTest({
       models: {
         providers: {
@@ -343,8 +343,14 @@ describe("legacy memory search config migrate", () => {
       },
     });
 
-    expect(res.config).toBeNull();
-    expect(res.changes).toEqual([]);
+    expect(res.config?.models?.providers?.["openai-codex"]).toEqual({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      models: [{ id: "gpt-5.5", api: "openai-chatgpt-responses" }],
+    });
+    expect(res.changes).toEqual([
+      "Skipped merging models.providers.openai-codex into models.providers.openai because provider-level defaults cannot be represented safely on merged models: models.providers.openai.params.",
+    ]);
   });
 
   it("merges distinct legacy model ids even when display names collide", () => {
