@@ -387,6 +387,33 @@ describe("ssh sandbox backend", () => {
     });
   });
 
+  it("disposes the exec ssh session when materialized skills refresh fails", async () => {
+    const skillsWorkspaceDir = await createTempDir("openclaw-ssh-skills-");
+    await fs.mkdir(path.join(skillsWorkspaceDir, "skills"), { recursive: true });
+    const backend = await createSshSandboxBackend({
+      sessionKey: "agent:worker:task",
+      scopeKey: "agent:worker",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      skillsWorkspaceDir,
+      cfg: createBackendSandboxConfig({
+        target: "peter@example.com:2222",
+      }),
+    });
+    sshMocks.uploadDirectoryToSshTarget.mockRejectedValueOnce(new Error("upload failed"));
+
+    await expect(
+      backend.buildExecSpec({
+        command: "pwd",
+        env: {},
+        usePty: false,
+      }),
+    ).rejects.toThrow("upload failed");
+
+    expect(sshMocks.uploadDirectoryToSshTarget).toHaveBeenCalledTimes(1);
+    expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
+  });
+
   it("filters blocked secrets from exec subprocess env", async () => {
     process.env.OPENAI_API_KEY = "sk-test-secret";
     process.env.LANG = "en_US.UTF-8";

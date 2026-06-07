@@ -160,17 +160,22 @@ class SshSandboxBackendImpl {
         });
         await this.ensureRuntime();
         const sshSession = await this.createSession();
-        await this.refreshRemoteSkillsWorkspace(sshSession);
-        return {
-          argv: buildSshSandboxArgv({
-            session: sshSession,
-            remoteCommand,
-            tty: usePty,
-          }),
-          env: sanitizeEnvVars(process.env).allowed,
-          stdinMode: "pipe-open",
-          finalizeToken: { sshSession } satisfies PendingExec,
-        };
+        try {
+          await this.refreshRemoteSkillsWorkspace(sshSession);
+          return {
+            argv: buildSshSandboxArgv({
+              session: sshSession,
+              remoteCommand,
+              tty: usePty,
+            }),
+            env: sanitizeEnvVars(process.env).allowed,
+            stdinMode: "pipe-open",
+            finalizeToken: { sshSession } satisfies PendingExec,
+          };
+        } catch (error) {
+          await disposeSshSandboxSession(sshSession);
+          throw error;
+        }
       },
       finalizeExec: async ({ token }) => {
         const sshSession = (token as PendingExec | undefined)?.sshSession;
