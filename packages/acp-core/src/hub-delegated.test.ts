@@ -155,7 +155,6 @@ describe("findHubDelegatedLabelConflictInStore", () => {
         store: {
           "agent:codex:acp:closed": {
             label: "refactor",
-            updatedAt: 1,
           },
         },
         storeKey: "agent:codex:acp:reuse-after-close",

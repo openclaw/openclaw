@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { findHubDelegatedLabelConflictInStore } from "@openclaw/acp-core";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -34,6 +35,7 @@ import {
   validateSessionsSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { resolveDiscoveredAcpSessionStoreTargets } from "../../agents/acp-subagent-targets.js";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
@@ -117,7 +119,7 @@ import {
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
-import { applySessionsPatchToStore } from "../sessions-patch.js";
+import { applySessionsPatchToStore, withHubDelegatedLabelPatchLock } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
@@ -2099,22 +2101,44 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
       agentId: requestedAgentId,
     });
-    const applied = await updateSessionStore(storePath, async (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key,
-        store,
-        agentId: requestedAgentId,
+    const applyPatch = async () =>
+      await updateSessionStore(storePath, async (store) => {
+        const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+          cfg,
+          key,
+          store,
+          agentId: requestedAgentId,
+        });
+        return await applySessionsPatchToStore({
+          cfg,
+          store,
+          storeKey: primaryKey,
+          agentId: requestedAgentId,
+          patch: p,
+          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+          findHubDelegatedLabelConflict: ({ ownerSessionKey, label }) => {
+            for (const candidate of resolveDiscoveredAcpSessionStoreTargets(cfg)) {
+              if (candidate.storePath === storePath) {
+                continue;
+              }
+              const conflictingKey = findHubDelegatedLabelConflictInStore({
+                store: loadSessionStore(candidate.storePath),
+                storeKey: "",
+                ownerSessionKey,
+                label,
+              });
+              if (conflictingKey) {
+                return conflictingKey;
+              }
+            }
+            return undefined;
+          },
+        });
       });
-      return await applySessionsPatchToStore({
-        cfg,
-        store,
-        storeKey: primaryKey,
-        agentId: requestedAgentId,
-        patch: p,
-        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-      });
-    });
+    const changesHubDelegateIdentity = p.hubDelegated !== undefined || p.label !== undefined;
+    const applied = changesHubDelegateIdentity
+      ? await withHubDelegatedLabelPatchLock(applyPatch)
+      : await applyPatch();
     if (!applied.ok) {
       respond(false, undefined, applied.error);
       return;

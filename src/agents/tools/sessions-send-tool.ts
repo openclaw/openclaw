@@ -275,7 +275,10 @@ async function resolveSessionsSendLabelSessionKey(params: {
         error: "Session not visible from this sandboxed agent session.",
       };
     }
-    const scoped = await tryResolve({ ...baseParams, spawnedBy: requesterKey });
+    let scoped = await tryResolve({ ...baseParams, hubDelegatedOwner: requesterKey });
+    if (!scoped.ok && isHubDelegatedLabelResolveRetryError(scoped.error)) {
+      scoped = await tryResolve({ ...baseParams, spawnedBy: requesterKey });
+    }
     if (!scoped.ok) {
       return {
         ok: false,
@@ -288,7 +291,10 @@ async function resolveSessionsSendLabelSessionKey(params: {
 
   let resolved = await tryResolve(baseParams);
   if (!resolved.ok && requesterKey && isHubDelegatedLabelResolveRetryError(resolved.error)) {
-    const scoped = await tryResolve({ ...baseParams, spawnedBy: requesterKey });
+    let scoped = await tryResolve({ ...baseParams, hubDelegatedOwner: requesterKey });
+    if (!scoped.ok && isHubDelegatedLabelResolveRetryError(scoped.error)) {
+      scoped = await tryResolve({ ...baseParams, spawnedBy: requesterKey });
+    }
     if (scoped.ok) {
       resolved = scoped;
     }

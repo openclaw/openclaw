@@ -1359,12 +1359,12 @@ describe("sessions tools", () => {
       const request = opts as { method?: string; params?: Record<string, unknown> };
       if (request.method === "sessions.resolve") {
         resolveAttempts += 1;
-        if (!request.params?.spawnedBy) {
+        if (!request.params?.hubDelegatedOwner) {
           throw new Error(
             "Multiple sessions found with label: refactor (agent:codex:acp:a, agent:codex:acp:b)",
           );
         }
-        expect(request.params?.spawnedBy).toBe(requesterKey);
+        expect(request.params?.hubDelegatedOwner).toBe(requesterKey);
         return { key: targetKey };
       }
       if (request.method === "agent") {
@@ -1418,6 +1418,70 @@ describe("sessions tools", () => {
     const details = sessionsSendDetails(result.details);
     expect(details.status).toBe("ok");
     expect(resolveAttempts).toBe(2);
+  });
+
+  it("sessions_send preserves spawnedBy label fallback for non-delegate children", async () => {
+    const requesterKey = "agent:main:webchat:main";
+    const targetKey = "agent:main:subagent:owned-child";
+    let resolveAttempts = 0;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve") {
+        resolveAttempts += 1;
+        if (!request.params?.spawnedBy) {
+          throw new Error(
+            "Multiple sessions found with label: worker (agent:main:subagent:a, agent:other:subagent:b)",
+          );
+        }
+        expect(request.params?.spawnedBy).toBe(requesterKey);
+        expect(request.params?.hubDelegatedOwner).toBeUndefined();
+        return { key: targetKey };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-owned", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-owned", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "owned reply" }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
+      sessionKey === targetKey
+        ? {
+            sessionId: "owned-child-session",
+            updatedAt: 1,
+            spawnedBy: requesterKey,
+            label: "worker",
+          }
+        : undefined,
+    );
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "webchat",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-owned-label", {
+      label: "worker",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    expect(sessionsSendDetails(result.details).status).toBe("ok");
+    expect(resolveAttempts).toBe(3);
   });
 
   it("sessions_send resolves sessionId inputs", async () => {

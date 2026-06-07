@@ -670,8 +670,10 @@ Rules:
 | `/acp delegate status <label>` | Show state and idle/max-age expiry for one worker       | `/acp delegate status repo-fix` |
 | `/acp delegate close <label>`  | Close one owned worker                                  | `/acp delegate close repo-fix`  |
 
-There is no agent-tool close path for hub-delegated workers in the
-current release; use `/acp delegate close`.
+Hub-delegated workers are closed by operators with `/acp delegate close <label>`
+(or by maintenance idle/max-age sweeps). Hub agents use `sessions_spawn`,
+`sessions_send`, and `sessions_list`; thread-bound ACP sessions continue to
+use `/acp close`.
 
 ### Lifecycle defaults
 

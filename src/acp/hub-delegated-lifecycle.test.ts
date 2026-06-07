@@ -93,6 +93,45 @@ describe("hub-delegated lifecycle", () => {
     });
   });
 
+  it("repairs runtime metadata before clearing the delegate marker", async () => {
+    await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const sessionKey = "agent:codex:acp:repair-before-close";
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sess-repair-before-close",
+            updatedAt: Date.now(),
+            hubDelegated: { ownerSessionKey: "agent:main:main", createdAt: Date.now() },
+          },
+        }),
+      );
+      const events: string[] = [];
+
+      await closeHubDelegatedAcpWorker({
+        cfg: { session: { store: storePath } },
+        sessionKey,
+        storePath,
+        storeSessionKey: sessionKey,
+        reason: "manual-delegate-close",
+        prepareRuntime: async () => {
+          events.push("prepare");
+          const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+            string,
+            SessionEntry
+          >;
+          expect(persisted[sessionKey]?.hubDelegated).toBeDefined();
+        },
+        closeRuntime: async () => {
+          events.push("close");
+        },
+      });
+
+      expect(events).toEqual(["prepare", "close"]);
+    });
+  });
+
   it("restores hubDelegated when runtime close fails", async () => {
     await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
       const storePath = path.join(home, "agents/codex/sessions/sessions.json");

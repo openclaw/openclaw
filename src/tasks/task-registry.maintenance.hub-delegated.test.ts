@@ -2,6 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AcpRuntimeError } from "../acp/runtime/errors.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
@@ -54,6 +56,14 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
       };
 
       const closeAcpSession = vi.fn(async () => {});
+      const repairAcpSessionMetadata = vi.fn(async () => {
+        const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+          string,
+          { hubDelegated?: unknown }
+        >;
+        expect(persisted[sessionKey]?.hubDelegated).toBeDefined();
+        throw new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "backend offline");
+      });
       setTaskRegistryMaintenanceRuntimeForTests({
         listAcpSessionEntries: async () => [],
         readAcpSessionEntry: () => ({
@@ -64,9 +74,10 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
           entry: undefined,
           storeReadFailed: false,
         }),
+        repairAcpSessionMetadata,
         closeAcpSession,
         loadSessionStore: (targetPath) =>
-          JSON.parse(fs.readFileSync(targetPath, "utf8")) as Record<string, unknown>,
+          JSON.parse(fs.readFileSync(targetPath, "utf8")) as Record<string, SessionEntry>,
         resolveStorePath: () => storePath,
         parseAgentSessionKey: () => ({ agentId: "codex" }) as never,
         isCronJobActive: () => false,
@@ -79,12 +90,12 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
         listTaskRecords: () => [],
         markTaskLostById: () => null,
         markTaskTerminalById: () => null,
-        maybeDeliverTaskTerminalUpdate: () => {},
-        resolveTaskForLookupToken: () => null,
+        maybeDeliverTaskTerminalUpdate: async () => null,
+        resolveTaskForLookupToken: () => undefined,
         setTaskCleanupAfterById: () => null,
         isRuntimeAuthoritative: () => true,
         resolveCronJobsStorePath: () => path.join(home, "cron/jobs.json"),
-        loadCronJobsStoreSync: () => ({ jobs: [] }),
+        loadCronJobsStoreSync: () => ({ version: 1, jobs: [] }),
         readCronRunLogEntriesSync: () => [],
       });
 
@@ -95,6 +106,9 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
           sessionKey,
           reason: "delegate-max-age-expired",
         }),
+      );
+      expect(repairAcpSessionMetadata).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionKey }),
       );
       const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
         string,

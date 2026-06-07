@@ -12,6 +12,7 @@ import { isAcpTurnActive } from "../acp/control-plane/active-turns.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import {
   closeHubDelegatedAcpWorker,
+  isAcpBackendUnavailableForDelegateClose,
   listHubDelegatedMaintenanceCandidates,
   resolveExpiredHubDelegatedCandidates,
 } from "../acp/hub-delegated-lifecycle.js";
@@ -101,6 +102,10 @@ let configuredRuntimeAuthoritative = false;
 type TaskRegistryMaintenanceRuntime = {
   listAcpSessionEntries: typeof listAcpSessionEntries;
   readAcpSessionEntry: typeof readAcpSessionEntry;
+  repairAcpSessionMetadata?: (params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+  }) => Promise<boolean>;
   closeAcpSession?: (params: {
     cfg: OpenClawConfig;
     sessionKey: string;
@@ -134,6 +139,8 @@ type TaskRegistryMaintenanceRuntime = {
 const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   listAcpSessionEntries,
   readAcpSessionEntry,
+  repairAcpSessionMetadata: async ({ cfg, sessionKey }) =>
+    await getAcpSessionManager().repairMissingSessionMetadata({ cfg, sessionKey }),
   closeAcpSession: async ({ cfg, sessionKey, reason }) => {
     await getAcpSessionManager().closeSession({
       cfg,
@@ -776,6 +783,26 @@ async function cleanupExpiredHubDelegatedAcpSessions(): Promise<void> {
         storePath: acpEntry.storePath,
         storeSessionKey: acpEntry.storeSessionKey,
         reason: expiry.reason,
+        prepareRuntime: async ({ cfg, sessionKey: preparedSessionKey }) => {
+          if (acpEntry.acp) {
+            return;
+          }
+          try {
+            const repaired =
+              (await taskRegistryMaintenanceRuntime.repairAcpSessionMetadata?.({
+                cfg,
+                sessionKey: preparedSessionKey,
+              })) ?? false;
+            if (!repaired) {
+              throw new Error("ACP metadata is missing and could not be repaired before close.");
+            }
+          } catch (error) {
+            if (isAcpBackendUnavailableForDelegateClose(error)) {
+              return;
+            }
+            throw error;
+          }
+        },
         closeRuntime: closeAcpSession,
         unbind: taskRegistryMaintenanceRuntime.unbindSessionBindings,
       });

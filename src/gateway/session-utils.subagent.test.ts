@@ -60,6 +60,41 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(result.sessions[0]?.displayName).toBe("slack:g-general");
   });
 
+  test("keeps durable hub delegates visible after their spawn run ages out", () => {
+    const now = Date.now();
+    const ownerSessionKey = "agent:main:webchat:main";
+    const delegateKey = "agent:codex:acp:durable-worker";
+    addSubagentRunForTests({
+      runId: "run-durable-worker",
+      childSessionKey: delegateKey,
+      controllerSessionKey: ownerSessionKey,
+      requesterSessionKey: ownerSessionKey,
+      requesterDisplayKey: "main",
+      task: "persistent delegate",
+      cleanup: "keep",
+      createdAt: now - 2 * 60 * 60_000,
+      startedAt: now - 2 * 60 * 60_000,
+      endedAt: now - 31 * 60_000,
+      outcome: { status: "ok" },
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        [delegateKey]: {
+          sessionId: "sess-durable-worker",
+          updatedAt: now - 31 * 60_000,
+          label: "durable-worker",
+          hubDelegated: { ownerSessionKey, createdAt: now - 2 * 60 * 60_000 },
+        },
+      },
+      opts: { hubDelegatedOwner: ownerSessionKey },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual([delegateKey]);
+  });
+
   test("applies limit before transcript enrichment", () => {
     const store: Record<string, SessionEntry> = {
       "agent:main:newest": {

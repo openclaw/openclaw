@@ -2549,6 +2549,7 @@ function filterSessionEntries(params: {
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
+  const hubDelegatedOwner = normalizeOptionalString(opts.hubDelegatedOwner) ?? "";
   const label = normalizeOptionalString(opts.label) ?? "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
@@ -2586,6 +2587,9 @@ function filterSessionEntries(params: {
     .filter(([key, entry]) => {
       if (isPhantomAgentStoreListEntry(key, entry)) {
         return false;
+      }
+      if (hubDelegatedOwner) {
+        return normalizeOptionalString(entry?.hubDelegated?.ownerSessionKey) === hubDelegatedOwner;
       }
       if (!spawnedBy) {
         return true;

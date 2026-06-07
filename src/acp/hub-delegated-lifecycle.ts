@@ -12,7 +12,17 @@ import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { toAcpRuntimeError } from "./runtime/errors.js";
 import { readAcpSessionEntry, type AcpSessionStoreEntry } from "./runtime/session-meta.js";
+
+export function isAcpBackendUnavailableForDelegateClose(error: unknown): boolean {
+  const acpError = toAcpRuntimeError({
+    error,
+    fallbackCode: "ACP_TURN_FAILED",
+    fallbackMessage: "ACP delegate close preparation failed.",
+  });
+  return acpError.code === "ACP_BACKEND_MISSING" || acpError.code === "ACP_BACKEND_UNAVAILABLE";
+}
 
 export async function clearHubDelegatedSessionMarker(params: {
   storePath: string;
@@ -85,6 +95,7 @@ export async function closeHubDelegatedAcpWorker(params: {
   storePath: string;
   storeSessionKey: string;
   reason: string;
+  prepareRuntime?: (input: { cfg: OpenClawConfig; sessionKey: string }) => Promise<void>;
   closeRuntime: (input: {
     cfg: OpenClawConfig;
     sessionKey: string;
@@ -92,6 +103,9 @@ export async function closeHubDelegatedAcpWorker(params: {
   }) => Promise<void>;
   unbind?: (input: { targetSessionKey: string; reason: string }) => Promise<unknown>;
 }): Promise<void> {
+  // Missing ACP metadata must be repaired while the delegate marker still exists;
+  // the repair classifier intentionally uses that marker as persistent evidence.
+  await params.prepareRuntime?.({ cfg: params.cfg, sessionKey: params.sessionKey });
   const markerSnapshot = readHubDelegatedSessionMarker({
     storePath: params.storePath,
     storeSessionKey: params.storeSessionKey,
@@ -159,7 +173,7 @@ export async function listHubDelegatedMaintenanceCandidates(params: {
         entry,
         acp: undefined,
       } satisfies AcpSessionStoreEntry;
-      let enriched: AcpSessionStoreEntry = fallbackEntry;
+      let enriched: AcpSessionStoreEntry;
       try {
         enriched =
           readAcpSessionEntry({

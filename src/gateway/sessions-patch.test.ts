@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { applySessionsPatchToStore } from "./sessions-patch.js";
+import { applySessionsPatchToStore, withHubDelegatedLabelPatchLock } from "./sessions-patch.js";
 
 const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.5";
 const KIMI_SUBAGENT_KEY = "agent:kimi:subagent:child";
@@ -27,6 +27,7 @@ async function runPatch(params: {
   storeKey?: string;
   agentId?: string;
   loadGatewayModelCatalog?: ApplySessionsPatchArgs["loadGatewayModelCatalog"];
+  findHubDelegatedLabelConflict?: ApplySessionsPatchArgs["findHubDelegatedLabelConflict"];
 }) {
   return applySessionsPatchToStore({
     cfg: params.cfg ?? EMPTY_CFG,
@@ -35,6 +36,7 @@ async function runPatch(params: {
     agentId: params.agentId,
     patch: params.patch,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    findHubDelegatedLabelConflict: params.findHubDelegatedLabelConflict,
   });
 }
 
@@ -696,6 +698,40 @@ describe("gateway sessions patch", () => {
     });
   });
 
+  test("rejects hub-delegated labels found in another harness store", async () => {
+    const result = await runPatch({
+      storeKey: "agent:codex:acp:child",
+      patch: {
+        key: "agent:codex:acp:child",
+        label: "worker",
+        hubDelegated: { ownerSessionKey: "agent:main:main", createdAt: 1 },
+      },
+      findHubDelegatedLabelConflict: () => "agent:claude:acp:other",
+    });
+    expectPatchError(result, "label already in use: worker");
+  });
+
+  test("serializes hub-delegated owner and label mutations", async () => {
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const first = withHubDelegatedLabelPatchLock(async () => {
+      events.push("first-start");
+      await firstBlocked;
+      events.push("first-end");
+    });
+    const second = withHubDelegatedLabelPatchLock(async () => {
+      events.push("second");
+    });
+    await Promise.resolve();
+    expect(events).toEqual(["first-start"]);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(events).toEqual(["first-start", "first-end", "second"]);
+  });
+
   test("sets spawnedWorkspaceDir for subagent sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -958,6 +994,7 @@ describe("gateway sessions patch", () => {
         storeKey: "agent:codex:acp:owner-a-new",
         store,
         patch: {
+          key: "agent:codex:acp:owner-a-new",
           label: "refactor",
           hubDelegated: { ownerSessionKey: ownerA, createdAt: Date.now() },
         },
@@ -970,6 +1007,7 @@ describe("gateway sessions patch", () => {
         storeKey: "agent:codex:acp:owner-b-new",
         store,
         patch: {
+          key: "agent:codex:acp:owner-b-new",
           label: "refactor",
           hubDelegated: { ownerSessionKey: ownerB, createdAt: Date.now() },
         },

@@ -156,7 +156,8 @@ export function createSessionsListTool(opts?: {
           includeLastMessage: false,
           includeGlobal: !restrictToSpawned && !delegatedOnly,
           includeUnknown: !restrictToSpawned && !delegatedOnly,
-          spawnedBy: restrictToSpawned || delegatedOnly ? effectiveRequesterKey : undefined,
+          spawnedBy: restrictToSpawned && !delegatedOnly ? effectiveRequesterKey : undefined,
+          hubDelegatedOwner: delegatedOnly ? effectiveRequesterKey : undefined,
         },
       });
 

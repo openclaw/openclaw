@@ -86,7 +86,7 @@ import {
   resolveConfiguredAcpSubagentTargetIds,
   resolveDiscoveredAcpSessionStoreTargets,
 } from "./acp-subagent-targets.js";
-import { listAgentIds, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,

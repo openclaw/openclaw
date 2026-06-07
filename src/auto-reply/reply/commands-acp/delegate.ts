@@ -9,6 +9,7 @@ import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import type { AcpCloseSessionResult } from "../../../acp/control-plane/manager.types.js";
 import {
   closeHubDelegatedAcpWorker,
+  isAcpBackendUnavailableForDelegateClose,
   listOwnedHubDelegatedSessionEntries,
 } from "../../../acp/hub-delegated-lifecycle.js";
 import type { AcpSessionStoreEntry } from "../../../acp/runtime/session-meta.js";
@@ -170,22 +171,38 @@ export async function handleAcpDelegateAction(
   try {
     let closed: AcpCloseSessionResult | undefined;
     let removedBindings: SessionBindingRecord[] = [];
+    let requireAcpSession = Boolean(match.acp);
     await closeHubDelegatedAcpWorker({
       cfg: params.cfg,
       sessionKey: match.sessionKey,
       storePath: match.storePath,
       storeSessionKey: match.storeSessionKey,
       reason: "manual-delegate-close",
-      closeRuntime: async ({ cfg, sessionKey, reason }) => {
-        if (!match.acp) {
+      prepareRuntime: async ({ cfg, sessionKey }) => {
+        if (match.acp) {
           return;
         }
+        try {
+          const repaired = await acpManager.repairMissingSessionMetadata({ cfg, sessionKey });
+          if (!repaired) {
+            throw new Error("ACP metadata is missing and could not be repaired before close.");
+          }
+          requireAcpSession = true;
+        } catch (error) {
+          if (isAcpBackendUnavailableForDelegateClose(error)) {
+            return;
+          }
+          throw error;
+        }
+      },
+      closeRuntime: async ({ cfg, sessionKey, reason }) => {
         closed = await acpManager.closeSession({
           cfg,
           sessionKey,
           reason,
           allowBackendUnavailable: true,
           clearMeta: true,
+          requireAcpSession,
         });
       },
       unbind: async ({ targetSessionKey }) => {

@@ -58,6 +58,23 @@ function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
 }
 
+let hubDelegatedLabelPatchTail = Promise.resolve();
+
+/** Serializes owner/label mutations so cross-store uniqueness checks cannot race. */
+export async function withHubDelegatedLabelPatchLock<T>(run: () => Promise<T>): Promise<T> {
+  const previous = hubDelegatedLabelPatchTail;
+  let release!: () => void;
+  hubDelegatedLabelPatchTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+  }
+}
+
 function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
   const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
@@ -139,6 +156,11 @@ export async function applySessionsPatchToStore(params: {
   agentId?: string;
   patch: SessionsPatchParams;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  findHubDelegatedLabelConflict?: (params: {
+    storeKey: string;
+    ownerSessionKey: string;
+    label: string;
+  }) => string | undefined;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, store, storeKey, patch } = params;
   const now = Date.now();
@@ -404,17 +426,7 @@ export async function applySessionsPatchToStore(params: {
         return invalid(parsed.error);
       }
       const ownerSessionKey = normalizeOptionalString(next.hubDelegated?.ownerSessionKey);
-      if (ownerSessionKey) {
-        const conflictingKey = findHubDelegatedLabelConflictInStore({
-          store,
-          storeKey,
-          ownerSessionKey,
-          label: parsed.label,
-        });
-        if (conflictingKey) {
-          return invalid(`label already in use: ${parsed.label}`);
-        }
-      } else {
+      if (!ownerSessionKey) {
         for (const [key, entry] of Object.entries(store)) {
           if (key === storeKey) {
             continue;
@@ -425,6 +437,25 @@ export async function applySessionsPatchToStore(params: {
         }
       }
       next.label = parsed.label;
+    }
+  }
+
+  const hubDelegatedOwner = normalizeOptionalString(next.hubDelegated?.ownerSessionKey);
+  const hubDelegatedLabel = normalizeOptionalString(next.label);
+  if (hubDelegatedOwner && hubDelegatedLabel) {
+    const localConflict = findHubDelegatedLabelConflictInStore({
+      store,
+      storeKey,
+      ownerSessionKey: hubDelegatedOwner,
+      label: hubDelegatedLabel,
+    });
+    const externalConflict = params.findHubDelegatedLabelConflict?.({
+      storeKey,
+      ownerSessionKey: hubDelegatedOwner,
+      label: hubDelegatedLabel,
+    });
+    if (localConflict || externalConflict) {
+      return invalid(`label already in use: ${hubDelegatedLabel}`);
     }
   }
 

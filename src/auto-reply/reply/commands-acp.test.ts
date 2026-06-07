@@ -1111,6 +1111,7 @@ describe("/acp command", () => {
         return { [input.key]: input.value };
       },
       updateSessionRuntimeOptions: async (input: { patch: Record<string, unknown> }) => input.patch,
+      repairMissingSessionMetadata: async () => true,
       closeSession: async (input: { clearMeta?: boolean; sessionKey: string }) => {
         await hoisted.closeMock(input);
         if (input.clearMeta === true) {

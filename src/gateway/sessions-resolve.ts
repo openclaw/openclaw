@@ -27,6 +27,7 @@ function resolveSessionVisibilityFilterOptions(p: SessionsResolveParams) {
     includeGlobal: p.includeGlobal === true,
     includeUnknown: p.includeUnknown === true,
     spawnedBy: p.spawnedBy,
+    hubDelegatedOwner: p.hubDelegatedOwner,
     agentId: p.agentId,
   };
 }
@@ -65,7 +66,11 @@ function isResolvedSessionKeyVisible(params: {
   store: ReturnType<typeof loadSessionStore>;
   key: string;
 }) {
-  if (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) {
+  if (
+    (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) &&
+    (typeof params.p.hubDelegatedOwner !== "string" ||
+      params.p.hubDelegatedOwner.trim().length === 0)
+  ) {
     return true;
   }
   return filterAndSortSessionEntries({
@@ -237,6 +242,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
       label: parsedLabel.label,
       agentId: p.agentId,
       spawnedBy: p.spawnedBy,
+      hubDelegatedOwner: p.hubDelegatedOwner,
       limit: 2,
     },
   });
