@@ -76,6 +76,22 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
     [...mockFlows.values()].filter((f) => f.ownerKey === ownerKey),
   ),
   listTaskFlowRecords: vi.fn(() => [...mockFlows.values()]),
+  getTaskFlowById: vi.fn((flowId: string) => mockFlows.get(flowId)),
+  updateFlowRecordByIdExpectedRevision: vi.fn(
+    (params: { flowId: string; expectedRevision: number; patch: Record<string, unknown> }) => {
+      const flow = mockFlows.get(params.flowId);
+      if (!flow || flow.revision !== params.expectedRevision) {
+        return {
+          applied: false,
+          reason: flow ? "revision_conflict" : "not_found",
+          current: flow ? { ...flow } : undefined,
+        };
+      }
+      Object.assign(flow, params.patch);
+      flow.revision = (flow.revision as number) + 1;
+      return { applied: true, flow: { ...flow } };
+    },
+  ),
   finishFlow: vi.fn(
     (params: {
       flowId: string;
@@ -268,7 +284,7 @@ describe("delegate store — TaskFlow-backed", () => {
         mode: "silent-wake",
       }),
     ]);
-    expect(mockFlows.get(flowId)?.status).toBe("succeeded");
+    expect(mockFlows.get(flowId)?.status).toBe("running");
   });
 
   it("rejects malformed multi-flag rows instead of choosing precedence", () => {
@@ -360,9 +376,9 @@ describe("delegate store — TaskFlow-backed", () => {
       stagedPostCompaction: 1,
       invalidQueued: 1,
       enqueuedSinceLastSample: 0,
-      drainedSinceLastSample: 1,
+      drainedSinceLastSample: 0,
       failedSinceLastSample: 0,
-      drainRatePerMinute: 60,
+      drainRatePerMinute: 0,
     });
     expect(second?.queueDepthHistory.map((point) => point.totalQueued)).toEqual([4, 3]);
   });

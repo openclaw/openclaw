@@ -201,7 +201,14 @@ export type SpawnSubagentParams = {
   continuationTargetSessionKeys?: string[];
   continuationFanoutMode?: "tree" | "all";
   traceparent?: string;
+  /** Durable continuation delegate flow id; used to derive an idempotent child session key. */
+  continuationDelegateFlowId?: string;
 };
+
+function deriveContinuationDelegateChildSessionKey(targetAgentId: string, flowId: string): string {
+  const digest = crypto.createHash("sha256").update(flowId).digest("hex").slice(0, 32);
+  return `agent:${targetAgentId}:subagent:continuation-${digest}`;
+}
 
 export type SpawnSubagentContext = {
   agentSessionKey?: string;
@@ -1243,7 +1250,9 @@ export async function spawnSubagentDirect(
       error: targetPolicy.error,
     };
   }
-  const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
+  const childSessionKey = params.continuationDelegateFlowId
+    ? deriveContinuationDelegateChildSessionKey(targetAgentId, params.continuationDelegateFlowId)
+    : `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg,
     sessionKey: requesterInternalKey,

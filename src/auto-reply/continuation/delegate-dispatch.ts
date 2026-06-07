@@ -12,6 +12,8 @@
  * RFC: docs/design/continue-work-signal-v2.md §3.2, §3.4
  */
 
+import crypto from "node:crypto";
+import { getSubagentRunByChildSessionKey } from "../../agents/subagent-registry-read.js";
 import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import type { SpawnSubagentContext } from "../../agents/subagent-spawn.js";
 import {
@@ -25,7 +27,9 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import {
   consumePendingDelegates,
+  listPendingDelegateSessionKeysForRecovery,
   markPendingDelegateFailed,
+  markPendingDelegateSpawnAccepted,
   peekSoonestUnmaturedDelegateDueAt,
 } from "./delegate-store.js";
 import { checkContinuationBudget, type ChainState } from "./scheduler.js";
@@ -159,6 +163,19 @@ export type DelegateDispatchContext = {
  * Called by agent-runner.ts after the response finalizes.
  * Each delegate goes through chain/cost enforcement and is spawned via spawnSubagentDirect.
  */
+
+function deriveContinuationChildSessionKey(sessionKey: string, flowId: string): string {
+  const agentId = sessionKey.startsWith("agent:") ? sessionKey.split(":")[1] : undefined;
+  const targetAgentId = agentId && agentId.length > 0 ? agentId : "main";
+  const digest = crypto.createHash("sha256").update(flowId).digest("hex").slice(0, 32);
+  return `agent:${targetAgentId}:subagent:continuation-${digest}`;
+}
+
+function hasActiveSubagentRegistryRun(childSessionKey: string): boolean {
+  const trackedRun = getSubagentRunByChildSessionKey(childSessionKey);
+  return Boolean(trackedRun && typeof trackedRun.endedAt !== "number");
+}
+
 function markDelegateFailed(
   delegate: { flowId?: string; expectedRevision?: number; task: string },
   summary: string,
@@ -189,10 +206,13 @@ export async function dispatchToolDelegates(params: {
    * dispatch past `maxChainLength`.
    */
   loadFreshChainState?: () => ChainState;
+  recoverRunningDelegates?: boolean;
 }): Promise<{ dispatched: number; rejected: number; chainState: ChainState }> {
   const { sessionKey, chainState, ctx } = params;
   const config = params.config ?? resolveContinuationRuntimeConfig();
-  const toolDelegates = consumePendingDelegates(sessionKey);
+  const toolDelegates = consumePendingDelegates(sessionKey, {
+    includeRunning: params.recoverRunningDelegates === true,
+  });
 
   // Arm (or re-arm) a hedge timer for any unmatured queued delegates so they
   // still fire in fully-quiet channels where no further response-finalize
@@ -330,10 +350,22 @@ export async function dispatchToolDelegates(params: {
         log: (message) => log.info(message),
       });
       const spawnTraceparent = dispatchSpan.traceparent?.() ?? outboundTraceparent;
+      const childSessionKey = delegate.flowId
+        ? deriveContinuationChildSessionKey(sessionKey, delegate.flowId)
+        : undefined;
+      if (childSessionKey && hasActiveSubagentRegistryRun(childSessionKey)) {
+        markPendingDelegateSpawnAccepted(delegate, childSessionKey);
+        dispatchSpan.setStatus("OK");
+        dispatched++;
+        currentChainCount = nextHop;
+        currentChainId = dispatchChainId;
+        continue;
+      }
       const result = await spawnSubagentDirect(
         {
           task: `[continuation:chain-hop:${nextHop}] Delegated task (turn ${nextHop}/${maxChainLength}): ${delegate.task}`,
           drainsContinuationDelegateQueue: true,
+          ...(delegate.flowId ? { continuationDelegateFlowId: delegate.flowId } : {}),
           ...(silent ? { silentAnnounce: true } : {}),
           ...(silentWake ? { silentAnnounce: true, wakeOnReturn: true } : {}),
           ...(delegate.targetSessionKey
@@ -357,6 +389,10 @@ export async function dispatchToolDelegates(params: {
           `[continuation:delegate-spawned] Spawned turn ${nextHop}/${maxChainLength}: ${delegate.task}`,
           { sessionKey, trusted: true },
         );
+        const acceptedChildSessionKey = result.childSessionKey ?? childSessionKey;
+        if (acceptedChildSessionKey) {
+          markPendingDelegateSpawnAccepted(delegate, acceptedChildSessionKey);
+        }
         dispatchSpan.setStatus("OK");
         dispatched++;
         currentChainCount = nextHop;
@@ -406,6 +442,34 @@ export async function dispatchToolDelegates(params: {
       ...(currentChainId ? { chainId: currentChainId } : {}),
     },
   };
+}
+
+export async function recoverPendingContinuationDelegates(
+  params: {
+    chainState?: ChainState;
+    ctx?: Partial<DelegateDispatchContext>;
+    maxChainLength?: number;
+  } = {},
+): Promise<{ sessions: number; dispatched: number; rejected: number }> {
+  const sessionKeys = listPendingDelegateSessionKeysForRecovery();
+  let dispatched = 0;
+  let rejected = 0;
+  for (const sessionKey of sessionKeys) {
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: params.chainState ?? {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+      },
+      ctx: { sessionKey, ...params.ctx },
+      maxChainLength: params.maxChainLength ?? resolveContinuationRuntimeConfig().maxChainLength,
+      recoverRunningDelegates: true,
+    });
+    dispatched += result.dispatched;
+    rejected += result.rejected;
+  }
+  return { sessions: sessionKeys.length, dispatched, rejected };
 }
 
 // ---------------------------------------------------------------------------

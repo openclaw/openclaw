@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock TaskFlow registry — delegate-store resolves it transitively.
@@ -7,9 +8,17 @@ const loggerRecords: Array<{ level: string; message: string }> = [];
 const spawnSubagentDirectMock = vi.fn();
 let flowIdCounter = 0;
 let listTaskFlowsShouldThrow = false;
+const activeRegistryChildSessionKeys = new Set<string>();
 
 vi.mock("../../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
+}));
+
+vi.mock("../../agents/subagent-registry-read.js", () => ({
+  getSubagentRunByChildSessionKey: (childSessionKey: string) =>
+    activeRegistryChildSessionKeys.has(childSessionKey)
+      ? { runId: "run-active", childSessionKey }
+      : null,
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
@@ -63,15 +72,42 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
     }
     return [...mockFlows.values()].filter((f) => f.ownerKey === ownerKey);
   }),
-  finishFlow: vi.fn((params: { flowId: string; expectedRevision: number }) => {
-    const flow = mockFlows.get(params.flowId);
-    if (!flow || flow.revision !== params.expectedRevision) {
-      return { applied: false, reason: flow ? "revision_conflict" : "not_found" };
-    }
-    flow.status = "succeeded";
-    flow.revision = flow.revision + 1;
-    return { applied: true, flow: { ...flow } };
-  }),
+  getTaskFlowById: vi.fn((flowId: string) => mockFlows.get(flowId)),
+  updateFlowRecordByIdExpectedRevision: vi.fn(
+    (params: { flowId: string; expectedRevision: number; patch: Record<string, unknown> }) => {
+      const flow = mockFlows.get(params.flowId);
+      if (!flow || flow.revision !== params.expectedRevision) {
+        return {
+          applied: false,
+          reason: flow ? "revision_conflict" : "not_found",
+          current: flow ? { ...flow } : undefined,
+        };
+      }
+      Object.assign(flow, params.patch);
+      flow.revision = (flow.revision as number) + 1;
+      return { applied: true, flow: { ...flow } };
+    },
+  ),
+  finishFlow: vi.fn(
+    (params: {
+      flowId: string;
+      expectedRevision: number;
+      stateJson?: unknown;
+      updatedAt?: number;
+      endedAt?: number;
+    }) => {
+      const flow = mockFlows.get(params.flowId);
+      if (!flow || flow.revision !== params.expectedRevision) {
+        return { applied: false, reason: flow ? "revision_conflict" : "not_found" };
+      }
+      flow.status = "succeeded";
+      flow.stateJson = params.stateJson ?? flow.stateJson;
+      flow.endedAt = params.endedAt ?? params.updatedAt ?? Date.now();
+      flow.updatedAt = params.updatedAt ?? flow.endedAt;
+      flow.revision = (flow.revision as number) + 1;
+      return { applied: true, flow: { ...flow } };
+    },
+  ),
   failFlow: vi.fn((params: { flowId: string }) => {
     const flow = mockFlows.get(params.flowId);
     if (flow) {
@@ -101,6 +137,7 @@ beforeEach(() => {
   spawnSubagentDirectMock.mockReset().mockResolvedValue({ status: "accepted" });
   flowIdCounter = 0;
   listTaskFlowsShouldThrow = false;
+  activeRegistryChildSessionKeys.clear();
   vi.useFakeTimers();
 });
 
@@ -111,6 +148,7 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
   mockFlows.clear();
   listTaskFlowsShouldThrow = false;
+  activeRegistryChildSessionKeys.clear();
   vi.useRealTimers();
 });
 
@@ -201,6 +239,29 @@ describe("hedge timer ref/handle cleanup", () => {
 });
 
 describe("tool delegate dispatch contract", () => {
+  it("recovers a running delegate by reconciling the deterministic live child", async () => {
+    const sessionKey = "agent:main:root";
+    enqueuePendingDelegate(sessionKey, { task: "recover already spawned child" });
+    const flowId = [...mockFlows.keys()][0];
+    const digest = crypto.createHash("sha256").update(flowId).digest("hex").slice(0, 32);
+    activeRegistryChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);
+
+    const first = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      recoverRunningDelegates: true,
+    });
+
+    expect(first.dispatched).toBe(1);
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get(flowId)?.status).toBe("succeeded");
+    expect(mockFlows.get(flowId)?.stateJson).toMatchObject({
+      childSessionKey: `agent:main:subagent:continuation-${digest}`,
+    });
+  });
+
   it("caps dispatch at maxDelegatesPerTurn and surfaces over-limit delegates", async () => {
     const sessionKey = "session-delegate-cap";
     for (let index = 0; index < 6; index++) {
