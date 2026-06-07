@@ -342,17 +342,13 @@ export function resolveSubagentConfiguredModelSelection(params: {
  * or not a known alias, returns it unchanged.
  */
 function resolveModelThroughAliases(value: string, aliasIndex: ModelAliasIndex): string {
-  // Already a provider/model ref — no alias resolution needed.
-  if (value.includes("/")) {
-    return value;
-  }
-  // Check if the value is a known alias; if so, resolve to provider/model.
-  // Unknown bare strings are returned as-is (don't guess the provider).
   const aliasKey = normalizeLowercaseStringOrEmpty(value);
   const aliasMatch = aliasIndex.byAlias.get(aliasKey);
   if (aliasMatch) {
     return `${aliasMatch.ref.provider}/${aliasMatch.ref.model}`;
   }
+  // Unknown strings are returned as-is. That preserves explicit provider/model
+  // refs while still allowing exact aliases that contain a slash.
   return value;
 }
 
