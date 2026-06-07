@@ -633,10 +633,90 @@ describe("createAgentMetaInvokePlanRunner", () => {
         review: {
           text: "checked with skill instructions",
           skillName: "review-helper",
-          skillFilePath: "/workspace/skills/review-helper/SKILL.md",
         },
       },
     });
+    expect(result.outputs.review).not.toHaveProperty("skillFilePath");
+    expect(JSON.stringify(result)).not.toContain("/workspace/skills/review-helper/SKILL.md");
+  });
+
+  it("does not persist local skill paths from skill_exec outputs", async () => {
+    const store = createStoreMock();
+    const llmCompletion = createLlmCompletion({
+      completeWithPreparedSimpleCompletionModel: vi.fn(async () =>
+        assistantMessage("checked with skill instructions"),
+      ),
+    });
+    const skillsSnapshot = {
+      prompt: "",
+      skills: [{ name: "review-helper" }],
+      resolvedSkills: [
+        {
+          name: "review-helper",
+          description: "Review code changes",
+          filePath: "/workspace/skills/review-helper/SKILL.md",
+          baseDir: "/workspace/skills/review-helper",
+          sourceInfo: {
+            path: "/workspace/skills/review-helper/SKILL.md",
+            source: "workspace",
+            scope: "project",
+            origin: "top-level",
+            baseDir: "/workspace/skills/review-helper",
+          },
+          disableModelInvocation: false,
+          source: "# Review Helper\n\nCheck changed behavior and tests.",
+        },
+      ],
+    } satisfies SkillSnapshot;
+    const plan = {
+      name: "run_review_skill",
+      description: "Run a review skill",
+      triggers: [],
+      steps: [
+        {
+          id: "review",
+          kind: "skill_exec",
+          dependsOn: [],
+          skillName: "review-helper",
+          prompt: "Review {{input.file}}",
+          args: { file: "{{input.file}}" },
+          onFailure: { kind: "fail" },
+        },
+      ],
+      finalTextMode: { kind: "step", stepId: "review" },
+    } satisfies MetaPlan;
+
+    await createAgentMetaInvokePlanRunner({
+      toolsRef: { current: [] },
+      llmCompletion,
+      skillsSnapshot,
+      persistence: {
+        store,
+        agentId: "agent-main",
+        sessionKey: "session-1",
+      },
+    })({
+      plan,
+      input: { file: "src/example.ts" },
+    });
+
+    expect(store.recordStepFinished).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stepId: "review",
+        outputJson: expect.objectContaining({
+          text: "checked with skill instructions",
+          skillName: "review-helper",
+        }),
+      }),
+    );
+    const persistedStep = store.recordStepFinished.mock.calls.at(-1)?.[0];
+    expect(persistedStep).toMatchObject({ stepId: "review" });
+    const persistedOutput = persistedStep?.outputJson;
+    expect(persistedOutput).toBeDefined();
+    expect(persistedOutput).not.toHaveProperty("skillFilePath");
+    expect(JSON.stringify(persistedOutput)).not.toContain(
+      "/workspace/skills/review-helper/SKILL.md",
+    );
   });
 
   it("fails skill_exec when the target skill is unavailable", async () => {

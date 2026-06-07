@@ -524,7 +524,6 @@ function buildSkillExecExecutors(options: {
       return {
         text,
         skillName: skill.name,
-        skillFilePath: skill.filePath,
         provider: message.provider,
         model: message.model,
         stopReason: message.stopReason,
