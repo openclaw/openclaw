@@ -44,6 +44,28 @@ type PendingExec = {
 };
 
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
+const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = [
+  "set -e",
+  'target="$1"',
+  'case "$target" in /*) ;; *) echo "remote directory must be absolute: $target" >&2; exit 1 ;; esac',
+  'current="/"',
+  'old_ifs="$IFS"',
+  'IFS="/"',
+  "set -- ${target#/}",
+  'IFS="$old_ifs"',
+  "for part do",
+  '  [ -n "$part" ] || continue',
+  '  case "$part" in "."|"..") echo "unsafe remote directory component: $part" >&2; exit 1 ;; esac',
+  '  if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
+  '  if [ -L "$next" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi',
+  '  if [ -e "$next" ]; then',
+  '    if [ ! -d "$next" ]; then echo "unsafe remote directory component: $next" >&2; exit 1; fi',
+  "  else",
+  '    mkdir -- "$next"',
+  "  fi",
+  '  current="$next"',
+  "done",
+].join("\n");
 
 export function buildOpenShellSshExecEnv(): NodeJS.ProcessEnv {
   return sanitizeEnvVars(process.env).allowed;
@@ -432,7 +454,7 @@ class OpenShellSandboxBackendImpl {
       this.params.remoteWorkspaceDir,
     );
     await this.runRemoteShellScriptInternal({
-      script: 'mkdir -p -- "$1" && find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +',
+      script: `${ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT}\nfind "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +`,
       args: [remoteSkillsWorkspaceDir],
     });
     const stats = await fs.lstat(this.params.createParams.skillsWorkspaceDir).catch(() => null);
@@ -479,7 +501,7 @@ class OpenShellSandboxBackendImpl {
         } finally {
           await restoreMaterializedSkillsShadow({
             workspaceDir: this.params.createParams.workspaceDir,
-            preservedPath: preservedSandboxSkills,
+            preserved: preservedSandboxSkills,
           });
         }
       },
@@ -578,7 +600,7 @@ async function removeMaterializedSkillsFromDownloadedWorkspace(tmpDir: string): 
 async function moveMaterializedSkillsShadowAside(params: {
   workspaceDir: string;
   tmpDir: string;
-}): Promise<string | undefined> {
+}): Promise<{ preservedPath: string; preserveRoot: string } | undefined> {
   const shadowPath = path.join(params.workspaceDir, ...MATERIALIZED_SKILLS_REMOTE_PARTS);
   const parentStats = await fs.lstat(path.dirname(shadowPath)).catch(() => null);
   if (!parentStats?.isDirectory() || parentStats.isSymbolicLink()) {
@@ -588,27 +610,34 @@ async function moveMaterializedSkillsShadowAside(params: {
   if (!shadowStats || shadowStats.isSymbolicLink()) {
     return undefined;
   }
-  const preservedPath = path.join(params.tmpDir, ".openclaw-sandbox-skills-preserved");
+  const preserveRoot = await fs.mkdtemp(
+    path.join(path.dirname(params.tmpDir), "openclaw-openshell-preserve-"),
+  );
+  const preservedPath = path.join(preserveRoot, "sandbox-skills");
   await fs.rename(shadowPath, preservedPath);
-  return preservedPath;
+  return { preservedPath, preserveRoot };
 }
 
 async function restoreMaterializedSkillsShadow(params: {
   workspaceDir: string;
-  preservedPath?: string;
+  preserved?: { preservedPath: string; preserveRoot: string };
 }): Promise<void> {
-  if (!params.preservedPath) {
+  if (!params.preserved) {
     return;
   }
-  const shadowPath = path.join(params.workspaceDir, ...MATERIALIZED_SKILLS_REMOTE_PARTS);
-  const parentPath = path.dirname(shadowPath);
-  const parentStats = await fs.lstat(parentPath).catch(() => null);
-  if (parentStats?.isSymbolicLink()) {
-    throw new Error(`Refusing to restore sandbox skills through symlink parent: ${parentPath}`);
+  try {
+    const shadowPath = path.join(params.workspaceDir, ...MATERIALIZED_SKILLS_REMOTE_PARTS);
+    const parentPath = path.dirname(shadowPath);
+    const parentStats = await fs.lstat(parentPath).catch(() => null);
+    if (parentStats?.isSymbolicLink()) {
+      throw new Error(`Refusing to restore sandbox skills through symlink parent: ${parentPath}`);
+    }
+    await fs.mkdir(parentPath, { recursive: true });
+    await fs.rm(shadowPath, { recursive: true, force: true });
+    await fs.rename(params.preserved.preservedPath, shadowPath);
+  } finally {
+    await fs.rm(params.preserved.preserveRoot, { recursive: true, force: true });
   }
-  await fs.mkdir(parentPath, { recursive: true });
-  await fs.rm(shadowPath, { recursive: true, force: true });
-  await fs.rename(params.preservedPath, shadowPath);
 }
 
 function resolveOpenShellTmpRoot(): string {
