@@ -948,6 +948,66 @@ describe("QmdMemoryManager", () => {
     expect(workspaceAddCall).toContain("**/*.md");
   });
 
+  it("rebinds collection when collection show exposes a stale root path", async () => {
+    const staleRoot = path.join(os.tmpdir(), "openclaw-stale-workspace");
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([{ name: "workspace-main", pattern: "**/*.md" }]),
+        );
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "show") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          [
+            "workspace-main (qmd://workspace-main/)",
+            `  Path:     ${staleRoot}`,
+            "  Pattern:  **/*.md",
+            "  Files:    12",
+          ].join("\n"),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    const commands = spawnMock.mock.calls.map((call: unknown[]) => call[1] as string[]);
+    const removeCalls = commands.filter(
+      (args) => args[0] === "collection" && args[1] === "remove" && args[2] === "workspace-main",
+    );
+    expect(removeCalls).toHaveLength(1);
+
+    const addCall = commands.find((args) => {
+      if (args[0] !== "collection" || args[1] !== "add") {
+        return false;
+      }
+      const nameIdx = args.indexOf("--name");
+      return nameIdx >= 0 && args[nameIdx + 1] === "workspace-main";
+    });
+    expect(addCall).toBeDefined();
+  });
+
   it("migrates unscoped legacy collections before adding scoped names", async () => {
     cfg = {
       ...cfg,
