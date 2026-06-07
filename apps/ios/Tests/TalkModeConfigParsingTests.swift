@@ -184,28 +184,31 @@ import Testing
         #expect(manager._test_gatewayTalkUsesRealtimeRelay())
     }
 
-    @Test func classifiesRealtimeAuthFailureForDisplay() {
-        let issue = TalkRuntimeIssue.classify(
+    @Test func buildsGenericRealtimeFallbackIssueForDisplay() {
+        let issue = TalkRuntimeIssue.realtimeUnavailable(
             message: "OpenAI API key rejected with 401",
             provider: "openai",
             model: "gpt-realtime-2",
             transport: "gateway-relay",
             phase: "start")
 
-        #expect(issue.code == .credentialInvalid)
+        #expect(issue.code == .realtimeUnavailable)
         #expect(issue.displayMessage == "OpenAI API key rejected with 401")
         #expect(issue.diagnosticSummary.contains("provider: openai"))
         #expect(issue.diagnosticSummary.contains("model: gpt-realtime-2"))
         #expect(issue.fallbackStatusText == "Listening (iOS Speech fallback)")
         #expect(issue.fallbackBannerTitle == "Using iOS Speech fallback")
-        #expect(issue.fallbackBannerOwnerLabel == "Fix on gateway")
-        #expect(issue.technicalDetails.contains("code: credential_invalid"))
+        #expect(issue.fallbackBannerOwnerLabel == "Fallback active")
+        #expect(issue
+            .fallbackBannerMessage ==
+            "Realtime voice did not start. Talk is running with iOS speech recognition and TTS.")
+        #expect(issue.technicalDetails.contains("code: realtime_unavailable"))
     }
 
     @Test func nativeFallbackKeepsRealtimeIssueVisible() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         let issue = TalkRuntimeIssue(
-            code: .providerClosedBeforeReady,
+            code: .realtimeUnavailable,
             message: "Realtime closed before it became ready.",
             provider: "openai",
             model: "gpt-realtime-2",
@@ -229,7 +232,7 @@ import Testing
             message: "Error: OpenAI API key rejected with 401",
             details: [
                 "talkIssue": AnyCodable([
-                    "code": "credential_invalid",
+                    "code": "realtime_unavailable",
                     "message": "OpenAI API key rejected with 401",
                     "provider": "openai",
                     "model": "gpt-realtime-2",
@@ -240,7 +243,7 @@ import Testing
 
         let issue = manager._test_realtimeIssue(from: error, phase: "start")
 
-        #expect(issue.code == .credentialInvalid)
+        #expect(issue.code == .realtimeUnavailable)
         #expect(issue.displayMessage == "OpenAI API key rejected with 401")
         #expect(issue.provider == "openai")
         #expect(issue.model == "gpt-realtime-2")
@@ -251,7 +254,7 @@ import Testing
     @Test func relayStartupIssueSurvivesUntilReadyStatus() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         let issue = TalkRuntimeIssue(
-            code: .credentialInvalid,
+            code: .realtimeUnavailable,
             message: "OpenAI API key rejected with 401",
             provider: "openai",
             model: "gpt-realtime-2",
@@ -288,7 +291,7 @@ import Testing
     @Test func relayRetryClearsStaleFallbackTriggerButKeepsLastIssueVisible() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         let issue = TalkRuntimeIssue(
-            code: .providerClosedBeforeReady,
+            code: .realtimeUnavailable,
             message: "Realtime closed before it became ready.",
             provider: "openai",
             model: "gpt-realtime-2",

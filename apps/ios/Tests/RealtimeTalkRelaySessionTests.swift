@@ -58,7 +58,7 @@ private final class UnusedPCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
                 "relaySessionId": "relay-1",
                 "type": "error",
                 "message": "OpenAI API key rejected with 401",
-                "code": "credential_invalid",
+                "code": "realtime_unavailable",
                 "provider": "openai",
                 "model": "gpt-realtime-2",
                 "transport": "gateway-relay",
@@ -77,7 +77,7 @@ private final class UnusedPCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
             seq: nil,
             stateversion: nil))
 
-        #expect(issues.map(\.code) == [.credentialInvalid])
+        #expect(issues.map(\.code) == [.realtimeUnavailable])
         #expect(statuses == ["OpenAI API key rejected with 401"])
     }
 

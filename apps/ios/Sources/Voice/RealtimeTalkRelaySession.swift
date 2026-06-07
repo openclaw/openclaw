@@ -388,7 +388,7 @@ final class RealtimeTalkRelaySession {
                 self.onStatus("Ready")
             } else if !self.hasReceivedFailure {
                 let issue = TalkRuntimeIssue(
-                    code: .providerClosedBeforeReady,
+                    code: .realtimeUnavailable,
                     message: "Realtime closed before it became ready.",
                     provider: self.options.provider,
                     model: self.options.model,
@@ -441,7 +441,7 @@ final class RealtimeTalkRelaySession {
             return
         }
         let issue = TalkRuntimeIssue(
-            code: .providerUnavailable,
+            code: .realtimeUnavailable,
             message: "Realtime did not become ready in time.",
             provider: self.options.provider,
             model: self.options.model,
@@ -460,22 +460,11 @@ final class RealtimeTalkRelaySession {
         fallbackProvider: String?,
         fallbackModel: String?) -> TalkRuntimeIssue
     {
-        let code = payload["code"]?.stringValue
-            .flatMap { TalkRuntimeIssue.Code(rawValue: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
         let provider = payload["provider"]?.stringValue ?? fallbackProvider
         let model = payload["model"]?.stringValue ?? fallbackModel
         let transport = payload["transport"]?.stringValue ?? "gateway-relay"
         let phase = payload["phase"]?.stringValue
-        if let code {
-            return TalkRuntimeIssue(
-                code: code,
-                message: fallbackMessage,
-                provider: provider,
-                model: model,
-                transport: transport,
-                phase: phase)
-        }
-        return TalkRuntimeIssue.classify(
+        return TalkRuntimeIssue.realtimeUnavailable(
             message: fallbackMessage,
             provider: provider,
             model: model,

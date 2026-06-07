@@ -492,7 +492,7 @@ describe("talk realtime gateway relay", () => {
     expectRecordFields(closePayload.talkEvent, { type: "session.closed", final: true });
   });
 
-  it("emits classified issue details when relay connect fails", async () => {
+  it("emits generic issue details when relay connect fails", async () => {
     const provider: RealtimeVoiceProviderPlugin = {
       id: "openai",
       label: "OpenAI Realtime",
@@ -533,7 +533,7 @@ describe("talk realtime gateway relay", () => {
       relaySessionId: session.relaySessionId,
       type: "error",
       message: "OpenAI API key rejected with 401",
-      code: "credential_invalid",
+      code: "realtime_unavailable",
       provider: "openai",
       model: "gpt-realtime-2",
       transport: "gateway-relay",
@@ -544,7 +544,7 @@ describe("talk realtime gateway relay", () => {
       final: true,
     });
     expectRecordFields((errorPayload.talkEvent as Record<string, unknown>).payload, {
-      code: "credential_invalid",
+      code: "realtime_unavailable",
       provider: "openai",
       model: "gpt-realtime-2",
       transport: "gateway-relay",
@@ -594,7 +594,7 @@ describe("talk realtime gateway relay", () => {
     expectRecordFields(errorPayload, {
       relaySessionId: session.relaySessionId,
       type: "error",
-      code: "provider_closed_before_ready",
+      code: "realtime_unavailable",
       provider: "openai",
       model: "gpt-realtime-2",
       transport: "gateway-relay",
@@ -658,7 +658,7 @@ describe("talk realtime gateway relay", () => {
     expect(errorPayloads).toHaveLength(1);
     expectRecordFields(errorPayloads[0], {
       type: "error",
-      code: "credential_invalid",
+      code: "realtime_unavailable",
       provider: "openai",
       model: "gpt-realtime-2",
       transport: "gateway-relay",

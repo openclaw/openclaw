@@ -788,7 +788,7 @@ describe("talk.session unified handlers", () => {
       message: "Error: OpenAI API key rejected with 401",
     });
     expectRecordFields((error.details as Record<string, unknown>).talkIssue, {
-      code: "credential_invalid",
+      code: "realtime_unavailable",
       message: "Error: OpenAI API key rejected with 401",
       phase: "request",
     });

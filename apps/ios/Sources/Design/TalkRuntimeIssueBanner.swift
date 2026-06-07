@@ -67,27 +67,11 @@ struct TalkRuntimeIssueBanner: View {
     }
 
     private var iconName: String {
-        switch self.issue.code {
-        case .credentialInvalid, .credentialMissing, .gatewayConfigInvalid:
-            "key.slash.fill"
-        case .networkError:
-            "wifi.exclamationmark"
-        case .modelUnavailable, .providerUnavailable:
-            "waveform.badge.exclamationmark"
-        case .providerClosedBeforeReady, .unknown:
-            "exclamationmark.triangle.fill"
-        }
+        "exclamationmark.triangle.fill"
     }
 
     private var tint: Color {
-        switch self.issue.code {
-        case .networkError, .providerClosedBeforeReady:
-            .yellow
-        case .providerUnavailable:
-            .orange
-        default:
-            .red
-        }
+        .orange
     }
 }
 

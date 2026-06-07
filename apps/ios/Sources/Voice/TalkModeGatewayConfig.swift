@@ -9,14 +9,7 @@ enum TalkModeExecutionMode {
 
 struct TalkRuntimeIssue: Equatable {
     enum Code: String {
-        case credentialInvalid = "credential_invalid"
-        case credentialMissing = "credential_missing"
-        case providerUnavailable = "provider_unavailable"
-        case modelUnavailable = "model_unavailable"
-        case gatewayConfigInvalid = "gateway_config_invalid"
-        case networkError = "network_error"
-        case providerClosedBeforeReady = "provider_closed_before_ready"
-        case unknown
+        case realtimeUnavailable = "realtime_unavailable"
     }
 
     let code: Code
@@ -47,24 +40,7 @@ struct TalkRuntimeIssue: Equatable {
 
     var displayMessage: String {
         if !self.message.isEmpty { return self.message }
-        switch self.code {
-        case .credentialInvalid:
-            return "Realtime credentials were rejected."
-        case .credentialMissing:
-            return "Realtime credentials are missing."
-        case .providerUnavailable:
-            return "The realtime provider is unavailable."
-        case .modelUnavailable:
-            return "The realtime model is unavailable."
-        case .gatewayConfigInvalid:
-            return "Gateway realtime configuration is invalid."
-        case .networkError:
-            return "Realtime network connection failed."
-        case .providerClosedBeforeReady:
-            return "Realtime closed before it became ready."
-        case .unknown:
-            return "Realtime voice failed."
-        }
+        return "Realtime voice did not start."
     }
 
     var fallbackStatusText: String {
@@ -76,18 +52,11 @@ struct TalkRuntimeIssue: Equatable {
     }
 
     var fallbackBannerOwnerLabel: String {
-        switch self.code {
-        case .credentialInvalid, .credentialMissing, .providerUnavailable, .modelUnavailable, .gatewayConfigInvalid:
-            "Fix on gateway"
-        case .networkError:
-            "Check network"
-        case .providerClosedBeforeReady, .unknown:
-            "Needs attention"
-        }
+        "Fallback active"
     }
 
     var fallbackBannerMessage: String {
-        "Realtime voice is unavailable. Talk is still running with iOS speech recognition and TTS."
+        "Realtime voice did not start. Talk is running with iOS speech recognition and TTS."
     }
 
     var technicalDetails: String {
@@ -111,34 +80,15 @@ struct TalkRuntimeIssue: Equatable {
         return parts.joined(separator: " • ")
     }
 
-    static func classify(
+    static func realtimeUnavailable(
         message: String,
         provider: String? = nil,
         model: String? = nil,
         transport: String? = nil,
         phase: String? = nil) -> TalkRuntimeIssue
     {
-        let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let code: Code = if normalized.contains("api key") || normalized.contains("unauthorized") || normalized
-            .contains("401")
-        {
-            normalized.contains("missing") ? .credentialMissing : .credentialInvalid
-        } else if normalized.contains("credential") || normalized.contains("auth") {
-            normalized.contains("missing") ? .credentialMissing : .credentialInvalid
-        } else if normalized.contains("model") && (
-            normalized.contains("not found") || normalized.contains("unsupported") || normalized.contains(
-                "unavailable"))
-        {
-            .modelUnavailable
-        } else if normalized.contains("network") || normalized.contains("socket") || normalized.contains("connection") {
-            .networkError
-        } else if normalized.contains("provider") || normalized.contains("unavailable") {
-            .providerUnavailable
-        } else {
-            .unknown
-        }
-        return TalkRuntimeIssue(
-            code: code,
+        TalkRuntimeIssue(
+            code: .realtimeUnavailable,
             message: message,
             provider: provider,
             model: model,

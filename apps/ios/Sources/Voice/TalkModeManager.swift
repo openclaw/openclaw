@@ -2466,7 +2466,7 @@ extension TalkModeManager {
     }
 
     private func realtimeIssue(message: String, phase: String) -> TalkRuntimeIssue {
-        TalkRuntimeIssue.classify(
+        TalkRuntimeIssue.realtimeUnavailable(
             message: message,
             provider: self.realtimeProvider,
             model: self.realtimeModelId,
@@ -2496,23 +2496,12 @@ extension TalkModeManager {
         fallbackPhase: String) -> TalkRuntimeIssue?
     {
         guard let rawIssue = gatewayError.details["talkIssue"]?.dictionaryValue else { return nil }
-        let rawCode = rawIssue["code"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let code = rawCode.flatMap(TalkRuntimeIssue.Code.init(rawValue:))
         let message = rawIssue["message"]?.stringValue ?? gatewayError.message
         let provider = rawIssue["provider"]?.stringValue ?? fallbackProvider
         let model = rawIssue["model"]?.stringValue ?? fallbackModel
         let transport = rawIssue["transport"]?.stringValue ?? fallbackTransport
         let phase = rawIssue["phase"]?.stringValue ?? fallbackPhase
-        guard let code else {
-            return TalkRuntimeIssue.classify(
-                message: message,
-                provider: provider,
-                model: model,
-                transport: transport,
-                phase: phase)
-        }
-        return TalkRuntimeIssue(
-            code: code,
+        return TalkRuntimeIssue.realtimeUnavailable(
             message: message,
             provider: provider,
             model: model,
