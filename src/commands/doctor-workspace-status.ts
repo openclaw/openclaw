@@ -129,8 +129,11 @@ export async function noteWorkspaceStatus(cfg: OpenClawConfig, opts?: NoteWorksp
   }
   // Check official managed plugin version drift against the running gateway.
   // Best-effort: don't let a plugin-index read failure block the rest of doctor.
-  // Uses the same env/version inputs as gateway status --deep: env for resolving
-  // managed install paths, and probed gateway version falling back to CLI VERSION.
+  // Uses the same env/version inputs and local-only guard as gateway status --deep.
+  // Remote gateways skip this check (their managed plugins live on another host).
+  if (cfg.gateway?.mode === "remote") {
+    return { workspaceDir };
+  }
   try {
     const installRecords = await loadInstalledPluginIndexInstallRecords({
       env: env as NodeJS.ProcessEnv,

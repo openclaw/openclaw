@@ -728,9 +728,11 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
 
 async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteWorkspaceStatus } = await import("../commands/doctor-workspace-status.js");
+  // Match gateway status semantics: prefer the probed runtimeVersion
+  // over the invoking CLI VERSION when a gateway probe is available.
   await noteWorkspaceStatus(ctx.cfg, {
     env: ctx.env ?? process.env,
-    gatewayVersion: undefined, // probe context not available in doctor flow; falls back to VERSION
+    gatewayVersion: ctx.gatewayStatus?.runtimeVersion ?? undefined,
   });
 }
 
