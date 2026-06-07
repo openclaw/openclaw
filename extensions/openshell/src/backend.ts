@@ -464,13 +464,24 @@ class OpenShellSandboxBackendImpl {
           throw new Error(result.stderr.trim() || "openshell sandbox download failed");
         }
         await removeMaterializedSkillsFromDownloadedWorkspace(tmpDir);
-        await replaceDirectoryContents({
-          sourceDir: tmpDir,
-          targetDir: this.params.createParams.workspaceDir,
-          // Never sync trusted host hook directories or repository metadata from
-          // the remote sandbox.
-          excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
+        const preservedSandboxSkills = await moveMaterializedSkillsShadowAside({
+          workspaceDir: this.params.createParams.workspaceDir,
+          tmpDir,
         });
+        try {
+          await replaceDirectoryContents({
+            sourceDir: tmpDir,
+            targetDir: this.params.createParams.workspaceDir,
+            // Never sync trusted host hook directories or repository metadata from
+            // the remote sandbox.
+            excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
+          });
+        } finally {
+          await restoreMaterializedSkillsShadow({
+            workspaceDir: this.params.createParams.workspaceDir,
+            preservedPath: preservedSandboxSkills,
+          });
+        }
       },
     );
   }
@@ -562,6 +573,42 @@ async function removeMaterializedSkillsFromDownloadedWorkspace(tmpDir: string): 
     cursor = next;
   }
   await fs.rm(cursor, { recursive: true, force: true });
+}
+
+async function moveMaterializedSkillsShadowAside(params: {
+  workspaceDir: string;
+  tmpDir: string;
+}): Promise<string | undefined> {
+  const shadowPath = path.join(params.workspaceDir, ...MATERIALIZED_SKILLS_REMOTE_PARTS);
+  const parentStats = await fs.lstat(path.dirname(shadowPath)).catch(() => null);
+  if (!parentStats?.isDirectory() || parentStats.isSymbolicLink()) {
+    return undefined;
+  }
+  const shadowStats = await fs.lstat(shadowPath).catch(() => null);
+  if (!shadowStats || shadowStats.isSymbolicLink()) {
+    return undefined;
+  }
+  const preservedPath = path.join(params.tmpDir, ".openclaw-sandbox-skills-preserved");
+  await fs.rename(shadowPath, preservedPath);
+  return preservedPath;
+}
+
+async function restoreMaterializedSkillsShadow(params: {
+  workspaceDir: string;
+  preservedPath?: string;
+}): Promise<void> {
+  if (!params.preservedPath) {
+    return;
+  }
+  const shadowPath = path.join(params.workspaceDir, ...MATERIALIZED_SKILLS_REMOTE_PARTS);
+  const parentPath = path.dirname(shadowPath);
+  const parentStats = await fs.lstat(parentPath).catch(() => null);
+  if (parentStats?.isSymbolicLink()) {
+    throw new Error(`Refusing to restore sandbox skills through symlink parent: ${parentPath}`);
+  }
+  await fs.mkdir(parentPath, { recursive: true });
+  await fs.rm(shadowPath, { recursive: true, force: true });
+  await fs.rename(params.preservedPath, shadowPath);
 }
 
 function resolveOpenShellTmpRoot(): string {
