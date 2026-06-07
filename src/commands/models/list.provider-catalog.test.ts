@@ -355,9 +355,7 @@ describe("loadProviderCatalogModelsForList", () => {
       providerFilter: "hybrid",
     });
 
-    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual([
-      "hybrid/live-model",
-    ]);
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["hybrid/live-model"]);
     expect(hybridCatalogProvider.catalog.run).toHaveBeenCalledOnce();
     expect(hybridCatalogProvider.staticCatalog.run).not.toHaveBeenCalled();
   });
@@ -376,9 +374,7 @@ describe("loadProviderCatalogModelsForList", () => {
       staticOnly: true,
     });
 
-    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual([
-      "hybrid/static-model",
-    ]);
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["hybrid/static-model"]);
     expect(hybridCatalogProvider.catalog.run).not.toHaveBeenCalled();
     expect(hybridCatalogProvider.staticCatalog.run).toHaveBeenCalledOnce();
   });
@@ -397,9 +393,7 @@ describe("loadProviderCatalogModelsForList", () => {
       providerFilter: "hybrid",
     });
 
-    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual([
-      "hybrid/static-model",
-    ]);
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["hybrid/static-model"]);
     expect(hybridCatalogProvider.catalog.run).toHaveBeenCalledOnce();
     expect(hybridCatalogProvider.staticCatalog.run).toHaveBeenCalledOnce();
   });
