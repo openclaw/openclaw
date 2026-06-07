@@ -555,7 +555,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   const pluginConfig = params.cfg ? resolveMemoryCorePluginConfig(params.cfg) : undefined;
   const detachNarratives = params.trigger === "cron";
   const [
-    { writeDeepDreamingReport },
+    { writeDeepDreamingReport, writeDeepDreamingToDreamsMd },
     { generateAndAppendDreamNarrative, runDetachedDreamNarrative },
     { runDreamingSweepPhases },
     {
@@ -650,6 +650,12 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         nowMs: sweepNowMs,
         timezone: params.config.timezone,
         storage: params.config.storage ?? { mode: "separate", separateReports: false },
+      });
+      await writeDeepDreamingToDreamsMd({
+        workspaceDir,
+        bodyLines: reportLines,
+        nowMs: sweepNowMs,
+        timezone: params.config.timezone,
       });
       // Generate dream diary narrative from promoted memories.
       if (params.subagent && (candidates.length > 0 || applied.applied > 0)) {
