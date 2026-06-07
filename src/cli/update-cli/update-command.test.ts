@@ -79,6 +79,17 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
     ).toBe(false);
   });
 
+  it("prepares package update restarts when the service unit is missing but the gateway is still running", () => {
+    expect(
+      shouldPrepareUpdatedInstallRestart({
+        updateMode: "npm",
+        serviceInstalled: false,
+        serviceLoaded: false,
+        serviceRunning: true,
+      }),
+    ).toBe(true);
+  });
+
   it("keeps non-package updates tied to the loaded service state", () => {
     expect(
       shouldPrepareUpdatedInstallRestart({

@@ -118,9 +118,7 @@ assert_after_update() {
   node - <<'NODE' "$LOG_DIR/update-candidate.json"
 const fs = require('fs');
 const file = process.argv[2];
-const raw = fs.readFileSync(file, 'utf8');
-const lastJsonLine = raw.trim().split(/\n/).reverse().find((line) => line.trim().startsWith('{'));
-const parsed = JSON.parse(lastJsonLine || raw);
+const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
 if (!['ok', 'warning'].includes(String(parsed.status))) {
   throw new Error(`unexpected update status: ${parsed.status}`);
 }

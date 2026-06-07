@@ -629,9 +629,10 @@ export function shouldPrepareUpdatedInstallRestart(params: {
   updateMode: UpdateRunResult["mode"];
   serviceInstalled: boolean;
   serviceLoaded: boolean;
+  serviceRunning?: boolean;
 }): boolean {
   if (isPackageManagerUpdateMode(params.updateMode)) {
-    return params.serviceInstalled;
+    return params.serviceInstalled || params.serviceRunning === true;
   }
   return params.serviceLoaded;
 }
@@ -3744,6 +3745,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
           updateMode: resultWithPostUpdate.mode,
           serviceInstalled: serviceState.installed,
           serviceLoaded: serviceState.loaded,
+          serviceRunning: serviceState.running,
         })
       ) {
         gatewayServiceEnv = serviceState.env;
