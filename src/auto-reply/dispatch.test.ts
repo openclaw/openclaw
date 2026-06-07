@@ -338,6 +338,83 @@ describe("withReplyDispatcher", () => {
     );
   });
 
+  it("still runs message_sending when a channel supplies a beforeDeliver", async () => {
+    // Regression: a channel that installs any beforeDeliver — even an identity
+    // no-op, like the Telegram bot dispatch — must not bypass the message_sending
+    // gate. Before the fix the channel hook replaced the canonical chain entirely.
+    const runMessageSending = vi.fn(async () => ({ content: "sanitized reply" }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName?: string) => hookName === "message_sending"),
+      runMessageSending,
+    });
+    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithDispatcher({
+      ctx: buildTestCtx({
+        From: "telegram:1155284475",
+        To: "telegram:1155284475",
+        OriginatingTo: "telegram:1155284475",
+      }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+        beforeDeliver: async (payload) => payload, // channel identity no-op
+      },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const dispatcherOptions = requireReplyDispatcherOptions();
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
+    const payload = await dispatcherOptions.beforeDeliver(
+      { text: "original reply" },
+      { kind: "final" },
+    );
+
+    expect(runMessageSending).toHaveBeenCalledTimes(1);
+    expect(payload).toEqual({ text: "sanitized reply" });
+  });
+
+  it("cancels delivery when message_sending vetoes, even with a channel beforeDeliver", async () => {
+    const runMessageSending = vi.fn(async () => ({ cancel: true }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName?: string) => hookName === "message_sending"),
+      runMessageSending,
+    });
+    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    const channelBeforeDeliver: ReplyDispatchBeforeDeliver = vi.fn(async (payload) => payload);
+    await dispatchInboundMessageWithDispatcher({
+      ctx: buildTestCtx({
+        From: "telegram:1",
+        To: "telegram:1",
+        OriginatingTo: "telegram:1",
+      }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+        beforeDeliver: channelBeforeDeliver,
+      },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const dispatcherOptions = requireReplyDispatcherOptions();
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
+    const payload = await dispatcherOptions.beforeDeliver(
+      { text: "original reply" },
+      { kind: "final" },
+    );
+
+    // The message_sending veto cancels delivery even though the channel hook ran.
+    expect(payload).toBeNull();
+    expect(runMessageSending).toHaveBeenCalledTimes(1);
+  });
+
   it("runs reply_payload_sending hooks before inbound dispatcher delivery", async () => {
     const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({
       payload: {
@@ -736,7 +813,6 @@ describe("withReplyDispatcher", () => {
 
     expect(customBeforeDeliver).toHaveBeenCalledTimes(1);
     expect(customBeforeDeliver).toHaveBeenCalledWith({ text: "original" }, { kind: "final" });
-    expect(runMessageSending).not.toHaveBeenCalled();
     expect(runReplyPayloadSending).toHaveBeenCalledTimes(1);
     expect(runReplyPayloadSending).toHaveBeenCalledWith(
       {
@@ -753,7 +829,15 @@ describe("withReplyDispatcher", () => {
         runId: undefined,
       },
     );
-    expect(payload).toEqual({ text: "original [custom] [plugin]" });
+    // message_sending now composes after the channel hook + reply_payload_sending
+    // (previously a channel-supplied beforeDeliver silently disabled it), so it
+    // gates the fully-composed payload.
+    expect(runMessageSending).toHaveBeenCalledTimes(1);
+    expect(runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "original [custom] [plugin]" }),
+      expect.anything(),
+    );
+    expect(payload).toEqual({ text: "message hook" });
   });
 
   it("does not copy source conversation type onto cross-session native silent-reply targets", async () => {

@@ -546,8 +546,13 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     replyPayloadBeforeDeliver,
     buildMessageSendingBeforeDeliver(finalized),
   );
+  // A channel-supplied beforeDeliver must compose WITH the canonical gates
+  // (reply_payload_sending + message_sending), not replace them. Composing against
+  // replyPayloadBeforeDeliver alone dropped the message_sending gate, so a channel
+  // that installs any beforeDeliver — even an identity no-op, like the Telegram bot
+  // dispatch — silently disabled message_sending for that channel's replies.
   const configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
+    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, globalBeforeDeliver)
     : globalBeforeDeliver;
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
@@ -640,8 +645,11 @@ export async function dispatchInboundMessageWithDispatcher(params: {
     replyPayloadBeforeDeliver,
     buildMessageSendingBeforeDeliver(params.ctx),
   );
+  // See dispatchInboundMessageWithBufferedDispatcher: compose the channel-supplied
+  // beforeDeliver WITH the canonical gates (incl. message_sending) so a channel
+  // hook cannot silently disable the message_sending gate.
   const composedBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
+    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, globalBeforeDeliver)
     : globalBeforeDeliver;
   const dispatcher = createReplyDispatcher({
     ...params.dispatcherOptions,
