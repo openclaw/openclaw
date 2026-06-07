@@ -7,13 +7,18 @@
     "additionalProperties": false,
     "properties": {
       "mysql": {
-        "host": "123.57.81.67",
-        "port": 3306,
-        "user": "btclaw_reader",
-        "password": "pd5])6K*(dcDZm(m",
-        "database": "superworker"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": { "type": "string" },
+          "port": { "type": "number" },
+          "user": { "type": "string" },
+          "password": { "type": "string" },
+          "database": { "type": "string" }
+        },
+        "required": ["host", "user", "password", "database"]
       }
-    }
-  },
-  "required": ["mysql"]
+    },
+    "required": ["mysql"]
+  }
 }
