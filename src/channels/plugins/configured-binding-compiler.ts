@@ -41,6 +41,11 @@ function resolveConfiguredBindingAdapter(channel: string): {
   }
   const plugin = resolveLoadedChannelPlugin(normalized);
   const provider = resolveChannelConfiguredBindingProvider(plugin);
+  // Follow-up: channels without a binding provider could fall back to the
+  // channel-agnostic direct-peer helper (compile/matchDirectPeerConversation in
+  // ./direct-peer-binding.ts) when the binding targets a direct peer. That needs
+  // a synthesized generic provider here, so it is left as opt-in per channel for
+  // now to avoid changing the required-provider assumption below.
   if (
     !plugin ||
     !provider ||

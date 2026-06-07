@@ -1,3 +1,8 @@
+import {
+  compileDirectPeerConversation,
+  isDirectPeerBinding,
+  matchDirectPeerConversation,
+} from "openclaw/plugin-sdk/channel-core";
 import { parseTelegramDirectConversation } from "./direct-conversation.js";
 import { parseTelegramTopicConversation } from "./topic-conversation.js";
 
@@ -16,8 +21,15 @@ export type TelegramAcpConversationMatch = TelegramAcpConversationRef & {
  * everything else (group/channel/unset) keeps the existing topic behavior.
  */
 export function isTelegramDirectPeerBinding(peerKind?: string): boolean {
-  const normalized = peerKind?.trim().toLowerCase();
-  return normalized === "direct" || normalized === "dm";
+  return isDirectPeerBinding(peerKind);
+}
+
+/**
+ * Canonicalizes a Telegram direct-peer id (bare positive id or `direct:<id>`)
+ * for the channel-agnostic direct-peer binding helpers.
+ */
+function normalizeTelegramDirectPeerId(id: string): string | null {
+  return parseTelegramDirectConversation({ conversationId: id })?.canonicalConversationId ?? null;
 }
 
 function normalizeTelegramAcpTopicConversationId(
@@ -33,21 +45,6 @@ function normalizeTelegramAcpTopicConversationId(
   };
 }
 
-function normalizeTelegramAcpDirectConversationId(
-  conversationId: string,
-): TelegramAcpConversationRef | null {
-  const parsed = parseTelegramDirectConversation({ conversationId });
-  if (!parsed) {
-    return null;
-  }
-  // DMs have no parent conversation; the canonical id is the bare peer id, which
-  // is exactly the inbound conversation id the route uses for a 1:1 chat.
-  return {
-    conversationId: parsed.canonicalConversationId,
-    parentConversationId: undefined,
-  };
-}
-
 /**
  * Compiles a configured ACP binding into a Telegram conversation ref.
  *
@@ -60,40 +57,12 @@ export function compileTelegramAcpConversation(params: {
   conversationId: string;
 }): TelegramAcpConversationRef | null {
   if (isTelegramDirectPeerBinding(params.peerKind)) {
-    return normalizeTelegramAcpDirectConversationId(params.conversationId);
+    return compileDirectPeerConversation({
+      conversationId: params.conversationId,
+      normalizePeerId: normalizeTelegramDirectPeerId,
+    });
   }
   return normalizeTelegramAcpTopicConversationId(params.conversationId);
-}
-
-function matchTelegramAcpDirectConversation(params: {
-  bindingConversationId: string;
-  conversationId: string;
-  parentConversationId?: string;
-}): TelegramAcpConversationMatch | null {
-  const binding = normalizeTelegramAcpDirectConversationId(params.bindingConversationId);
-  if (!binding) {
-    return null;
-  }
-  // Inbound DMs carry the bare positive peer id with no parent conversation. A
-  // group/topic inbound (negative chat id or a topic id with a parent) must not
-  // match a direct binding.
-  if (params.parentConversationId?.trim()) {
-    return null;
-  }
-  const incoming = parseTelegramDirectConversation({
-    conversationId: params.conversationId,
-  });
-  if (!incoming) {
-    return null;
-  }
-  if (binding.conversationId !== incoming.canonicalConversationId) {
-    return null;
-  }
-  return {
-    conversationId: incoming.canonicalConversationId,
-    parentConversationId: undefined,
-    matchPriority: 2,
-  };
 }
 
 function matchTelegramAcpTopicConversation(params: {
@@ -135,7 +104,12 @@ export function matchTelegramAcpConversation(params: {
   parentConversationId?: string;
 }): TelegramAcpConversationMatch | null {
   if (isTelegramDirectPeerBinding(params.peerKind)) {
-    return matchTelegramAcpDirectConversation(params);
+    return matchDirectPeerConversation({
+      bindingConversationId: params.bindingConversationId,
+      conversationId: params.conversationId,
+      parentConversationId: params.parentConversationId,
+      normalizePeerId: normalizeTelegramDirectPeerId,
+    });
   }
   return matchTelegramAcpTopicConversation(params);
 }
