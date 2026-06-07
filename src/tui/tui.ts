@@ -389,6 +389,15 @@ export function canSubmitTuiChatMessage(params: {
   return !pending;
 }
 
+export function resolveBlockedTuiChatSubmitMessage(
+  params: { activityStatus?: string } = {},
+): string {
+  if (params.activityStatus === "warming runtime") {
+    return "runtime is still warming; wait for it to finish before sending a new message";
+  }
+  return "agent is busy — press Esc to abort before sending a new message";
+}
+
 const TUI_BUSY_ACTIVITY_STATUSES = new Set([
   "sending",
   "waiting",
@@ -1390,7 +1399,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       message,
     });
   const notifyBlockedChatSubmit = () => {
-    chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
+    chatLog.addSystem(resolveBlockedTuiChatSubmitMessage({ activityStatus }));
     tui.requestRender();
   };
   const submitHandler = createEditorSubmitHandler({
