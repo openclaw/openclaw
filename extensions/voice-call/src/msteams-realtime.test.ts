@@ -252,6 +252,77 @@ describe("createMsteamsRealtimeCall", () => {
     expect(texts.some((t) => t.includes("I'll message you"))).toBe(false);
   });
 
+  it("exposes look_at_screen and answers with a no-frame message when nothing is shared", () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        tools: [CONSULT_TOOL],
+        toolPolicy: "owner",
+        agentRuntime: { resolveThinkingDefault: () => "high" } as unknown as CoreAgentDeps,
+        voiceConfig: { realtime: {}, agentId: "main" } as unknown as VoiceCallConfig,
+        cfg: {} as unknown as OpenClawConfig,
+        getLatestFrame: () => undefined, // nothing shared yet
+      },
+    });
+
+    const req = mock.getRequest();
+    expect((req.tools ?? []).map((t) => t.name)).toContain("look_at_screen");
+
+    req.onToolCall?.({
+      itemId: "i-look-0",
+      callId: "look-0",
+      name: "look_at_screen",
+      args: { question: "what's on my screen?" },
+    });
+
+    const texts = mock.submitToolResult.mock.calls
+      .filter((args) => args[0] === "look-0")
+      .map((args) => (args[1] as { text: string }).text);
+    expect(texts.some((t) => t.includes("can't see anything yet"))).toBe(true);
+  });
+
+  it("look_at_screen runs the agent with the latest frame as an image", async () => {
+    consultSpy.mockClear();
+    consultSpy.mockResolvedValueOnce({ text: "Your screen shows a stack trace on line 42." });
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        tools: [CONSULT_TOOL],
+        toolPolicy: "owner",
+        agentRuntime: { resolveThinkingDefault: () => "high" } as unknown as CoreAgentDeps,
+        voiceConfig: { realtime: {}, agentId: "main" } as unknown as VoiceCallConfig,
+        cfg: {} as unknown as OpenClawConfig,
+        getLatestFrame: () => ({
+          dataBase64: "AQID",
+          mime: "image/jpeg",
+          width: 1280,
+          height: 720,
+        }),
+      },
+    });
+
+    mock.getRequest().onToolCall?.({
+      itemId: "i-look-1",
+      callId: "look-1",
+      name: "look_at_screen",
+      args: { question: "read the error on my screen" },
+    });
+
+    await vi.waitFor(() => expect(consultSpy).toHaveBeenCalled());
+    const arg = consultSpy.mock.calls.at(-1)?.[0] as {
+      images?: Array<{ type: string; data: string; mimeType: string }>;
+    };
+    expect(arg.images?.[0]).toMatchObject({ type: "image", data: "AQID", mimeType: "image/jpeg" });
+  });
+
   it("refuses a consult tool call until Teams recording status is active (Media Access API)", () => {
     const ctx = createMockSession("inactive");
     const mock = createMockProvider();
