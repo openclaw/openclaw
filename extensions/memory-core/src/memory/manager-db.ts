@@ -40,7 +40,10 @@ export function openMemoryDatabaseAtPath(
     }
   }
   const db = new DatabaseSync(dbPath, { allowExtension });
-  configureMemorySqliteWalMaintenance(db);
+  configureMemorySqliteWalMaintenance(db, { databasePath: dbPath });
+  // busy_timeout is per-connection and resets to 0 on restart.
+  // Set it on every open so concurrent processes retry instead of
+  // failing immediately with SQLITE_BUSY.
   db.exec("PRAGMA busy_timeout = 5000");
   return db;
 }
