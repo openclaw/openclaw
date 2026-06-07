@@ -5226,6 +5226,11 @@ describe("update-cli", () => {
         }),
     });
     serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
     probeGateway.mockResolvedValue({
       ok: true,
       close: null,
