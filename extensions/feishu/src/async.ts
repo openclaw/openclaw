@@ -55,6 +55,10 @@ export async function raceWithTimeoutAndAbort<T>(
       return { status: "aborted" };
     }
     return { status: "resolved", value: result };
+  } catch {
+    // If the promise rejects (e.g. AxiosError from HTTP timeout),
+    // treat it as a timeout so callers can handle it gracefully.
+    return { status: "timeout" };
   } finally {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
