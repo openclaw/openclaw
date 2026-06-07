@@ -630,9 +630,13 @@ export function shouldPrepareUpdatedInstallRestart(params: {
   serviceInstalled: boolean;
   serviceLoaded: boolean;
   serviceRunning?: boolean;
+  serviceSupervisionMissing?: boolean;
 }): boolean {
   if (isPackageManagerUpdateMode(params.updateMode)) {
-    return params.serviceInstalled || params.serviceRunning === true;
+    return (
+      params.serviceInstalled ||
+      (params.serviceRunning === true && params.serviceSupervisionMissing === true)
+    );
   }
   return params.serviceLoaded;
 }
@@ -3746,6 +3750,9 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
           serviceInstalled: serviceState.installed,
           serviceLoaded: serviceState.loaded,
           serviceRunning: serviceState.running,
+          serviceSupervisionMissing:
+            serviceState.runtime?.missingUnit === true ||
+            serviceState.runtime?.missingSupervision === true,
         })
       ) {
         gatewayServiceEnv = serviceState.env;
