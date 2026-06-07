@@ -240,11 +240,8 @@ function resolveInitialThinkLevel(params: {
   if (params.requested) {
     return params.requested;
   }
-  if (!params.config) {
-    return "off";
-  }
   return resolveThinkingDefault({
-    cfg: params.config,
+    cfg: params.config ?? {},
     provider: params.provider,
     model: params.modelId,
     catalog: [
