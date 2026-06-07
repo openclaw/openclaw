@@ -45,9 +45,19 @@ function resolveAutoEnableProviderPluginIds(
 ): Readonly<Record<string, string>> {
   const entries = new Map<string, string>();
   for (const plugin of registry.plugins) {
-    for (const providerId of plugin.autoEnableWhenConfiguredProviders ?? []) {
+    let providerIds: readonly string[];
+    let pluginId: string;
+    try {
+      providerIds = plugin.autoEnableWhenConfiguredProviders ?? [];
+      pluginId = plugin.id;
+    } catch {
+      // Provider auto-enable metadata is plugin-owned. One unreadable row must
+      // not block configured auth from enabling unrelated provider plugins.
+      continue;
+    }
+    for (const providerId of providerIds) {
       if (!entries.has(providerId)) {
-        entries.set(providerId, plugin.id);
+        entries.set(providerId, pluginId);
       }
     }
   }
