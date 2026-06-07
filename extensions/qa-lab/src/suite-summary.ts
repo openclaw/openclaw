@@ -1,4 +1,6 @@
 // Qa Lab plugin module implements suite summary behavior.
+import fs from "node:fs/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaProviderMode } from "./model-selection.js";
 import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
 
@@ -79,11 +81,46 @@ export function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): num
     };
     scenarios?: Array<QaSuiteScenarioStatus>;
   };
-  if (typeof payload.counts?.failed === "number" && Number.isFinite(payload.counts.failed)) {
-    return Math.max(0, Math.floor(payload.counts.failed));
+  const countedFailures =
+    typeof payload.counts?.failed === "number" && Number.isFinite(payload.counts.failed)
+      ? Math.max(0, Math.floor(payload.counts.failed))
+      : null;
+  const scenarioFailures = Array.isArray(payload.scenarios)
+    ? countQaSuiteFailedScenarios(payload.scenarios)
+    : null;
+  if (countedFailures !== null && scenarioFailures !== null) {
+    return Math.max(countedFailures, scenarioFailures);
   }
-  if (Array.isArray(payload.scenarios)) {
-    return countQaSuiteFailedScenarios(payload.scenarios);
+  if (scenarioFailures !== null) {
+    return scenarioFailures;
   }
-  return null;
+  return countedFailures;
+}
+
+export async function readQaSuiteFailedScenarioCountFromFile(summaryPath: string): Promise<number> {
+  let summaryText: string;
+  try {
+    summaryText = await fs.readFile(summaryPath, "utf8");
+  } catch (error) {
+    throw new Error(
+      `Could not read QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(summaryText) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Could not parse QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+  const failedScenarioCount = readQaSuiteFailedScenarioCountFromSummary(payload);
+  if (failedScenarioCount !== null) {
+    return failedScenarioCount;
+  }
+  throw new Error(
+    `QA summary at ${summaryPath} did not include counts.failed or scenarios[].status.`,
+  );
 }

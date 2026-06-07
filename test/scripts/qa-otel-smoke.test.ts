@@ -2,8 +2,10 @@
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { createConnection as createNetConnection } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/qa-otel-smoke.ts";
@@ -158,6 +160,48 @@ describe("qa-otel-smoke receiver bounds", () => {
       ]);
     } finally {
       await receiver.close();
+    }
+  });
+
+  it("closes active local OTLP receiver sockets during cleanup", async () => {
+    const receiver = testing.startLocalOtlpReceiver();
+    const port = await receiver.listen();
+    const socket = createNetConnection(port, "127.0.0.1");
+    const socketClosed = new Promise<void>((resolve) => {
+      socket.once("close", resolve);
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once("connect", resolve);
+        socket.once("error", reject);
+      });
+      socket.write(
+        [
+          "POST /v1/traces HTTP/1.1",
+          "Host: 127.0.0.1",
+          "Content-Type: application/x-protobuf",
+          "Content-Length: 1048576",
+          "",
+          "x",
+        ].join("\r\n"),
+      );
+
+      await Promise.race([
+        receiver.close(),
+        delay(1_000).then(() => {
+          throw new Error("receiver close timed out");
+        }),
+      ]);
+      await Promise.race([
+        socketClosed,
+        delay(1_000).then(() => {
+          throw new Error("socket close timed out");
+        }),
+      ]);
+    } finally {
+      socket.destroy();
+      await receiver.close().catch(() => {});
     }
   });
 

@@ -245,6 +245,7 @@ export function runCommand(command, args, options = {}) {
       resourceSampleIntervalMs = 1000,
       resourceSampleOptions,
       resourceSamples,
+      requireResourceSample = false,
       sampleProcessImpl = sampleProcess,
       timeoutKillGraceMs = 2000,
       timeoutMs = config.commandTimeoutMs,
@@ -262,6 +263,8 @@ export function runCommand(command, args, options = {}) {
     let forceKillTimer;
     let sampleTimer;
     let resourceSampleInFlight = null;
+    let capturedResourceSampleCount = 0;
+    let lastResourceSampleError = null;
     const commandLabel = resourceLabel ?? [command, ...args.slice(0, 2)].join(" ");
     const shouldSampleResources = Array.isArray(resourceSamples);
     const collectResourceSample = () => {
@@ -272,6 +275,7 @@ export function runCommand(command, args, options = {}) {
         .then(() => sampleProcessImpl(child.pid, resourceSampleOptions ?? {}))
         .then((sample) => {
           if (sample) {
+            capturedResourceSampleCount += 1;
             resourceSamples.push({
               ...sample,
               elapsedMs: Date.now() - startedAt,
@@ -279,7 +283,9 @@ export function runCommand(command, args, options = {}) {
             });
           }
         })
-        .catch(() => {})
+        .catch((error) => {
+          lastResourceSampleError = error;
+        })
         .finally(() => {
           resourceSampleInFlight = null;
         });
@@ -288,6 +294,12 @@ export function runCommand(command, args, options = {}) {
     const stopResourceSampling = async () => {
       clearInterval(sampleTimer);
       await resourceSampleInFlight?.catch(() => {});
+      if (requireResourceSample && capturedResourceSampleCount === 0) {
+        const detail =
+          lastResourceSampleError instanceof Error ? `: ${lastResourceSampleError.message}` : "";
+        return new Error(`${commandLabel} RSS sample was not captured${detail}`);
+      }
+      return null;
     };
     if (shouldSampleResources) {
       void collectResourceSample();
@@ -321,8 +333,12 @@ export function runCommand(command, args, options = {}) {
     child.on("close", (status, signal) => {
       clearTimeout(timer);
       clearTimeout(forceKillTimer);
-      void stopResourceSampling().then(() => {
+      void stopResourceSampling().then((resourceSampleFailure) => {
         if (!timedOut && status === 0) {
+          if (resourceSampleFailure) {
+            reject(resourceSampleFailure);
+            return;
+          }
           resolve({
             stdout: stdout.text,
             stderr: stderr.text,
@@ -379,6 +395,7 @@ async function runOpenClaw(runner, args, env, options = {}) {
     resourceSampleIntervalMs: options.resourceSampleIntervalMs,
     resourceSampleOptions: options.resourceSampleOptions,
     resourceSamples: options.resourceSamples,
+    requireResourceSample: options.requireResourceSample,
     timeoutMs: options.timeoutMs ?? config.commandTimeoutMs,
   });
 }
@@ -1775,6 +1792,7 @@ export async function main() {
     console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
     await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC], env, {
       ...commandResourceOptions,
+      requireResourceSample: true,
       resourceLabel: "plugins install",
       timeoutMs: config.installTimeoutMs,
     });

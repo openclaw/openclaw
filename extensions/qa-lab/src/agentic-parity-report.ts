@@ -177,11 +177,9 @@ export function computeQaAgenticParityMetrics(
   const toolBackedTitleSet: ReadonlySet<string> = new Set(
     QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
   );
-  const totalScenarios = summary.counts?.total ?? scenarios.length;
-  const passedScenarios =
-    summary.counts?.passed ?? scenarios.filter((scenario) => scenario.status === "pass").length;
-  const failedScenarios =
-    summary.counts?.failed ?? scenarios.filter((scenario) => scenario.status === "fail").length;
+  const totalScenarios = scenarios.length;
+  const passedScenarios = scenarios.filter((scenario) => scenario.status === "pass").length;
+  const failedScenarios = scenarios.filter((scenario) => scenario.status === "fail").length;
   const unintendedStopCount = scenarios.filter(
     (scenario) =>
       scenario.status !== "pass" && scenarioHasPattern(scenario, UNINTENDED_STOP_PATTERNS),

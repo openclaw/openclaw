@@ -48,21 +48,26 @@ describe("check-cli-startup-memory", () => {
   });
 
   it("keeps invalid startup memory env values from bypassing budgets", () => {
-    expect(
+    expect(() =>
       testing.readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", 100, {
         OPENCLAW_STARTUP_MEMORY_HELP_MB: "abc",
       }),
-    ).toBe(100);
-    expect(
+    ).toThrow("OPENCLAW_STARTUP_MEMORY_HELP_MB must be a positive number");
+    expect(() =>
       testing.readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", 100, {
         OPENCLAW_STARTUP_MEMORY_HELP_MB: "1e3",
       }),
-    ).toBe(100);
-    expect(
+    ).toThrow("OPENCLAW_STARTUP_MEMORY_HELP_MB must be a positive number");
+    expect(() =>
       testing.readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", 100, {
         OPENCLAW_STARTUP_MEMORY_HELP_MB: "0x10",
       }),
-    ).toBe(100);
+    ).toThrow("OPENCLAW_STARTUP_MEMORY_HELP_MB must be a positive number");
+    expect(() =>
+      testing.readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", 100, {
+        OPENCLAW_STARTUP_MEMORY_HELP_MB: "0",
+      }),
+    ).toThrow("OPENCLAW_STARTUP_MEMORY_HELP_MB must be a positive number");
     expect(
       testing.readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", 100, {
         OPENCLAW_STARTUP_MEMORY_HELP_MB: "125.5",
@@ -71,11 +76,16 @@ describe("check-cli-startup-memory", () => {
   });
 
   it("keeps invalid startup memory timeout env values from parsing loosely", () => {
-    expect(
+    expect(() =>
       testing.readPositiveIntEnv("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS", 60_000, {
         OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: "1e3",
       }),
-    ).toBe(60_000);
+    ).toThrow("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS must be a positive number");
+    expect(() =>
+      testing.readPositiveIntEnv("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS", 60_000, {
+        OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: "1000.5",
+      }),
+    ).toThrow("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS must be a positive integer");
     expect(
       testing.readPositiveIntEnv("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS", 60_000, {
         OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: "1000",

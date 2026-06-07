@@ -20,7 +20,10 @@ let rssHookPath = null;
 
 function readPositiveIntEnv(name, fallback, env = process.env) {
   const value = readPositiveNumberEnv(name, fallback, env);
-  return Number.isInteger(value) ? value : fallback;
+  if (!Number.isInteger(value)) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
 }
 
 function readPositiveNumberEnv(name, fallback, env = process.env) {
@@ -30,10 +33,13 @@ function readPositiveNumberEnv(name, fallback, env = process.env) {
   }
   const text = raw.trim();
   if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {
-    return fallback;
+    throw new Error(`${name} must be a positive number`);
   }
   const value = Number(text);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive number`);
+  }
+  return value;
 }
 
 function readNonEmptyEnv(name) {

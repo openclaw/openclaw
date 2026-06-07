@@ -568,6 +568,36 @@ setInterval(() => {}, 1000);
     expect(samples[0]?.elapsedMs).toBeGreaterThanOrEqual(0);
   });
 
+  it("rejects required command resource proof when sampling captures nothing", async () => {
+    const samples: unknown[] = [];
+
+    await expect(
+      runCommand(process.execPath, ["-e", "setTimeout(() => {}, 50);"], {
+        requireResourceSample: true,
+        resourceLabel: "plugins install",
+        resourceSampleIntervalMs: 1,
+        resourceSamples: samples,
+        sampleProcessImpl: async () => null,
+      }),
+    ).rejects.toThrow("plugins install RSS sample was not captured");
+
+    expect(samples).toEqual([]);
+  });
+
+  it("includes sampler errors in required command resource proof failures", async () => {
+    await expect(
+      runCommand(process.execPath, ["-e", "setTimeout(() => {}, 50);"], {
+        requireResourceSample: true,
+        resourceLabel: "plugins install",
+        resourceSampleIntervalMs: 1,
+        resourceSamples: [],
+        sampleProcessImpl: async () => {
+          throw new Error("ps failed");
+        },
+      }),
+    ).rejects.toThrow("plugins install RSS sample was not captured: ps failed");
+  });
+
   it("rejects command spawn failures as Error objects", async () => {
     await expect(runCommand("openclaw-definitely-missing-command", [])).rejects.toMatchObject({
       code: "ENOENT",

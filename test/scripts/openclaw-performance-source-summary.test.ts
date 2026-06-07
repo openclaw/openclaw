@@ -72,6 +72,7 @@ function writeSourceFixture(sourceDir: string) {
       wallMs: 250,
     },
     run: { primaryModel: "mock-openai/perf" },
+    scenarios: [{ id: "mock-hello", status: "pass" }],
   });
 }
 
@@ -140,6 +141,27 @@ describe("buildMarkdown", () => {
 
     expect(() => buildMarkdown(sourceDir, null)).toThrow(
       "[source-performance] invalid mock hello summary counts:",
+    );
+  });
+
+  it("rejects mock hello summaries without matching scenario evidence", () => {
+    const sourceDir = mkTmpRoot();
+    writeSourceFixture(sourceDir);
+    writeJson(path.join(sourceDir, "mock-hello", "run-001", "qa-suite-summary.json"), {
+      counts: { failed: 0, passed: 1, total: 1 },
+      metrics: {
+        gatewayCpuCoreRatio: 0.15,
+        gatewayProcessRssDeltaBytes: 1024 * 1024,
+        gatewayProcessRssEndBytes: 91 * 1024 * 1024,
+        gatewayProcessRssStartBytes: 90 * 1024 * 1024,
+        wallMs: 250,
+      },
+      run: { primaryModel: "mock-openai/perf" },
+      scenarios: [{ id: "mock-hello", status: "fail" }],
+    });
+
+    expect(() => buildMarkdown(sourceDir, null)).toThrow(
+      "[source-performance] invalid mock hello scenario evidence:",
     );
   });
 

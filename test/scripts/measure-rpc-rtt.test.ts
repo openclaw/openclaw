@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
   cleanupTempRoot,
+  createGatewayClient,
   installGatewayParentCleanup,
   isGatewayProcessAlive,
   parseArgs,
@@ -13,7 +14,66 @@ import {
   waitForGatewayReady,
 } from "../../scripts/measure-rpc-rtt.mjs";
 
+class FakeWebSocket extends EventEmitter {
+  static OPEN = 1;
+  static instances: FakeWebSocket[] = [];
+
+  closed = false;
+  readyState = 0;
+  sent: string[] = [];
+
+  constructor(
+    readonly url: string,
+    readonly options: unknown,
+  ) {
+    super();
+    FakeWebSocket.instances.push(this);
+  }
+
+  send(payload: string, callback?: (error?: Error) => void): void {
+    this.sent.push(payload);
+    callback?.();
+  }
+
+  close(): void {
+    this.closed = true;
+    this.readyState = 3;
+    this.emit("close", 1000, "closed");
+  }
+}
+
 describe("scripts/measure-rpc-rtt.mjs", () => {
+  it("closes websocket clients that time out before opening", async () => {
+    FakeWebSocket.instances = [];
+    const client = createGatewayClient({
+      WebSocket: FakeWebSocket,
+      openTimeoutMs: 1,
+      url: "ws://127.0.0.1:12345",
+    });
+
+    await expect(client.waitOpen()).rejects.toThrow("gateway websocket open timeout");
+    expect(FakeWebSocket.instances[0]?.closed).toBe(true);
+  });
+
+  it("rejects pending websocket requests when cleanup closes the client", async () => {
+    FakeWebSocket.instances = [];
+    const client = createGatewayClient({
+      WebSocket: FakeWebSocket,
+      url: "ws://127.0.0.1:12345",
+    });
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("fake websocket was not created");
+    }
+    socket.readyState = FakeWebSocket.OPEN;
+
+    const request = client.request("health", {}, 10_000);
+    client.close();
+
+    await expect(request).rejects.toThrow("gateway websocket client closed");
+    expect(socket.closed).toBe(true);
+  });
+
   it("parses bounded RPC RTT options strictly", () => {
     expect(
       parseArgs([

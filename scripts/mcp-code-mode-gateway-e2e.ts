@@ -87,6 +87,14 @@ async function readSessionLogMentions(stateDir: string): Promise<Record<string, 
   });
 }
 
+function restoreEnvValue(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+}
+
 async function writeProbeMcpServer(serverPath: string) {
   const sdkMcpServerPath = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
   const sdkStdioServerPath = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
@@ -207,6 +215,11 @@ async function writeConfig(params: {
 export async function main() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-code-mode-"));
   const keep = process.env.OPENCLAW_MCP_CODE_MODE_GATEWAY_E2E_KEEP === "1";
+  const previousEnv = {
+    configPath: process.env.OPENCLAW_CONFIG_PATH,
+    stateDir: process.env.OPENCLAW_STATE_DIR,
+    testFast: process.env.OPENCLAW_TEST_FAST,
+  };
   let provider: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   try {
@@ -300,9 +313,9 @@ export async function main() {
     await server?.close({ reason: "mcp code-mode gateway e2e complete" });
     await provider?.stop();
     resetConfigRuntimeState();
-    delete process.env.OPENCLAW_STATE_DIR;
-    delete process.env.OPENCLAW_CONFIG_PATH;
-    delete process.env.OPENCLAW_TEST_FAST;
+    restoreEnvValue("OPENCLAW_STATE_DIR", previousEnv.stateDir);
+    restoreEnvValue("OPENCLAW_CONFIG_PATH", previousEnv.configPath);
+    restoreEnvValue("OPENCLAW_TEST_FAST", previousEnv.testFast);
     if (!keep) {
       await fs.rm(rootDir, { recursive: true, force: true });
     }

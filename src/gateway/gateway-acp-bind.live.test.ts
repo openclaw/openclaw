@@ -34,6 +34,7 @@ import {
   runOpenClawCliJson,
   shouldRunLiveImageProbe,
 } from "./live-agent-probes.js";
+import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
 import { startGatewayServer } from "./server.js";
 
 const LIVE = isLiveTestEnabled();
@@ -51,6 +52,10 @@ const ACP_CRON_MCP_PROBE_VERIFY_POLL_MS = 1_000;
 const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.5";
 const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
 type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "opencode";
+
+function snapshotAcpBindLiveEnv(): LiveEnvSnapshot {
+  return snapshotLiveEnv(["CODEX_HOME", "OPENCLAW_GATEWAY_PORT"]);
+}
 
 function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number {
   const parsed = raw ? Number(raw) : Number.NaN;
@@ -564,17 +569,7 @@ describeLive("gateway live (ACP bind)", () => {
   it(
     "binds a synthetic Slack DM conversation to a live ACP session and reroutes the next turn",
     async () => {
-      const previous = {
-        configPath: process.env.OPENCLAW_CONFIG_PATH,
-        stateDir: process.env.OPENCLAW_STATE_DIR,
-        token: process.env.OPENCLAW_GATEWAY_TOKEN,
-        port: process.env.OPENCLAW_GATEWAY_PORT,
-        skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-        skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-        skipCron: process.env.OPENCLAW_SKIP_CRON,
-        skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-        codexHome: process.env.CODEX_HOME,
-      };
+      const previousEnv = snapshotAcpBindLiveEnv();
       const liveAgent = normalizeAcpAgent(process.env.OPENCLAW_LIVE_ACP_BIND_AGENT);
       const agentCommandOverride =
         process.env.OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND?.trim() || undefined;
@@ -591,6 +586,11 @@ describeLive("gateway live (ACP bind)", () => {
       const followupNonce = randomBytes(4).toString("hex").toUpperCase();
       const recallNonce = randomBytes(4).toString("hex").toUpperCase();
       const memoryNonce = randomBytes(4).toString("hex").toUpperCase();
+      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+      let client: GatewayClient | undefined;
+      let pinnedChannelRegistry:
+        | ReturnType<typeof createSlackCurrentConversationBindingRegistry>
+        | undefined;
 
       clearRuntimeConfigSnapshot();
       process.env.OPENCLAW_STATE_DIR = tempStateDir;
@@ -689,25 +689,26 @@ describeLive("gateway live (ACP bind)", () => {
       clearPluginLoaderCache();
       resetPluginRuntimeStateForTest();
 
-      logLiveStep(`starting gateway on port ${String(port)}`);
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
-      logLiveStep("gateway startup returned");
-      await waitForGatewayPort({ host: "127.0.0.1", port, timeoutMs: CONNECT_TIMEOUT_MS });
-      logLiveStep("gateway port is reachable");
-      const client = await connectClient({
-        url: `ws://127.0.0.1:${port}`,
-        token,
-        timeoutMs: CONNECT_TIMEOUT_MS,
-      });
-      logLiveStep("gateway websocket connected");
-      const channelRegistry = createSlackCurrentConversationBindingRegistry();
-      pinActivePluginChannelRegistry(channelRegistry);
-
       try {
+        logLiveStep(`starting gateway on port ${String(port)}`);
+        server = await startGatewayServer(port, {
+          bind: "loopback",
+          auth: { mode: "token", token },
+          controlUiEnabled: false,
+        });
+        logLiveStep("gateway startup returned");
+        await waitForGatewayPort({ host: "127.0.0.1", port, timeoutMs: CONNECT_TIMEOUT_MS });
+        logLiveStep("gateway port is reachable");
+        client = await connectClient({
+          url: `ws://127.0.0.1:${port}`,
+          token,
+          timeoutMs: CONNECT_TIMEOUT_MS,
+        });
+        logLiveStep("gateway websocket connected");
+        const channelRegistry = createSlackCurrentConversationBindingRegistry();
+        pinActivePluginChannelRegistry(channelRegistry);
+        pinnedChannelRegistry = channelRegistry;
+
         const bindResult = await bindConversationAndWait({
           client,
           sessionKey: originalSessionKey,
@@ -1077,56 +1078,17 @@ describeLive("gateway live (ACP bind)", () => {
         );
         logLiveStep("bound session created cron via MCP and CLI verification passed");
       } finally {
-        releasePinnedPluginChannelRegistry(channelRegistry);
-        clearConfigCache();
-        clearRuntimeConfigSnapshot();
-        await client.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});
-        await server.close();
-        await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-        if (previous.configPath === undefined) {
-          delete process.env.OPENCLAW_CONFIG_PATH;
-        } else {
-          process.env.OPENCLAW_CONFIG_PATH = previous.configPath;
-        }
-        if (previous.stateDir === undefined) {
-          delete process.env.OPENCLAW_STATE_DIR;
-        } else {
-          process.env.OPENCLAW_STATE_DIR = previous.stateDir;
-        }
-        if (previous.token === undefined) {
-          delete process.env.OPENCLAW_GATEWAY_TOKEN;
-        } else {
-          process.env.OPENCLAW_GATEWAY_TOKEN = previous.token;
-        }
-        if (previous.port === undefined) {
-          delete process.env.OPENCLAW_GATEWAY_PORT;
-        } else {
-          process.env.OPENCLAW_GATEWAY_PORT = previous.port;
-        }
-        if (previous.skipChannels === undefined) {
-          delete process.env.OPENCLAW_SKIP_CHANNELS;
-        } else {
-          process.env.OPENCLAW_SKIP_CHANNELS = previous.skipChannels;
-        }
-        if (previous.skipGmail === undefined) {
-          delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-        } else {
-          process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previous.skipGmail;
-        }
-        if (previous.skipCron === undefined) {
-          delete process.env.OPENCLAW_SKIP_CRON;
-        } else {
-          process.env.OPENCLAW_SKIP_CRON = previous.skipCron;
-        }
-        if (previous.skipCanvas === undefined) {
-          delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
-        } else {
-          process.env.OPENCLAW_SKIP_CANVAS_HOST = previous.skipCanvas;
-        }
-        if (previous.codexHome === undefined) {
-          delete process.env.CODEX_HOME;
-        } else {
-          process.env.CODEX_HOME = previous.codexHome;
+        try {
+          if (pinnedChannelRegistry) {
+            releasePinnedPluginChannelRegistry(pinnedChannelRegistry);
+          }
+          clearConfigCache();
+          clearRuntimeConfigSnapshot();
+          await client?.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});
+          await server?.close();
+        } finally {
+          await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+          restoreLiveEnv(previousEnv);
         }
       }
     },
