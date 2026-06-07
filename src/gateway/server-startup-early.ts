@@ -133,6 +133,32 @@ export async function startGatewayEarlyRuntime(params: {
     taskRegistryMaintenance.startTaskRegistryMaintenance();
     getActiveTaskCount = () =>
       taskRegistryMaintenance.getInspectableActiveTaskRestartBlockers().length;
+
+    // Reclaim orphaned atomic-write temp files from previous crash cycles.
+    // `writeTextAtomic` stages into `<store>.<pid>.<uuid>.tmp` then renames;
+    // a crash between write and rename leaves the temp behind (#56827).
+    void measureStartup(params.startupTrace, "runtime.early.orphan-tmp-sweep", async () => {
+      const { sweepOrphanStoreTempsSync } = await import("../config/sessions/disk-budget.js");
+      const { resolveStorePath } = await import("../config/sessions/paths.js");
+      const { DEFAULT_AGENT_ID } = await import("../routing/session-key.js");
+      const path = await import("node:path");
+      const storePath = resolveStorePath(params.cfgAtStart.session?.store, {
+        agentId: DEFAULT_AGENT_ID,
+      });
+      const sessionsDir = path.dirname(storePath);
+      const storeBasename = path.basename(storePath);
+      const result = sweepOrphanStoreTempsSync(sessionsDir, storeBasename, {
+        log: {
+          info: (msg: string, ctx?: Record<string, unknown>) => params.log.info(msg),
+          warn: (msg: string, ctx?: Record<string, unknown>) => params.log.warn(msg),
+        },
+      });
+      if (result.removedFiles > 0) {
+        params.log.info(
+          `swept ${result.removedFiles} orphaned .tmp files (${(result.freedBytes / 1024).toFixed(1)} KB freed)`,
+        );
+      }
+    });
   }
 
   const skillsChangeUnsub = params.minimalTestGateway

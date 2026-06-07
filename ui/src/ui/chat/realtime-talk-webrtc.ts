@@ -69,6 +69,11 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       }
     });
     this.media = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // stop() may have been called during the getUserMedia await (e.g. user denied permission
+    // or cancelled the session), which nullifies this.peer — guard before addTrack.
+    if (!this.peer) {
+      throw new Error("Realtime Talk session was closed during microphone setup");
+    }
     for (const track of this.media.getAudioTracks()) {
       this.peer.addTrack(track, this.media);
     }

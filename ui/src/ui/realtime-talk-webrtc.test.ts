@@ -719,4 +719,44 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     });
     transport.stop();
   });
+
+  it("throws a clear error when stop() is called during getUserMedia", async () => {
+    let resolveGetUserMedia: (stream: MediaStream) => void;
+    const getUserMediaPromise = new Promise<MediaStream>((resolve) => {
+      resolveGetUserMedia = resolve;
+    });
+    const track = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const stream = {
+      getAudioTracks: () => [track],
+      getTracks: () => [track],
+    } as unknown as MediaStream;
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn(async () => getUserMediaPromise),
+      },
+    });
+
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      {
+        provider: "openai",
+        transport: "webrtc",
+        clientSecret: "client-secret-123",
+      },
+      {
+        client: {} as never,
+        sessionKey: "main",
+        callbacks: {},
+      },
+    );
+
+    const startPromise = transport.start();
+    // Simulate stop() being called during the getUserMedia await
+    transport.stop();
+    // Now resolve getUserMedia — start() should throw
+    resolveGetUserMedia!(stream);
+    await expect(startPromise).rejects.toThrow(
+      "Realtime Talk session was closed during microphone setup",
+    );
+  });
 });
