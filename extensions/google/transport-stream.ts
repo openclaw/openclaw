@@ -392,8 +392,12 @@ function buildGoogleVertexRequestUrl(
   model: GoogleTransportModel,
   options: GoogleTransportOptions | undefined,
 ): string {
-  const project = encodeURIComponent(resolveGoogleVertexProject(options));
-  const location = encodeURIComponent(resolveGoogleVertexLocation(options));
+  const project = encodeURIComponent(
+    resolveGoogleVertexProject(options as { project?: unknown } | undefined),
+  );
+  const location = encodeURIComponent(
+    resolveGoogleVertexLocation(options as { location?: unknown } | undefined),
+  );
   const modelId = encodeURIComponent(model.id);
   const origin = resolveGoogleVertexBaseOrigin(model, decodeURIComponent(location));
   return `${origin}/${GOOGLE_VERTEX_DEFAULT_API_VERSION}/projects/${project}/locations/${location}/publishers/google/models/${modelId}:streamGenerateContent?alt=sse`;

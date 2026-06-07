@@ -545,10 +545,9 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       const client = createGoogleGenAI({
         ...(isVertex
           ? {
-              vertexai: {
-                project: resolveGoogleVertexProject(),
-                location: resolveGoogleVertexLocation(),
-              },
+              vertexai: true,
+              project: resolveGoogleVertexProject(),
+              location: resolveGoogleVertexLocation(),
             }
           : { apiKey }),
         httpOptions: {
