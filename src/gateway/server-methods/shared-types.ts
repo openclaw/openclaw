@@ -103,6 +103,8 @@ export type GatewayRequestContext = {
   chatDeltaLastBroadcastText: Map<string, string>;
   agentDeltaSentAt: Map<string, number>;
   bufferedAgentEvents: Map<string, BufferedAgentEvent>;
+  chatSendReceivedAt: Map<string, number>;
+  firstOutputEmitted: Map<string, boolean>;
   clearChatRunState: (runId: string) => void;
   addChatRun: (
     sessionId: string,

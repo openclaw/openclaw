@@ -88,6 +88,10 @@ export type ChatRunState = {
   agentDeltaSentAt: Map<string, number>;
   bufferedAgentEvents: Map<string, BufferedAgentEvent>;
   abortedRuns: Map<string, number>;
+  /** Time (performance.now) when the chat.send request was received, keyed by clientRunId. */
+  chatSendReceivedAt: Map<string, number>;
+  /** Whether the first-output timing has been emitted for a run, keyed by clientRunId. */
+  firstOutputEmitted: Map<string, boolean>;
   clearRun: (runId: string) => void;
   clear: () => void;
 };
@@ -104,6 +108,8 @@ export function createChatRunState(): ChatRunState {
   const agentDeltaSentAt = new Map<string, number>();
   const bufferedAgentEvents = new Map<string, BufferedAgentEvent>();
   const abortedRuns = new Map<string, number>();
+  const chatSendReceivedAt = new Map<string, number>();
+  const firstOutputEmitted = new Map<string, boolean>();
 
   const clearRun = (runId: string) => {
     rawBuffers.delete(runId);
@@ -112,6 +118,8 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt.delete(runId);
     deltaLastBroadcastLen.delete(runId);
     deltaLastBroadcastText.delete(runId);
+    chatSendReceivedAt.delete(runId);
+    firstOutputEmitted.delete(runId);
     for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
       agentDeltaSentAt.delete(key);
       bufferedAgentEvents.delete(key);
@@ -129,6 +137,8 @@ export function createChatRunState(): ChatRunState {
     agentDeltaSentAt.clear();
     bufferedAgentEvents.clear();
     abortedRuns.clear();
+    chatSendReceivedAt.clear();
+    firstOutputEmitted.clear();
   };
 
   return {
@@ -142,6 +152,8 @@ export function createChatRunState(): ChatRunState {
     agentDeltaSentAt,
     bufferedAgentEvents,
     abortedRuns,
+    chatSendReceivedAt,
+    firstOutputEmitted,
     clearRun,
     clear,
   };
