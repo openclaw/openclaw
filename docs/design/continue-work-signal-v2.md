@@ -43,7 +43,7 @@ Targeted delegate return is the banner routing primitive: one child can grant an
   - [5.1 Core configuration surface](#51-core-configuration-surface)
   - [5.2 Human-user profiles](#52-human-user-profiles)
   - [5.3 Wide fan-out patterns](#53-wide-fan-out-patterns)
-  - [5.4 TaskFlow backing and durable delegate queues](#54-taskflow-backing-and-durable-delegate-queues)
+  - [5.4 TaskFlow backing for same-session work and delegates](#54-taskflow-backing-for-same-session-work-and-delegates)
 - [6. Observability](#6-observability)
   - [6.1 Diagnostic log anchors](#61-diagnostic-log-anchors)
   - [6.2 Lifecycle traces](#62-lifecycle-traces)
@@ -139,7 +139,7 @@ This RFC uses the following terms consistently:
 | **temporal shard**     | Work split across time rather than only across simultaneous agents.                                                                                                                                            |
 | **substrate**          | The mechanism that carries a continuation path: process timer/reservation, TaskFlow, session-delivery queue, or compaction lifecycle.                                                                          |
 | **broker**             | Gateway code that translates agent intent into substrate mechanics and policy enforcement.                                                                                                                     |
-| **TaskFlow**           | The managed-work SQLite-backed substrate used for tool-path pending delegates and post-compaction staging.                                                                                                     |
+| **TaskFlow**           | The managed-work SQLite-backed substrate used for same-session `continue_work` elections, pending delegates, and post-compaction staging.                                                                      |
 | **OTel**               | OpenTelemetry trace emission through `extensions/diagnostics-otel`.                                                                                                                                            |
 
 Status markers:
@@ -178,6 +178,10 @@ This yields a strict two-interface model:
 **Behavior:** calling `continue_work()` schedules a future turn and the current turn completes normally. The call does not terminate the active turn, and it does not force an immediate second generation inside the same turn.
 
 If `delaySeconds` is 30 and the current turn is still active, the 30-second timer starts **after turn completion**, not when the tool call is emitted. The same timing model applies to the `CONTINUE_WORK:30` response token.
+
+**Shipped behavior:** same-session continuation is a durable TaskFlow election. The tool form and response-token fallback both converge on a `continuation_work` row that records the session key, hop, delay, due time, election time, reason, parent run, and chain metadata. In-process timers are hedge timers only: they may mature a due row promptly, but they are not the source of truth. Gateway startup recovery re-arms or matures queued work from TaskFlow.
+
+When a `continuation_work` row matures, the dispatcher grants a turn to the **same session** directly through the universal reply executor (`getReplyFromConfig`) with a `[continuation:wake]` system event. It does not call `requestHeartbeatNow()` or `runHeartbeatOnce()`, because heartbeat registration, active-hours, deferral, and busy skip gates are heartbeat policy rather than same-session continuation policy. The session-store entry must still exist when the row matures, so sub-agent cleanup and archive sweeps retain child sessions with live or recently granted continuation work.
 
 **Safety model:** the scheduled continuation remains subject to chain-length and token-budget guards. If the session has already exhausted its configured continuation budget, the call is rejected and the agent may stop, persist state to files, or choose another recovery path.
 
@@ -348,7 +352,7 @@ The hierarchy is a decision rule, not a user-facing mode switch. Tier 2 is selec
 2. **Prefer structured invocation.** Tools avoid the fragility of regex parsing and allow explicit schemas.
 3. **Support width.** Fleet-scale fan-out requires multiple delegates in one turn; the response-token path cannot express that efficiently.
 4. **Keep the interface self-describing.** When tools are available, the continuation surface appears explicitly in the tool inventory rather than relying on prior knowledge of terminal tokens.
-5. **Reuse implementation paths.** Tools and response tokens converge on the same scheduler and dispatch machinery.
+5. **Reuse implementation paths.** Tools and response tokens converge on the same signal extraction, TaskFlow scheduling, budget, and dispatch machinery.
 
 In OpenClaw, `continue_work()` is the first primitive that lets an agent say “I am not done yet” without trapping it in a loop that cannot also say “I am done.”
 
@@ -359,13 +363,14 @@ In OpenClaw, `continue_work()` is the first primitive that lets an agent say “
 The implementation hooks into existing gateway layers rather than adding a parallel runner.
 
 1. **Token parsing:** `parseContinuationSignal()` and `stripContinuationSignal()` in `src/auto-reply/tokens.ts` detect and remove continuation tokens from displayed output.
-2. **Signal detection:** `runReplyAgent()` in `src/auto-reply/reply/agent-runner.ts` inspects finalized text payloads before follow-up finalization.
-3. **Turn scheduling:** `scheduleContinuationTurn()` in `src/auto-reply/reply/session-updates.ts` injects `[continuation:wake]` through the existing system-event queue.
-4. **Delegate queueing:** tool-path delegates are enqueued via `enqueuePendingDelegate()` into TaskFlow and consumed after the response finishes or after a follow-up/announce boundary drains the same queue.
-5. **Return routing:** delegate completions resolve default, explicit, multi-recipient, tree, or host-wide return targets and deliver same-host targeted returns through `session-delivery-queue`.
-6. **Lifecycle dispatch:** post-compaction delegates are staged in the TaskFlow-backed post-compaction queue and released through the compaction completion path into `session-delivery-queue` delivery.
+2. **Signal detection:** the main reply runner, follow-up runner, and spawn-init attempt path inspect finalized payloads and typed tool callbacks with `extractContinuationSignal()`, so typed `continue_work()` and `CONTINUE_WORK[:N]` fallback produce the same work signal.
+3. **Same-session work scheduling:** `scheduleContinuationWork()` persists a `continuation_work` TaskFlow row and advances continuation chain state after the current turn completes. The row, not the timer handle, is the durable election.
+4. **Same-session work dispatch:** `dispatchPendingContinuationWork()` consumes matured rows, enqueues `[continuation:wake]`, checks that the elected session is present and not already active, then calls `getReplyFromConfig()` directly for that same `SessionKey`. Busy sessions are requeued instead of orphaned.
+5. **Delegate queueing:** tool-path delegates are enqueued via `enqueuePendingDelegate()` into TaskFlow and consumed after the response finishes or after a follow-up/announce boundary drains the same queue.
+6. **Return routing:** delegate completions resolve default, explicit, multi-recipient, tree, or host-wide return targets and deliver same-host targeted returns through `session-delivery-queue`.
+7. **Lifecycle dispatch:** post-compaction delegates are staged in the TaskFlow-backed post-compaction queue and released through the compaction completion path into `session-delivery-queue` delivery.
 
-No new transport layer is introduced. Continuation uses system events, existing sub-agent dispatch, same-host session delivery, and the standard inbound-message wake path.
+No new transport layer is introduced. Continuation uses system events, existing sub-agent dispatch, same-host session delivery, and the standard reply executor. Same-session `continue_work` deliberately avoids the heartbeat wake substrate; silent delegate returns still use their existing wake path.
 
 ### 3.2 Delegate dispatch walkthrough
 
@@ -398,11 +403,12 @@ For the typed tool path, the gateway instead writes a TaskFlow row:
 
 The durability contract is path-specific:
 
-| Path                               | Pre-spawn state                                                         | Restart behavior                                                                                                                   |
-| ---------------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Response-token fallback with `+Ns` | Process reservation plus timer handle                                   | Timer/reservation are process-scoped and are lost on gateway restart.                                                              |
-| Tool `continue_delegate()`         | TaskFlow queued row                                                     | Queued work survives restart; exact hedge timer state is process-scoped and may be re-established by a later drain/recovery path.  |
-| `mode="post-compaction"`           | TaskFlow staged row, then session-delivery queue entry after compaction | Staged work survives until consumed, expired, cancelled, or released; queued post-compaction delivery has retry/restart semantics. |
+| Path                             | Pre-dispatch state                                                      | Restart behavior                                                                                                                   |
+| -------------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `continue_work()` tool or token  | TaskFlow `continuation_work` row plus optional hedge timer              | Queued work survives restart; exact hedge timer state is process-scoped and is re-established by recovery or later dispatch.       |
+| Delegate response-token fallback | Process reservation plus timer handle                                   | Timer/reservation are process-scoped and are lost on gateway restart.                                                              |
+| Tool `continue_delegate()`       | TaskFlow queued row                                                     | Queued work survives restart; exact hedge timer state is process-scoped and may be re-established by a later drain/recovery path.  |
+| `mode="post-compaction"`         | TaskFlow staged row, then session-delivery queue entry after compaction | Staged work survives until consumed, expired, cancelled, or released; queued post-compaction delivery has retry/restart semantics. |
 
 ```mermaid
 sequenceDiagram
@@ -588,13 +594,13 @@ delivery:
 
 Continuation is not carried by one substrate. Each path has its own persistence and failure semantics:
 
-| Path                                             | Substrate                              | Durability                                                                              | Important failure behavior                                                                           |
-| ------------------------------------------------ | -------------------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Same-session `continue_work()` wake              | System-event queue plus process timer  | Timer handle is process-scoped; emitted wake is session-scoped once enqueued            | Explicit user/directive reset cancels timers and clears chain state.                                 |
-| Response-token `[[CONTINUE_DELEGATE: ... +Ns]]`  | Process reservation plus process timer | Reservation/timer do not survive gateway restart                                        | Exact delayed work can be lost on restart or explicit reset before spawn.                            |
-| Tool `continue_delegate()`                       | TaskFlow pending-delegate queue        | Queued row survives restart until consumed, cancelled, failed, or completed             | Unmatured rows remain queued; corrupt rows are logged and failed via `failFlow`.                     |
-| Tool `continue_delegate(mode="post-compaction")` | TaskFlow post-compaction staging       | Staged row survives until compaction release, cancellation, stale TTL, or queue failure | Release consumes `maxDelegatesPerTurn` budget and may drop stale/overflow work.                      |
-| Post-compaction delivery after release           | `session-delivery-queue`               | Filesystem-backed atomic write with retry/restart recovery                              | Failed entries move to `failed/`; retry cap emits `[session-delivery-queue:retry-budget-exhausted]`. |
+| Path                                             | Substrate                                            | Durability                                                                                            | Important failure behavior                                                                           |
+| ------------------------------------------------ | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Same-session `continue_work()` wake              | TaskFlow `continuation_work` plus system-event queue | Queued row survives restart; hedge timer is process-scoped and re-established by recovery or dispatch | Explicit user/directive reset cancels queued work, timers, and chain state.                          |
+| Response-token `[[CONTINUE_DELEGATE: ... +Ns]]`  | Process reservation plus process timer               | Reservation/timer do not survive gateway restart                                                      | Exact delayed work can be lost on restart or explicit reset before spawn.                            |
+| Tool `continue_delegate()`                       | TaskFlow pending-delegate queue                      | Queued row survives restart until consumed, cancelled, failed, or completed                           | Unmatured rows remain queued; corrupt rows are logged and failed via `failFlow`.                     |
+| Tool `continue_delegate(mode="post-compaction")` | TaskFlow post-compaction staging                     | Staged row survives until compaction release, cancellation, stale TTL, or queue failure               | Release consumes `maxDelegatesPerTurn` budget and may drop stale/overflow work.                      |
+| Post-compaction delivery after release           | `session-delivery-queue`                             | Filesystem-backed atomic write with retry/restart recovery                                            | Failed entries move to `failed/`; retry cap emits `[session-delivery-queue:retry-budget-exhausted]`. |
 
 **Session-delivery queue scope.** `session-delivery-queue` is a local-gateway substrate keyed by `sessionKey`. It accepts `systemEvent`, `agentTurn`, and `postCompactionDelegate` payloads against addressable sessions in the same gateway namespace. It is load-bearing for restart-recovered session deliveries and post-compaction delegate delivery; it is not the ordinary substrate for tool-path pending delegates before compaction.
 
@@ -837,19 +843,20 @@ The continuation primitives — `continue_work`, `continue_delegate`, `request_c
 
 **Enforcement.** The capability registry at `src/infra/substrate-capability-registry.ts` mechanizes this review discipline as an explicit inventory of substrate capabilities, including `session-delivery-queue`, TaskFlow, and chain-budget-at-spawn behavior for queue-drained post-compaction delegates. There is no shipped `pnpm lint:substrate-adoption` script in this checkout; the registry is the shipped artifact, and bespoke transport remains possible when it carries a named functional reason.
 
-The agent supplies structured intent (`delaySeconds`, `mode`, `reason`, task, and optional return targets); the tool's code path picks the substrate (process timer/reservation, TaskFlow, or `session-delivery-queue`, see §3.6), the lifecycle hook (compaction-pending vs. immediate dispatch, see §4.5), and the wire (same-host session addressing today, cross-host addressing only when supported). The agent never names a substrate, hook, or wire — those are the tool's job.
+The agent supplies structured intent (`delaySeconds`, `mode`, `reason`, task, and optional return targets); the tool's code path picks the substrate (TaskFlow, process timer/reservation, or `session-delivery-queue`, see §3.6), the lifecycle hook (compaction-pending vs. immediate dispatch, see §4.5), and the wire (same-host session addressing today, cross-host addressing only when supported). The agent never names a substrate, hook, or wire — those are the tool's job.
 
 ```mermaid
 flowchart LR
     Agent["Agent intent<br/>delaySeconds / mode / reason / task"] --> Tool["Tool surface<br/>continue_work / continue_delegate / request_compaction"]
     Tool --> Broker["Gateway broker<br/>policy, lifecycle, routing"]
-    Broker --> Timer["Process timer<br/>same-session wake / response-token delay"]
-    Broker --> TaskFlow["TaskFlow<br/>pending tool delegates"]
+    Broker --> TaskFlow["TaskFlow<br/>same-session work / pending delegates"]
+    Broker --> Timer["Process timer<br/>hedge or response-token reservation"]
     Broker --> Queue["session-delivery-queue<br/>targeted returns / post-compaction delivery / restart recovery"]
     Broker --> Compaction["Compaction lane<br/>request + after_compaction hooks"]
     Broker --> Diag["diagnostic event surface<br/>message.queued / session.state / run fireReason"]
-    Timer --> Wake["system event + heartbeat wake"]
+    TaskFlow --> Direct["same-session getReplyFromConfig"]
     TaskFlow --> Spawn["spawnSubagentDirect"]
+    Timer --> Wake["dispatch hedge / legacy wake"]
     TaskFlow --> Metrics["continuation queue metrics provider<br/>depths, drain rates, top queues"]
     Metrics --> Diag
     Queue --> Spawn
@@ -870,7 +877,7 @@ flowchart LR
 | --------- | ----------------------------------------------------------------------------------------------------------- |
 | Agent     | `task`, `mode` (`silent` / `silent-wake` / `post-compaction`), `delaySeconds`, optional return target       |
 | Tool      | TaskFlow enqueue/stage, hedge timer, target resolution, post-compaction queue handoff, span emission (§6.6) |
-| Substrate | path-specific persistence and retry: process timer, TaskFlow row, or queue record (§3.6)                    |
+| Substrate | path-specific persistence and retry: TaskFlow row, process timer/reservation, or queue record (§3.6)        |
 
 **Worked example — projected stream-publish tool surface:** the same shape. The agent supplies stream reference, payload bytes, and mode (`broadcast` vs. `addressed`); the tool picks UDP fan-out (substrate: ringbuffer / station-broadcast) vs. an `enqueueSessionDelivery` bridge (substrate: §3.6 queue) underneath. The boundary-line is identical to `continue_delegate`'s; the substrate differs. The specific stream-publish tracker is external to this RFC and is included only as an illustration of the broker discipline.
 
@@ -1021,23 +1028,23 @@ Explicit cross-session delegate targeting — `targetSessionKey`, `targetSession
 
 The gate addresses the model-controlled cross-session context-injection surface: without it, a continuation-enabled session can affect unrelated sessions on the same host. With the gate default-deny, operators explicitly opt in to cross-session targeting when their deployment model requires it. Enforcement is live-read at tool validation, TaskFlow delegate dispatch, post-compaction delegate release, and bracket-syntax spawn, so a config reload changes the next enforcement point without restarting the gateway.
 
-### 5.4 TaskFlow backing and durable delegate queues
+### 5.4 TaskFlow backing for same-session work and delegates
 
-Tool-path pending delegates are backed by TaskFlow (SQLite persistence) unconditionally. There is no opt-out. Response-token delayed reservations and concrete timer handles remain process-scoped, as described in §3.2.
+Same-session `continue_work` elections and tool-path pending delegates are backed by TaskFlow (SQLite persistence) unconditionally. There is no opt-out. Concrete hedge timer handles remain process-scoped, but they only prompt dispatch of durable rows; they are not the continuation record. Delegate response-token delayed reservations remain process-scoped, as described in §3.2.
 
-`enqueuePendingDelegate()` and `consumePendingDelegates()` use `createManagedTaskFlow()` with `controllerId = "core/continuation-delegate"`.
+`enqueuePendingWork()` / `consumePendingWork()` use `createManagedTaskFlow()` with `controllerId = "core/continuation-work"`. `enqueuePendingDelegate()` and `consumePendingDelegates()` use `createManagedTaskFlow()` with `controllerId = "core/continuation-delegate"`.
 
 This provides:
 
-| Capability                 | Volatile store | TaskFlow                                                      |
-| -------------------------- | -------------- | ------------------------------------------------------------- |
-| Persistence across restart | ❌             | ✅ SQLite-backed                                              |
-| Cancel semantics           | basic drain    | `requestFlowCancel`, terminal cancellation state, audit trail |
-| Lifecycle tracking         | minimal        | queued, spawned, succeeded, cancelled                         |
-| Observability              | manual logging | TaskFlow registry queries                                     |
-| Session isolation          | map key        | flow scoping                                                  |
+| Capability                 | Volatile store | TaskFlow                                                        |
+| -------------------------- | -------------- | --------------------------------------------------------------- |
+| Persistence across restart | ❌             | ✅ SQLite-backed                                                |
+| Cancel semantics           | basic drain    | `requestFlowCancel`, terminal cancellation state, audit trail   |
+| Lifecycle tracking         | minimal        | queued, running/released, granted/spawned, succeeded, cancelled |
+| Observability              | manual logging | TaskFlow registry queries                                       |
+| Session isolation          | map key        | flow scoping                                                    |
 
-TaskFlow therefore aligns continuation delegates with the platform’s broader managed-work infrastructure without changing the public continuation API.
+TaskFlow therefore aligns same-session continuation work and continuation delegates with the platform’s broader managed-work infrastructure without changing the public continuation API.
 
 ## 6. Observability
 
@@ -1051,6 +1058,9 @@ The implementation emits stable log anchors for the major continuation lifecycle
 | `[context-pressure:noop]`                         | `context-pressure.ts`                | pre-condition or guard suppressed the check (debug-level, see below) |
 | `[system:context-pressure]`                       | system-event queue                   | event included in the next system prompt                             |
 | `[continue_delegate:enqueue]`                     | `continue-delegate-tool.ts`          | tool call enqueued delegate work                                     |
+| `[continuation:work-wake]`                        | `work-dispatch.ts`                   | matured same-session work row is granting a turn                     |
+| `[continuation:work-drive-skipped]`               | `work-dispatch.ts`                   | same-session turn grant did not run and was requeued or failed       |
+| `[continuation:work-hedge-armed]`                 | `work-dispatch.ts`                   | process-local hedge timer was armed for the next durable work dueAt  |
 | `[continuation:delegate-pending]`                 | `agent-runner.ts`                    | delegate chain state registered                                      |
 | `[continuation:delegate-spawned]`                 | `agent-runner.ts`                    | child dispatched after delay or immediate acceptance                 |
 | `[continuation/silent-wake]`                      | `subagent-announce.ts`               | silent return will wake the parent                                   |
@@ -1577,7 +1587,7 @@ The deferred test (`10-H1`) concerned fallback behavior under `tools.deny`; the 
 2. **LLMs confabulate absent enrichment.** When asked about enrichment that had not arrived, agents sometimes produced plausible but invented content. External verification is therefore mandatory for high-confidence recall.
 3. **Runtime testing found issues that code review missed.** The missing `doToolSpawn()` drain flag and the missing request-compaction wiring both survived prior review.
 4. **Continuation is resilient under pressure, but only with correct routing metadata.** Silent-wake, post-compaction dispatch, and sub-agent tool access all depend on small pieces of topology data being preserved end to end.
-5. **Session reset is an interruption boundary.** Explicit directive or inline-action reset cancels process timers, clears delayed reservations, resets chain state, and deletes pending TaskFlow delegates for the session. Delayed work should not be described as surviving `/new` unless a future substrate explicitly provides that behavior.
+5. **Session reset is an interruption boundary.** Explicit directive or inline-action reset cancels process timers, clears delayed reservations, resets chain state, and deletes pending TaskFlow work/delegates for the session. Delayed work should not be described as surviving `/new` unless the reset path explicitly preserves that substrate.
 
 ## 10. Discussion and Future Work
 
@@ -1593,7 +1603,7 @@ The implemented capability consists of these connected parts:
 4. `request_compaction()` for volitional compaction after preparation (§2.5, §4.3).
 5. Post-compaction delegate release for lifecycle-aware recovery: pre-compaction work staged electively and released directly into the post-compaction lifecycle event (§4.4).
 6. Tool-primary design with response-token fallback for environments where tools are unavailable (§2.6, §2.7).
-7. Path-specific substrates: process timers for ephemeral reservations, TaskFlow for pending/staged delegates, and `session-delivery-queue` for targeted delegate returns, restart-recovered deliveries, and post-compaction handoff (§3.6).
+7. Path-specific substrates: TaskFlow for same-session `continue_work`, pending delegates, and staged delegates; process timers only as ephemeral hedge/reservation prompts; and `session-delivery-queue` for targeted delegate returns, restart-recovered deliveries, and post-compaction handoff (§3.6).
 
 The feature ships disabled by default, respects human-user guardrails, and integrates with the existing compaction and sub-agent machinery rather than replacing it.
 
@@ -1718,7 +1728,7 @@ The continuation system inherits three broader limitations from persistent deplo
 
 1. **Self-bound context occlusion.** Too many recurring lifecycle messages can displace the agent's useful conversational context.
 2. **Channel context poisoning.** In open-listen multi-agent channels, one agent's passive status messages can influence the rest of the fleet.
-3. **Timer-handle volatility.** TaskFlow and `session-delivery-queue` provide durable records for their paths, but concrete in-process timer handles and response-token delayed reservations can still be lost on restart; recovery may preserve some work while changing exact wake timing.
+3. **Timer-handle volatility.** TaskFlow and `session-delivery-queue` provide durable records for their paths, including same-session `continue_work`; concrete in-process hedge timer handles and any remaining response-token delayed reservations can still be lost on restart. Recovery preserves the durable work while possibly changing exact wake timing.
 
 These are not correctness bugs in continuation itself, but they materially shape safe deployment and future design work.
 
@@ -1752,18 +1762,18 @@ The key property is **pre-run inclusion**: the event is enqueued and then draine
 
 ### D.2 Evidence locations
 
-| Artifact                                      | Location                                                                                                                                                                          |
-| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Continuation runtime config defaults          | `src/auto-reply/continuation/config.ts`, `src/config/types.agent-defaults.ts`, `src/config/zod-schema.agent-defaults.ts`                                                          |
-| `continue_work()` scheduling and cancellation | `src/auto-reply/continuation/scheduler.ts` + colocated tests                                                                                                                      |
-| `continue_delegate()` tool schema             | `src/agents/tools/continue-delegate-tool.ts` + `src/agents/tools/continuation-tools-registration.test.ts`                                                                         |
-| Return-target resolution and delivery         | `src/auto-reply/continuation/targeting.ts` + `src/auto-reply/continuation/cross-session-targeting.test.ts`                                                                        |
-| Response-token fallback parsing               | `src/auto-reply/tokens.ts` + `src/auto-reply/tokens.continuation.test.ts`                                                                                                         |
-| Pending and staged delegate persistence       | `src/auto-reply/continuation/delegate-store.ts` + `src/auto-reply/continuation/delegate-store.test.ts`                                                                            |
-| Post-compaction delegate release              | `src/auto-reply/continuation/post-compaction-release.ts` + `src/auto-reply/continuation/post-compaction-release.test.ts`                                                          |
-| Context-pressure warnings                     | `src/auto-reply/continuation/context-pressure.ts` + `src/auto-reply/continuation/context-pressure.test.ts`                                                                        |
-| `/status` continuation row                    | `src/auto-reply/status.ts` + `src/auto-reply/status.test.ts`                                                                                                                      |
-| Trace context carrier surfaces                | `src/infra/system-events.ts`, `src/infra/session-delivery-queue-storage.ts`, `src/infra/continuation-tracer.ts`, `extensions/diagnostics-otel/src/continuation-tracer-adapter.ts` |
+| Artifact                                         | Location                                                                                                                                                                          |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Continuation runtime config defaults             | `src/auto-reply/continuation/config.ts`, `src/config/types.agent-defaults.ts`, `src/config/zod-schema.agent-defaults.ts`                                                          |
+| `continue_work()` budgeting and durable dispatch | `src/auto-reply/continuation/scheduler.ts`, `src/auto-reply/continuation/work-store.ts`, `src/auto-reply/continuation/work-dispatch.ts` + colocated tests                         |
+| `continue_delegate()` tool schema                | `src/agents/tools/continue-delegate-tool.ts` + `src/agents/tools/continuation-tools-registration.test.ts`                                                                         |
+| Return-target resolution and delivery            | `src/auto-reply/continuation/targeting.ts` + `src/auto-reply/continuation/cross-session-targeting.test.ts`                                                                        |
+| Response-token fallback parsing                  | `src/auto-reply/tokens.ts` + `src/auto-reply/tokens.continuation.test.ts`                                                                                                         |
+| Pending and staged delegate persistence          | `src/auto-reply/continuation/delegate-store.ts` + `src/auto-reply/continuation/delegate-store.test.ts`                                                                            |
+| Post-compaction delegate release                 | `src/auto-reply/continuation/post-compaction-release.ts` + `src/auto-reply/continuation/post-compaction-release.test.ts`                                                          |
+| Context-pressure warnings                        | `src/auto-reply/continuation/context-pressure.ts` + `src/auto-reply/continuation/context-pressure.test.ts`                                                                        |
+| `/status` continuation row                       | `src/auto-reply/status.ts` + `src/auto-reply/status.test.ts`                                                                                                                      |
+| Trace context carrier surfaces                   | `src/infra/system-events.ts`, `src/infra/session-delivery-queue-storage.ts`, `src/infra/continuation-tracer.ts`, `extensions/diagnostics-otel/src/continuation-tracer-adapter.ts` |
 
 The retained scorecards below summarize the historical canary cycles and the v5.2 substrate verification cycle without linking internal execution trackers.
 
