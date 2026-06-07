@@ -408,6 +408,70 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     });
   });
 
+  it("uses provenance source channel when suppressing subagent announce acks with external delivery hints", async () => {
+    const delivered = await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "subagent ack",
+        deliver: true,
+        bestEffortDeliver: true,
+        channel: "slack",
+        accountId: "workspace-1",
+        to: "U123",
+        sessionKey: "agent:tester:main",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "subagent_announce",
+        },
+      } as AgentCommandOpts,
+      outboundSession: {
+        key: "agent:tester:main",
+        agentId: "tester",
+      } as never,
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        deliveryContext: {
+          channel: "slack",
+          to: "U123",
+          accountId: "workspace-1",
+        },
+      },
+      payloads: [{ text: "Confirmation received; the parent message was delivered." }],
+      result: {
+        ...createResult(),
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "U123",
+            text: "The subagent completion already reached the user.",
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+    expect(delivered.deliverySucceeded).toBe(true);
+    expect(delivered.didSendViaMessagingTool).toBe(true);
+    expectDeliveryStatusFields(delivered, {
+      requested: true,
+      attempted: false,
+      status: "suppressed",
+      succeeded: true,
+      reason: "inter_session_control_reply",
+      resultCount: 0,
+    });
+  });
+
   it("keeps delivering genuine internal inter-session completions without messaging-tool evidence", async () => {
     deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
 

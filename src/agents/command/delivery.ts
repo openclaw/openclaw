@@ -209,10 +209,7 @@ function isInternalInterSessionControlReplySource(opts: AgentCommandOpts): boole
     return false;
   }
   const sourceChannel =
-    opts.runContext?.messageChannel ??
-    opts.messageChannel ??
-    opts.channel ??
-    provenance.sourceChannel;
+    opts.runContext?.messageChannel ?? opts.messageChannel ?? provenance.sourceChannel;
   return isInternalMessageChannel(sourceChannel);
 }
 
