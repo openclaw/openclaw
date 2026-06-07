@@ -210,9 +210,11 @@ These flags log through normal OpenClaw logging, so `openclaw logs --follow`
 and the Control UI Logs tab show them. Without the flags, the same diagnostics
 remain available at `debug` level.
 
-`[model-fetch]` response metadata (provider, API, model, status, latency) is
-always emitted at `info` level regardless of `OPENCLAW_DEBUG_MODEL_TRANSPORT`,
-so basic model transport hygiene is visible without debug flags.
+`[model-fetch]` start and response metadata (provider, API, model, status,
+latency, and request fields such as method, URL, timeout, proxy, and policy)
+is always emitted at `info` level regardless of
+`OPENCLAW_DEBUG_MODEL_TRANSPORT`, so basic model transport hygiene is visible
+without debug flags.
 
 ### Trace correlation
 
