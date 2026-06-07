@@ -451,7 +451,10 @@ export async function startManagedServiceUpdateHandoff(params: {
     execPath: params.execPath ?? process.execPath,
     argv1: params.argv1 ?? process.argv[1],
   });
-  const commandLabel = formatManagedServiceUpdateCommand(params.timeoutMs, params.channel);
+  const commandLabel = formatManagedServiceUpdateCommand({
+    timeoutMs: params.timeoutMs,
+    channel: params.channel,
+  });
   const handoffCwd = await resolveManagedServiceHandoffCwd(params.root);
   const metaFile: ControlPlaneUpdateSentinelMetaFile = {
     version: 1,

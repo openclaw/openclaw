@@ -194,7 +194,7 @@ describe("managed service update handoff", () => {
     const { formatManagedServiceUpdateCommand, startManagedServiceUpdateHandoff } =
       await import("./update-managed-service-handoff.js");
 
-    expect(formatManagedServiceUpdateCommand(1_800_000, "beta")).toBe(
+    expect(formatManagedServiceUpdateCommand({ timeoutMs: 1_800_000, channel: "beta" })).toBe(
       "openclaw update --yes --channel beta --timeout 1800",
     );
 
