@@ -154,7 +154,9 @@ function createSignalProcess() {
   };
 }
 
-async function waitForAgentCommandCall(expectedCalls = 1) {
+async function waitForAgentCommandCall(expectedAdditionalCalls = 1) {
+  const initialCalls = agentCommand.mock.calls.length;
+  const expectedCalls = initialCalls + expectedAdditionalCalls;
   for (
     let attempt = 0;
     attempt < 50 && agentCommand.mock.calls.length < expectedCalls;
@@ -164,7 +166,7 @@ async function waitForAgentCommandCall(expectedCalls = 1) {
       setTimeout(resolve, 0);
     });
   }
-  expect(agentCommand).toHaveBeenCalledTimes(expectedCalls);
+  expect(agentCommand.mock.calls.length - initialCalls).toBe(expectedAdditionalCalls);
 }
 
 async function waitForGatewayCall(expectedCalls = 1) {
