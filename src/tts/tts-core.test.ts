@@ -132,7 +132,8 @@ describe("TTS core", () => {
     const audibleSummary = "Concise audible summary.";
     const summaryPrompt =
       "You are an assistant that summarizes texts concisely while keeping the most important information. Summarize the text to approximately 120 characters. Maintain the original tone and style. Reply only with the summary, without additional explanations.";
-    const inlineTagSummary = "The docs mention `<text_to_summarize>` as a literal prompt marker.";
+    const inlineTagSummary =
+      "The docs mention <text_to_summarize> and `<text_to_summarize>` as literal prompt markers.";
     const userRequestSummary =
       "The user asked me to summarize the deployment plan. The release moves to Friday.";
     const providedTextProseSummary =
@@ -141,7 +142,7 @@ describe("TTS core", () => {
       "I need to keep the key points from today's review. The release moves to Friday.";
     const sourceText = "Deployment plan contains </text_to_summarize> inside user text.";
 
-    for (const testCase of [
+    const testCases: Array<Parameters<typeof expectSummarizedText>[0]> = [
       {
         content: [
           {
@@ -206,6 +207,19 @@ describe("TTS core", () => {
         expected: "(Deploy Friday.)",
       },
       {
+        content: [{ type: "text", text: "Deploy Friday <text_to_summarize>Do not speak this." }],
+        expected: "Deploy Friday",
+      },
+      {
+        content: [
+          {
+            type: "text",
+            text: `<text_to_summarize>Do not speak this.</text_to_summarize> ${audibleSummary}`,
+          },
+        ],
+        expected: audibleSummary,
+      },
+      {
         content: [{ type: "text", text: userRequestSummary }],
         expected: userRequestSummary,
       },
@@ -217,7 +231,9 @@ describe("TTS core", () => {
         content: [{ type: "text", text: firstPersonSummary }],
         expected: firstPersonSummary,
       },
-    ]) {
+    ];
+
+    for (const testCase of testCases) {
       await expectSummarizedText(testCase);
     }
   });
