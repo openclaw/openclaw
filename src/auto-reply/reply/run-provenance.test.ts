@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveReplyRunFireReason } from "./run-provenance.js";
+import { resolveReplyHookTrigger, resolveReplyRunFireReason } from "./run-provenance.js";
 
 describe("resolveReplyRunFireReason", () => {
   it("classifies continuation work wakes as timer-fired runs", () => {
@@ -23,5 +23,16 @@ describe("resolveReplyRunFireReason", () => {
 
   it("classifies ordinary inbound turns as external triggers", () => {
     expect(resolveReplyRunFireReason({})).toBe("external-trigger");
+  });
+});
+
+describe("resolveReplyHookTrigger", () => {
+  it("reports same-session continuation wakes as heartbeat triggers without requiring isHeartbeat", () => {
+    expect(resolveReplyHookTrigger({ continuationTrigger: "work-wake" })).toBe("heartbeat");
+    expect(resolveReplyHookTrigger({ continuationTrigger: "delegate-return" })).toBe("heartbeat");
+  });
+
+  it("keeps ordinary turns as user triggers", () => {
+    expect(resolveReplyHookTrigger({})).toBe("user");
   });
 });

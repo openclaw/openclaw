@@ -26,17 +26,10 @@ import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import {
-  registerContinuationTimerHandle,
-  retainContinuationTimerRef,
-  unregisterContinuationTimerHandle,
-} from "../continuation/state.js";
-import type { ContinueWorkRequest } from "../continuation/types.js";
+import type { ChainState, ContinueWorkRequest } from "../continuation/types.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -69,6 +62,7 @@ import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import { resolveReplyHookTrigger } from "./run-provenance.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -809,7 +803,7 @@ export function createFollowupRunner(params: {
                     sessionId: run.sessionId,
                     sessionKey: replySessionKey,
                     agentId: run.agentId,
-                    trigger: opts?.isHeartbeat === true ? "heartbeat" : "user",
+                    trigger: resolveReplyHookTrigger(opts),
                     sessionFile: run.sessionFile,
                     workspaceDir: run.workspaceDir,
                     cwd: run.cwd,
@@ -889,7 +883,7 @@ export function createFollowupRunner(params: {
                 sessionId: run.sessionId,
                 sessionKey: run.sessionKey,
                 agentId: run.agentId,
-                trigger: "user",
+                trigger: resolveReplyHookTrigger(opts),
                 messageChannel: queued.originatingChannel ?? undefined,
                 messageProvider: run.messageProvider,
                 agentAccountId: run.agentAccountId,
@@ -1071,6 +1065,7 @@ export function createFollowupRunner(params: {
 
       await drainProgressDeliveries();
 
+      let continuationChainStateAfterDelegateDispatch: ChainState | undefined;
       // Consume and dispatch continue_delegate queue enqueued during this
       // followup turn. Parallels the main-session dispatch in agent-runner.ts:
       // without this, delegates queued by continue_work-triggered heartbeats
@@ -1170,84 +1165,128 @@ export function createFollowupRunner(params: {
         // (delayed-only delegates, all-deferred dispatches, or pure
         // continue_work turns), causing token-budget drift across hops.
         if (dispatchResult) {
+          continuationChainStateAfterDelegateDispatch = dispatchResult.chainState;
           await persistDispatchChainState(dispatchResult.chainState);
         }
       }
 
       // --- continue_work processing ---
-      // When the agent calls continue_work during this followup turn, schedule
-      // a delayed heartbeat for the session (same mechanism as agent-runner.ts).
-      // This enables subagent/organ sessions to self-elect another turn.
-      if (
-        attemptContinueWorkRequest &&
-        runtimeConfig?.agents?.defaults?.continuation?.enabled === true &&
-        sessionKey
-      ) {
-        const { resolveLiveContinuationRuntimeConfig, clampDelayMs } =
-          await import("../continuation/config.js");
+      // The election is durable TaskFlow state; the dispatcher only arms a
+      // maturity timer and can replay it after gateway restart.
+      const continuationEnabled = runtimeConfig?.agents?.defaults?.continuation?.enabled === true;
+      let effectiveContinueWorkRequest:
+        | { reason: string; delaySeconds?: number; traceparent?: string }
+        | undefined = attemptContinueWorkRequest;
+      if (!effectiveContinueWorkRequest && continuationEnabled && sessionKey) {
+        const [{ extractContinuationSignal }, { stripContinuationSignal }] = await Promise.all([
+          import("../continuation/signal.js"),
+          import("../tokens.js"),
+        ]);
+        const continuationPayloads = runResult.payloads ?? [];
+        const extraction = extractContinuationSignal({
+          payloads: continuationPayloads.map((payload) => ({ ...payload })),
+          enabled: true,
+          sessionKey,
+        });
+        if (extraction.signal?.kind === "work") {
+          if (extraction.fromBracket) {
+            for (let i = continuationPayloads.length - 1; i >= 0; i--) {
+              const payload = continuationPayloads[i];
+              if (!payload?.text) {
+                continue;
+              }
+              const stripped = stripContinuationSignal(payload.text);
+              if (stripped.signal?.kind !== "work") {
+                continue;
+              }
+              payload.text = stripped.text;
+              break;
+            }
+          }
+          effectiveContinueWorkRequest = {
+            reason: extraction.workReason ?? "",
+            ...(extraction.signal.delayMs !== undefined
+              ? { delaySeconds: extraction.signal.delayMs / 1000 }
+              : {}),
+            ...(extraction.signal.traceparent
+              ? { traceparent: extraction.signal.traceparent }
+              : {}),
+          };
+        }
+      }
+      if (effectiveContinueWorkRequest && continuationEnabled && sessionKey) {
+        const [
+          { resolveLiveContinuationRuntimeConfig },
+          { loadContinuationChainState, persistContinuationChainState },
+          { scheduleContinuationWork },
+          { updateSessionStore: updateSessionStoreFromStoreModule, resolveSessionStoreEntry },
+        ] = await Promise.all([
+          import("../continuation/config.js"),
+          import("../continuation/state.js"),
+          import("../continuation/lazy.runtime.js"),
+          import("../../config/sessions/store.js"),
+        ]);
         const continuationConfig = resolveLiveContinuationRuntimeConfig(runtimeConfig);
-        const { maxChainLength } = continuationConfig;
-
-        // Load chain state to check cap.
-        const { loadContinuationChainState, persistContinuationChainState } =
-          await import("../continuation/state.js");
         const tailUsage = runResult.meta?.agentMeta?.usage;
         const turnTokens = (tailUsage?.input ?? 0) + (tailUsage?.output ?? 0);
         const tailEntry = (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
-        const chainState = loadContinuationChainState(tailEntry, turnTokens);
-        const currentChainCount = chainState.currentChainCount;
-
-        if (currentChainCount >= maxChainLength) {
-          defaultRuntime.log(
-            `[followup-runner] continue_work cap reached for ${sessionKey}: ` +
-              `${currentChainCount}/${maxChainLength}`,
-          );
-        } else {
-          const nextChainCount = currentChainCount + 1;
-          // Treat an explicit zero-delay continue_work as a real 0 (clamped up
-          // to `minDelayMs`), matching what the continue_work tool reports via
-          // `clampDelayMs(delaySeconds * 1000, config)`. The prior
-          // `|| defaultDelayMs` expression treated 0 as falsy and substituted
-          // `defaultDelayMs` (15s), so an omitted/zero delay woke at 15s instead
-          // of the reported 5s minimum. Routed through the canonical
-          // `clampDelayMs` helper so the scheduler and tool result can't drift.
-          const requestedDelayMs = attemptContinueWorkRequest.delaySeconds * 1000;
-          const clampedDelay = clampDelayMs(requestedDelayMs, continuationConfig);
-
-          // Persist advanced chain state.
+        const chainState =
+          continuationChainStateAfterDelegateDispatch ??
+          loadContinuationChainState(tailEntry, turnTokens);
+        const scheduleResult = await scheduleContinuationWork({
+          sessionKey,
+          chainState,
+          request: {
+            reason: effectiveContinueWorkRequest.reason,
+            delaySeconds:
+              effectiveContinueWorkRequest.delaySeconds ?? continuationConfig.defaultDelayMs / 1000,
+            ...(effectiveContinueWorkRequest.traceparent
+              ? { traceparent: effectiveContinueWorkRequest.traceparent }
+              : {}),
+          },
+          config: continuationConfig,
+          parentRunId: runId,
+          log: (message) => defaultRuntime.log(message),
+        });
+        if (scheduleResult.scheduled) {
           persistContinuationChainState({
             sessionEntry: tailEntry,
-            count: nextChainCount,
-            startedAt: chainState.chainStartedAt,
-            tokens: chainState.accumulatedChainTokens,
+            count: scheduleResult.chainState.currentChainCount,
+            startedAt: scheduleResult.chainState.chainStartedAt,
+            tokens: scheduleResult.chainState.accumulatedChainTokens,
+            ...(scheduleResult.chainState.chainId
+              ? { chainId: scheduleResult.chainState.chainId }
+              : {}),
           });
-
-          // Schedule the continuation timer.
-          retainContinuationTimerRef(sessionKey);
-          const timerHandle = setTimeout(() => {
+          // Followup usage persistence only writes usage/model fields. Persist
+          // continuation chain counters explicitly so recovered TaskFlow work
+          // reloads the advanced budget after cache eviction or restart.
+          if (storePath) {
             try {
-              defaultRuntime.log(
-                `[followup-runner] continue_work timer fired for session ${sessionKey}`,
-              );
-              enqueueSystemEvent(
-                `[continuation:wake] Turn ${nextChainCount}/${maxChainLength}. ` +
-                  `The agent elected to continue working.` +
-                  (attemptContinueWorkRequest!.reason
-                    ? ` Reason: ${attemptContinueWorkRequest!.reason}`
-                    : ""),
-                { sessionKey, trusted: true },
-              );
-              requestHeartbeatNow({
-                sessionKey,
-                reason: "continuation",
-                parentRunId: runId,
+              await updateSessionStoreFromStoreModule(storePath, (store) => {
+                const resolved = resolveSessionStoreEntry({ store, sessionKey });
+                if (!resolved.existing) {
+                  return;
+                }
+                store[resolved.normalizedKey] = {
+                  ...resolved.existing,
+                  continuationChainCount: scheduleResult.chainState.currentChainCount,
+                  continuationChainStartedAt: scheduleResult.chainState.chainStartedAt,
+                  continuationChainTokens: scheduleResult.chainState.accumulatedChainTokens,
+                  ...(scheduleResult.chainState.chainId
+                    ? { continuationChainId: scheduleResult.chainState.chainId }
+                    : {}),
+                };
+                for (const legacyKey of resolved.legacyKeys) {
+                  delete store[legacyKey];
+                }
               });
-            } finally {
-              unregisterContinuationTimerHandle(sessionKey, timerHandle);
+            } catch (err) {
+              defaultRuntime.error?.(
+                `[followup-runner] failed to persist continue_work chain state for ${sessionKey}: ${String(err)}`,
+              );
             }
-          }, clampedDelay);
-          registerContinuationTimerHandle(sessionKey, timerHandle);
-          timerHandle.unref();
+          }
         }
       }
 

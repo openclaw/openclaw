@@ -174,25 +174,37 @@ function recoverPendingSessionDeliveries(params: {
   timer.unref?.();
 }
 
-function recoverPendingContinuationDelegates(params: { log: GatewayRuntimeServiceLogger }): void {
-  // Delegate recovery is TaskFlow-backed and idempotent: queued rows are claimed
-  // to running before spawn, while running rows derive the child key and reconcile
-  // an already-live subagent instead of spawning a duplicate.
+function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger }): void {
+  // Delegate recovery must run before same-session continue_work recovery to
+  // preserve normal post-turn ordering when a restart happens after both were
+  // queued in the same turn.
   const timer = setTimeout(() => {
     void (async () => {
-      const { recoverPendingContinuationDelegates: recoverDelegates } =
-        await import("../auto-reply/continuation/delegate-dispatch.js");
-      const logRecovery = params.log.child("continuation-delegate-recovery");
-      const summary = await recoverDelegates();
-      if (summary.sessions > 0 || summary.dispatched > 0 || summary.rejected > 0) {
-        logRecovery.info(
-          `replayed sessions=${summary.sessions} dispatched=${summary.dispatched} rejected=${summary.rejected}`,
+      const [delegateModule, workModule] = await Promise.all([
+        import("../auto-reply/continuation/delegate-dispatch.js"),
+        import("../auto-reply/continuation/work-dispatch.js"),
+      ]);
+      const delegateLog = params.log.child("continuation-delegate-recovery");
+      const delegateSummary = await delegateModule.recoverPendingContinuationDelegates();
+      if (
+        delegateSummary.sessions > 0 ||
+        delegateSummary.dispatched > 0 ||
+        delegateSummary.rejected > 0
+      ) {
+        delegateLog.info(
+          `replayed sessions=${delegateSummary.sessions} dispatched=${delegateSummary.dispatched} rejected=${delegateSummary.rejected}`,
         );
       }
-    })().catch((err: unknown) =>
-      params.log.error(`Continuation delegate recovery failed: ${String(err)}`),
-    );
-  }, 1_500);
+
+      const workLog = params.log.child("continuation-work-recovery");
+      const workSummary = await workModule.recoverPendingContinuationWork();
+      if (workSummary.sessions > 0 || workSummary.dispatched > 0 || workSummary.failed > 0) {
+        workLog.info(
+          `replayed sessions=${workSummary.sessions} dispatched=${workSummary.dispatched} failed=${workSummary.failed}`,
+        );
+      }
+    })().catch((err: unknown) => params.log.error(`Continuation recovery failed: ${String(err)}`));
+  }, 1_400);
   timer.unref?.();
 }
 
@@ -264,7 +276,7 @@ export function activateGatewayScheduledServices(params: {
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
   });
-  recoverPendingContinuationDelegates({
+  recoverPendingContinuations({
     log: params.log,
   });
   const stopModelPricingRefresh = !isVitestRuntimeEnv()

@@ -126,7 +126,7 @@ import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
-import { resolveReplyRunFireReason } from "./run-provenance.js";
+import { resolveReplyHookTrigger, resolveReplyRunFireReason } from "./run-provenance.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
@@ -1729,7 +1729,7 @@ export async function runAgentTurnWithFallback(params: {
         params.followupRun.run.messageProvider ??
         params.sessionCtx.Surface ??
         params.sessionCtx.Provider,
-      trigger: params.isHeartbeat ? "heartbeat" : "user",
+      trigger: resolveReplyHookTrigger(params.opts),
     });
   }
   const replyMediaContext =
@@ -2370,7 +2370,7 @@ export async function runAgentTurnWithFallback(params: {
                     sessionId: params.followupRun.run.sessionId,
                     sessionKey: params.sessionKey,
                     agentId: params.followupRun.run.agentId,
-                    trigger: params.isHeartbeat ? "heartbeat" : "user",
+                    trigger: resolveReplyHookTrigger(params.opts),
                     sessionFile: params.followupRun.run.sessionFile,
                     workspaceDir: params.followupRun.run.workspaceDir,
                     cwd: params.followupRun.run.cwd,
@@ -2492,7 +2492,7 @@ export async function runAgentTurnWithFallback(params: {
                   runEmbeddedAgent({
                     ...embeddedContext,
                     allowGatewaySubagentBinding: true,
-                    trigger: params.isHeartbeat ? "heartbeat" : "user",
+                    trigger: resolveReplyHookTrigger(params.opts),
                     fireReason: resolveReplyRunFireReason({
                       opts: params.opts,
                       drainsContinuationDelegateQueue:
