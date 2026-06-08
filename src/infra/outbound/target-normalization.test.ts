@@ -1,3 +1,5 @@
+// Covers target input normalization, provider plugin normalizers, resolver
+// caching, and id-like lookup heuristics.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
@@ -13,7 +15,7 @@ let maybeResolvePluginMessagingTarget: TargetNormalizationModule["maybeResolvePl
 let normalizeChannelTargetInput: TargetNormalizationModule["normalizeChannelTargetInput"];
 let resolveNormalizedTargetInput: TargetNormalizationModule["resolveNormalizedTargetInput"];
 let normalizeTargetForProvider: TargetNormalizationModule["normalizeTargetForProvider"];
-let resetTargetNormalizerCacheForTests: TargetNormalizationModule["__testing"]["resetTargetNormalizerCacheForTests"];
+let resetTargetNormalizerCacheForTests: TargetNormalizationModule["testing"]["resetTargetNormalizerCacheForTests"];
 
 vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
   getLoadedChannelPluginForRead: (...args: unknown[]) => getLoadedChannelPluginMock(...args),
@@ -38,7 +40,7 @@ beforeAll(async () => {
     resolveNormalizedTargetInput,
   } = await import("./target-normalization.js"));
   ({
-    __testing: { resetTargetNormalizerCacheForTests },
+    testing: { resetTargetNormalizerCacheForTests },
   } = await import("./target-normalization.js"));
 });
 
@@ -264,6 +266,7 @@ describe("maybeResolvePluginMessagingTarget", () => {
       kind: "group",
       display: "general",
       source: "normalized",
+      resolutionSource: "plugin",
     });
 
     expect(resolveTarget).toHaveBeenCalledWith({

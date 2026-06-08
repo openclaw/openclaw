@@ -1,6 +1,23 @@
+// Control UI module implements markdown behavior.
 import DOMPurify from "dompurify";
+import hljs from "highlight.js/lib/core";
+import bash from "highlight.js/lib/languages/bash";
+import cpp from "highlight.js/lib/languages/cpp";
+import css from "highlight.js/lib/languages/css";
+import diff from "highlight.js/lib/languages/diff";
+import go from "highlight.js/lib/languages/go";
+import java from "highlight.js/lib/languages/java";
+import javascript from "highlight.js/lib/languages/javascript";
+import json from "highlight.js/lib/languages/json";
+import markdown from "highlight.js/lib/languages/markdown";
+import python from "highlight.js/lib/languages/python";
+import rust from "highlight.js/lib/languages/rust";
+import typescript from "highlight.js/lib/languages/typescript";
+import xml from "highlight.js/lib/languages/xml";
+import yaml from "highlight.js/lib/languages/yaml";
 import MarkdownIt from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
+import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "./format.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
@@ -68,15 +85,29 @@ const MARKDOWN_PARSE_LIMIT = 40_000;
 const MARKDOWN_CACHE_LIMIT = 200;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
+const HOST_LOCAL_FILE_HREF_RE =
+  /^(?:~\/|\/(?:Users|home|tmp|private\/tmp|var\/folders|private\/var\/folders)\/|\/[A-Za-z]:\/|[A-Za-z]:[\\/])/;
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
+const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
+const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
+
+export type MarkdownCodeBlockChrome = "copy" | "none";
+
+export type MarkdownRenderOptions = {
+  codeBlockChrome?: MarkdownCodeBlockChrome;
+};
+
+type MarkdownRenderEnv = {
+  codeBlockChrome: MarkdownCodeBlockChrome;
+};
 
 // CJK character ranges for URL boundary detection (RFC 3986: CJK is not valid in raw URLs).
 // CJK Unified Ideographs, CJK Symbols/Punctuation, Fullwidth Forms, Hiragana, Katakana,
 // Hangul Syllables, and CJK Compatibility Ideographs.
-// biome-ignore lint: readability — regex charset is inherently dense
-const CJK_RE =
-  /[\u2E80-\u2FFF\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60]/;
+const CJK_RE = new RegExp(
+  "[\\u2E80-\\u2FFF\\u3000-\\u303F\\u3040-\\u309F\\u30A0-\\u30FF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uAC00-\\uD7AF\\uF900-\\uFAFF\\uFF01-\\uFF60]",
+);
 
 function getCachedMarkdown(key: string): string | null {
   const cached = markdownCache.get(key);
@@ -99,6 +130,20 @@ function setCachedMarkdown(key: string, value: string) {
   }
 }
 
+function normalizeMarkdownRenderOptions(options: MarkdownRenderOptions = {}): MarkdownRenderEnv {
+  return {
+    codeBlockChrome: options.codeBlockChrome ?? "copy",
+  };
+}
+
+function shouldRenderCodeBlockCopy(env: unknown): boolean {
+  return (env as Partial<MarkdownRenderEnv> | undefined)?.codeBlockChrome !== "none";
+}
+
+function isHostLocalFileHref(href: string): boolean {
+  return HOST_LOCAL_FILE_HREF_RE.test(href.trim());
+}
+
 function installHooks() {
   if (hooksInstalled) {
     return;
@@ -111,6 +156,11 @@ function installHooks() {
     }
     const href = node.getAttribute("href");
     if (!href) {
+      return;
+    }
+
+    if (isHostLocalFileHref(href)) {
+      node.removeAttribute("href");
       return;
     }
 
@@ -149,6 +199,172 @@ function escapeHtml(value: string): string {
 function normalizeMarkdownImageLabel(text?: string | null): string {
   const trimmed = text?.trim();
   return trimmed ? trimmed : "image";
+}
+
+function normalizeMarkdownInput(markdownLocal: string): string {
+  const input = stripUnsupportedCitationControlMarkers(markdownLocal).trim();
+  if (!input) {
+    return "";
+  }
+  const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
+  const suffix = truncated.truncated
+    ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
+    : "";
+  return `${truncated.text}${suffix}`.replace(/\r\n?/g, "\n");
+}
+
+function getFenceMarker(line: string): { marker: "`" | "~"; length: number } | null {
+  const match = FENCE_OPEN_RE.exec(stripFenceContainerPrefixes(line));
+  if (!match) {
+    return null;
+  }
+  const fence = match[1];
+  const marker = fence[0] as "`" | "~";
+  return { marker, length: fence.length };
+}
+
+function stripFenceContainerPrefixes(line: string): string {
+  let current = line;
+  for (let index = 0; index < 8; index += 1) {
+    const next = current.replace(FENCE_CONTAINER_PREFIX_RE, "");
+    if (next === current) {
+      return current;
+    }
+    current = next;
+  }
+  return current;
+}
+
+function isFenceClose(line: string, fence: { marker: "`" | "~"; length: number }): boolean {
+  const trimmed = stripFenceContainerPrefixes(line).trimEnd();
+  const match = FENCE_OPEN_RE.exec(trimmed);
+  if (!match) {
+    return false;
+  }
+  const marker = match[1][0];
+  if (marker !== fence.marker || match[1].length < fence.length) {
+    return false;
+  }
+  return trimmed.slice(match[0].length).trim() === "";
+}
+
+function findStableStreamingMarkdownBoundary(markdownLocal: string): number {
+  let boundary = 0;
+  let index = 0;
+  let openFence: { marker: "`" | "~"; length: number } | null = null;
+
+  while (index < markdownLocal.length) {
+    const nextLineBreak = markdownLocal.indexOf("\n", index);
+    const lineEnd = nextLineBreak === -1 ? markdownLocal.length : nextLineBreak + 1;
+    const line = markdownLocal.slice(index, nextLineBreak === -1 ? lineEnd : nextLineBreak);
+
+    if (openFence) {
+      if (isFenceClose(line, openFence)) {
+        openFence = null;
+        boundary = lineEnd;
+      }
+      index = lineEnd;
+      continue;
+    }
+
+    const openingFence = getFenceMarker(line);
+    if (openingFence) {
+      openFence = openingFence;
+      index = lineEnd;
+      continue;
+    }
+
+    if (line.trim() === "") {
+      boundary = lineEnd;
+    }
+    index = lineEnd;
+  }
+
+  return boundary;
+}
+
+for (const [language, definition, aliases] of [
+  ["bash", bash, ["sh", "shell"]],
+  ["cpp", cpp, ["c++", "cxx"]],
+  ["css", css, []],
+  ["diff", diff, ["patch"]],
+  ["go", go, ["golang"]],
+  ["java", java, []],
+  ["javascript", javascript, ["js", "jsx"]],
+  ["json", json, []],
+  ["markdown", markdown, ["md"]],
+  ["python", python, ["py"]],
+  ["rust", rust, ["rs"]],
+  ["typescript", typescript, ["ts", "tsx"]],
+  ["xml", xml, ["html", "svg"]],
+  ["yaml", yaml, ["yml"]],
+] as const) {
+  hljs.registerLanguage(language, definition);
+  if (aliases.length > 0) {
+    hljs.registerAliases([...aliases], { languageName: language });
+  }
+}
+
+function normalizeHighlightLanguage(lang: string): string {
+  const normalized = lang.trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  const aliases: Record<string, string> = {
+    "c++": "cpp",
+    cxx: "cpp",
+    js: "javascript",
+    jsx: "javascript",
+    md: "markdown",
+    sh: "bash",
+    shell: "bash",
+    ts: "typescript",
+    tsx: "typescript",
+  };
+  return aliases[normalized] ?? normalized;
+}
+
+const autoHighlightLanguages = [
+  "bash",
+  "cpp",
+  "css",
+  "diff",
+  "go",
+  "java",
+  "javascript",
+  "json",
+  "markdown",
+  "python",
+  "rust",
+  "typescript",
+  "xml",
+  "yaml",
+];
+
+function highlightCode(text: string, lang: string): string {
+  const language = normalizeHighlightLanguage(lang);
+  try {
+    if (language && hljs.getLanguage(language)) {
+      return hljs.highlight(text, { language, ignoreIllegals: true }).value;
+    }
+    if (!language && text.trim()) {
+      const result = hljs.highlightAuto(text, autoHighlightLanguages);
+      if (result.relevance >= 2) {
+        return result.value;
+      }
+    }
+  } catch {
+    // Fall back to escaped plaintext; malformed input should not break chat rendering.
+  }
+  return escapeHtml(text);
+}
+
+function codeClassAttribute(lang: string, highlighted: string): string {
+  const classes = [
+    highlighted.includes("hljs-") ? "hljs" : "",
+    lang ? `language-${lang}` : "",
+  ].filter(Boolean);
+  return classes.length > 0 ? ` class="${escapeHtml(classes.join(" "))}"` : "";
 }
 
 export const md = new MarkdownIt({
@@ -218,13 +434,11 @@ md.linkify.add("www", {
           if (c === open) {
             balance[close] = balance[close] === 0 ? 1 : 0;
           }
-        } else {
+        } else if (c === open) {
           // Distinct open/close (e.g., ())
-          if (c === open) {
-            balance[close]++;
-          } else if (c === close) {
-            balance[close]--;
-          }
+          balance[close]++;
+        } else if (c === close) {
+          balance[close]--;
         }
       }
     }
@@ -263,13 +477,11 @@ md.linkify.add("www", {
             len--;
             continue;
           }
-        } else {
+        } else if (balance[ch] < 0) {
           // Distinct pair: strip if more closes than opens
-          if (balance[ch] < 0) {
-            balance[ch]++;
-            len--;
-            continue;
-          }
+          balance[ch]++;
+          len--;
+          continue;
         }
       }
       break;
@@ -421,15 +633,18 @@ md.renderer.rules.image = (tokens, idx) => {
 };
 
 // Override fenced code blocks with copy button + JSON collapse
-md.renderer.rules.fence = (tokens, idx) => {
+md.renderer.rules.fence = (tokens, idx, _options, env) => {
   const token = tokens[idx];
   // token.info contains the full fence info string (e.g., "json title=foo");
   // extract only the first whitespace-separated token as the language.
   const lang = token.info.trim().split(/\s+/)[0] || "";
   const text = token.content;
-  const langClass = lang ? ` class="language-${escapeHtml(lang)}"` : "";
-  const safeText = escapeHtml(text);
-  const codeBlock = `<pre><code${langClass}>${safeText}</code></pre>`;
+  const highlighted = highlightCode(text, lang);
+  const classAttr = codeClassAttribute(lang, highlighted);
+  const codeBlock = `<pre><code${classAttr}>${highlighted}</code></pre>`;
+  if (!shouldRenderCodeBlockCopy(env)) {
+    return codeBlock;
+  }
   const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
   const attrSafe = escapeHtml(text);
   const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
@@ -452,11 +667,15 @@ md.renderer.rules.fence = (tokens, idx) => {
 };
 
 // Override indented code blocks (code_block) with the same treatment as fence
-md.renderer.rules.code_block = (tokens, idx) => {
+md.renderer.rules.code_block = (tokens, idx, _options, env) => {
   const token = tokens[idx];
   const text = token.content;
-  const safeText = escapeHtml(text);
-  const codeBlock = `<pre><code>${safeText}</code></pre>`;
+  const highlighted = highlightCode(text, "");
+  const classAttr = codeClassAttribute("", highlighted);
+  const codeBlock = `<pre><code${classAttr}>${highlighted}</code></pre>`;
+  if (!shouldRenderCodeBlockCopy(env)) {
+    return codeBlock;
+  }
   const attrSafe = escapeHtml(text);
   const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
   const header = `<div class="code-block-header">${copyBtn}</div>`;
@@ -475,13 +694,17 @@ md.renderer.rules.code_block = (tokens, idx) => {
   return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;
 };
 
-export function toSanitizedMarkdownHtml(markdown: string): string {
-  const input = markdown.trim();
+export function toSanitizedMarkdownHtml(
+  markdownLocal: string,
+  options: MarkdownRenderOptions = {},
+): string {
+  const renderOptions = normalizeMarkdownRenderOptions(options);
+  const input = stripUnsupportedCitationControlMarkers(markdownLocal).trim();
   if (!input) {
     return "";
   }
   installHooks();
-  const cacheKey = `${i18n.getLocale()}\0${input}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.codeBlockChrome}\0${input}`;
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {
@@ -496,7 +719,7 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
-    const html = renderEscapedPlainTextHtml(`${truncated.text}${suffix}`);
+    const html = toEscapedPlainTextHtml(`${truncated.text}${suffix}`);
     const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(cacheKey, sanitized);
@@ -505,7 +728,7 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   }
   let rendered: string;
   try {
-    rendered = md.render(`${truncated.text}${suffix}`);
+    rendered = md.render(`${truncated.text}${suffix}`, renderOptions);
   } catch (err) {
     // Fall back to escaped plain text when md.render() throws (#36213).
     console.warn("[markdown] md.render failed, falling back to plain text:", err);
@@ -519,6 +742,37 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   return sanitized;
 }
 
-function renderEscapedPlainTextHtml(value: string): string {
+export function toEscapedPlainTextHtml(value: string): string {
   return `<div class="markdown-plain-text-fallback">${escapeHtml(value.replace(/\r\n?/g, "\n"))}</div>`;
+}
+
+export function toStreamingPlainTextHtml(markdownLocal: string): string {
+  const input = normalizeMarkdownInput(markdownLocal);
+  if (!input) {
+    return "";
+  }
+  return toEscapedPlainTextHtml(input);
+}
+
+export function toStreamingMarkdownHtml(
+  markdownLocal: string,
+  options: MarkdownRenderOptions = {},
+): string {
+  const input = normalizeMarkdownInput(markdownLocal);
+  if (!input) {
+    return "";
+  }
+
+  const boundary = findStableStreamingMarkdownBoundary(input);
+  if (boundary <= 0) {
+    return toEscapedPlainTextHtml(input);
+  }
+
+  const stableMarkdown = input.slice(0, boundary);
+  const streamingTail = input.slice(boundary);
+  const stableHtml = toSanitizedMarkdownHtml(stableMarkdown, options);
+  if (!streamingTail.trim()) {
+    return stableHtml;
+  }
+  return `${stableHtml}${toEscapedPlainTextHtml(streamingTail)}`;
 }

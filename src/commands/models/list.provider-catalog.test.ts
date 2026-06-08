@@ -1,3 +1,4 @@
+// Provider catalog list tests cover provider catalog integration for model listing.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hasProviderStaticCatalogForFilter,
@@ -27,6 +28,7 @@ vi.mock("../../plugins/providers.js", () => ({
   resolveBundledProviderCompatPluginIds:
     providerDiscoveryMocks.resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProvider: providerDiscoveryMocks.resolveOwningPluginIdsForProvider,
+  resolveOwningPluginIdsForProviderRef: providerDiscoveryMocks.resolveOwningPluginIdsForProvider,
 }));
 
 vi.mock("../../plugins/contracts/registry.js", () => ({
@@ -112,7 +114,85 @@ const catalogOnlyProvider = {
   },
 };
 
+const hybridCatalogProvider = {
+  id: "hybrid",
+  pluginId: "hybrid",
+  label: "Hybrid",
+  auth: [],
+  catalog: {
+    run: vi.fn(async () => ({
+      provider: {
+        baseUrl: "https://hybrid.example/v1",
+        models: [{ id: "live-model", name: "Live Model" }],
+      },
+    })),
+  },
+  staticCatalog: {
+    run: vi.fn(async () => ({
+      provider: {
+        baseUrl: "https://hybrid.example/v1",
+        models: [{ id: "static-model", name: "Static Model" }],
+      },
+    })),
+  },
+};
+
+const vllmProvider = {
+  id: "vllm",
+  pluginId: "vllm",
+  label: "vLLM",
+  auth: [],
+  catalog: {
+    run: async (ctx: {
+      config: {
+        models?: {
+          providers?: Record<
+            string,
+            {
+              baseUrl?: string;
+            }
+          >;
+        };
+      };
+      resolveProviderApiKey: (providerId?: string) => {
+        apiKey: string | undefined;
+        discoveryApiKey?: string;
+      };
+    }) => ({
+      provider: {
+        baseUrl: ctx.config.models?.providers?.vllm?.baseUrl,
+        api: "openai-completions",
+        models: [
+          {
+            id: "runtime-vllm-model",
+            name: "Runtime vLLM Model",
+          },
+        ],
+        apiKey: "proof-key",
+      },
+    }),
+  },
+};
+
 const defaultProviders = [chutesProvider, moonshotProvider, openaiProvider];
+
+function firstDiscoveryRequest(): {
+  onlyPluginIds?: string[];
+  requireCompleteDiscoveryEntryCoverage?: boolean;
+  discoveryEntriesOnly?: boolean;
+  includeUntrustedWorkspacePlugins?: boolean;
+} {
+  const call = providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mock.calls[0];
+  if (!call) {
+    throw new Error("expected runtime plugin discovery call");
+  }
+  return call[0] as {
+    onlyPluginIds?: string[];
+    requireCompleteDiscoveryEntryCoverage?: boolean;
+    discoveryEntriesOnly?: boolean;
+    includeUntrustedWorkspacePlugins?: boolean;
+  };
+}
 
 describe("loadProviderCatalogModelsForList", () => {
   beforeEach(() => {
@@ -136,10 +216,13 @@ describe("loadProviderCatalogModelsForList", () => {
       "moonshot",
       "openai",
       "ollama",
+      "hybrid",
     ]);
     providerDiscoveryMocks.resolveOwningPluginIdsForProvider.mockImplementation(
       ({ provider }: { provider: string }) =>
-        [...defaultProviders, catalogOnlyProvider].some((entry) => entry.id === provider)
+        [...defaultProviders, catalogOnlyProvider, hybridCatalogProvider].some(
+          (entry) => entry.id === provider,
+        )
           ? [provider]
           : undefined,
     );
@@ -172,9 +255,7 @@ describe("loadProviderCatalogModelsForList", () => {
     });
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(rows.map((row) => `${row.provider}/${row.id}`)).toEqual(
-      expect.arrayContaining(["moonshot/kimi-k2.6"]),
-    );
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toContain("moonshot/kimi-k2.6");
   });
 
   it("requires complete discovery-entry coverage for static-only loads", async () => {
@@ -184,13 +265,137 @@ describe("loadProviderCatalogModelsForList", () => {
       staticOnly: true,
     });
 
-    expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["moonshot"],
-        requireCompleteDiscoveryEntryCoverage: true,
-        discoveryEntriesOnly: true,
-      }),
+    const discoveryRequest = firstDiscoveryRequest();
+    expect(discoveryRequest?.onlyPluginIds).toStrictEqual(["moonshot"]);
+    expect(discoveryRequest?.requireCompleteDiscoveryEntryCoverage).toBe(true);
+    expect(discoveryRequest?.discoveryEntriesOnly).toBe(true);
+  });
+
+  it("reuses a command metadata snapshot for provider catalog planning", async () => {
+    const metadataSnapshot = {
+      index: {
+        plugins: [{ pluginId: "moonshot", enabled: true, origin: "bundled" }],
+      },
+      manifestRegistry: {
+        plugins: [],
+        diagnostics: [],
+      },
+    };
+
+    await loadProviderCatalogModelsForList({
+      ...baseParams,
+      providerFilter: "moonshot",
+      staticOnly: true,
+      metadataSnapshot: metadataSnapshot as unknown as Parameters<
+        typeof loadProviderCatalogModelsForList
+      >[0]["metadataSnapshot"],
+    });
+
+    expect(providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ index: metadataSnapshot.index }),
     );
+    expect(providerDiscoveryMocks.resolveBundledProviderCompatPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({ manifestRegistry: metadataSnapshot.manifestRegistry }),
+    );
+    expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginMetadataSnapshot: metadataSnapshot }),
+    );
+  });
+
+  it("uses bundled runtime provider catalogs for provider-filtered self-hosted rows", async () => {
+    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
+      ({ providerId }: { providerId: string }) => (providerId === "vllm" ? ["vllm"] : []),
+    );
+    providerDiscoveryMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["vllm"]);
+    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([vllmProvider]);
+
+    const rows = await loadProviderCatalogModelsForList({
+      ...baseParams,
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "vllm/*": {},
+            },
+          },
+        },
+        models: {
+          providers: {
+            vllm: {
+              baseUrl: "http://vllm-router.example/v1",
+              apiKey: "proof-key",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+      providerFilter: "vllm",
+    });
+
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual([
+      "vllm/runtime-vllm-model",
+    ]);
+    expect(rows[0]?.baseUrl).toBe("http://vllm-router.example/v1");
+    const discoveryRequest = firstDiscoveryRequest();
+    expect(discoveryRequest?.onlyPluginIds).toStrictEqual(["vllm"]);
+    expect(discoveryRequest?.discoveryEntriesOnly).toBe(false);
+  });
+
+  it("uses live catalogs before static catalogs for normal list output", async () => {
+    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
+      ({ providerId }: { providerId: string }) => (providerId === "hybrid" ? ["hybrid"] : []),
+    );
+    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      hybridCatalogProvider,
+    ]);
+
+    const rows = await loadProviderCatalogModelsForList({
+      ...baseParams,
+      providerFilter: "hybrid",
+    });
+
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["hybrid/live-model"]);
+    expect(hybridCatalogProvider.catalog.run).toHaveBeenCalledOnce();
+    expect(hybridCatalogProvider.staticCatalog.run).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit static-only list output on static catalogs", async () => {
+    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
+      ({ providerId }: { providerId: string }) => (providerId === "hybrid" ? ["hybrid"] : []),
+    );
+    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      hybridCatalogProvider,
+    ]);
+
+    const rows = await loadProviderCatalogModelsForList({
+      ...baseParams,
+      providerFilter: "hybrid",
+      staticOnly: true,
+    });
+
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["hybrid/static-model"]);
+    expect(hybridCatalogProvider.catalog.run).not.toHaveBeenCalled();
+    expect(hybridCatalogProvider.staticCatalog.run).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to static rows when a live catalog fails", async () => {
+    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
+      ({ providerId }: { providerId: string }) => (providerId === "hybrid" ? ["hybrid"] : []),
+    );
+    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      hybridCatalogProvider,
+    ]);
+    hybridCatalogProvider.catalog.run.mockRejectedValueOnce(new Error("live catalog offline"));
+
+    const rows = await loadProviderCatalogModelsForList({
+      ...baseParams,
+      providerFilter: "hybrid",
+    });
+
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["hybrid/static-model"]);
+    expect(hybridCatalogProvider.catalog.run).toHaveBeenCalledOnce();
+    expect(hybridCatalogProvider.staticCatalog.run).toHaveBeenCalledOnce();
   });
 
   it("resolves provider owners from the installed plugin index before manifest fallback", async () => {
@@ -205,6 +410,30 @@ describe("loadProviderCatalogModelsForList", () => {
     expect(providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
       config: baseParams.cfg,
       env: baseParams.env,
+    });
+    expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
+  });
+
+  it("uses a supplied registry index for provider ownership", async () => {
+    const registryIndex = {
+      plugins: [{ pluginId: "moonshot", enabled: true, origin: "bundled" }],
+    };
+
+    await expect(
+      resolveProviderCatalogPluginIdsForFilter({
+        cfg: baseParams.cfg,
+        env: baseParams.env,
+        providerFilter: "moonshot",
+        registryIndex: registryIndex as unknown as Parameters<
+          typeof resolveProviderCatalogPluginIdsForFilter
+        >[0]["registryIndex"],
+      }),
+    ).resolves.toEqual(["moonshot"]);
+
+    expect(providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
+      config: baseParams.cfg,
+      env: baseParams.env,
+      index: registryIndex,
     });
     expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
   });
@@ -245,7 +474,7 @@ describe("loadProviderCatalogModelsForList", () => {
         env: baseParams.env,
         providerFilter: "moonshot",
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
   });
@@ -271,7 +500,7 @@ describe("loadProviderCatalogModelsForList", () => {
         providerFilter: "moonshot",
         staticOnly: true,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   });
 
   it("only skips registry for providers with actual static catalogs", async () => {
@@ -287,13 +516,10 @@ describe("loadProviderCatalogModelsForList", () => {
       }),
     ).resolves.toBe(false);
 
-    expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["ollama"],
-        requireCompleteDiscoveryEntryCoverage: true,
-        discoveryEntriesOnly: true,
-      }),
-    );
+    const discoveryRequest = firstDiscoveryRequest();
+    expect(discoveryRequest?.onlyPluginIds).toStrictEqual(["ollama"]);
+    expect(discoveryRequest?.requireCompleteDiscoveryEntryCoverage).toBe(true);
+    expect(discoveryRequest?.discoveryEntriesOnly).toBe(true);
   });
 
   it("does not skip registry when a bundled provider has no lightweight static entry", async () => {
@@ -368,14 +594,11 @@ describe("loadProviderCatalogModelsForList", () => {
       ...baseParams,
     });
 
-    expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["bundled-demo"],
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    );
+    const discoveryRequest = firstDiscoveryRequest();
+    expect(discoveryRequest?.onlyPluginIds).toStrictEqual(["bundled-demo"]);
+    expect(discoveryRequest?.includeUntrustedWorkspacePlugins).toBe(false);
     expect(workspaceStaticCatalog).not.toHaveBeenCalled();
-    expect(rows).toEqual([]);
+    expect(rows).toStrictEqual([]);
   });
 
   it("keeps unknown provider filters eligible for early empty results", async () => {

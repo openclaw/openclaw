@@ -1,3 +1,7 @@
+/**
+ * Persists and normalizes the Codex app-server thread binding associated with
+ * an OpenClaw session file.
+ */
 import fs from "node:fs/promises";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -6,15 +10,22 @@ import {
   resolveProviderIdForAuth,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { CodexAppServerApprovalPolicy, CodexAppServerSandboxMode } from "./config.js";
+import {
+  CODEX_PLUGINS_MARKETPLACE_NAME,
+  normalizeCodexServiceTier,
+  type CodexAppServerApprovalPolicy,
+  type CodexAppServerSandboxMode,
+} from "./config.js";
+import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type { CodexServiceTier } from "./protocol.js";
 
-const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai-codex";
+const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
 
 type ProviderAuthAliasLookupParams = Parameters<typeof resolveProviderIdForAuth>[1];
 type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
 
+/** Inputs needed to resolve whether a binding's auth profile is native Codex/OpenAI auth. */
 export type CodexAppServerAuthProfileLookup = {
   authProfileId?: string;
   authProfileStore?: AuthProfileStore;
@@ -22,6 +33,7 @@ export type CodexAppServerAuthProfileLookup = {
   config?: ProviderAuthAliasConfig;
 };
 
+/** Durable sidecar binding connecting an OpenClaw session file to a Codex thread. */
 export type CodexAppServerThreadBinding = {
   schemaVersion: 1;
   threadId: string;
@@ -34,14 +46,41 @@ export type CodexAppServerThreadBinding = {
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
   dynamicToolsFingerprint?: string;
+  dynamicToolsContainDeferred?: boolean;
+  userMcpServersFingerprint?: string;
+  mcpServersFingerprint?: string;
+  nativeHookRelayGeneration?: string;
+  pluginAppsFingerprint?: string;
+  pluginAppsInputFingerprint?: string;
+  pluginAppPolicyContext?: PluginAppPolicyContext;
+  contextEngine?: CodexAppServerContextEngineBinding;
+  environmentSelectionFingerprint?: string;
   createdAt: string;
   updatedAt: string;
 };
 
+/** Context-engine state persisted with a Codex app-server thread binding. */
+export type CodexAppServerContextEngineBinding = {
+  schemaVersion: 1;
+  engineId: string;
+  policyFingerprint: string;
+  projection?: CodexAppServerContextEngineProjectionBinding;
+};
+
+/** Context-engine projection metadata used to guard resumed native threads. */
+export type CodexAppServerContextEngineProjectionBinding = {
+  schemaVersion: 1;
+  mode: "thread_bootstrap";
+  epoch: string;
+  fingerprint?: string;
+};
+
+/** Returns the JSON sidecar path for the Codex app-server binding beside a session file. */
 export function resolveCodexAppServerBindingPath(sessionFile: string): string {
   return `${sessionFile}.codex-app-server.json`;
 }
 
+/** Reads and normalizes a Codex app-server binding sidecar, returning undefined on stale data. */
 export async function readCodexAppServerBinding(
   sessionFile: string,
   lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
@@ -83,6 +122,33 @@ export async function readCodexAppServerBinding(
         typeof parsed.dynamicToolsFingerprint === "string"
           ? parsed.dynamicToolsFingerprint
           : undefined,
+      dynamicToolsContainDeferred:
+        typeof parsed.dynamicToolsContainDeferred === "boolean"
+          ? parsed.dynamicToolsContainDeferred
+          : undefined,
+      userMcpServersFingerprint:
+        typeof parsed.userMcpServersFingerprint === "string"
+          ? parsed.userMcpServersFingerprint
+          : undefined,
+      mcpServersFingerprint:
+        typeof parsed.mcpServersFingerprint === "string" ? parsed.mcpServersFingerprint : undefined,
+      nativeHookRelayGeneration:
+        typeof parsed.nativeHookRelayGeneration === "string" &&
+        parsed.nativeHookRelayGeneration.trim()
+          ? parsed.nativeHookRelayGeneration
+          : undefined,
+      pluginAppsFingerprint:
+        typeof parsed.pluginAppsFingerprint === "string" ? parsed.pluginAppsFingerprint : undefined,
+      pluginAppsInputFingerprint:
+        typeof parsed.pluginAppsInputFingerprint === "string"
+          ? parsed.pluginAppsInputFingerprint
+          : undefined,
+      pluginAppPolicyContext: readPluginAppPolicyContext(parsed.pluginAppPolicyContext),
+      contextEngine: readContextEngineBinding(parsed.contextEngine),
+      environmentSelectionFingerprint:
+        typeof parsed.environmentSelectionFingerprint === "string"
+          ? parsed.environmentSelectionFingerprint
+          : undefined,
       createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString(),
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
     };
@@ -92,6 +158,7 @@ export async function readCodexAppServerBinding(
   }
 }
 
+/** Writes the Codex app-server binding sidecar with normalized provider/auth metadata. */
 export async function writeCodexAppServerBinding(
   sessionFile: string,
   binding: Omit<
@@ -119,6 +186,15 @@ export async function writeCodexAppServerBinding(
     sandbox: binding.sandbox,
     serviceTier: binding.serviceTier,
     dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
+    dynamicToolsContainDeferred: binding.dynamicToolsContainDeferred,
+    userMcpServersFingerprint: binding.userMcpServersFingerprint,
+    mcpServersFingerprint: binding.mcpServersFingerprint,
+    nativeHookRelayGeneration: binding.nativeHookRelayGeneration,
+    pluginAppsFingerprint: binding.pluginAppsFingerprint,
+    pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
+    pluginAppPolicyContext: binding.pluginAppPolicyContext,
+    contextEngine: binding.contextEngine,
+    environmentSelectionFingerprint: binding.environmentSelectionFingerprint,
     createdAt: binding.createdAt ?? now,
     updatedAt: now,
   };
@@ -128,7 +204,111 @@ export async function writeCodexAppServerBinding(
   );
 }
 
-export async function clearCodexAppServerBinding(sessionFile: string): Promise<void> {
+function readContextEngineBinding(value: unknown): CodexAppServerContextEngineBinding | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.schemaVersion !== 1 ||
+    typeof record.engineId !== "string" ||
+    typeof record.policyFingerprint !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    engineId: record.engineId,
+    policyFingerprint: record.policyFingerprint,
+    projection: readContextEngineProjectionBinding(record.projection),
+  };
+}
+
+function readContextEngineProjectionBinding(
+  value: unknown,
+): CodexAppServerContextEngineProjectionBinding | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.schemaVersion !== 1 ||
+    record.mode !== "thread_bootstrap" ||
+    typeof record.epoch !== "string" ||
+    !record.epoch.trim()
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    mode: "thread_bootstrap",
+    epoch: record.epoch,
+    fingerprint: typeof record.fingerprint === "string" ? record.fingerprint : undefined,
+  };
+}
+
+function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.fingerprint !== "string") {
+    return undefined;
+  }
+  const apps = record.apps;
+  if (!apps || typeof apps !== "object" || Array.isArray(apps)) {
+    return undefined;
+  }
+  const parsedApps: PluginAppPolicyContext["apps"] = {};
+  for (const [appId, rawEntry] of Object.entries(apps)) {
+    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+      return undefined;
+    }
+    const entry = rawEntry as Record<string, unknown>;
+    if (
+      "appId" in entry ||
+      typeof entry.configKey !== "string" ||
+      entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
+      typeof entry.pluginName !== "string" ||
+      typeof entry.allowDestructiveActions !== "boolean" ||
+      !Array.isArray(entry.mcpServerNames) ||
+      entry.mcpServerNames.some((serverName) => typeof serverName !== "string")
+    ) {
+      return undefined;
+    }
+    parsedApps[appId] = {
+      configKey: entry.configKey,
+      marketplaceName: entry.marketplaceName,
+      pluginName: entry.pluginName,
+      allowDestructiveActions: entry.allowDestructiveActions,
+      mcpServerNames: entry.mcpServerNames,
+    };
+  }
+  const parsedPluginAppIds: PluginAppPolicyContext["pluginAppIds"] = {};
+  const rawPluginAppIds = record.pluginAppIds;
+  if (rawPluginAppIds && (typeof rawPluginAppIds !== "object" || Array.isArray(rawPluginAppIds))) {
+    return undefined;
+  }
+  if (rawPluginAppIds && typeof rawPluginAppIds === "object") {
+    for (const [configKey, appIds] of Object.entries(rawPluginAppIds)) {
+      if (!Array.isArray(appIds) || appIds.some((appId) => typeof appId !== "string")) {
+        return undefined;
+      }
+      parsedPluginAppIds[configKey] = appIds;
+    }
+  }
+  return {
+    fingerprint: record.fingerprint,
+    apps: parsedApps,
+    pluginAppIds: parsedPluginAppIds,
+  };
+}
+
+/** Removes the Codex app-server binding sidecar if present. */
+export async function clearCodexAppServerBinding(
+  sessionFile: string,
+  _lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
+): Promise<void> {
   try {
     await fs.unlink(resolveCodexAppServerBindingPath(sessionFile));
   } catch (error) {
@@ -138,10 +318,33 @@ export async function clearCodexAppServerBinding(sessionFile: string): Promise<v
   }
 }
 
+/** Clears a binding only when it still points at the expected Codex thread id. */
+export async function clearCodexAppServerBindingForThread(
+  sessionFile: string,
+  threadId: string,
+  lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
+): Promise<boolean> {
+  const binding = await readCodexAppServerBinding(sessionFile, lookup);
+  if (!binding) {
+    return false;
+  }
+  if (binding.threadId !== threadId) {
+    embeddedAgentLog.debug("codex app-server binding points at a different thread; preserving", {
+      sessionFile,
+      threadId,
+      boundThreadId: binding.threadId,
+    });
+    return false;
+  }
+  await clearCodexAppServerBinding(sessionFile);
+  return true;
+}
+
 function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
 }
 
+/** Returns true when an auth profile uses native Codex/OpenAI app-server auth. */
 export function isCodexAppServerNativeAuthProfile(
   lookup: CodexAppServerAuthProfileLookup,
 ): boolean {
@@ -154,10 +357,10 @@ export function isCodexAppServerNativeAuthProfile(
       ...lookup,
       authProfileId,
     });
-    return isCodexAppServerNativeAuthProvider({
-      provider: credential?.provider,
-      config: lookup.config,
-    });
+    if (!credential || credential.type === "api_key") {
+      return false;
+    }
+    return isOpenAiAuthProvider({ provider: credential.provider, config: lookup.config });
   } catch (error) {
     embeddedAgentLog.debug("failed to resolve codex app-server auth profile provider", {
       authProfileId,
@@ -167,6 +370,7 @@ export function isCodexAppServerNativeAuthProfile(
   }
 }
 
+/** Hides redundant OpenAI provider attribution for native Codex auth bindings. */
 export function normalizeCodexAppServerBindingModelProvider(params: {
   authProfileId?: string;
   modelProvider?: string;
@@ -195,20 +399,32 @@ function resolveCodexAppServerAuthProfileCredential(
     return undefined;
   }
   const store =
-    lookup.authProfileStore ?? loadCodexAppServerAuthProfileStore(lookup.agentDir, lookup.config);
+    lookup.authProfileStore ??
+    loadCodexAppServerAuthProfileStore({
+      agentDir: lookup.agentDir,
+      authProfileId,
+      config: lookup.config,
+    });
   return store.profiles[authProfileId];
 }
 
-function loadCodexAppServerAuthProfileStore(
-  agentDir: string | undefined,
-  config?: ProviderAuthAliasConfig,
-): AuthProfileStore {
-  return ensureAuthProfileStore(agentDir?.trim() || resolveDefaultAgentDir(config ?? {}), {
-    allowKeychainPrompt: false,
-  });
+function loadCodexAppServerAuthProfileStore(params: {
+  agentDir: string | undefined;
+  authProfileId: string;
+  config?: ProviderAuthAliasConfig;
+}): AuthProfileStore {
+  return ensureAuthProfileStore(
+    params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {}),
+    {
+      allowKeychainPrompt: false,
+      config: params.config,
+      externalCliProviderIds: [CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER],
+      externalCliProfileIds: [params.authProfileId],
+    },
+  );
 }
 
-function isCodexAppServerNativeAuthProvider(params: {
+function isOpenAiAuthProvider(params: {
   provider?: string;
   config?: ProviderAuthAliasConfig;
 }): boolean {
@@ -236,5 +452,5 @@ function readSandboxMode(value: unknown): CodexAppServerSandboxMode | undefined 
 }
 
 function readServiceTier(value: unknown): CodexServiceTier | undefined {
-  return value === "fast" || value === "flex" ? value : undefined;
+  return normalizeCodexServiceTier(value);
 }

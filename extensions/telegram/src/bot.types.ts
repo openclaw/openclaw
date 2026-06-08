@@ -1,4 +1,5 @@
-import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
+// Telegram type declarations define plugin contracts.
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramBotInfo } from "./bot-info.js";
@@ -23,6 +24,7 @@ export type TelegramBotOptions = {
   minimumClientTimeoutSeconds?: number;
   updateOffset?: {
     lastUpdateId?: number | null;
+    persistenceFloorUpdateId?: number | null;
     onUpdateId?: (updateId: number) => void | Promise<void>;
   };
   testTimings?: {

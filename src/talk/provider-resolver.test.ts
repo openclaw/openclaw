@@ -1,3 +1,4 @@
+// Talk provider resolver tests cover provider selection from config.
 import { describe, expect, it } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "./provider-resolver.js";
@@ -34,7 +35,7 @@ describe("realtime voice provider resolver", () => {
       },
     });
 
-    expect(resolution).toMatchObject({
+    expect(resolution).toStrictEqual({
       provider: providers[1],
       providerConfig: {
         enabled: true,
@@ -54,7 +55,7 @@ describe("realtime voice provider resolver", () => {
       },
     });
 
-    expect(resolution.providerConfig).toMatchObject({
+    expect(resolution.providerConfig).toStrictEqual({
       enabled: true,
       model: "gpt-realtime",
       resolved: true,
@@ -72,8 +73,32 @@ describe("realtime voice provider resolver", () => {
       },
     });
 
-    expect(resolution.providerConfig).toMatchObject({
+    expect(resolution.providerConfig).toStrictEqual({
+      enabled: true,
       model: "custom-realtime",
+      resolved: true,
+    });
+  });
+
+  it("applies caller overrides to the auto-selected realtime voice provider", () => {
+    const resolution = resolveConfiguredRealtimeVoiceProvider({
+      cfg: {},
+      defaultModel: "gpt-realtime",
+      providerConfigOverrides: {
+        model: "gpt-realtime-2",
+        voice: "cedar",
+      },
+      providers,
+      providerConfigs: {
+        second: { enabled: true, model: "provider-default", voice: "marin" },
+      },
+    });
+
+    expect(resolution.providerConfig).toStrictEqual({
+      enabled: true,
+      model: "gpt-realtime-2",
+      voice: "cedar",
+      resolved: true,
     });
   });
 

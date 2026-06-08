@@ -1,6 +1,8 @@
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+/** Orchestrates model-list row sources across registry, manifests, catalogs, and config. */
+import type { ModelRegistry } from "../../llm/model-registry.js";
 import {
   appendCatalogSupplementRows,
+  appendAuthenticatedCatalogRows,
   appendConfiguredProviderRows,
   appendConfiguredRows,
   appendDiscoveredRows,
@@ -25,6 +27,7 @@ type AppendAllModelRowSourcesResult = {
   requiresRegistryFallback: boolean;
 };
 
+/** Appends all rows requested by `models list --all` or a provider-filtered list. */
 export async function appendAllModelRowSources(
   params: AllModelRowSources,
 ): Promise<AppendAllModelRowSourcesResult> {
@@ -83,16 +86,17 @@ export async function appendAllModelRowSources(
       params.rows.length === 0 &&
       params.sourcePlan.fallbackToRegistryWhenEmpty
     ) {
+      // Provider-scoped static sources can be empty when a plugin exposes only
+      // runtime discovery; tell the caller to load the registry and retry.
       if (!params.modelRegistry) {
         return { requiresRegistryFallback: true };
       }
       await appendDiscoveredRows({
         rows: params.rows,
-        models: params.modelRegistry.getAll(),
+        models: params.registryModels ?? params.modelRegistry.getAll(),
         modelRegistry: params.modelRegistry,
         context: params.context,
         resolveWithRegistry: false,
-        skipSuppression: true,
       });
     }
     return { requiresRegistryFallback: false };
@@ -167,6 +171,7 @@ export async function appendAllModelRowSources(
   return { requiresRegistryFallback: false };
 }
 
+/** Appends the configured/default rows used by the cheap default list path. */
 export async function appendConfiguredModelRowSources(params: {
   rows: ModelRow[];
   entries: ConfiguredEntry[];
@@ -174,11 +179,15 @@ export async function appendConfiguredModelRowSources(params: {
   context: RowBuilderContext;
 }): Promise<void> {
   await appendConfiguredRows(params);
-  if (params.context.filter.provider) {
-    await appendConfiguredProviderRows({
-      rows: params.rows,
-      context: params.context,
-      seenKeys: new Set(params.rows.map((row) => row.key)),
-    });
-  }
+  const seenKeys = new Set(params.rows.map((row) => row.key));
+  await appendConfiguredProviderRows({
+    rows: params.rows,
+    context: params.context,
+    seenKeys,
+  });
+  await appendAuthenticatedCatalogRows({
+    rows: params.rows,
+    context: params.context,
+    seenKeys,
+  });
 }

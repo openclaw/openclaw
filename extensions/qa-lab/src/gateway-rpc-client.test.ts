@@ -1,3 +1,4 @@
+// Qa Lab tests cover gateway rpc client plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayRpcMock = vi.hoisted(() => {
@@ -15,6 +16,22 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
 }));
 
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
+
+function expectRequestResolver(
+  callback: ((value: { ok: boolean }) => void) | null,
+): (value: { ok: boolean }) => void {
+  if (callback === null) {
+    throw new Error("Expected first request resolver callback to be captured");
+  }
+  return callback;
+}
+
+function expectReleaseCallback(callback: (() => void) | null): () => void {
+  if (callback === null) {
+    throw new Error("Expected first request release callback to be captured");
+  }
+  return callback;
+}
 
 describe("startQaGatewayRpcClient", () => {
   beforeEach(() => {
@@ -145,8 +162,7 @@ describe("startQaGatewayRpcClient", () => {
       },
     );
 
-    expect(resolveFirst).not.toBeNull();
-    resolveFirst!({ ok: true });
+    expectRequestResolver(resolveFirst)({ ok: true });
     await expect(firstRequest).resolves.toEqual({ ok: true });
   });
 
@@ -174,11 +190,40 @@ describe("startQaGatewayRpcClient", () => {
 
     expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(1);
 
-    expect(releaseFirst).not.toBeNull();
-    releaseFirst!();
+    expectReleaseCallback(releaseFirst)();
 
     await expect(firstRequest).resolves.toEqual({ ok: true });
     await expect(secondRequest).resolves.toEqual({ ok: true });
     expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects queued requests that have not started before stop", async () => {
+    let releaseFirst: (() => void) | null = null;
+    gatewayRpcMock.callGatewayFromCli.mockImplementationOnce(
+      async () =>
+        await new Promise<{ ok: boolean }>((resolve) => {
+          releaseFirst = () => resolve({ ok: true });
+        }),
+    );
+
+    const client = await startQaGatewayRpcClient({
+      wsUrl: "ws://127.0.0.1:18789",
+      token: "qa-token",
+      logs: () => "qa logs",
+    });
+
+    const firstRequest = client.request("health");
+    await Promise.resolve();
+    const secondRequest = client.request("status");
+    await Promise.resolve();
+
+    await client.stop();
+    expectReleaseCallback(releaseFirst)();
+
+    await expect(firstRequest).resolves.toEqual({ ok: true });
+    await expect(secondRequest).rejects.toThrow(
+      "gateway rpc client already stopped\nGateway logs:\nqa logs",
+    );
+    expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 });

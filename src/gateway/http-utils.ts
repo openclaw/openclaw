@@ -1,18 +1,17 @@
+// Gateway HTTP request helpers.
+// Resolves OpenAI-compatible agent/model/session headers and re-exports auth helpers.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import {
-  buildAllowedModelSet,
-  modelKey,
-  parseModelRef,
-  resolveDefaultModelForAgent,
-} from "../agents/model-selection.js";
-import { getRuntimeConfig } from "../config/io.js";
-import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-auth-utils.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
@@ -28,12 +27,14 @@ export {
   resolveHttpSenderIsOwner,
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
+  resolveSharedSecretHttpOperatorScopes,
   resolveTrustedHttpOperatorScopes,
   type AuthorizedGatewayHttpRequest,
   type GatewayHttpRequestAuthCheckResult,
 } from "./http-auth-utils.js";
 
 export const OPENCLAW_MODEL_ID = "openclaw";
+/** Default OpenAI-compatible model alias that targets the default OpenClaw agent. */
 export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
 
 function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
@@ -47,6 +48,7 @@ function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   return normalizeAgentId(raw);
 }
 
+/** Resolves the target agent encoded by an OpenAI-compatible model id. */
 export function resolveAgentIdFromModel(
   model: string | undefined,
   cfg = getRuntimeConfig(),
@@ -70,6 +72,7 @@ export function resolveAgentIdFromModel(
   return normalizeAgentId(agentId);
 }
 
+/** Validates and resolves the `x-openclaw-model` override for OpenAI-compatible requests. */
 export async function resolveOpenAiCompatModelOverride(params: {
   req: IncomingMessage;
   agentId: string;
@@ -90,20 +93,36 @@ export async function resolveOpenAiCompatModelOverride(params: {
   const cfg = getRuntimeConfig();
   const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId: params.agentId });
   const defaultProvider = defaultModelRef.provider;
-  const parsed = parseModelRef(raw, defaultProvider);
+  const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
+    config: cfg,
+    env: process.env,
+  });
+  const modelManifestContext = {
+    manifestPlugins: manifestMetadataSnapshot.plugins,
+  };
+  const parsed = parseModelRef(raw, defaultProvider, {
+    allowManifestNormalization: true,
+    allowPluginNormalization: true,
+    ...modelManifestContext,
+  });
   if (!parsed) {
     return { errorMessage: "Invalid `x-openclaw-model`." };
   }
 
+  // Overrides must pass the same visibility policy as model picker surfaces;
+  // otherwise API clients could target hidden plugin/provider models by header.
   const catalog = await loadGatewayModelCatalog();
-  const allowed = buildAllowedModelSet({
+  const policy = createModelVisibilityPolicy({
     cfg,
     catalog,
     defaultProvider,
     agentId: params.agentId,
+    allowManifestNormalization: true,
+    allowPluginNormalization: true,
+    ...modelManifestContext,
   });
   const normalized = modelKey(parsed.provider, parsed.model);
-  if (!allowed.allowAny && !allowed.allowedKeys.has(normalized)) {
+  if (!policy.allowsKey(normalized)) {
     return {
       errorMessage: `Model '${normalized}' is not allowed for agent '${params.agentId}'.`,
     };
@@ -112,6 +131,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
   return { modelOverride: raw };
 }
 
+/** Resolves the request agent from headers, model alias, or the configured default. */
 export function resolveAgentIdForRequest(params: {
   req: IncomingMessage;
   model: string | undefined;
@@ -142,6 +162,7 @@ function resolveSessionKey(params: {
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
 }
 
+/** Resolves gateway agent/session/channel context for OpenAI-compatible handlers. */
 export function resolveGatewayRequestContext(params: {
   req: IncomingMessage;
   model: string | undefined;

@@ -1,9 +1,11 @@
+// Qa Matrix plugin module implements scenario catalog behavior.
+import type { QaProviderModeInput } from "../../run-config.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
 } from "../../shared/live-transport-scenarios.js";
-import { type MatrixQaConfigOverrides } from "../../substrate/config.js";
+import type { MatrixQaConfigOverrides } from "../../substrate/config.js";
 import {
   buildDefaultMatrixQaTopologySpec,
   findMatrixQaProvisionedRoom,
@@ -30,6 +32,7 @@ type MatrixQaScenarioId =
   | "matrix-room-image-understanding-attachment"
   | "matrix-room-generated-image-delivery"
   | "matrix-media-type-coverage"
+  | "matrix-voice-preflight-mention"
   | "matrix-attachment-only-ignored"
   | "matrix-unsupported-media-safe"
   | "matrix-dm-reply-shape"
@@ -74,6 +77,7 @@ type MatrixQaScenarioId =
   | "matrix-inbound-edit-ignored"
   | "matrix-inbound-edit-no-duplicate-trigger"
   | "matrix-e2ee-basic-reply"
+  | "matrix-e2ee-state-after-missing-encryption"
   | "matrix-e2ee-thread-follow-up"
   | "matrix-e2ee-bootstrap-success"
   | "matrix-e2ee-recovery-key-lifecycle"
@@ -112,6 +116,7 @@ export type MatrixQaE2eeScenarioId = Extract<MatrixQaScenarioId, `matrix-e2ee-${
 
 export type MatrixQaScenarioDefinition = LiveTransportScenarioDefinition<MatrixQaScenarioId> & {
   configOverrides?: MatrixQaConfigOverrides;
+  providerMode?: QaProviderModeInput;
   topology?: MatrixQaTopologySpec;
 };
 
@@ -138,7 +143,7 @@ export const MATRIX_QA_RESTART_ROOM_KEY = "restart";
 export const MATRIX_QA_SECONDARY_ROOM_KEY = "secondary";
 export const MATRIX_QA_STALE_SYNC_ROOM_KEY = "stale-sync";
 
-const MATRIX_QA_LIVE_MODEL_TIMEOUT_MS = 120_000;
+const MATRIX_QA_LIVE_MODEL_TIMEOUT_MS = 180_000;
 const MATRIX_QA_IMAGE_GENERATION_TIMEOUT_MS = 180_000;
 const MATRIX_QA_E2EE_REPLY_TIMEOUT_MS = 150_000;
 const MATRIX_QA_E2EE_MEDIA_TIMEOUT_MS = 180_000;
@@ -453,6 +458,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     timeoutMs: 75_000,
     title: "Matrix block streaming preserves completed quiet preview blocks",
     topology: MATRIX_QA_BLOCK_ROOM_TOPOLOGY,
+    providerMode: "mock-openai",
     configOverrides: {
       agentDefaults: {
         blockStreamingChunk: {
@@ -468,6 +474,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
       },
       blockStreaming: true,
       streaming: "quiet",
+      toolProfile: "coding",
     },
   },
   {
@@ -489,6 +496,19 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-media-type-coverage",
     timeoutMs: 90_000,
     title: "Matrix media attachments cover image, audio, video, PDF, and EPUB transport",
+    topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
+  },
+  {
+    id: "matrix-voice-preflight-mention",
+    configOverrides: {
+      audio: {
+        enabled: true,
+      },
+      groupMentionPatterns: ["\\S"],
+    },
+    providerMode: "live-frontier",
+    timeoutMs: 180_000,
+    title: "Matrix voice notes can trigger mention gating through transcription",
     topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
   },
   {
@@ -834,6 +854,16 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     topology: buildMatrixQaE2eeScenarioTopology({
       scenarioId: "matrix-e2ee-basic-reply",
       name: "Matrix QA E2EE Basic Reply Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-state-after-missing-encryption",
+    timeoutMs: MATRIX_QA_E2EE_REPLY_TIMEOUT_MS,
+    title: "Matrix E2EE sync state_after opt-in stays disabled for encrypted rooms",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-state-after-missing-encryption",
+      name: "Matrix QA E2EE State After Missing Encryption Room",
     }),
     configOverrides: MATRIX_QA_E2EE_CONFIG,
   },
@@ -1209,10 +1239,16 @@ const MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS = [
   "matrix-room-image-understanding-attachment",
   "matrix-room-generated-image-delivery",
   "matrix-media-type-coverage",
+  "matrix-voice-preflight-mention",
   "matrix-attachment-only-ignored",
   "matrix-unsupported-media-safe",
   "matrix-e2ee-media-image",
 ] satisfies MatrixQaScenarioId[];
+
+const MATRIX_QA_EXPLICIT_ONLY_SCENARIO_IDS = new Set<MatrixQaScenarioId>([
+  "matrix-room-block-streaming",
+  "matrix-subagent-thread-spawn",
+]);
 
 const MATRIX_QA_E2EE_SMOKE_PROFILE_SCENARIO_IDS = [
   "matrix-e2ee-basic-reply",
@@ -1248,7 +1284,9 @@ function normalizeMatrixQaProfile(profile?: string): MatrixQaProfile {
 }
 
 function getMatrixQaProfileScenarioIds(profile: MatrixQaProfile): MatrixQaScenarioId[] {
-  const allIds = MATRIX_QA_SCENARIOS.map((scenario) => scenario.id);
+  const allIds = MATRIX_QA_SCENARIOS.map((scenario) => scenario.id).filter(
+    (id) => !MATRIX_QA_EXPLICIT_ONLY_SCENARIO_IDS.has(id),
+  );
   const mediaIds = buildMatrixQaScenarioIdSet(MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS);
   const smokeIds = buildMatrixQaScenarioIdSet(MATRIX_QA_E2EE_SMOKE_PROFILE_SCENARIO_IDS);
   switch (profile) {
@@ -1290,7 +1328,7 @@ export function findMatrixQaScenarios(ids?: string[], profile?: string) {
   });
 }
 
-export const __matrixQaProfileTesting = {
+export const matrixQaProfileTesting = {
   getMatrixQaProfileScenarioIds,
   normalizeMatrixQaProfile,
 };

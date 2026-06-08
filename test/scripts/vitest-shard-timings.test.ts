@@ -1,3 +1,4 @@
+// Vitest Shard Timings tests cover vitest shard timings script behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -85,16 +86,18 @@ describe("scripts/lib/vitest-shard-timings.mjs", () => {
         ["test/vitest/vitest.auto-reply-reply.config.ts#auto-reply-reply-agent-runner", 1234],
       ]),
     );
-    expect(
-      JSON.parse(fs.readFileSync(env.OPENCLAW_TEST_PROJECTS_TIMINGS_PATH, "utf8")).configs[
-        "test/vitest/vitest.auto-reply-reply.config.ts#auto-reply-reply-agent-runner"
-      ],
-    ).toMatchObject({
+    const persistedTiming = JSON.parse(
+      fs.readFileSync(env.OPENCLAW_TEST_PROJECTS_TIMINGS_PATH, "utf8"),
+    ).configs["test/vitest/vitest.auto-reply-reply.config.ts#auto-reply-reply-agent-runner"];
+    expect(typeof persistedTiming.updatedAt).toBe("string");
+    expect(persistedTiming.updatedAt.length).toBeGreaterThan(0);
+    expect({ ...persistedTiming, updatedAt: "<dynamic>" }).toStrictEqual({
       averageMs: 1234,
       baseConfig: "test/vitest/vitest.auto-reply-reply.config.ts",
       includePatternCount: 1,
       lastMs: 1234,
       sampleCount: 1,
+      updatedAt: "<dynamic>",
     });
   });
 });

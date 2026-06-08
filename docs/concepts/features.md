@@ -20,8 +20,8 @@ title: "Features"
   <Card title="Media" icon="image" href="/nodes/images">
     Images, audio, video, documents, and image/video generation.
   </Card>
-  <Card title="Apps and UI" icon="monitor" href="/web/control-ui">
-    Web Control UI and macOS companion app.
+  <Card title="Apps and UI" icon="monitor" href="/platforms">
+    Windows Hub, Web Control UI, macOS app, and mobile nodes.
   </Card>
   <Card title="Mobile nodes" icon="smartphone" href="/nodes">
     iOS and Android nodes with pairing, voice/chat, and rich device commands.
@@ -33,7 +33,7 @@ title: "Features"
 **Channels:**
 
 - Built-in channels include Discord, Google Chat, iMessage, IRC, Signal, Slack, Telegram, WebChat, and WhatsApp
-- Bundled plugin channels include BlueBubbles as a legacy iMessage bridge, Feishu, LINE, Matrix, Mattermost, Microsoft Teams, Nextcloud Talk, Nostr, QQ Bot, Synology Chat, Tlon, Twitch, Zalo, and Zalo Personal
+- Bundled plugin channels include Feishu, LINE, Matrix, Mattermost, Microsoft Teams, Nextcloud Talk, Nostr, QQ Bot, Synology Chat, Tlon, Twitch, Zalo, and Zalo Personal
 - Optional separately installed channel plugins include Voice Call and third-party packages such as WeChat
 - Third-party channel plugins can extend the Gateway further, such as WeChat
 - Group chat support with mention-based activation

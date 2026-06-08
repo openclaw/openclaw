@@ -1,3 +1,4 @@
+// Covers the Kysely dialect backed by Node sqlite.
 import { DatabaseSync } from "node:sqlite";
 import { CompiledQuery, Kysely, sql, type Generated } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,7 +25,7 @@ describe("NodeSqliteKyselyDialect", () => {
     await expect(db.selectFrom("person").selectAll().execute()).resolves.toEqual([
       { id: 1, name: "Ada" },
     ]);
-    await expect(sql`select name from person where id = ${1}`.execute(db)).resolves.toMatchObject({
+    await expect(sql`select name from person where id = ${1}`.execute(db)).resolves.toEqual({
       rows: [{ name: "Ada" }],
     });
     await expect(
@@ -32,7 +33,7 @@ describe("NodeSqliteKyselyDialect", () => {
     ).resolves.toEqual([{ id: 2, name: "Grace" }]);
     await expect(
       sql`insert into person (name) values ('Lin') returning *`.execute(db),
-    ).resolves.toMatchObject({
+    ).resolves.toEqual({
       rows: [{ id: 3, name: "Lin" }],
     });
 
@@ -63,9 +64,7 @@ describe("NodeSqliteKyselyDialect", () => {
       }),
     });
 
-    await expect(
-      sql<{ user_version: number }>`pragma user_version`.execute(db),
-    ).resolves.toMatchObject({
+    await expect(sql<{ user_version: number }>`pragma user_version`.execute(db)).resolves.toEqual({
       rows: [{ user_version: 7 }],
     });
     expect(createDatabase).toHaveBeenCalledTimes(1);
@@ -115,7 +114,7 @@ describe("NodeSqliteKyselyDialect", () => {
         throw new Error("rollback outer");
       }),
     ).rejects.toThrow("rollback outer");
-    await expect(db.selectFrom("person").selectAll().execute()).resolves.toEqual([]);
+    await expect(db.selectFrom("person").selectAll().execute()).resolves.toStrictEqual([]);
 
     const trx = await db.startTransaction().execute();
     await trx.insertInto("person").values({ name: "Ada" }).execute();

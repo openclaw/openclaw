@@ -1,3 +1,4 @@
+// Tests block streaming policy and buffered reply pipeline behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -47,7 +48,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
   it("honors newline chunkMode for plugin channels even before the plugin registry is loaded", () => {
     const cfg = {
       channels: {
-        bluebubbles: {
+        imessage: {
           chunkMode: "newline",
         },
       },
@@ -64,7 +65,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
 
     const resolved = resolveEffectiveBlockStreamingConfig({
       cfg,
-      provider: "bluebubbles",
+      provider: "imessage",
     });
 
     expect(resolved.chunking.flushOnParagraph).toBe(true);

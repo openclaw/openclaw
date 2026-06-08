@@ -1,8 +1,14 @@
+// Control UI view renders config screen content.
 import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
-import { BORDER_RADIUS_STOPS, type BorderRadiusStop } from "../storage.ts";
+import {
+  BORDER_RADIUS_STOPS,
+  TEXT_SCALE_STOPS,
+  type BorderRadiusStop,
+  type TextScaleStop,
+} from "../storage.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
 import type { ConfigUiHints } from "../types.ts";
@@ -24,6 +30,14 @@ const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
   50: "Default",
   75: "Round",
   100: "Full",
+};
+
+const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
+  90: "Small",
+  100: "Default",
+  110: "Large",
+  125: "XL",
+  140: "XXL",
 };
 
 export type WebPushUiState = {
@@ -85,10 +99,13 @@ export type ConfigProps = {
   onOpenCustomThemeImport?: () => void;
   borderRadius: number;
   setBorderRadius: (value: number) => void;
+  textScale: number;
+  setTextScale: (value: number) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
   navRootLabel?: string;
+  showRootTab?: boolean;
   includeSections?: string[];
   excludeSections?: string[];
   includeVirtualSections?: boolean;
@@ -370,6 +387,12 @@ const sidebarIcons = {
       <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
     </svg>
   `,
+  __notifications__: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path>
+      <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+    </svg>
+  `,
   default: html`
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
@@ -419,6 +442,7 @@ const SECTION_CATEGORIES: SectionCategory[] = [
       { key: "channels", label: "Channels" },
       { key: "messages", label: "Messages" },
       { key: "broadcast", label: "Broadcast" },
+      { key: "__notifications__", label: "Notifications" },
       { key: "talk", label: "Talk" },
       { key: "audio", label: "Audio" },
     ],
@@ -478,40 +502,23 @@ function scopeSchemaSections(
   const include = params.include;
   const exclude = params.exclude;
   const nextProps: Record<string, JsonSchema> = {};
-  for (const [key, value] of Object.entries(schema.properties)) {
+  for (const key of Object.keys(schema.properties)) {
     if (include && include.size > 0 && !include.has(key)) {
       continue;
     }
     if (exclude && exclude.size > 0 && exclude.has(key)) {
       continue;
     }
-    nextProps[key] = value;
+    nextProps[key] = schema.properties[key];
   }
   return { ...schema, properties: nextProps };
 }
 
-function scopeUnsupportedPaths(
-  unsupportedPaths: string[],
-  params: { include?: ReadonlySet<string> | null; exclude?: ReadonlySet<string> | null },
-): string[] {
-  const include = params.include;
-  const exclude = params.exclude;
-  if ((!include || include.size === 0) && (!exclude || exclude.size === 0)) {
-    return unsupportedPaths;
+function asConfigSchema(value: unknown): JsonSchema | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
   }
-  return unsupportedPaths.filter((entry) => {
-    if (entry === "<root>") {
-      return true;
-    }
-    const [top] = entry.split(".");
-    if (include && include.size > 0) {
-      return include.has(top);
-    }
-    if (exclude && exclude.size > 0) {
-      return !exclude.has(top);
-    }
-    return true;
-  });
+  return value as JsonSchema;
 }
 
 function resolveSectionMeta(
@@ -594,10 +601,7 @@ function computeDiff(
       return true;
     }
     for (const key of origKeys) {
-      if (
-        !Object.prototype.hasOwnProperty.call(curr, key) ||
-        valuesDiffer(orig[key], curr[key], depth + 1)
-      ) {
+      if (!Object.hasOwn(curr, key) || valuesDiffer(orig[key], curr[key], depth + 1)) {
         return true;
       }
     }
@@ -816,11 +820,19 @@ function renderNotificationsSection(props: ConfigProps) {
   const push = props.webPush;
   if (!push) {
     return html`
-      <div class="settings-appearance">
-        <div class="settings-appearance__section">
-          <h3 class="settings-appearance__heading">Push Notifications</h3>
-          <p class="settings-appearance__hint">Not available in this browser.</p>
-        </div>
+      <div class="settings-notifications">
+        <section class="settings-notifications__card">
+          <div class="settings-notifications__header">
+            <span class="settings-notifications__icon">${getSectionIcon("__notifications__")}</span>
+            <div class="settings-notifications__copy">
+              <h3 class="settings-notifications__title">Push notifications</h3>
+              <p class="settings-notifications__hint">Not available in this browser.</p>
+            </div>
+            <span class="settings-notifications__badge settings-notifications__badge--muted">
+              Unavailable
+            </span>
+          </div>
+        </section>
       </div>
     `;
   }
@@ -833,80 +845,101 @@ function renderNotificationsSection(props: ConfigProps) {
         : push.permission === "default"
           ? "Not requested"
           : "Unsupported";
-  const statusDot = push.subscribed ? "settings-status-dot--ok" : "";
+  const subscriptionLabel = push.subscribed ? "Subscribed" : "Not subscribed";
+  const badgeLabel = !push.supported
+    ? "Unsupported"
+    : push.permission === "denied"
+      ? "Blocked"
+      : push.subscribed
+        ? "Subscribed"
+        : "Ready";
+  const badgeTone = !push.supported
+    ? "settings-notifications__badge--muted"
+    : push.permission === "denied"
+      ? "settings-notifications__badge--danger"
+      : push.subscribed
+        ? "settings-notifications__badge--ok"
+        : "settings-notifications__badge--accent";
 
   return html`
-    <div class="settings-appearance">
-      <div class="settings-appearance__section">
-        <h3 class="settings-appearance__heading">Push Notifications</h3>
-        <p class="settings-appearance__hint">
-          Subscribe to receive browser push notifications from your gateway.
-        </p>
+    <div class="settings-notifications">
+      <section class="settings-notifications__card">
+        <div class="settings-notifications__header">
+          <span class="settings-notifications__icon">${getSectionIcon("__notifications__")}</span>
+          <div class="settings-notifications__copy">
+            <h3 class="settings-notifications__title">Push notifications</h3>
+            <p class="settings-notifications__hint">
+              Receive browser push notifications from your gateway.
+            </p>
+          </div>
+          <span class="settings-notifications__badge ${badgeTone}">${badgeLabel}</span>
+        </div>
 
-        <div class="settings-info-grid">
-          <div class="settings-info-row">
-            <span class="settings-info-row__label">Browser support</span>
-            <span class="settings-info-row__value"
-              >${push.supported ? "Available" : "Not supported"}</span
-            >
+        <div class="settings-notifications__body">
+          <div class="settings-notifications__details">
+            <div class="settings-notifications__detail">
+              <span class="settings-notifications__label">Browser support</span>
+              <span class="settings-notifications__value">
+                ${push.supported ? "Available" : "Not supported"}
+              </span>
+            </div>
+            <div class="settings-notifications__detail">
+              <span class="settings-notifications__label">Permission</span>
+              <span class="settings-notifications__value">${permissionLabel}</span>
+            </div>
+            <div class="settings-notifications__detail">
+              <span class="settings-notifications__label">Status</span>
+              <span class="settings-notifications__value settings-notifications__value--status">
+                <span
+                  class="settings-notifications__dot ${push.subscribed
+                    ? "settings-notifications__dot--ok"
+                    : ""}"
+                ></span>
+                ${subscriptionLabel}
+              </span>
+            </div>
           </div>
-          <div class="settings-info-row">
-            <span class="settings-info-row__label">Permission</span>
-            <span class="settings-info-row__value">${permissionLabel}</span>
-          </div>
-          <div class="settings-info-row">
-            <span class="settings-info-row__label">Status</span>
-            <span class="settings-info-row__value">
-              <span class="settings-status-dot ${statusDot}"></span>
-              ${push.subscribed ? "Subscribed" : "Not subscribed"}
-            </span>
+
+          <div class="settings-notifications__actions">
+            ${push.supported && push.permission !== "denied"
+              ? push.subscribed
+                ? html`
+                    <button
+                      class="btn"
+                      ?disabled=${push.loading || !props.connected}
+                      @click=${() => props.onWebPushUnsubscribe?.()}
+                    >
+                      ${icons.x} Unsubscribe
+                    </button>
+                    <button
+                      class="btn primary"
+                      ?disabled=${push.loading || !props.connected}
+                      @click=${() => props.onWebPushTest?.()}
+                    >
+                      ${icons.send} Send test
+                    </button>
+                  `
+                : html`
+                    <button
+                      class="btn primary"
+                      ?disabled=${push.loading || !props.connected}
+                      @click=${() => props.onWebPushSubscribe?.()}
+                    >
+                      ${push.loading ? icons.loader : getSectionIcon("__notifications__")}
+                      ${push.loading ? "Subscribing..." : "Enable notifications"}
+                    </button>
+                  `
+              : push.permission === "denied"
+                ? html`
+                    <div class="settings-notifications__callout">
+                      Notifications are blocked. Update your browser site permissions to allow
+                      notifications.
+                    </div>
+                  `
+                : nothing}
           </div>
         </div>
-      </div>
-
-      ${push.supported && push.permission !== "denied"
-        ? html`
-            <div class="settings-appearance__section">
-              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                ${push.subscribed
-                  ? html`
-                      <button
-                        class="config-bar__btn"
-                        ?disabled=${push.loading || !props.connected}
-                        @click=${() => props.onWebPushUnsubscribe?.()}
-                      >
-                        Unsubscribe
-                      </button>
-                      <button
-                        class="config-bar__btn"
-                        ?disabled=${push.loading || !props.connected}
-                        @click=${() => props.onWebPushTest?.()}
-                      >
-                        Send test
-                      </button>
-                    `
-                  : html`
-                      <button
-                        class="config-bar__btn config-bar__btn--primary"
-                        ?disabled=${push.loading || !props.connected}
-                        @click=${() => props.onWebPushSubscribe?.()}
-                      >
-                        ${push.loading ? "Subscribing..." : "Enable notifications"}
-                      </button>
-                    `}
-              </div>
-            </div>
-          `
-        : push.permission === "denied"
-          ? html`
-              <div class="settings-appearance__section">
-                <p class="settings-appearance__hint">
-                  Notifications are blocked. Update your browser site permissions to allow
-                  notifications.
-                </p>
-              </div>
-            `
-          : nothing}
+      </section>
     </div>
   `;
 }
@@ -1080,6 +1113,26 @@ function renderAppearanceSection(props: ConfigProps) {
       </div>
 
       <div class="settings-appearance__section">
+        <h3 class="settings-appearance__heading">Text size</h3>
+        <div class="settings-text-scale">
+          <div class="settings-text-scale__options">
+            ${TEXT_SCALE_STOPS.map(
+              (stop) => html`
+                <button
+                  type="button"
+                  class="settings-text-scale__btn ${stop === props.textScale ? "active" : ""}"
+                  @click=${() => props.setTextScale(stop)}
+                >
+                  <span class="settings-text-scale__sample">${TEXT_SCALE_LABELS[stop]}</span>
+                  <span class="settings-text-scale__label">${stop}%</span>
+                </button>
+              `,
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-appearance__section">
         <h3 class="settings-appearance__heading">Connection</h3>
         <div class="settings-info-grid">
           <div class="settings-info-row">
@@ -1173,15 +1226,13 @@ export function resetConfigViewStateForTests() {
 
 export function renderConfig(props: ConfigProps) {
   const showModeToggle = props.showModeToggle ?? false;
+  const showRootTab = props.showRootTab ?? true;
   const validity = props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
   const includeVirtualSections = props.includeVirtualSections ?? true;
   const include = props.includeSections?.length ? new Set(props.includeSections) : null;
   const exclude = props.excludeSections?.length ? new Set(props.excludeSections) : null;
-  const rawAnalysis = analyzeConfigSchema(props.schema);
-  const analysis = {
-    schema: scopeSchemaSections(rawAnalysis.schema, { include, exclude }),
-    unsupportedPaths: scopeUnsupportedPaths(rawAnalysis.unsupportedPaths, { include, exclude }),
-  };
+  const scopedSchema = scopeSchemaSections(asConfigSchema(props.schema), { include, exclude });
+  const analysis = analyzeConfigSchema(scopedSchema);
   const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
   const rawAvailable = props.rawAvailable ?? true;
   const formMode = showModeToggle && rawAvailable ? props.formMode : "form";
@@ -1197,11 +1248,15 @@ export function renderConfig(props: ConfigProps) {
   const schemaProps = analysis.schema?.properties ?? {};
 
   const VIRTUAL_SECTIONS = new Set(["__appearance__", "__notifications__"]);
+  const isVisibleVirtualSection = (key: string) =>
+    includeVirtualSections &&
+    VIRTUAL_SECTIONS.has(key) &&
+    (key === "__appearance__" || include?.has(key) === true);
   const visibleCategories = SECTION_CATEGORIES.map((cat) =>
     Object.assign({}, cat, {
       sections: cat.sections.filter(
         (s) =>
-          ((includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps) &&
+          (isVisibleVirtualSection(s.key) || s.key in schemaProps) &&
           (!include || include.has(s.key)) &&
           (!exclude || !exclude.has(s.key)),
       ),
@@ -1235,7 +1290,9 @@ export function renderConfig(props: ConfigProps) {
   const effectiveSubsection = null;
 
   const topTabs = [
-    { key: null as string | null, label: props.navRootLabel ?? "Settings" },
+    ...(showRootTab
+      ? [{ key: null as string | null, label: props.navRootLabel ?? "Settings" }]
+      : []),
     ...[...visibleCategories, ...(otherCategory ? [otherCategory] : [])].flatMap((cat) =>
       cat.sections.map((s) => ({ key: s.key, label: s.label })),
     ),

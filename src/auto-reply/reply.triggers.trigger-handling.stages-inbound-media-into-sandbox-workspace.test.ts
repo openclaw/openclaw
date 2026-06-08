@@ -1,3 +1,4 @@
+/** Tests trigger handling for staging inbound media into sandbox workspaces. */
 import fs from "node:fs/promises";
 import path, { basename, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -188,9 +189,10 @@ describe("stageSandboxMedia", () => {
         expect(sessionCtx.MediaPath).toBe(stagedPath);
         expect(ctx.MediaUrl).toBe(stagedPath);
         expect(sessionCtx.MediaUrl).toBe(stagedPath);
-        await expect(
-          fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath))),
-        ).resolves.toBeTruthy();
+        const stagedStats = await fs.stat(
+          join(sandboxDir, "media", "inbound", basename(mediaPath)),
+        );
+        expect(stagedStats.isFile()).toBe(true);
       }
 
       {
@@ -206,9 +208,13 @@ describe("stageSandboxMedia", () => {
           workspaceDir,
         });
 
-        await expect(
-          fs.stat(join(sandboxDir, "media", "inbound", basename(sensitiveFile))),
-        ).rejects.toThrow();
+        let stagedStatError: NodeJS.ErrnoException | undefined;
+        try {
+          await fs.stat(join(sandboxDir, "media", "inbound", basename(sensitiveFile)));
+        } catch (error) {
+          stagedStatError = error as NodeJS.ErrnoException;
+        }
+        expect(stagedStatError?.code).toBe("ENOENT");
         expect(ctx.MediaPath).toBe(sensitiveFile);
       }
 
@@ -285,9 +291,13 @@ describe("stageSandboxMedia", () => {
         workspaceDir,
       });
 
-      await expect(
-        fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath))),
-      ).rejects.toThrow();
+      let stagedStatError: NodeJS.ErrnoException | undefined;
+      try {
+        await fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath)));
+      } catch (error) {
+        stagedStatError = error as NodeJS.ErrnoException;
+      }
+      expect(stagedStatError?.code).toBe("ENOENT");
       expect(ctx.MediaPath).toBe(mediaPath);
       expect(sessionCtx.MediaPath).toBe(mediaPath);
     });

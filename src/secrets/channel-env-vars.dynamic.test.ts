@@ -1,3 +1,4 @@
+/** Tests dynamic channel env-var discovery from plugin/channel metadata. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type MockManifestRegistry = {
@@ -70,8 +71,8 @@ describe("channel env vars dynamic manifest metadata", () => {
     const mod = await import("./channel-env-vars.js");
 
     expect(mod.getChannelEnvVars("mattermost")).toEqual(["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]);
-    expect(mod.listKnownChannelEnvVarNames()).toEqual(
-      expect.arrayContaining(["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]),
-    );
+    const knownNames = mod.listKnownChannelEnvVarNames();
+    expect(knownNames).toContain("MATTERMOST_BOT_TOKEN");
+    expect(knownNames).toContain("MATTERMOST_URL");
   });
 });

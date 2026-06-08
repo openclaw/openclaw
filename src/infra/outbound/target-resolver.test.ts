@@ -1,3 +1,5 @@
+// Covers outbound target resolver id heuristics, directory cache/live fallback,
+// ambiguity modes, display formatting, and plugin normalized fallbacks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelDirectoryEntry } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -64,6 +66,21 @@ async function expectOkResolution(
     throw new Error("expected successful target resolution");
   }
   return result;
+}
+
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error(`expected ${label} input to be an object`);
+  }
+  return arg as Record<string, unknown>;
 }
 
 describe("resolveMessagingTarget (directory fallback)", () => {
@@ -147,12 +164,12 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       to: "user:dm-user-id",
       kind: "user",
       source: "directory",
+      resolutionSource: "plugin",
       display: undefined,
     });
-    expect(mocks.resolveTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        input: "dthcxgoxhifn3pwh65cut3ud3w",
-      }),
+    expect(mocks.resolveTarget).toHaveBeenCalledOnce();
+    expect(firstMockArg(mocks.resolveTarget, "target resolver").input).toBe(
+      "dthcxgoxhifn3pwh65cut3ud3w",
     );
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
@@ -186,6 +203,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       kind: "group",
       display: "telegram:-1001234567890:topic:42",
       source: "normalized",
+      resolutionSource: "normalized",
     });
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
@@ -222,16 +240,14 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       to: "+15551234567",
       kind: "user",
       source: "normalized",
+      resolutionSource: "plugin",
       display: undefined,
     });
     expect(mocks.listPeers).toHaveBeenCalledTimes(1);
     expect(mocks.listPeersLive).toHaveBeenCalledTimes(1);
     expect(mocks.listGroups).not.toHaveBeenCalled();
-    expect(mocks.resolveTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        input: "+15551234567",
-      }),
-    );
+    expect(mocks.resolveTarget).toHaveBeenCalledOnce();
+    expect(firstMockArg(mocks.resolveTarget, "target resolver").input).toBe("+15551234567");
   });
 
   it("keeps plugin-owned id casing when resolver returns a normalized target", async () => {

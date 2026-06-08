@@ -1,8 +1,9 @@
+// Chutes tests cover implicit provider plugin behavior.
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveOAuthApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
-import { CHUTES_BASE_URL } from "./models.js";
+import { CHUTES_BASE_URL, clearChutesModelCacheForTests } from "./models.js";
 
 const CHUTES_OAUTH_MARKER = resolveOAuthApiKeyMarker("chutes");
 
@@ -12,6 +13,17 @@ function restoreEnvVar(name: string, value: string | undefined): void {
   } else {
     process.env[name] = value;
   }
+}
+
+function readAuthorizationHeader(init?: { headers?: HeadersInit }): string {
+  const headers = init?.headers;
+  if (headers instanceof Headers) {
+    return headers.get("Authorization") ?? "";
+  }
+  if (Array.isArray(headers)) {
+    return headers.find(([key]) => key.toLowerCase() === "authorization")?.[1] ?? "";
+  }
+  return headers?.Authorization ?? headers?.authorization ?? "";
 }
 
 async function runChutesCatalog(params: { apiKey?: string; discoveryApiKey?: string }) {
@@ -60,6 +72,7 @@ async function withRealChutesDiscovery<T>(
 
 describe("chutes implicit provider auth mode", () => {
   afterEach(() => {
+    clearChutesModelCacheForTests();
     vi.restoreAllMocks();
   });
 
@@ -92,6 +105,7 @@ describe("chutes implicit provider auth mode", () => {
   });
 
   it("forwards oauth access token to Chutes model discovery", async () => {
+    clearChutesModelCacheForTests();
     await withRealChutesDiscovery(async (fetchMock) => {
       await runChutesCatalogProvider({
         apiKey: CHUTES_OAUTH_MARKER,
@@ -101,7 +115,7 @@ describe("chutes implicit provider auth mode", () => {
       const chutesCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes("chutes.ai"));
       expect(chutesCalls.length).toBeGreaterThan(0);
       const request = chutesCalls[0]?.[1] as { headers?: Record<string, string> } | undefined;
-      expect(request?.headers?.Authorization).toBe("Bearer my-chutes-access-token");
+      expect(readAuthorizationHeader(request)).toBe("Bearer my-chutes-access-token");
     });
   });
 });

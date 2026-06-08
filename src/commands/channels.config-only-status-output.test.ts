@@ -1,3 +1,4 @@
+// Channels config-only status tests cover fallback output when gateway status is unavailable.
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { makeDirectPlugin } from "../test-utils/channel-plugin-test-fixtures.js";
@@ -191,19 +192,27 @@ function expectResolvedTokenStatusSummary(
   }
 }
 
+function requireReadOnlyPluginListCall(): unknown[] {
+  const call = listReadOnlyChannelPluginsForConfig.mock.calls[0];
+  if (!call) {
+    throw new Error("expected listReadOnlyChannelPluginsForConfig call");
+  }
+  return call;
+}
+
 describe("config-only channels status output", () => {
   it("uses setup fallback plugins so configured external channels can be shown", async () => {
     registerSingleTestPlugin("token-only", makeUnavailableTokenPlugin());
     listReadOnlyChannelPluginsForConfig.mockClear();
+    const cfg = { channels: { "token-only": { enabled: true } } };
 
-    await formatLocalStatusSummary({ channels: { "token-only": { enabled: true } } });
+    await formatLocalStatusSummary(cfg);
 
-    expect(listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({
-        includeSetupFallbackPlugins: true,
-      }),
-    );
+    expect(listReadOnlyChannelPluginsForConfig).toHaveBeenCalledOnce();
+    expect(requireReadOnlyPluginListCall()).toStrictEqual([
+      cfg,
+      { activationSourceConfig: cfg, includeSetupFallbackPlugins: true },
+    ]);
   });
 
   it("shows configured-but-unavailable credentials distinctly from not configured", async () => {

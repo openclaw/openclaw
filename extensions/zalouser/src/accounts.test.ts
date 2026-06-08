@@ -1,3 +1,4 @@
+// Zalouser tests cover accounts plugin behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -64,6 +65,23 @@ describe("zalouser account resolution", () => {
     });
 
     expect(listZalouserAccountIds(cfg)).toEqual(["default", "personal", "work"]);
+  });
+
+  it("preserves top-level default account when named accounts are configured", () => {
+    const cfg = asConfig({
+      channels: {
+        zalouser: {
+          profile: "personal",
+          accounts: {
+            work: { enabled: false },
+          },
+        },
+      },
+    });
+
+    expect(listZalouserAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultZalouserAccountId(cfg)).toBe("default");
+    expect(resolveZalouserAccountSync({ cfg }).profile).toBe("personal");
   });
 
   it("uses configured defaultAccount when present", () => {

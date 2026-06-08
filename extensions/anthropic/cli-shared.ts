@@ -1,9 +1,13 @@
+/**
+ * Shared Claude CLI backend normalization. It sanitizes command args, maps
+ * thinking levels, and keeps OpenClaw-managed CLI runs isolated from shell env.
+ */
 import type {
   CliBackendConfig,
   CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 export {
   CLAUDE_CLI_BACKEND_ID,
@@ -17,6 +21,7 @@ export {
 // consulting its local login state, so inherited shell overrides must not
 // steer OpenClaw-managed Claude CLI runs toward a different provider,
 // endpoint, token source, plugin/config tree, or telemetry bootstrap mode.
+/** Environment variables removed before launching OpenClaw-managed Claude CLI runs. */
 export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_API_KEY_OLD",
@@ -67,6 +72,7 @@ const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
 
 type ClaudeCliEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
+/** Return whether a provider id refers to the Claude CLI backend. */
 export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
 }
@@ -87,6 +93,7 @@ function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): bo
   return security === "full" && ask === "off";
 }
 
+/** Resolve Claude permission mode from OpenClaw exec security settings. */
 export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigContext): {
   mode?: string;
   overrideExisting: boolean;
@@ -96,6 +103,7 @@ export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigC
     : { overrideExisting: false };
 }
 
+/** Normalize Claude permission arguments, removing legacy skip-permissions flags. */
 export function normalizeClaudePermissionArgs(
   args?: string[],
   options?: { mode?: string; overrideExisting?: boolean },
@@ -144,6 +152,7 @@ export function normalizeClaudePermissionArgs(
   return normalized;
 }
 
+/** Ensure Claude CLI setting sources stay restricted to user settings. */
 export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | undefined {
   if (!args) {
     return args;
@@ -178,6 +187,7 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
   return normalized;
 }
 
+/** Map OpenClaw thinking levels to Claude CLI effort flags for a model id. */
 export function mapClaudeCliThinkingLevelToEffort(
   thinkingLevel?: string | null,
 ): ClaudeCliEffort | undefined {
@@ -222,6 +232,7 @@ function stripClaudeEffortArgs(args: readonly string[]): string[] {
   return normalized;
 }
 
+/** Resolve final Claude CLI execution args for one backend invocation. */
 export function resolveClaudeCliExecutionArgs(
   context: CliBackendResolveExecutionArgsContext,
 ): string[] {
@@ -232,6 +243,7 @@ export function resolveClaudeCliExecutionArgs(
   return [...stripClaudeEffortArgs(context.baseArgs), CLAUDE_EFFORT_ARG, effort];
 }
 
+/** Normalize Claude CLI backend config before registration or execution. */
 export function normalizeClaudeBackendConfig(
   config: CliBackendConfig,
   context?: CliBackendNormalizeConfigContext,

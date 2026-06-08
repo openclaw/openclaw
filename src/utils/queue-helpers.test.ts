@@ -1,9 +1,11 @@
+// Queue helper tests cover queue ordering and dedupe utility behavior.
 import { describe, expect, it } from "vitest";
 import {
   applyQueueRuntimeSettings,
   buildQueueSummaryPrompt,
   clearQueueSummaryState,
   drainCollectItemIfNeeded,
+  hasCrossChannelItems,
   previewQueueSummaryPrompt,
 } from "./queue-helpers.js";
 
@@ -109,7 +111,7 @@ describe("queue summary helpers", () => {
     };
     clearQueueSummaryState(state);
     expect(state.droppedCount).toBe(0);
-    expect(state.summaryLines).toEqual([]);
+    expect(state.summaryLines).toStrictEqual([]);
   });
 });
 
@@ -128,7 +130,7 @@ describe("drainCollectItemIfNeeded", () => {
     });
 
     expect(result).toBe("skipped");
-    expect(seen).toEqual([]);
+    expect(seen).toStrictEqual([]);
     expect(items).toEqual([1]);
   });
 
@@ -165,5 +167,28 @@ describe("drainCollectItemIfNeeded", () => {
 
     expect(result).toBe("empty");
     expect(forced).toBe(true);
+  });
+});
+
+describe("hasCrossChannelItems", () => {
+  it("lets unresolved items join an otherwise single keyed route", () => {
+    const items = [
+      { id: "unresolved" },
+      { id: "first", key: "slack:channel:A" },
+      { id: "second", key: "slack:channel:A" },
+    ];
+
+    expect(hasCrossChannelItems(items, (item) => ({ key: item.key }))).toBe(false);
+  });
+
+  it("still treats distinct keyed routes and explicit cross items as cross-channel", () => {
+    expect(
+      hasCrossChannelItems([{ key: "slack:channel:A" }, { key: "slack:channel:B" }], (item) => ({
+        key: item.key,
+      })),
+    ).toBe(true);
+    expect(
+      hasCrossChannelItems([{ key: "slack:channel:A" }, { cross: true }], (item) => item),
+    ).toBe(true);
   });
 });

@@ -1,3 +1,4 @@
+// Llm Task tests cover llm task tool plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("typebox", () => ({
@@ -55,15 +56,13 @@ vi.mock("../api.js", async () => {
 });
 
 afterAll(() => {
-  vi.doUnmock("typebox");
-  vi.doUnmock("ajv");
   vi.doUnmock("../api.js");
   vi.resetModules();
 });
 
 import { createLlmTaskTool } from "./llm-task-tool.js";
 
-const runEmbeddedPiAgent = vi.fn(async () => ({
+const runEmbeddedAgent = vi.fn(async () => ({
   meta: { startedAt: Date.now() },
   payloads: [{ text: "{}" }],
 }));
@@ -98,14 +97,14 @@ function fakeApi(overrides: any = {}) {
     name: "llm-task",
     source: "test",
     config: {
-      agents: { defaults: { workspace: "/tmp", model: { primary: "openai-codex/gpt-5.2" } } },
+      agents: { defaults: { workspace: "/tmp", model: { primary: "openai/gpt-5.5" } } },
     },
     pluginConfig: {},
     runtime: {
       version: "test",
       agent: {
-        defaults: { provider: "openai-codex", model: "gpt-5.2" },
-        runEmbeddedPiAgent,
+        defaults: { provider: "openai", model: "gpt-5.5" },
+        runEmbeddedAgent,
         resolveThinkingPolicy,
         normalizeThinkingLevel,
       },
@@ -117,15 +116,15 @@ function fakeApi(overrides: any = {}) {
 }
 
 function mockEmbeddedRunJson(payload: unknown) {
-  (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+  (runEmbeddedAgent as any).mockResolvedValueOnce({
     meta: {},
     payloads: [{ text: JSON.stringify(payload) }],
   });
 }
 
 function resetRunnerMocks() {
-  runEmbeddedPiAgent.mockReset();
-  runEmbeddedPiAgent.mockImplementation(async () => ({
+  runEmbeddedAgent.mockReset();
+  runEmbeddedAgent.mockImplementation(async () => ({
     meta: { startedAt: Date.now() },
     payloads: [{ text: "{}" }],
   }));
@@ -136,7 +135,7 @@ function resetRunnerMocks() {
 async function executeEmbeddedRun(input: Record<string, unknown>) {
   const tool = createLlmTaskTool(fakeApi());
   await tool.execute("id", input);
-  return (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
+  return (runEmbeddedAgent as any).mock.calls[0]?.[0];
 }
 
 describe("llm-task tool (json-only)", () => {
@@ -145,7 +144,7 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("returns parsed json", async () => {
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+    (runEmbeddedAgent as any).mockResolvedValueOnce({
       meta: {},
       payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
     });
@@ -155,7 +154,7 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("strips fenced json", async () => {
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+    (runEmbeddedAgent as any).mockResolvedValueOnce({
       meta: {},
       payloads: [{ text: '```json\n{"ok":true}\n```' }],
     });
@@ -165,7 +164,7 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("validates schema", async () => {
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+    (runEmbeddedAgent as any).mockResolvedValueOnce({
       meta: {},
       payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
     });
@@ -180,8 +179,53 @@ describe("llm-task tool (json-only)", () => {
     expect((res as any).details.json).toEqual({ foo: "bar" });
   });
 
+  it("validates caller schemas with repeated $id independently across calls", async () => {
+    const tool = createLlmTaskTool(fakeApi());
+    (runEmbeddedAgent as any)
+      .mockResolvedValueOnce({
+        meta: {},
+        payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
+      })
+      .mockResolvedValueOnce({
+        meta: {},
+        payloads: [{ text: JSON.stringify({ count: 1 }) }],
+      });
+
+    await expect(
+      tool.execute("id", {
+        prompt: "return foo",
+        schema: {
+          $id: "https://example.test/llm-task-result",
+          type: "object",
+          properties: { foo: { type: "string" } },
+          required: ["foo"],
+          additionalProperties: false,
+        },
+      }),
+    ).resolves.toEqual({
+      content: [{ type: "text", text: '{\n  "foo": "bar"\n}' }],
+      details: { json: { foo: "bar" }, provider: "openai", model: "gpt-5.5" },
+    });
+
+    await expect(
+      tool.execute("id", {
+        prompt: "return count",
+        schema: {
+          $id: "https://example.test/llm-task-result",
+          type: "object",
+          properties: { count: { type: "number" } },
+          required: ["count"],
+          additionalProperties: false,
+        },
+      }),
+    ).resolves.toEqual({
+      content: [{ type: "text", text: '{\n  "count": 1\n}' }],
+      details: { json: { count: 1 }, provider: "openai", model: "gpt-5.5" },
+    });
+  });
+
   it("throws on invalid json", async () => {
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+    (runEmbeddedAgent as any).mockResolvedValueOnce({
       meta: {},
       payloads: [{ text: "not-json" }],
     });
@@ -190,7 +234,7 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("throws on schema mismatch", async () => {
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+    (runEmbeddedAgent as any).mockResolvedValueOnce({
       meta: {},
       payloads: [{ text: JSON.stringify({ foo: 1 }) }],
     });
@@ -241,7 +285,7 @@ describe("llm-task tool (json-only)", () => {
 
     await tool.execute("id", { prompt: "x", model: "gemini-flash" });
 
-    const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
+    const call = (runEmbeddedAgent as any).mock.calls[0]?.[0];
     expect(call.provider).toBe("google");
     expect(call.model).toBe("gemini-3-flash-preview");
   });
@@ -251,8 +295,8 @@ describe("llm-task tool (json-only)", () => {
     const call = await executeEmbeddedRun({ prompt: "x", thinking: "high" });
     expect(call.thinkLevel).toBe("high");
     expect(resolveThinkingPolicy).toHaveBeenCalledWith({
-      provider: "openai-codex",
-      model: "gpt-5.2",
+      provider: "openai",
+      model: "gpt-5.5",
     });
   });
 
@@ -267,7 +311,7 @@ describe("llm-task tool (json-only)", () => {
     await expect(tool.execute("id", { prompt: "x", thinking: "banana" })).rejects.toThrow(
       /invalid thinking level/i,
     );
-    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("throws on unsupported xhigh thinking level", async () => {
@@ -286,7 +330,7 @@ describe("llm-task tool (json-only)", () => {
   it("enforces allowedModels", async () => {
     mockEmbeddedRunJson({ ok: true });
     const tool = createLlmTaskTool(
-      fakeApi({ pluginConfig: { allowedModels: ["openai-codex/gpt-5.2"] } }),
+      fakeApi({ pluginConfig: { allowedModels: ["openai/gpt-5.5"] } }),
     );
     await expect(
       tool.execute("id", { prompt: "x", provider: "anthropic", model: "claude-4-sonnet" }),
@@ -297,5 +341,52 @@ describe("llm-task tool (json-only)", () => {
     mockEmbeddedRunJson({ ok: true });
     const call = await executeEmbeddedRun({ prompt: "x" });
     expect(call.disableTools).toBe(true);
+  });
+
+  it("rejects malformed numeric run options before dispatch", async () => {
+    const tool = createLlmTaskTool(fakeApi());
+
+    await expect(tool.execute("id", { prompt: "x", temperature: Number.NaN })).rejects.toThrow(
+      "temperature must be a finite number",
+    );
+    await expect(tool.execute("id", { prompt: "x", maxTokens: 0 })).rejects.toThrow(
+      "maxTokens must be a positive integer",
+    );
+    await expect(tool.execute("id", { prompt: "x", timeoutMs: "4096.5" })).rejects.toThrow(
+      "timeoutMs must be a positive integer",
+    );
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("passes valid numeric run options before dispatch", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const call = await executeEmbeddedRun({
+      prompt: "x",
+      temperature: 0.2,
+      maxTokens: 512,
+      timeoutMs: 10_000,
+    });
+
+    expect(call.timeoutMs).toBe(10_000);
+    expect(call.streamParams).toEqual({
+      temperature: 0.2,
+      maxTokens: 512,
+    });
+  });
+
+  it("normalizes numeric string run options before dispatch", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const call = await executeEmbeddedRun({
+      prompt: "x",
+      temperature: "0.2",
+      maxTokens: "512",
+      timeoutMs: "10000",
+    });
+
+    expect(call.timeoutMs).toBe(10_000);
+    expect(call.streamParams).toEqual({
+      temperature: 0.2,
+      maxTokens: 512,
+    });
   });
 });

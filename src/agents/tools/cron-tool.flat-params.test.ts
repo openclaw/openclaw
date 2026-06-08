@@ -1,3 +1,5 @@
+// Cron flat-parameter tests cover model-friendly shorthand recovery before
+// gateway cron RPC dispatch.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { callGatewayToolMock } = vi.hoisted(() => ({
@@ -16,6 +18,14 @@ describe("cron tool flat-params", () => {
     callGatewayToolMock.mockResolvedValue({ ok: true });
   });
 
+  function firstGatewayToolCall<TParams>(): [string, unknown, TParams] {
+    const call = callGatewayToolMock.mock.calls[0];
+    if (!call) {
+      throw new Error("expected callGatewayTool to be called");
+    }
+    return call as [string, unknown, TParams];
+  }
+
   it("preserves explicit top-level sessionKey during flat-params recovery", async () => {
     const tool = createCronTool(
       { agentSessionKey: "agent:main:discord:channel:ops" },
@@ -28,11 +38,7 @@ describe("cron tool flat-params", () => {
       message: "do stuff",
     });
 
-    const [method, _gatewayOpts, params] = callGatewayToolMock.mock.calls[0] as [
-      string,
-      unknown,
-      { sessionKey?: string },
-    ];
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{ sessionKey?: string }>();
     expect(method).toBe("cron.add");
     expect(params.sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
   });
@@ -49,14 +55,10 @@ describe("cron tool flat-params", () => {
       message: "send report",
     });
 
-    const [method, _gatewayOpts, params] = callGatewayToolMock.mock.calls[0] as [
-      string,
-      unknown,
-      {
-        schedule?: unknown;
-        payload?: unknown;
-      },
-    ];
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      schedule?: unknown;
+      payload?: unknown;
+    }>();
     expect(method).toBe("cron.add");
     expect(params.schedule).toEqual({
       kind: "cron",
@@ -81,19 +83,35 @@ describe("cron tool flat-params", () => {
       message: "send reminder",
     });
 
-    const [method, _gatewayOpts, params] = callGatewayToolMock.mock.calls[0] as [
-      string,
-      unknown,
-      {
-        schedule?: unknown;
-      },
-    ];
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      schedule?: unknown;
+    }>();
     expect(method).toBe("cron.add");
     expect(params.schedule).toEqual({
       kind: "cron",
       expr: "0 18 * * *",
       tz: "Asia/Shanghai",
     });
+  });
+
+  it("leaves out-of-range flat atMs for gateway validation", async () => {
+    // The gateway owns final schedule validation; flat recovery should preserve
+    // the supplied value instead of silently coercing an invalid date.
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+    const invalidAtMs = 8_640_000_000_000_001;
+
+    await tool.execute("call-flat-invalid-atms-add", {
+      action: "add",
+      name: "bad date",
+      atMs: invalidAtMs,
+      message: "send reminder",
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      schedule?: { at?: unknown; kind?: unknown };
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.schedule).toEqual({ kind: "at", at: invalidAtMs });
   });
 
   it("recovers flat cron schedule shorthand for update", async () => {
@@ -107,14 +125,10 @@ describe("cron tool flat-params", () => {
       staggerMs: 30_000,
     });
 
-    const [method, _gatewayOpts, params] = callGatewayToolMock.mock.calls[0] as [
-      string,
-      unknown,
-      {
-        id?: string;
-        patch?: { schedule?: unknown };
-      },
-    ];
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: { schedule?: unknown };
+    }>();
     expect(method).toBe("cron.update");
     expect(params.id).toBe("job-123");
     expect(params.patch?.schedule).toEqual({

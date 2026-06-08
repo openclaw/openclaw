@@ -1,8 +1,10 @@
+/** Reads official external plugin/channel/provider catalogs into manifest-like metadata. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import officialExternalChannelCatalog from "../../scripts/lib/official-external-channel-catalog.json" with { type: "json" };
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import officialExternalProviderCatalog from "../../scripts/lib/official-external-provider-catalog.json" with { type: "json" };
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import type {
   PluginManifestChannelConfig,
@@ -26,7 +28,7 @@ export type OfficialExternalProviderAuthChoice = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
-  onboardingScopes?: readonly ("text-inference" | "image-generation")[];
+  onboardingScopes?: readonly ("text-inference" | "image-generation" | "music-generation")[];
 };
 
 export type OfficialExternalProviderCatalogProvider = {
@@ -52,6 +54,7 @@ export type OfficialExternalWebSearchProvider = {
   autoDetectOrder?: number;
 };
 
+/** Manifest-like metadata stored in official external catalog entries. */
 export type OfficialExternalPluginCatalogManifest = {
   plugin?: {
     id?: string;
@@ -68,6 +71,7 @@ export type OfficialExternalPluginCatalogManifest = {
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 
+/** Raw official external catalog entry loaded from generated catalog JSON. */
 export type OfficialExternalPluginCatalogEntry = {
   name?: string;
   version?: string;
@@ -100,6 +104,7 @@ function normalizeDefaultChoice(value: unknown): PluginPackageInstall["defaultCh
   return value === "clawhub" || value === "npm" || value === "local" ? value : undefined;
 }
 
+/** Returns manifest metadata from an official external catalog entry when present. */
 export function getOfficialExternalPluginCatalogManifest(
   entry: OfficialExternalPluginCatalogEntry,
 ): OfficialExternalPluginCatalogManifest | undefined {
@@ -122,11 +127,13 @@ function resolveOfficialExternalPluginLookupIds(
   entry: OfficialExternalPluginCatalogEntry,
 ): string[] {
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
-  return [
-    normalizeOptionalString(manifest?.plugin?.id),
-    normalizeOptionalString(manifest?.channel?.id),
-    normalizeOptionalString(manifest?.providers?.[0]?.id),
-  ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+  return uniqueStrings(
+    [
+      normalizeOptionalString(manifest?.plugin?.id),
+      normalizeOptionalString(manifest?.channel?.id),
+      normalizeOptionalString(manifest?.providers?.[0]?.id),
+    ].filter((value): value is string => Boolean(value)),
+  );
 }
 
 export function resolveOfficialExternalPluginLabel(

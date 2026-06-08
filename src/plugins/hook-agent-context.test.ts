@@ -1,3 +1,4 @@
+/** Verifies hook callbacks receive agent context and scoped plugin metadata. */
 import { describe, expect, it } from "vitest";
 import {
   buildAgentHookContextChannelFields,
@@ -24,6 +25,17 @@ describe("resolveAgentHookChannelId", () => {
         currentChannelId: "telegram:-1003841603622",
       }),
     ).toBe("-1003841603622");
+  });
+
+  it("uses message channel prefixes when provider is a narrower route label", () => {
+    expect(
+      resolveAgentHookChannelId({
+        sessionKey: "agent:main:main",
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
+        currentChannelId: "discord:voice-room",
+      }),
+    ).toBe("voice-room");
   });
 
   it("uses prefixed message targets before falling back to the provider", () => {

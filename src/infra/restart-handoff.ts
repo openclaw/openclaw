@@ -1,13 +1,18 @@
+// Persists short-lived gateway restart handoff metadata.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
+// Restart handoff files let a supervisor explain a recent gateway restart after
+// the old process exits. The file is short-lived, bounded, and regular-file only.
 export const GATEWAY_SUPERVISOR_RESTART_HANDOFF_FILENAME =
   "gateway-supervisor-restart-handoff.json";
 export const GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND = "gateway-supervisor-restart-handoff";
 const GATEWAY_RESTART_HANDOFF_TTL_MS = 60_000;
+const GATEWAY_RESTART_TRACE_HANDOFF_MAX_DURATION_MS = 10 * 60_000;
 const GATEWAY_RESTART_HANDOFF_MAX_BYTES = 4096;
 const MAX_INTENT_ID_LENGTH = 120;
 const MAX_PROCESS_INSTANCE_ID_LENGTH = 120;
@@ -37,6 +42,10 @@ export type GatewayRestartHandoff = {
   source: GatewayRestartHandoffSource;
   restartKind: GatewayRestartHandoffRestartKind;
   supervisorMode: GatewayRestartHandoffSupervisorMode;
+  restartTrace?: {
+    startedAt: number;
+    lastAt: number;
+  };
 };
 
 function formatShortDuration(ms: number): string {
@@ -71,6 +80,7 @@ function formatDiagnosticValue(value: string): string {
   return normalized.trimEnd();
 }
 
+/** Format a compact diagnostic for a recently consumed restart handoff. */
 export function formatGatewayRestartHandoffDiagnostic(
   handoff: GatewayRestartHandoff,
   now = Date.now(),
@@ -104,6 +114,7 @@ function unlinkRegularFileSync(filePath: string): boolean {
   }
 }
 
+/** Remove the restart handoff file when it is a regular single-link file. */
 export function clearGatewayRestartHandoffSync(env: NodeJS.ProcessEnv = process.env): void {
   unlinkRegularFileSync(resolveGatewayRestartHandoffPath(env));
 }
@@ -128,6 +139,30 @@ function normalizeTtlMs(value: number | undefined): number {
     return GATEWAY_RESTART_HANDOFF_TTL_MS;
   }
   return Math.min(Math.floor(value), GATEWAY_RESTART_HANDOFF_TTL_MS);
+}
+
+function normalizeRestartTraceHandoff(
+  value: unknown,
+): GatewayRestartHandoff["restartTrace"] | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as { startedAt?: unknown; lastAt?: unknown };
+  if (
+    typeof record.startedAt !== "number" ||
+    !Number.isFinite(record.startedAt) ||
+    typeof record.lastAt !== "number" ||
+    !Number.isFinite(record.lastAt) ||
+    record.startedAt <= 0 ||
+    record.lastAt < record.startedAt ||
+    record.lastAt - record.startedAt > GATEWAY_RESTART_TRACE_HANDOFF_MAX_DURATION_MS
+  ) {
+    return undefined;
+  }
+  return {
+    startedAt: record.startedAt,
+    lastAt: record.lastAt,
+  };
 }
 
 function normalizeSource(
@@ -178,10 +213,6 @@ function isSupervisorMode(value: unknown): value is GatewayRestartHandoffSupervi
   return value === "launchd" || value === "systemd" || value === "schtasks" || value === "external";
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function parseGatewayRestartHandoff(raw: string): GatewayRestartHandoff | null {
   let parsed: unknown;
   try {
@@ -218,6 +249,7 @@ function parseGatewayRestartHandoff(raw: string): GatewayRestartHandoff | null {
   if (parsed.processInstanceId !== undefined && typeof parsed.processInstanceId !== "string") {
     return null;
   }
+  const restartTrace = normalizeRestartTraceHandoff(parsed.restartTrace);
 
   const processInstanceId = normalizeText(parsed.processInstanceId, MAX_PROCESS_INSTANCE_ID_LENGTH);
   const reason = normalizeText(parsed.reason, MAX_REASON_LENGTH);
@@ -233,6 +265,7 @@ function parseGatewayRestartHandoff(raw: string): GatewayRestartHandoff | null {
     source: parsed.source,
     restartKind: parsed.restartKind,
     supervisorMode: parsed.supervisorMode,
+    ...(restartTrace ? { restartTrace } : {}),
   };
 }
 
@@ -240,6 +273,8 @@ function readGatewayRestartHandoffRawSync(env: NodeJS.ProcessEnv): string | null
   const handoffPath = resolveGatewayRestartHandoffPath(env);
   try {
     const stat = fs.lstatSync(handoffPath);
+    // Handoff reads ignore symlinks, hardlinks, and oversized files because the
+    // state directory may be user-writable on some installs.
     if (!stat.isFile() || stat.nlink > 1 || stat.size > GATEWAY_RESTART_HANDOFF_MAX_BYTES) {
       return null;
     }
@@ -249,6 +284,7 @@ function readGatewayRestartHandoffRawSync(env: NodeJS.ProcessEnv): string | null
   }
 }
 
+/** Write the bounded supervisor restart handoff atomically. */
 export function writeGatewayRestartHandoffSync(opts: {
   env?: NodeJS.ProcessEnv;
   pid?: number;
@@ -257,6 +293,7 @@ export function writeGatewayRestartHandoffSync(opts: {
   source?: GatewayRestartHandoffSource;
   restartKind: GatewayRestartHandoffRestartKind;
   supervisorMode?: GatewayRestartHandoffSupervisorMode | null;
+  restartTrace?: GatewayRestartHandoff["restartTrace"];
   ttlMs?: number;
   createdAt?: number;
 }): GatewayRestartHandoff | null {
@@ -277,6 +314,7 @@ export function writeGatewayRestartHandoffSync(opts: {
   const ttlMs = normalizeTtlMs(opts.ttlMs);
   const reason = normalizeText(opts.reason, MAX_REASON_LENGTH);
   const processInstanceId = normalizeText(opts.processInstanceId, MAX_PROCESS_INSTANCE_ID_LENGTH);
+  const restartTrace = normalizeRestartTraceHandoff(opts.restartTrace);
   const payload: GatewayRestartHandoff = {
     kind: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
     version: 1,
@@ -289,6 +327,7 @@ export function writeGatewayRestartHandoffSync(opts: {
     source: normalizeSource(opts.source, reason),
     restartKind: opts.restartKind,
     supervisorMode,
+    ...(restartTrace ? { restartTrace } : {}),
   };
 
   let tmpPath: string | undefined;
@@ -319,6 +358,7 @@ export function writeGatewayRestartHandoffSync(opts: {
   }
 }
 
+/** Read the current unexpired restart handoff without consuming it. */
 export function readGatewayRestartHandoffSync(
   env: NodeJS.ProcessEnv = process.env,
   now = Date.now(),
@@ -334,6 +374,7 @@ export function readGatewayRestartHandoffSync(
   return payload;
 }
 
+/** Consume a handoff only when it belongs to the just-exited process. */
 export function consumeGatewayRestartHandoffForExitedProcessSync(opts: {
   env?: NodeJS.ProcessEnv;
   exitedPid?: number;
@@ -345,6 +386,8 @@ export function consumeGatewayRestartHandoffForExitedProcessSync(opts: {
   let raw: string | null = null;
   try {
     const stat = fs.lstatSync(handoffPath);
+    // Consume uses the same regular-file guard as reads, then clears the file
+    // even if parsing fails so stale handoffs do not repeat.
     if (!stat.isFile() || stat.nlink > 1 || stat.size > GATEWAY_RESTART_HANDOFF_MAX_BYTES) {
       return null;
     }

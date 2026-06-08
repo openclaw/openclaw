@@ -1,3 +1,12 @@
+/**
+ * Internal runtime event prompt formatting.
+ * Sanitizes background task completion events into protected runtime-context
+ * blocks or plain prompt text.
+ */
+import {
+  formatGeneratedAttachmentLines,
+  type AgentGeneratedAttachment,
+} from "./generated-attachments.js";
 import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
   type AgentInternalEventSource,
@@ -20,11 +29,13 @@ type AgentTaskCompletionInternalEvent = {
   status: AgentInternalEventStatus;
   statusLabel: string;
   result: string;
+  attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
   statsLine?: string;
   replyInstruction: string;
 };
 
+/** Internal event variants that can be rendered into agent prompt context. */
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
 
 export { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END };
@@ -57,6 +68,7 @@ function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): str
   const taskLabel = sanitizeSingleLineField(event.taskLabel, "unnamed task");
   const statusLabel = sanitizeSingleLineField(event.statusLabel, event.status);
   const result = formatChildResultDataBlock(event.result);
+  const attachmentLines = formatGeneratedAttachmentLines(event.attachments);
   const lines = [
     "[Internal task completion event]",
     `source: ${event.source}`,
@@ -68,6 +80,9 @@ function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): str
     "",
     result,
   ];
+  if (attachmentLines.length > 0) {
+    lines.push("", ...attachmentLines);
+  }
   if (event.statsLine?.trim()) {
     lines.push("", sanitizeMultilineField(event.statsLine, ""));
   }
@@ -82,6 +97,7 @@ function formatTaskCompletionEventForPlainPrompt(event: AgentTaskCompletionInter
   const taskLabel = sanitizeSingleLineField(event.taskLabel, "unnamed task");
   const statusLabel = sanitizeSingleLineField(event.statusLabel, event.status);
   const result = formatChildResultDataBlock(event.result);
+  const attachmentLines = formatGeneratedAttachmentLines(event.attachments);
   const lines = [
     "A background task completed. Use this result to reply to the user in your normal assistant voice.",
     "",
@@ -94,6 +110,9 @@ function formatTaskCompletionEventForPlainPrompt(event: AgentTaskCompletionInter
     "",
     result,
   ];
+  if (attachmentLines.length > 0) {
+    lines.push("", ...attachmentLines);
+  }
   if (event.statsLine?.trim()) {
     lines.push("", sanitizeMultilineField(event.statsLine, ""));
   }
@@ -101,6 +120,7 @@ function formatTaskCompletionEventForPlainPrompt(event: AgentTaskCompletionInter
   return lines.join("\n");
 }
 
+/** Format internal runtime events for the protected runtime-context prompt block. */
 export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]): string {
   if (!events || events.length === 0) {
     return "";
@@ -126,6 +146,7 @@ export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]
   ].join("\n");
 }
 
+/** Format internal runtime events for plain prompts that lack context delimiters. */
 export function formatAgentInternalEventsForPlainPrompt(events?: AgentInternalEvent[]): string {
   if (!events || events.length === 0) {
     return "";

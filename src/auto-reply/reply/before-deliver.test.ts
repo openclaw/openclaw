@@ -1,8 +1,34 @@
+// Tests before-deliver hook ordering and payload mutation behavior.
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 
 describe("beforeDeliver in reply dispatcher", () => {
+  it("cancels delivery before queueing when transformReplyPayload returns null", async () => {
+    const delivered: string[] = [];
+
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload.text ?? "");
+      },
+      transformReplyPayload: (payload: ReplyPayload) => {
+        if (payload.text?.includes("blocked")) {
+          return null;
+        }
+        return payload;
+      },
+    });
+
+    expect(dispatcher.sendFinalReply({ text: "blocked reply" })).toBe(false);
+    expect(dispatcher.sendFinalReply({ text: "safe reply" })).toBe(true);
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual(["safe reply"]);
+    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
+    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
+  });
+
   it("cancels delivery when beforeDeliver returns null", async () => {
     const delivered: string[] = [];
 

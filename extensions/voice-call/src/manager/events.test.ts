@@ -1,15 +1,43 @@
+// Voice Call tests cover events plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { VoiceCallConfigSchema } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
+import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "../runtime-state.js";
 import type { AnswerCallInput, HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
 import { flushPendingCallRecordWritesForTest } from "./store.js";
 
 const contexts: CallManagerContext[] = [];
+
+function installStateRuntime(): void {
+  setVoiceCallStateRuntime({
+    state: {
+      resolveStateDir: () => "",
+      openKeyedStore: (() => {
+        throw new Error("openKeyedStore is not used by voice-call event tests");
+      }) as never,
+      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateSyncKeyedStoreForTests("voice-call", options),
+      openChannelIngressQueue: (() => {
+        throw new Error("openChannelIngressQueue is not used by voice-call event tests");
+      }) as never,
+    },
+  });
+}
+
+beforeEach(() => {
+  resetPluginStateStoreForTests();
+  installStateRuntime();
+});
 
 afterEach(async () => {
   for (const ctx of contexts.splice(0)) {
@@ -24,6 +52,8 @@ afterEach(async () => {
     await flushPendingCallRecordWritesForTest();
     fs.rmSync(ctx.storePath, { recursive: true, force: true });
   }
+  clearVoiceCallStateRuntime();
+  resetPluginStateStoreForTests();
 });
 
 function createContext(overrides: Partial<CallManagerContext> = {}): CallManagerContext {
@@ -176,10 +206,11 @@ describe("processEvent (functional)", () => {
 
     expect(ctx.activeCalls.size).toBe(0);
     expect(hangupCalls).toEqual([
-      expect.objectContaining({
+      {
+        callId: "prov-dup",
         providerCallId: "prov-dup",
         reason: "hangup-bot",
-      }),
+      },
     ]);
   });
 
@@ -332,7 +363,7 @@ describe("processEvent (functional)", () => {
     expect(answeredCallId).toBe("call-2");
   });
 
-  it("when hangup throws, logs and does not throw", () => {
+  it("removes active call even when hangup rejects", () => {
     const provider = createProvider({
       hangupCall: async (): Promise<void> => {
         throw new Error("provider down");
@@ -348,7 +379,7 @@ describe("processEvent (functional)", () => {
       from: "+15553333333",
     });
 
-    expect(() => processEvent(ctx, event)).not.toThrow();
+    processEvent(ctx, event);
     expect(ctx.activeCalls.size).toBe(0);
   });
 
@@ -482,12 +513,8 @@ describe("processEvent (functional)", () => {
     processEvent(ctx, event);
 
     const call = requireFirstActiveCall(ctx);
-    expect(call.metadata).toEqual(
-      expect.objectContaining({
-        initialMessage: "Silver Fox Cards, how can I help?",
-        numberRouteKey: "+15550002222",
-      }),
-    );
+    expect(call.metadata?.initialMessage).toBe("Silver Fox Cards, how can I help?");
+    expect(call.metadata?.numberRouteKey).toBe("+15550002222");
   });
 
   it("deduplicates by dedupeKey even when event IDs differ", () => {
@@ -575,7 +602,7 @@ describe("processEvent (functional)", () => {
       throw new Error("expected retryable error call to remain active");
     }
     expect(call.state).toBe("active");
-    expect(Array.from(ctx.processedEventIds)).toEqual([]);
-    expect(call.processedEventIds).toEqual([]);
+    expect(Array.from(ctx.processedEventIds)).toStrictEqual([]);
+    expect(call.processedEventIds).toStrictEqual([]);
   });
 });

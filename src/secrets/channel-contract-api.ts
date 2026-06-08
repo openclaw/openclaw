@@ -1,9 +1,11 @@
+/** Loads channel secret contract APIs from bundled and external plugin artifacts. */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -74,6 +76,7 @@ export type BundledChannelSecretContractApi = Pick<
   "collectRuntimeConfigAssignments" | "secretTargetRegistryEntries"
 >;
 
+/** Loads a bundled channel secret contract from its public artifact bundle. */
 export function loadBundledChannelSecretContractApi(
   channelId: string,
 ): BundledChannelSecretContractApi | undefined {
@@ -117,6 +120,7 @@ function loadPluginContractModule(modulePath: string): BundledChannelContractApi
 
 function loadExternalChannelSecretContractFromRecord(
   record: PluginManifestRecord,
+  env: NodeJS.ProcessEnv = process.env,
 ): BundledChannelSecretContractApi | undefined {
   const contractPath = resolvePluginContractApiPath(record.rootDir);
   if (!contractPath) {
@@ -126,7 +130,11 @@ function loadExternalChannelSecretContractFromRecord(
     absolutePath: contractPath,
     rootPath: record.rootDir,
     boundaryLabel: "plugin root",
-    rejectHardlinks: record.origin !== "bundled",
+    rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+      origin: record.origin,
+      rootDir: record.rootDir,
+      env,
+    }),
     skipLexicalRootCheck: true,
   });
   if (!opened.ok) {
@@ -153,7 +161,7 @@ function loadExternalChannelSecretContractFromRecord(
 function recordOwnsChannel(record: PluginManifestRecord, channelId: string): boolean {
   return (
     record.channels.includes(channelId) ||
-    Object.prototype.hasOwnProperty.call(record.channelConfigs ?? {}, channelId) ||
+    Object.hasOwn(record.channelConfigs ?? {}, channelId) ||
     record.channelCatalogMeta?.id === channelId ||
     record.packageChannel?.id === channelId
   );
@@ -192,6 +200,8 @@ function listChannelSecretContractRecords(params: {
     });
 }
 
+/** Loads the first channel secret contract for a channel, preferring bundled metadata. */
+/** Loads a channel secret contract API for a channel id and current plugin origin policy. */
 export function loadChannelSecretContractApi(params: {
   channelId: string;
   config: OpenClawConfig;
@@ -202,6 +212,8 @@ export function loadChannelSecretContractApi(params: {
   if (bundled) {
     return bundled;
   }
+  // External contracts are considered only after bundled artifacts so core channels keep their
+  // shipped metadata stable even when similarly named plugins are installed.
   const env = params.env ?? process.env;
   for (const record of listChannelSecretContractRecords({
     channelId: params.channelId,
@@ -209,7 +221,7 @@ export function loadChannelSecretContractApi(params: {
     env,
     loadablePluginOrigins: params.loadablePluginOrigins,
   })) {
-    const contract = loadExternalChannelSecretContractFromRecord(record);
+    const contract = loadExternalChannelSecretContractFromRecord(record, env);
     if (contract) {
       return contract;
     }
@@ -217,6 +229,7 @@ export function loadChannelSecretContractApi(params: {
   return undefined;
 }
 
+/** Loads a channel secret contract directly from a manifest record. */
 export function loadChannelSecretContractApiForRecord(
   record: PluginManifestRecord,
 ): BundledChannelSecretContractApi | undefined {
@@ -231,6 +244,7 @@ export type BundledChannelSecurityContractApi = Pick<
   "unsupportedSecretRefSurfacePatterns" | "collectUnsupportedSecretRefConfigCandidates"
 >;
 
+/** Loads bundled channel security metadata used to reject unsupported SecretRef surfaces. */
 export function loadBundledChannelSecurityContractApi(
   channelId: string,
 ): BundledChannelSecurityContractApi | undefined {

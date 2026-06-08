@@ -1,7 +1,10 @@
+// Rich shell command explainer walks tree-sitter-bash nodes into command steps,
+// nested wrapper payloads, source spans, and risk annotations.
 import type { Node as TreeSitterNode } from "web-tree-sitter";
 import type { InterpreterInlineEvalHit } from "../command-analysis/inline-eval.js";
 import {
   detectCarriedShellBuiltinArgv,
+  detectCarrierInlineEvalArgv as detectSharedCarrierInlineEvalArgv,
   detectCommandCarrierArgv,
   detectInlineEvalArgv,
   detectShellWrapperThroughCarrierArgv,
@@ -10,6 +13,7 @@ import {
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
 import {
   extractShellWrapperCommand,
+  extractShellWrapperInlineCommand,
   isShellWrapperExecutable,
   POSIX_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
@@ -61,6 +65,7 @@ const MAX_WRAPPER_PAYLOAD_DEPTH = 2;
 
 const PARSEABLE_SHELL_WRAPPERS = new Set<string>(POSIX_SHELL_WRAPPERS);
 
+// Span bases map nested wrapper payload offsets back to source command offsets.
 type SpanBase = {
   startIndex: number;
   startPosition: SourceSpan["startPosition"];
@@ -72,6 +77,7 @@ const ROOT_SPAN_BASE: SpanBase = {
   startPosition: { row: 0, column: 0 },
 };
 
+// Tree-sitter exposes nullable children; normalize once for the walkers below.
 function children(node: TreeSitterNode): TreeSitterNode[] {
   return Array.from({ length: node.childCount }, (_, index) => node.child(index)).filter(
     (child): child is TreeSitterNode => child !== null,
@@ -260,9 +266,7 @@ function appendDecodedText(
   sourceEndOffset: number,
 ): void {
   decoded.value += value;
-  for (let index = 0; index < value.length; index += 1) {
-    decoded.sourceOffsets.push(sourceEndOffset);
-  }
+  decoded.sourceOffsets.push(...Array.from({ length: value.length }, () => sourceEndOffset));
 }
 
 function identityDecodedShellText(text: string, sourceOffset = 0): DecodedShellText {
@@ -876,14 +880,11 @@ function shellWrapperPayloadForParsing(
   dynamicArguments: DynamicArgument[],
 ): { command: string; spanBase: SpanBase } | null {
   const shellWrapper = extractShellWrapperCommand(argv);
-  if (
-    !shellWrapper.isWrapper ||
-    !shellWrapper.command ||
-    isDynamicPayload(shellWrapper.command, dynamicArguments)
-  ) {
+  const payload = shellWrapper.command ?? extractShellWrapperInlineCommand(argv);
+  if (!shellWrapper.isWrapper || !payload || isDynamicPayload(payload, dynamicArguments)) {
     return null;
   }
-  const spanBase = payloadBaseFromArguments(shellWrapper.command, argumentsList);
+  const spanBase = payloadBaseFromArguments(payload, argumentsList);
   if (!spanBase) {
     return null;
   }
@@ -892,11 +893,10 @@ function shellWrapperPayloadForParsing(
   if (!canParseShellWrapperPayload(transportArgv, commandFlag?.flag ?? null)) {
     return null;
   }
-  return { command: shellWrapper.command, spanBase };
+  return { command: payload, spanBase };
 }
 
 type InlineEvalHit = InterpreterInlineEvalHit;
-
 function recordInlineEvalRisk(
   inlineEval: InlineEvalHit,
   text: string,
@@ -941,13 +941,14 @@ function recordCommandRisks(
   }
   const normalizedExecutable = normalizeExecutableToken(executable);
   recordDynamicArgumentRisks(normalizedExecutable, dynamicArguments, output);
-  const inlineEval = detectInlineEvalArgv(argv);
+  const inlineEval = detectInlineEvalArgv(argv) ?? detectSharedCarrierInlineEvalArgv(argv);
   if (inlineEval) {
     recordInlineEvalRisk(inlineEval, text, span, output);
   }
 
   const shellWrapper = extractShellWrapperCommand(argv);
-  if (shellWrapper.isWrapper && shellWrapper.command) {
+  const shellWrapperPayload = shellWrapper.command ?? extractShellWrapperInlineCommand(argv);
+  if (shellWrapper.isWrapper && shellWrapperPayload) {
     const transportArgv = resolveShellWrapperTransportArgv(argv) ?? argv;
     const shellExecutable = transportArgv[0] ?? executable;
     const commandFlag = shellCommandFlag(transportArgv, 1) ?? shellCommandFlag(argv, 1);
@@ -956,7 +957,7 @@ function recordCommandRisks(
         kind: "shell-wrapper",
         executable: shellExecutable,
         flag: commandFlag?.flag ?? "-c",
-        payload: shellWrapper.command,
+        payload: shellWrapperPayload,
         text,
         span,
       });
@@ -1079,6 +1080,10 @@ async function walk(
         argv: parsed.argv,
         text: node.text,
         span,
+        executableSpan:
+          nameNode !== null
+            ? spanFromNode(nameNode, state.spanBase)
+            : (parsed.arguments[0]?.span ?? span),
       };
       if (step.executable) {
         output.commands.push(step);
@@ -1120,6 +1125,7 @@ async function walk(
   }
 }
 
+/** Parses a shell command into command steps, shapes, risks, and source spans. */
 export async function explainShellCommand(source: string): Promise<CommandExplanation> {
   const tree = await parseBashForCommandExplanation(source);
   try {

@@ -1,10 +1,21 @@
+/**
+ * gateway built-in tool.
+ *
+ * Exposes selected Gateway control/config/update actions with fail-closed config mutation boundaries.
+ */
 import { isDeepStrictEqual } from "node:util";
+import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { GatewayClientRequestError } from "../../gateway/client.js";
 import {
   buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,
@@ -15,30 +26,31 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
-import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
-import { stringEnum } from "../schema/typebox.js";
-import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
+import { optionalNonNegativeIntegerSchema, stringEnum } from "../schema/typebox.js";
+import {
+  type AnyAgentTool,
+  jsonResult,
+  readNonNegativeIntegerParam,
+  readStringParam,
+} from "./common.js";
+import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
-import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 
 const log = createSubsystemLogger("gateway-tool");
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
-// Security: the agent-facing `gateway` tool is owner-only, but per SECURITY.md the model/agent
-// itself is not a trusted principal. `assertGatewayConfigMutationAllowed` is the explicit
-// model -> operator trust-boundary control on `config.apply`/`config.patch`, so the runtime
-// tool must fail closed and allow only a narrow set of agent-tunable paths.
+const CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE = "config schema path not found";
+// Per SECURITY.md the model/agent itself is not a trusted principal.
+// `assertGatewayConfigMutationAllowed` is the explicit model -> operator
+// trust-boundary control on `config.apply`/`config.patch`, so the runtime tool
+// must fail closed and allow only a narrow set of agent-tunable paths.
 const ALLOWED_GATEWAY_CONFIG_PATHS = [
-  // Agent prompt/model tuning.
-  "agents.defaults.systemPromptOverride",
-  "agents.defaults.promptOverlays",
-  "agents.defaults.model",
+  // Low-risk agent runtime tuning.
   "agents.defaults.thinkingDefault",
   "agents.defaults.subagents.thinking",
   "agents.defaults.reasoningDefault",
   "agents.defaults.fastModeDefault",
   "agents.list[].id",
-  "agents.list[].systemPromptOverride",
   "agents.list[].model",
   "agents.list[].thinkingDefault",
   "agents.list[].subagents.thinking",
@@ -57,6 +69,7 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   // or privilege boundary. Let agents repair silent group/channel rooms.
   "messages.visibleReplies",
   "messages.groupChat.visibleReplies",
+  "messages.groupChat.unmentionedInbound",
 ] as const;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */
@@ -106,6 +119,14 @@ function stripConfigWriteResultPayload(result: unknown): unknown {
   return stripped;
 }
 
+function isConfigSchemaPathNotFoundError(error: unknown): boolean {
+  return (
+    error instanceof GatewayClientRequestError &&
+    error.gatewayCode === "INVALID_REQUEST" &&
+    error.message.includes(CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE)
+  );
+}
+
 function parseGatewayConfigMutationRaw(
   raw: string,
   action: "config.apply" | "config.patch",
@@ -122,10 +143,6 @@ function parseGatewayConfigMutationRaw(
     throw new Error(`${action} raw must be an object.`);
   }
   return parsedRes.parsed;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeGatewayConfigPath(path: string): string {
@@ -340,13 +357,11 @@ const GATEWAY_ACTIONS = [
 const GatewayToolSchema = Type.Object({
   action: stringEnum(GATEWAY_ACTIONS),
   // restart
-  delayMs: Type.Optional(Type.Number()),
+  delayMs: optionalNonNegativeIntegerSchema(),
   reason: Type.Optional(Type.String()),
   continuationMessage: Type.Optional(Type.String()),
   // config.get, config.schema.lookup, config.apply, update.run
-  gatewayUrl: Type.Optional(Type.String()),
-  gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
+  ...gatewayCallOptionSchemaProperties(),
   // config.schema.lookup
   path: Type.Optional(Type.String()),
   // config.apply, config.patch
@@ -355,7 +370,7 @@ const GatewayToolSchema = Type.Object({
   // config.apply, config.patch, update.run
   sessionKey: Type.Optional(Type.String()),
   note: Type.Optional(Type.String()),
-  restartDelayMs: Type.Optional(Type.Number()),
+  restartDelayMs: optionalNonNegativeIntegerSchema(),
 });
 // NOTE: We intentionally avoid top-level `allOf`/`anyOf`/`oneOf` conditionals here:
 // - OpenAI rejects tool schemas that include these keywords at the *top-level*.
@@ -369,9 +384,8 @@ export function createGatewayTool(opts?: {
   return {
     label: "Gateway",
     name: "gateway",
-    ownerOnly: isOpenClawOwnerOnlyCoreToolName("gateway"),
     description:
-      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Config writes hot-reload when possible and restart when required. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart. If restarting during a user task and you still owe the user a reply, pass a specific one-shot `continuationMessage` for what to verify or report after boot; do not write restart sentinel files directly.",
+      "Gateway restart/config/update. Before config edits, use config.schema.lookup with targeted dot path. Prefer config.patch for partial merge; config.apply only full replace. Writes hot-reload or restart as needed. Always pass human `note` for post-restart delivery. If post-restart work must continue internally, pass one-shot `continuationMessage`; visible follow-up from that turn must use the message tool. Do not write restart sentinel files directly.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -381,12 +395,9 @@ export function createGatewayTool(opts?: {
           throw new Error("Gateway restart is disabled (commands.restart=false).");
         }
         const sessionKey =
-          normalizeOptionalString(params.sessionKey) ??
-          normalizeOptionalString(opts?.agentSessionKey);
-        const delayMs =
-          typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
-            ? Math.floor(params.delayMs)
-            : undefined;
+          normalizeOptionalString(opts?.agentSessionKey) ??
+          normalizeOptionalString(params.sessionKey);
+        const delayMs = readNonNegativeIntegerParam(params, "delayMs");
         const reason = normalizeOptionalString(params.reason)?.slice(0, 200);
         const note = normalizeOptionalString(params.note);
         const continuationMessage = normalizeOptionalString(params.continuationMessage);
@@ -418,6 +429,9 @@ export function createGatewayTool(opts?: {
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,
+          // Ownership and sentinel routing use the same trusted session identity,
+          // so model-supplied params cannot queue work into another session.
+          sessionKey,
           emitHooks: {
             beforeEmit: async () => {
               sentinelPath = await writeRestartSentinel(payload);
@@ -427,7 +441,10 @@ export function createGatewayTool(opts?: {
             },
           },
         });
-        return jsonResult(scheduled);
+        return jsonResult({
+          ...scheduled,
+          ...(payload.continuation ? { continuationQueued: scheduled.emitHooksQueued } : {}),
+        });
       }
 
       const gatewayOpts = readGatewayCallOptions(params);
@@ -438,13 +455,10 @@ export function createGatewayTool(opts?: {
         restartDelayMs: number | undefined;
       } => {
         const sessionKey =
-          normalizeOptionalString(params.sessionKey) ??
-          normalizeOptionalString(opts?.agentSessionKey);
+          normalizeOptionalString(opts?.agentSessionKey) ??
+          normalizeOptionalString(params.sessionKey);
         const note = normalizeOptionalString(params.note);
-        const restartDelayMs =
-          typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
-            ? Math.floor(params.restartDelayMs)
-            : undefined;
+        const restartDelayMs = readNonNegativeIntegerParam(params, "restartDelayMs");
         return { sessionKey, note, restartDelayMs };
       };
 
@@ -480,8 +494,20 @@ export function createGatewayTool(opts?: {
           required: true,
           label: "path",
         });
-        const result = await callGatewayTool("config.schema.lookup", gatewayOpts, { path });
-        return jsonResult({ ok: true, result });
+        try {
+          const result = await callGatewayTool("config.schema.lookup", gatewayOpts, { path });
+          return jsonResult({ ok: true, result });
+        } catch (error) {
+          if (isConfigSchemaPathNotFoundError(error)) {
+            return jsonResult({
+              ok: false,
+              code: "schema_path_not_found",
+              path,
+              message: CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE,
+            });
+          }
+          throw error;
+        }
       }
       if (action === "config.apply") {
         const { raw, baseHash, snapshotConfig, sessionKey, note, restartDelayMs } =

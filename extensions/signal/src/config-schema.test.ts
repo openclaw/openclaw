@@ -1,3 +1,4 @@
+// Signal tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { SignalConfigSchema } from "../config-api.js";
 
@@ -71,6 +72,24 @@ describe("signal groups schema", () => {
     });
   });
 
+  it("accepts channel apiMode", () => {
+    for (const apiMode of ["auto", "native", "container"]) {
+      expectValidSignalConfig({ apiMode });
+    }
+  });
+
+  it("rejects per-account apiMode", () => {
+    const issues = expectInvalidSignalConfig({
+      accounts: {
+        primary: {
+          apiMode: "container",
+        },
+      },
+    });
+
+    expect(issues.map((issue) => issue.path.join("."))).toContain("accounts.primary");
+  });
+
   it("accepts top-level group overrides", () => {
     expectValidSignalConfig({
       groups: {
@@ -108,6 +127,6 @@ describe("signal groups schema", () => {
       },
     });
 
-    expect(issues.some((issue) => issue.path.join(".").startsWith("groups"))).toBe(true);
+    expect(issues.map((issue) => issue.path.join("."))).toEqual(["groups.*"]);
   });
 });

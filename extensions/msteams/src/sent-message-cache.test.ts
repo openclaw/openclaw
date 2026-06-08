@@ -1,3 +1,4 @@
+// Msteams tests cover sent message cache plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setMSTeamsRuntime } from "./runtime.js";
 import {
@@ -22,6 +23,7 @@ describe("msteams sent message cache", () => {
   });
 
   it("persists sent message ids when runtime state is available", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_234_567);
     const register = vi.fn().mockResolvedValue(undefined);
     const lookup = vi.fn().mockResolvedValue({ sentAt: Date.now() });
     const openKeyedStore = vi.fn(() => ({
@@ -40,7 +42,7 @@ describe("msteams sent message cache", () => {
     recordMSTeamsSentMessage("conv-1", "msg-2");
 
     await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1));
-    expect(register).toHaveBeenCalledWith("conv-1:msg-2", { sentAt: expect.any(Number) });
+    expect(register).toHaveBeenCalledWith("conv-1:msg-2", { sentAt: 1_234_567 });
 
     clearMSTeamsSentMessageCache();
     await expect(

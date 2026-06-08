@@ -1,3 +1,4 @@
+// Command registry tests cover CLI command descriptor registry behavior.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";
@@ -5,9 +6,14 @@ import type { ProgramContext } from "./context.js";
 // Perf: `registerCoreCliByName(...)` dynamically imports registrar modules.
 // Mock the heavy registrars so this suite stays focused on command-registry wiring.
 vi.mock("./register.agent.js", () => ({
-  registerAgentCommands: (program: Command) => {
-    program.command("agent");
+  registerAgentsCommands: (program: Command) => {
     program.command("agents");
+  },
+}));
+
+vi.mock("./register.agent-turn.js", () => ({
+  registerAgentTurnCommand: (program: Command) => {
+    program.command("agent");
   },
 }));
 
@@ -95,15 +101,17 @@ describe("command-registry", () => {
     expect(names).not.toContain("doctor");
   });
 
-  it("registerCoreCliByName resolves agents to the agent entry", async () => {
+  it("registerCoreCliByName resolves agent and agents separately", async () => {
     const program = createProgram();
     const found = await registerCoreCliByName(program, testProgramContext, "agents");
     expect(found).toBe(true);
-    const agentsCmd = program.commands.find((c) => c.name() === "agents");
-    expect(agentsCmd).toBeDefined();
-    // The registrar also installs the singular "agent" command from the same entry.
-    const agentCmd = program.commands.find((c) => c.name() === "agent");
-    expect(agentCmd).toBeDefined();
+    expect(program.commands.map((command) => command.name())).toEqual(["agents"]);
+
+    const agentProgram = createProgram();
+    await expect(registerCoreCliByName(agentProgram, testProgramContext, "agent")).resolves.toBe(
+      true,
+    );
+    expect(agentProgram.commands.map((command) => command.name())).toEqual(["agent"]);
   });
 
   it("registerCoreCliByName returns false for unknown commands", async () => {
@@ -173,8 +181,10 @@ describe("command-registry", () => {
     }
 
     const names = namesOf(program);
-    expect(names.filter((name) => name === "commitments")).toHaveLength(1);
-    expect(names.filter((name) => name === "tasks")).toHaveLength(1);
+    const countName = (target: string) =>
+      names.reduce((count, name) => count + (name === target ? 1 : 0), 0);
+    expect(countName("commitments")).toBe(1);
+    expect(countName("tasks")).toBe(1);
   });
 
   it("replaces placeholders when loading a grouped entry by secondary command name", async () => {

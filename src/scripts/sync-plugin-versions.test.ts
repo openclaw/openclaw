@@ -1,3 +1,4 @@
+// Plugin version sync tests cover script updates to plugin package versions.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -23,8 +24,8 @@ describe("syncPluginVersions", () => {
       name: "openclaw",
       version: "2026.4.1",
     });
-    writeJson(path.join(rootDir, "extensions/bluebubbles/package.json"), {
-      name: "@openclaw/bluebubbles",
+    writeJson(path.join(rootDir, "extensions/imessage/package.json"), {
+      name: "@openclaw/imessage",
       version: "2026.3.30",
       devDependencies: {
         openclaw: "workspace:*",
@@ -47,7 +48,7 @@ describe("syncPluginVersions", () => {
 
     const summary = syncPluginVersions(rootDir);
     const updatedPackage = JSON.parse(
-      fs.readFileSync(path.join(rootDir, "extensions/bluebubbles/package.json"), "utf8"),
+      fs.readFileSync(path.join(rootDir, "extensions/imessage/package.json"), "utf8"),
     ) as {
       version?: string;
       devDependencies?: Record<string, string>;
@@ -65,7 +66,7 @@ describe("syncPluginVersions", () => {
       };
     };
 
-    expect(summary.updated).toContain("@openclaw/bluebubbles");
+    expect(summary.updated).toContain("@openclaw/imessage");
     expect(updatedPackage.version).toBe("2026.4.1");
     expect(updatedPackage.devDependencies?.openclaw).toBe("workspace:*");
     expect(updatedPackage.peerDependencies?.openclaw).toBe(">=2026.4.1");
@@ -140,6 +141,6 @@ describe("syncPluginVersions", () => {
 
     const checkSummary = syncPluginVersions(rootDir, { write: false });
 
-    expect(checkSummary.changelogged).toEqual([]);
+    expect(checkSummary.changelogged).toStrictEqual([]);
   });
 });

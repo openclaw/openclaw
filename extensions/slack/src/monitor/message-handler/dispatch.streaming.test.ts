@@ -1,6 +1,7 @@
+// Slack tests cover dispatch.streaming plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  createSlackTurnDeliveryTracker,
+  createSlackEventDeliveryTracker,
   isSlackStreamingEnabled,
   resetSlackStreamRecipientTeamCacheForTests,
   resolveSlackDisableBlockStreaming,
@@ -19,10 +20,18 @@ describe("slack native streaming defaults", () => {
     expect(isSlackStreamingEnabled({ mode: "partial", nativeStreaming: true })).toBe(true);
   });
 
-  it("is disabled outside partial mode or when native streaming is off", () => {
+  it("keeps native progress task cards opt-in while preserving partial native streaming", () => {
     expect(isSlackStreamingEnabled({ mode: "partial", nativeStreaming: false })).toBe(false);
     expect(isSlackStreamingEnabled({ mode: "block", nativeStreaming: true })).toBe(false);
     expect(isSlackStreamingEnabled({ mode: "progress", nativeStreaming: true })).toBe(false);
+    expect(
+      isSlackStreamingEnabled({
+        mode: "progress",
+        nativeStreaming: true,
+        nativeProgressTaskCards: true,
+      }),
+    ).toBe(true);
+    expect(isSlackStreamingEnabled({ mode: "progress", nativeStreaming: false })).toBe(false);
     expect(isSlackStreamingEnabled({ mode: "off", nativeStreaming: true })).toBe(false);
   });
 });
@@ -120,9 +129,9 @@ describe("slack native streaming recipient team", () => {
   });
 });
 
-describe("slack turn delivery tracker", () => {
+describe("slack event delivery tracker", () => {
   it("treats repeated text payloads on the same thread as duplicates", () => {
-    const tracker = createSlackTurnDeliveryTracker();
+    const tracker = createSlackEventDeliveryTracker();
     const payload = { text: "same reply" };
 
     expect(tracker.hasDelivered({ kind: "final", payload, threadTs: "123.456" })).toBe(false);
@@ -132,7 +141,7 @@ describe("slack turn delivery tracker", () => {
   });
 
   it("keeps explicit reply targets distinct from the shared thread target", () => {
-    const tracker = createSlackTurnDeliveryTracker();
+    const tracker = createSlackEventDeliveryTracker();
 
     tracker.markDelivered({
       kind: "final",
@@ -150,7 +159,7 @@ describe("slack turn delivery tracker", () => {
   });
 
   it("keeps distinct dispatch kinds separate for identical payloads", () => {
-    const tracker = createSlackTurnDeliveryTracker();
+    const tracker = createSlackEventDeliveryTracker();
     const payload = { text: "same reply" };
 
     tracker.markDelivered({ kind: "tool", payload, threadTs: "123.456" });

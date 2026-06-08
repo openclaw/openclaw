@@ -1,3 +1,4 @@
+// Covers provider-driven plugin auto-enable decisions.
 import { afterAll, describe, expect, it } from "vitest";
 import {
   applyPluginAutoEnable,
@@ -279,7 +280,7 @@ describe("applyPluginAutoEnable providers", () => {
     });
 
     expect(result.config.plugins?.entries?.openai).toBeUndefined();
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
   });
 
   it("uses manifest-owned provider auto-enable metadata for third-party plugins", () => {
@@ -415,6 +416,6 @@ describe("applyPluginAutoEnable providers", () => {
     });
 
     expect(result.config.plugins?.entries?.acpx?.enabled).toBeUndefined();
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
   });
 });

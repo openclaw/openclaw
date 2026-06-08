@@ -1,12 +1,13 @@
+/** Group/direct chat prompt context, activation, and silent-reply helpers. */
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyPolicy } from "../../shared/silent-reply-policy.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { normalizeGroupActivation } from "../group-activation.js";
@@ -143,6 +144,7 @@ function resolveDiscordRequireMentionFallback(params: {
   return undefined;
 }
 
+/** Resolves whether a group/channel turn requires an explicit mention. */
 export async function resolveGroupRequireMention(params: {
   cfg: OpenClawConfig;
   ctx: TemplateContext;
@@ -195,6 +197,7 @@ export async function resolveGroupRequireMention(params: {
   });
 }
 
+/** Converts requireMention into the default prompt activation label. */
 export function defaultGroupActivation(requireMention: boolean): "always" | "mention" {
   return !requireMention ? "always" : "mention";
 }
@@ -218,11 +221,11 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
   return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
 }
 
+/** Builds system prompt context for group/channel conversations. */
 export function buildGroupChatContext(params: {
   sessionCtx: TemplateContext;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   silentReplyPolicy?: SilentReplyPolicy;
-  silentReplyRewrite?: boolean;
   silentToken?: string;
 }): string {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
@@ -253,25 +256,17 @@ export function buildGroupChatContext(params: {
     "When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value.",
   );
   const canUseSilentReply =
-    !messageToolOnly &&
-    params.silentToken &&
-    (params.silentReplyPolicy !== "disallow" || params.silentReplyRewrite === true);
+    !messageToolOnly && params.silentToken && params.silentReplyPolicy !== "disallow";
   if (messageToolOnly) {
     lines.push(
       "If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the group.",
     );
   }
   if (canUseSilentReply) {
-    if (params.silentReplyPolicy === "allow") {
-      lines.push(
-        `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw stays silent.`,
-      );
-      lines.push("Be extremely selective: reply only when directly addressed or clearly helpful.");
-    } else {
-      lines.push(
-        `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw can send a short fallback reply.`,
-      );
-    }
+    lines.push(
+      `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw stays silent.`,
+    );
+    lines.push("Be extremely selective: reply only when directly addressed or clearly helpful.");
     lines.push(
       "Do not add any other words, punctuation, tags, markdown/code blocks, or explanations.",
     );
@@ -285,12 +280,10 @@ export function buildGroupChatContext(params: {
   return lines.join(" ");
 }
 
+/** Builds system prompt context for direct conversations. */
 export function buildDirectChatContext(params: {
   sessionCtx: TemplateContext;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  silentReplyPolicy?: SilentReplyPolicy;
-  silentReplyRewrite?: boolean;
-  silentToken: string;
 }): string {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
@@ -306,25 +299,14 @@ export function buildDirectChatContext(params: {
     return lines.join(" ");
   }
   lines.push("Your replies are automatically sent to this conversation.");
-  if (params.silentReplyPolicy === "allow") {
-    lines.push(
-      `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw stays silent.`,
-    );
-  } else if (params.silentReplyRewrite === true) {
-    lines.push(
-      `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw can send a short fallback reply.`,
-    );
-  } else {
-    lines.push(`Do not use "${params.silentToken}" as your final answer in this conversation.`);
-  }
   return lines.join(" ");
 }
 
+/** Resolves silent-reply behavior text for group prompt instructions. */
 export function resolveGroupSilentReplyBehavior(params: {
   sessionEntry?: SessionEntry;
   defaultActivation: "always" | "mention";
   silentReplyPolicy?: SilentReplyPolicy;
-  silentReplyRewrite?: boolean;
 }): {
   activation: "always" | "mention";
   canUseSilentReply: boolean;
@@ -332,8 +314,7 @@ export function resolveGroupSilentReplyBehavior(params: {
 } {
   const activation =
     normalizeGroupActivation(params.sessionEntry?.groupActivation) ?? params.defaultActivation;
-  const canUseSilentReply =
-    params.silentReplyPolicy !== "disallow" || params.silentReplyRewrite === true;
+  const canUseSilentReply = params.silentReplyPolicy !== "disallow";
   return {
     activation,
     canUseSilentReply,
@@ -341,6 +322,7 @@ export function resolveGroupSilentReplyBehavior(params: {
   };
 }
 
+/** Builds the channel-specific group intro injected into the system prompt. */
 export function buildGroupIntro(params: {
   cfg: OpenClawConfig;
   sessionCtx: TemplateContext;
@@ -348,7 +330,6 @@ export function buildGroupIntro(params: {
   defaultActivation: "always" | "mention";
   silentToken: string;
   silentReplyPolicy?: SilentReplyPolicy;
-  silentReplyRewrite?: boolean;
 }): string {
   const { activation } = resolveGroupSilentReplyBehavior(params);
   const activationLine =

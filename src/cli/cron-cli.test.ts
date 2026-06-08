@@ -1,5 +1,6 @@
+// Cron CLI tests cover cron command registration and schedule output.
 import { Command } from "commander";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../cron/types.js";
 import { registerCronCli } from "./cron-cli.js";
 
@@ -39,6 +40,10 @@ const defaultGatewayMock = async (
 };
 callGatewayFromCli.mockImplementation(defaultGatewayMock);
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return {
@@ -57,10 +62,17 @@ type CronUpdatePatch = {
     schedule?: { kind?: string; expr?: string; tz?: string; staggerMs?: number };
     payload?: {
       kind?: string;
+      argv?: string[];
+      cwd?: string;
+      env?: Record<string, string>;
+      input?: string;
       message?: string;
       model?: string;
       thinking?: string;
       lightContext?: boolean;
+      timeoutSeconds?: number;
+      noOutputTimeoutSeconds?: number;
+      outputMaxBytes?: number;
       toolsAllow?: string[];
     };
     delivery?: {
@@ -75,11 +87,21 @@ type CronUpdatePatch = {
 };
 
 type CronAddParams = {
-  schedule?: { kind?: string; staggerMs?: number };
+  name?: string;
+  schedule?: { kind?: string; at?: string; expr?: string; everyMs?: number; staggerMs?: number };
   payload?: {
+    kind?: string;
+    argv?: string[];
+    cwd?: string;
+    env?: Record<string, string>;
+    input?: string;
+    message?: string;
     model?: string;
     thinking?: string;
     lightContext?: boolean;
+    timeoutSeconds?: number;
+    noOutputTimeoutSeconds?: number;
+    outputMaxBytes?: number;
     toolsAllow?: string[];
   };
   delivery?: {
@@ -125,6 +147,24 @@ function resetGatewayMock() {
   defaultRuntime.writeStdout.mockClear();
   defaultRuntime.writeJson.mockClear();
   defaultRuntime.exit.mockClear();
+}
+
+function runtimeErrorMessages(): string[] {
+  return defaultRuntime.error.mock.calls
+    .map(([message]) => message)
+    .filter((message): message is string => typeof message === "string");
+}
+
+function expectRuntimeErrorContaining(text: string): void {
+  expect(runtimeErrorMessages().join("\n")).toContain(text);
+}
+
+function expectNoRuntimeErrorContaining(text: string): void {
+  expect(runtimeErrorMessages().join("\n")).not.toContain(text);
+}
+
+function stdoutText(): string {
+  return defaultRuntime.writeStdout.mock.calls.map(([value]) => value).join("\n");
 }
 
 async function runCronCommand(args: string[]): Promise<void> {
@@ -209,6 +249,8 @@ async function expectCronEditWithScheduleLookupExit(
 async function runCronRunAndCaptureExit(params: {
   ran?: boolean;
   enqueued?: boolean;
+  runId?: string;
+  runStatus?: "ok" | "error" | "skipped";
   args?: string[];
 }) {
   resetGatewayMock();
@@ -223,6 +265,12 @@ async function runCronRunAndCaptureExit(params: {
           params: callParams,
           ...(typeof params.ran === "boolean" ? { ran: params.ran } : {}),
           ...(typeof params.enqueued === "boolean" ? { enqueued: params.enqueued } : {}),
+          ...(typeof params.runId === "string" ? { runId: params.runId } : {}),
+        };
+      }
+      if (method === "cron.runs") {
+        return {
+          entries: params.runStatus ? [{ status: params.runStatus }] : [],
         };
       }
       return { ok: true, params: callParams };
@@ -243,6 +291,7 @@ async function runCronRunAndCaptureExit(params: {
   return {
     exitSpy,
     runOpts: (runCall?.[1] ?? {}) as { timeout?: string },
+    calls: callGatewayFromCli.mock.calls,
   };
 }
 
@@ -276,6 +325,90 @@ describe("cron cli", () => {
   ])("$name", async ({ ran, enqueued, expectedExitCode }) => {
     const { exitSpy } = await runCronRunAndCaptureExit({ ran, enqueued });
     expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
+  });
+
+  it.each([
+    { status: "ok" as const, expectedExitCode: 0 },
+    { status: "error" as const, expectedExitCode: 1 },
+    { status: "skipped" as const, expectedExitCode: 1 },
+  ])(
+    "waits for queued cron run completion with status $status",
+    async ({ status, expectedExitCode }) => {
+      const { calls, exitSpy } = await runCronRunAndCaptureExit({
+        enqueued: true,
+        runId: "manual:job-1:123:0",
+        runStatus: status,
+        args: ["cron", "run", "job-1", "--wait", "--wait-timeout", "1s", "--poll-interval", "1ms"],
+      });
+
+      expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
+      const runsCall = calls.find((call) => call[0] === "cron.runs");
+      expect(runsCall?.[2]).toMatchObject({
+        id: "job-1",
+        runId: "manual:job-1:123:0",
+        limit: 1,
+      });
+      expect(stdoutText()).toContain('"completed": true');
+      expect(stdoutText()).toContain(`"status": "${status}"`);
+    },
+  );
+
+  it("rejects zero poll interval for cron run wait before enqueueing", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "run",
+      "job-1",
+      "--wait",
+      "--wait-timeout",
+      "1s",
+      "--poll-interval",
+      "0ms",
+    ]);
+
+    expectRuntimeErrorContaining("invalid --poll-interval");
+    expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.run")).toBe(false);
+  });
+
+  it("bounds oversized cron run wait poll intervals by the wait timeout", async () => {
+    vi.useFakeTimers();
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.run") {
+          return { ok: true, enqueued: true, runId: "manual:job-1:123:0", params };
+        }
+        if (method === "cron.runs") {
+          return { entries: [] };
+        }
+        return { ok: true, params };
+      },
+    );
+    const program = buildProgram();
+    const run = program.parseAsync(
+      [
+        "cron",
+        "run",
+        "job-1",
+        "--wait",
+        "--wait-timeout",
+        "10ms",
+        "--poll-interval",
+        "999999999999999ms",
+      ],
+      { from: "user" },
+    );
+
+    await vi.waitFor(() => {
+      expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.runs")).toBe(true);
+    });
+
+    const rejection = expect(run).rejects.toThrow("__exit__:1");
+    await vi.advanceTimersByTimeAsync(10);
+    await rejection;
+    expectRuntimeErrorContaining("timed out waiting for cron run");
   });
 
   it("trims model and thinking on cron add", { timeout: CRON_CLI_TEST_TIMEOUT_MS }, async () => {
@@ -325,6 +458,111 @@ describe("cron cli", () => {
     expect(params?.delivery?.mode).toBe("announce");
   });
 
+  it("accepts positional cron create name with webhook delivery", async () => {
+    const params = await runCronAddAndGetParams([
+      "Webhook reminder",
+      "--at",
+      "20m",
+      "--system-event",
+      "Summarize the latest status",
+      "--webhook",
+      " https://example.invalid/openclaw ",
+    ]);
+
+    expect(params?.name).toBe("Webhook reminder");
+    expect(params?.sessionTarget).toBe("main");
+    expect(params?.delivery).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/openclaw",
+      channel: undefined,
+      threadId: undefined,
+      accountId: undefined,
+      bestEffort: undefined,
+    });
+  });
+
+  it("accepts Hermes-style positional cron schedule and message on cron create", async () => {
+    const params = await runCronAddAndGetParams([
+      "0 2 * * *",
+      "Pull the top bug from the issue tracker, attempt a fix, and open a draft PR.",
+      "--name",
+      "Nightly bug fix",
+      "--agent",
+      "ops",
+    ]);
+
+    expect(params?.name).toBe("Nightly bug fix");
+    expect(params?.schedule).toMatchObject({ kind: "cron", expr: "0 2 * * *" });
+    expect(params?.sessionTarget).toBe("isolated");
+    expect(params?.payload?.kind).toBe("agentTurn");
+    expect(params?.payload?.message).toBe(
+      "Pull the top bug from the issue tracker, attempt a fix, and open a draft PR.",
+    );
+  });
+
+  it("accepts Hermes-style every interval schedule on cron create", async () => {
+    const params = await runCronAddAndGetParams([
+      "every 1h",
+      "Summarize what changed.",
+      "--name",
+      "Pricing monitor",
+      "--no-deliver",
+    ]);
+
+    expect(params?.schedule).toEqual({ kind: "every", everyMs: 3_600_000 });
+    expect(params?.payload?.message).toBe("Summarize what changed.");
+    expect(params?.delivery?.mode).toBe("none");
+  });
+
+  it("rejects conflicting positional and option messages on cron create", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "create",
+      "0 2 * * *",
+      "Positional prompt",
+      "--name",
+      "Mixed prompt",
+      "--message",
+      "Option prompt",
+    ]);
+
+    expectRuntimeErrorContaining("Pass the cron job message either positionally or with --message");
+  });
+
+  it("rejects ambiguous cron add names", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "Positional",
+      "--name",
+      "Option",
+      "--cron",
+      "* * * * *",
+      "--system-event",
+      "tick",
+    ]);
+
+    expectRuntimeErrorContaining("Pass the cron job name either positionally or with --name");
+  });
+
+  it("rejects webhook delivery mixed with chat delivery on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "Mixed delivery",
+      "--cron",
+      "* * * * *",
+      "--message",
+      "hello",
+      "--webhook",
+      "https://example.invalid/openclaw",
+      "--to",
+      "channel:C123",
+    ]);
+
+    expectRuntimeErrorContaining("--webhook cannot be combined with chat delivery options");
+  });
+
   it("infers sessionTarget from payload when --session is omitted", async () => {
     await runCronCommand([
       "cron",
@@ -359,6 +597,57 @@ describe("cron cli", () => {
     expect(params?.payload?.kind).toBe("agentTurn");
   });
 
+  it("creates command cron payloads without an agent-turn message", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Shell probe",
+      "--every",
+      "10m",
+      "--command",
+      "echo ok",
+      "--command-cwd",
+      "/srv/app",
+      "--command-env",
+      "FOO=bar",
+      "--timeout-seconds",
+      "30",
+      "--no-output-timeout-seconds",
+      "5",
+      "--output-max-bytes",
+      "4096",
+      "--no-deliver",
+    ]);
+
+    expect(params?.sessionTarget).toBe("isolated");
+    expect(params?.payload).toMatchObject({
+      kind: "command",
+      argv: ["sh", "-lc", "echo ok"],
+      cwd: "/srv/app",
+      env: { FOO: "bar" },
+      timeoutSeconds: 30,
+      noOutputTimeoutSeconds: 5,
+      outputMaxBytes: 4096,
+    });
+    expect(params?.delivery?.mode).toBe("none");
+  });
+
+  it("rejects cron add with both message and command payloads", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "Ambiguous",
+      "--cron",
+      "* * * * *",
+      "--message",
+      "hello",
+      "--command",
+      "echo ok",
+    ]);
+
+    expectRuntimeErrorContaining("Choose exactly one payload");
+  });
+
   it("supports --keep-after-run on cron add", async () => {
     await runCronCommand([
       "cron",
@@ -377,6 +666,24 @@ describe("cron cli", () => {
     const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as { deleteAfterRun?: boolean };
     expect(params?.deleteAfterRun).toBe(false);
+  });
+
+  it("accepts leading plus relative durations for cron add --at", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Plus duration",
+      "--at",
+      "+30m",
+      "--session",
+      "main",
+      "--system-event",
+      "hello",
+    ]);
+
+    expect(params?.schedule).toEqual({ kind: "at", at: "2026-05-25T00:30:00.000Z" });
   });
 
   it("includes --account on isolated cron add delivery", async () => {
@@ -495,6 +802,24 @@ describe("cron cli", () => {
     expect(listCall?.[2]).toEqual({ includeDisabled: false, agentId: "ops" });
   });
 
+  it("routes cron get to cron.get with the provided id", async () => {
+    await runCronCommand(["cron", "get", "job-1"]);
+
+    const getCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.get");
+    expect(getCall?.[2]).toEqual({ id: "job-1" });
+    expect(stdoutText()).toContain('"id": "job-1"');
+  });
+
+  it("rejects partial cron runs limit", async () => {
+    await expectCronCommandExit(["cron", "runs", "--id", "job-1", "--limit", "10x"]);
+    expectRuntimeErrorContaining("Invalid --limit");
+    expect(callGatewayFromCli).not.toHaveBeenCalledWith(
+      "cron.runs",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("paginates cron show lookups", async () => {
     resetGatewayMock();
     callGatewayFromCli.mockImplementation(
@@ -565,9 +890,7 @@ describe("cron cli", () => {
     const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as { agentId?: string };
     expect(params?.agentId).toBe("ops");
-    expect(defaultRuntime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("No --agent specified"),
-    );
+    expectNoRuntimeErrorContaining("No --agent specified");
   });
 
   it("warns when --agent is not specified on cron add with --message", async () => {
@@ -582,12 +905,8 @@ describe("cron cli", () => {
       "hello",
     ]);
 
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("No --agent specified"),
-    );
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("configured default agent"),
-    );
+    expectRuntimeErrorContaining("No --agent specified");
+    expectRuntimeErrorContaining("configured default agent");
   });
 
   it("keeps the missing --agent warning off cron add JSON stdout", async () => {
@@ -603,18 +922,20 @@ describe("cron cli", () => {
       "--json",
     ]);
 
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("No --agent specified"),
-    );
-    const stdout = defaultRuntime.writeStdout.mock.calls.map(([value]) => value).join("\n");
+    expectRuntimeErrorContaining("No --agent specified");
+    const stdout = stdoutText();
     expect(stdout).not.toContain("No --agent specified");
-    expect(JSON.parse(stdout)).toMatchObject({
-      ok: true,
-      params: {
-        name: "No agent JSON",
-        payload: { kind: "agentTurn", message: "hello" },
-      },
-    });
+    const output = JSON.parse(stdout) as {
+      ok?: unknown;
+      params?: {
+        name?: unknown;
+        payload?: { kind?: unknown; message?: unknown };
+      };
+    };
+    expect(output.ok).toBe(true);
+    expect(output.params?.name).toBe("No agent JSON");
+    expect(output.params?.payload?.kind).toBe("agentTurn");
+    expect(output.params?.payload?.message).toBe("hello");
   });
 
   it("warns when --agent is blank on cron add with --message", async () => {
@@ -630,9 +951,7 @@ describe("cron cli", () => {
     ]);
 
     expect(params?.agentId).toBeUndefined();
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("No --agent specified"),
-    );
+    expectRuntimeErrorContaining("No --agent specified");
   });
 
   it("does not warn when --system-event is used (no agent needed)", async () => {
@@ -647,9 +966,7 @@ describe("cron cli", () => {
       "tick",
     ]);
 
-    expect(defaultRuntime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("No --agent specified"),
-    );
+    expectNoRuntimeErrorContaining("No --agent specified");
   });
 
   it("warns even when --session-key is provided (user should still specify agent explicitly)", async () => {
@@ -666,9 +983,7 @@ describe("cron cli", () => {
       "agent:my-agent:my-session",
     ]);
 
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("No --agent specified"),
-    );
+    expectRuntimeErrorContaining("No --agent specified");
   });
 
   it("sets lightContext on cron add when --light-context is passed", async () => {
@@ -757,6 +1072,56 @@ describe("cron cli", () => {
     expect(patch?.patch?.payload?.thinking).toBe("low");
   });
 
+  it("converts cron edit payloads to command argv", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--command-argv",
+      '["node","scripts/report.mjs","  "]',
+      "--command-cwd",
+      "/srv/app",
+    ]);
+
+    expect(patch?.patch?.payload).toEqual({
+      kind: "command",
+      argv: ["node", "scripts/report.mjs", "  "],
+      cwd: "/srv/app",
+    });
+  });
+
+  it("updates command cron timeout without requiring argv to be repeated", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.list") {
+          return {
+            jobs: [
+              {
+                ...createCronJob("job-1", "Command"),
+                payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+              },
+            ],
+          };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const program = buildProgram();
+    await program.parseAsync(["cron", "edit", "job-1", "--timeout-seconds", "120"], {
+      from: "user",
+    });
+
+    const patch = getGatewayCallParams<{
+      patch?: { payload?: { kind?: string; timeoutSeconds?: number } };
+    }>("cron.update");
+    expect(patch?.patch?.payload).toEqual({
+      kind: "command",
+      timeoutSeconds: 120,
+    });
+  });
+
   it("sets and clears lightContext on cron edit", async () => {
     const setPatch = await runCronEditAndGetPatch(["--light-context", "--message", "hello"]);
     expect(setPatch?.patch?.payload?.lightContext).toBe(true);
@@ -784,7 +1149,7 @@ describe("cron cli", () => {
       };
     }>("cron.update");
 
-    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.payload).toBeUndefined();
     expect(patch?.patch?.delivery?.mode).toBe("announce");
     expect(patch?.patch?.delivery?.channel).toBe("telegram");
     expect(patch?.patch?.delivery?.to).toBe("19098680");
@@ -802,7 +1167,7 @@ describe("cron cli", () => {
       "42",
     ]);
 
-    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.payload).toBeUndefined();
     expect(patch?.patch?.delivery?.mode).toBe("announce");
     expect(patch?.patch?.delivery?.channel).toBe("telegram");
     expect(patch?.patch?.delivery?.to).toBe("-100123");
@@ -812,7 +1177,7 @@ describe("cron cli", () => {
   it("preserves existing delivery mode on thread-only cron edit patches", async () => {
     const patch = await runCronEditAndGetPatch(["--thread-id", "42"]);
 
-    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.payload).toBeUndefined();
     expect(patch?.patch?.delivery?.mode).toBeUndefined();
     expect(patch?.patch?.delivery?.threadId).toBe(42);
   });
@@ -839,13 +1204,51 @@ describe("cron cli", () => {
       patch?: { payload?: { kind?: string }; delivery?: { mode?: string } };
     }>("cron.update");
 
-    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.payload).toBeUndefined();
     expect(patch?.patch?.delivery?.mode).toBe("none");
+  });
+
+  it("sets webhook delivery without forcing an agentTurn payload on cron edit", async () => {
+    await runCronCommand([
+      "cron",
+      "edit",
+      "job-1",
+      "--webhook",
+      " https://example.invalid/cron ",
+      "--best-effort-deliver",
+    ]);
+
+    const patch = getGatewayCallParams<{
+      patch?: {
+        payload?: { kind?: string };
+        delivery?: { mode?: string; to?: string; bestEffort?: boolean };
+      };
+    }>("cron.update");
+
+    expect(patch?.patch?.payload).toBeUndefined();
+    expect(patch?.patch?.delivery).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+      bestEffort: true,
+    });
+  });
+
+  it("rejects webhook delivery mixed with announce delivery on cron edit", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "edit",
+      "job-1",
+      "--webhook",
+      "https://example.invalid/cron",
+      "--announce",
+    ]);
+
+    expectRuntimeErrorContaining("Choose at most one of --announce, --no-deliver, or --webhook");
   });
 
   it("updates delivery account without requiring --message on cron edit", async () => {
     const patch = await runCronEditAndGetPatch(["--account", "  coordinator  "]);
-    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.payload).toBeUndefined();
     expect(patch?.patch?.delivery?.accountId).toBe("coordinator");
     expect(patch?.patch?.delivery?.mode).toBeUndefined();
   });
@@ -1174,9 +1577,7 @@ describe("cron cli", () => {
       program.parseAsync(["cron", "edit", "job-1", "--exact"], { from: "user" }),
     ).rejects.toThrow("__exit__:1");
 
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("cron.list pagination did not advance"),
-    );
+    expectRuntimeErrorContaining("cron.list pagination did not advance");
   });
 
   it("rejects excessive cron edit lookup pagination", async () => {
@@ -1205,9 +1606,7 @@ describe("cron cli", () => {
 
     const listCalls = callGatewayFromCli.mock.calls.filter((call) => call[0] === "cron.list");
     expect(listCalls).toHaveLength(50);
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("cron.list pagination exceeded maximum pages"),
-    );
+    expectRuntimeErrorContaining("cron.list pagination exceeded maximum pages");
   });
 
   it("rejects --exact on edit when existing job is not cron", async () => {
@@ -1265,6 +1664,16 @@ describe("cron cli", () => {
     expect(patch?.patch?.failureAlert?.cooldownMs).toBe(3_600_000);
     expect(patch?.patch?.failureAlert?.channel).toBe("telegram");
     expect(patch?.patch?.failureAlert?.to).toBe("19098680");
+  });
+
+  it("rejects partial failure alert threshold on cron edit", async () => {
+    await expectCronCommandExit(["cron", "edit", "job-1", "--failure-alert-after", "3x"]);
+    expectRuntimeErrorContaining("Invalid --failure-alert-after");
+    expect(callGatewayFromCli).not.toHaveBeenCalledWith(
+      "cron.update",
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it("supports --no-failure-alert on cron edit", async () => {
@@ -1355,9 +1764,7 @@ describe("cron cli", () => {
         { from: "user" },
       ),
     ).rejects.toThrow("__exit__:1");
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Use either --failure-alert-include-skipped"),
-    );
+    expectRuntimeErrorContaining("Use either --failure-alert-include-skipped");
     expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 });

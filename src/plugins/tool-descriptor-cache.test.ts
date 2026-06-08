@@ -1,3 +1,4 @@
+// Covers plugin tool descriptor cache lifecycle and invalidation.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -88,6 +89,38 @@ describe("plugin tool descriptor cache keys", () => {
     });
 
     expect(hoisted.resolveRuntimeConfigCacheKey).toHaveBeenCalledTimes(2);
+    expect(firstKey).not.toBe(secondKey);
+  });
+
+  it("varies descriptor keys by active model metadata", () => {
+    const base = {
+      pluginId: "demo",
+      source: "/tmp/demo.js",
+      contractToolNames: ["demo"],
+      ctx: {
+        workspaceDir: "/tmp/workspace",
+        agentId: "main",
+        activeModel: {
+          provider: "openai",
+          modelId: "gpt-5.4",
+          modelRef: "openai/gpt-5.4",
+        },
+      },
+    };
+
+    const firstKey = buildPluginToolDescriptorCacheKey(base);
+    const secondKey = buildPluginToolDescriptorCacheKey({
+      ...base,
+      ctx: {
+        ...base.ctx,
+        activeModel: {
+          provider: "openrouter",
+          modelId: "openrouter/auto",
+          modelRef: "openrouter/auto",
+        },
+      },
+    });
+
     expect(firstKey).not.toBe(secondKey);
   });
 

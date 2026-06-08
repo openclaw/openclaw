@@ -1,6 +1,12 @@
+// Tests active reply run registry add, lookup, and cleanup behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  getDiagnosticSessionActivitySnapshot,
+  resetDiagnosticRunActivityForTest,
+} from "../../logging/diagnostic-run-activity.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
+import {
+  testing,
   abortActiveReplyRuns,
   createReplyOperation,
   forceClearReplyRunBySessionId,
@@ -13,7 +19,8 @@ import {
 
 describe("reply run registry", () => {
   afterEach(() => {
-    __testing.resetReplyRunRegistry();
+    testing.resetReplyRunRegistry();
+    resetDiagnosticRunActivityForTest();
     vi.restoreAllMocks();
   });
 
@@ -49,6 +56,39 @@ describe("reply run registry", () => {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     }
+  });
+
+  it("mirrors active reply operations into diagnostic work state", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:telegram:direct:chat-1",
+      sessionId: "session-1",
+      resetTriggered: false,
+    });
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "session-1",
+        sessionKey: "agent:main:telegram:direct:chat-1",
+      }).activeWorkKind,
+    ).toBe("embedded_run");
+
+    operation.updateSessionId("session-2");
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "session-2",
+        sessionKey: "agent:main:telegram:direct:chat-1",
+      }).activeWorkKind,
+    ).toBe("embedded_run");
+
+    operation.complete();
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "session-2",
+        sessionKey: "agent:main:telegram:direct:chat-1",
+      }).activeWorkKind,
+    ).toBeUndefined();
   });
 
   it("clears queued operations immediately on user abort", () => {
@@ -116,7 +156,31 @@ describe("reply run registry", () => {
     }
   });
 
-  it("queues messages only through the active running backend", async () => {
+  it("clamps oversized wait timers instead of resolving idle waits immediately", async () => {
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "session-running",
+        resetTriggered: false,
+      });
+
+      const waitPromise = waitForReplyRunEndBySessionId(
+        "session-running",
+        MAX_TIMER_TIMEOUT_MS + 1,
+      );
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      operation.complete();
+      await expect(waitPromise).resolves.toBe(true);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("queues messages only through the active running backend", () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",

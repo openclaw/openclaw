@@ -1,3 +1,4 @@
+// Covers install target canonicalization and occupied-directory checks.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -42,7 +43,8 @@ describe("resolveCanonicalInstallTarget", () => {
         }),
       ).resolves.toEqual({ ok: false, error: "bad id" });
 
-      await expect(fs.stat(baseDir)).resolves.toMatchObject({ isDirectory: expect.any(Function) });
+      const baseDirStat = await fs.stat(baseDir);
+      expect(baseDirStat.isDirectory()).toBe(true);
       expect(assertCanonicalPathWithinBaseMock).not.toHaveBeenCalled();
     });
   });

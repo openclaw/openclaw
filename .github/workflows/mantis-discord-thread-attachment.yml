@@ -21,7 +21,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
   issues: write
   pull-requests: write
 
@@ -32,7 +32,6 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.33.0"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
 
@@ -46,15 +45,17 @@ jobs:
           github.event_name == 'issue_comment' &&
           github.event.issue.pull_request &&
           (
-            contains(github.event.comment.body, '@Mantis') ||
-            contains(github.event.comment.body, '@mantis') ||
-            contains(github.event.comment.body, '/mantis')
+            contains(github.event.comment.body, '@openclaw-mantis') ||
+            contains(github.event.comment.body, '/openclaw-mantis')
           )
         )
       }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      authorized: ${{ steps.permission.outputs.authorized }}
     steps:
       - name: Require maintainer-level repository access
+        id: permission
         uses: actions/github-script@v8
         with:
           script: |
@@ -68,14 +69,18 @@ jobs:
             const permission = data.permission;
             core.info(`Actor ${context.actor} permission: ${permission}`);
             if (!allowed.has(permission)) {
-              core.setFailed(
+              core.notice(
                 `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
               );
+              core.setOutput("authorized", "false");
+              return;
             }
+            core.setOutput("authorized", "true");
 
   resolve_request:
     name: Resolve Mantis request
     needs: authorize_actor
+    if: needs.authorize_actor.outputs.authorized == 'true'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
       baseline_ref: ${{ steps.resolve.outputs.baseline_ref }}
@@ -121,7 +126,7 @@ jobs:
 
             const normalized = body.toLowerCase();
             const requested =
-              (normalized.includes("@mantis") || normalized.includes("/mantis")) &&
+              (normalized.includes("@openclaw-mantis") || normalized.includes("/openclaw-mantis")) &&
               normalized.includes("discord") &&
               normalized.includes("thread") &&
               (normalized.includes("attachment") ||
@@ -239,7 +244,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build Mantis harness
@@ -530,7 +534,7 @@ jobs:
       - name: Upload Mantis thread attachment artifacts
         id: upload_artifact
         if: ${{ always() && steps.run_mantis.outputs.output_dir != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mantis-discord-thread-attachment-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_mantis.outputs.output_dir }}
@@ -546,7 +550,6 @@ jobs:
           private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          permission-contents: write
           permission-issues: write
           permission-pull-requests: write
 
@@ -554,9 +557,15 @@ jobs:
         if: ${{ always() && needs.resolve_request.outputs.pr_number != '' && steps.run_mantis.outputs.output_dir != '' }}
         env:
           GH_TOKEN: ${{ steps.mantis_app_token.outputs.token }}
-          TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
           ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
+          MANTIS_ARTIFACT_R2_ACCESS_KEY_ID: ${{ secrets.MANTIS_ARTIFACT_R2_ACCESS_KEY_ID }}
+          MANTIS_ARTIFACT_R2_BUCKET: openclaw-crabbox-artifacts
+          MANTIS_ARTIFACT_R2_ENDPOINT: ${{ vars.MANTIS_ARTIFACT_R2_ENDPOINT }}
+          MANTIS_ARTIFACT_R2_PUBLIC_BASE_URL: https://artifacts.openclaw.ai
+          MANTIS_ARTIFACT_R2_REGION: auto
+          MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY: ${{ secrets.MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY }}
           REQUEST_SOURCE: ${{ needs.resolve_request.outputs.request_source }}
+          TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
         shell: bash
         run: |
           set -euo pipefail
@@ -584,3 +593,44 @@ jobs:
         run: |
           echo "Mantis comparison failed." >&2
           exit 1
+
+  clear_issue_comment_reaction:
+    name: Clear Mantis command reaction
+    needs: [resolve_request, validate_candidate, run_thread_attachment]
+    if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Remove workflow eyes reaction
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const commentId = context.payload.comment?.id;
+            if (!commentId) {
+              core.info("No issue comment id found; skipping reaction cleanup.");
+              return;
+            }
+
+            const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
+              owner,
+              repo,
+              comment_id: commentId,
+              per_page: 100,
+            });
+            const eyes = reactions.filter(
+              (reaction) => reaction.content === "eyes" && reaction.user?.login === "github-actions[bot]",
+            );
+            for (const reaction of eyes) {
+              await github.rest.reactions.deleteForIssueComment({
+                owner,
+                repo,
+                comment_id: commentId,
+                reaction_id: reaction.id,
+              });
+              core.info(`Removed eyes reaction ${reaction.id} from comment ${commentId}.`);
+            }
+            if (eyes.length === 0) {
+              core.info(`No workflow eyes reaction found on comment ${commentId}.`);
+            }

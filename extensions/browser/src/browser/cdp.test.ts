@@ -1,3 +1,4 @@
+// Browser tests cover cdp plugin behavior.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
@@ -27,7 +28,9 @@ describe("cdp", () => {
 
   const startWsServer = async () => {
     wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-    await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
+    await new Promise<void>((resolve) => {
+      wsServer?.once("listening", resolve);
+    });
     return (wsServer.address() as { port: number }).port;
   };
 
@@ -77,7 +80,9 @@ describe("cdp", () => {
       res.statusCode = 404;
       res.end("not found");
     });
-    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      httpServer?.listen(0, "127.0.0.1", resolve);
+    });
     return (httpServer.address() as { port: number }).port;
   };
 
@@ -85,14 +90,16 @@ describe("cdp", () => {
     vi.unstubAllEnvs();
     await new Promise<void>((resolve) => {
       if (!httpServer) {
-        return resolve();
+        resolve();
+        return;
       }
       httpServer.close(() => resolve());
       httpServer = null;
     });
     await new Promise<void>((resolve) => {
       if (!wsServer) {
-        return resolve();
+        resolve();
+        return;
       }
       wsServer.close(() => resolve());
       wsServer = null;
@@ -126,19 +133,17 @@ describe("cdp", () => {
     });
 
     expect(created.targetId).toBe("TARGET_123");
-    expect(methods).toEqual(
-      expect.arrayContaining([
-        "Target.createTarget",
-        "Target.attachToTarget",
-        "Page.enable",
-        "Runtime.enable",
-        "Network.enable",
-        "DOM.enable",
-        "Accessibility.enable",
-        "Runtime.runIfWaitingForDebugger",
-        "Target.detachFromTarget",
-      ]),
-    );
+    expect(methods).toEqual([
+      "Target.createTarget",
+      "Target.attachToTarget",
+      "Page.enable",
+      "Runtime.enable",
+      "Network.enable",
+      "DOM.enable",
+      "Accessibility.enable",
+      "Runtime.runIfWaitingForDebugger",
+      "Target.detachFromTarget",
+    ]);
   });
 
   it("creates a target via direct WebSocket URL (skips /json/version)", async () => {
@@ -192,7 +197,9 @@ describe("cdp", () => {
       res.statusCode = 404;
       res.end("not found");
     });
-    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      httpServer?.listen(0, "127.0.0.1", resolve);
+    });
     const httpPort = (httpServer.address() as AddressInfo).port;
 
     await expect(
@@ -201,7 +208,7 @@ describe("cdp", () => {
         url: "https://example.com",
         timeouts: { httpTimeoutMs: 20 },
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/abort|timeout|timed out/i);
   });
 
   it("honors configured WebSocket handshake timeouts when creating a target", async () => {
@@ -212,7 +219,9 @@ describe("cdp", () => {
       heldSockets.push(socket);
       // Hold the TCP connection open without completing the WebSocket handshake.
     });
-    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      httpServer?.listen(0, "127.0.0.1", resolve);
+    });
     const port = (httpServer.address() as AddressInfo).port;
 
     try {
@@ -222,7 +231,7 @@ describe("cdp", () => {
           url: "https://example.com",
           timeouts: { handshakeTimeoutMs: 20 },
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/handshake|timeout|timed out/i);
     } finally {
       for (const socket of heldSockets) {
         socket.destroy();
@@ -509,7 +518,9 @@ describe("cdp", () => {
         }
       });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const addr = server.address() as AddressInfo;
       const created = await createTargetViaCdp({
@@ -518,8 +529,12 @@ describe("cdp", () => {
       });
       expect(created.targetId).toBe("ROOT_FALLBACK");
     } finally {
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 

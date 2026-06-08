@@ -1,17 +1,19 @@
+// Gateway HTTP auth helpers.
+// Authenticates HTTP endpoints and derives trusted operator scopes.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { getRuntimeConfig } from "../config/io.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { getRuntimeConfig } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
-import { sendGatewayAuthFailure, sendJson } from "./http-common.js";
+import { sendGatewayAuthFailure, sendMissingScopeForbidden } from "./http-common.js";
 import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
@@ -27,6 +29,8 @@ export function getHeader(req: IncomingMessage, name: string): string | undefine
 }
 
 export function getBearerToken(req: IncomingMessage): string | undefined {
+  // Bearer parsing is intentionally minimal: callers pass the extracted token
+  // into the shared gateway auth verifier for constant-time comparison.
   const raw = normalizeOptionalString(getHeader(req, "authorization")) ?? "";
   if (!normalizeLowercaseStringOrEmpty(raw).startsWith("bearer ")) {
     return undefined;
@@ -150,7 +154,11 @@ export async function authorizeScopedGatewayHttpRequestOrReply(params: {
     req: IncomingMessage,
     requestAuth: AuthorizedGatewayHttpRequest,
   ) => string[];
-}): Promise<{ cfg: OpenClawConfig; requestAuth: AuthorizedGatewayHttpRequest } | null> {
+}): Promise<{
+  cfg: OpenClawConfig;
+  requestAuth: AuthorizedGatewayHttpRequest;
+  operatorScopes: string[];
+} | null> {
   const cfg = getRuntimeConfig();
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
     req: params.req,
@@ -164,20 +172,14 @@ export async function authorizeScopedGatewayHttpRequestOrReply(params: {
     return null;
   }
 
-  const requestedScopes = params.resolveOperatorScopes(params.req, requestAuth);
-  const scopeAuth = authorizeOperatorScopesForMethod(params.operatorMethod, requestedScopes);
+  const operatorScopes = params.resolveOperatorScopes(params.req, requestAuth);
+  const scopeAuth = authorizeOperatorScopesForMethod(params.operatorMethod, operatorScopes);
   if (!scopeAuth.allowed) {
-    sendJson(params.res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: `missing scope: ${scopeAuth.missingScope}`,
-      },
-    });
+    sendMissingScopeForbidden(params.res, scopeAuth.missingScope);
     return null;
   }
 
-  return { cfg, requestAuth };
+  return { cfg, requestAuth, operatorScopes };
 }
 
 export function isGatewayBearerHttpRequest(
@@ -219,9 +221,16 @@ export function resolveOpenAiCompatibleHttpOperatorScopes(
   req: IncomingMessage,
   requestAuth: AuthorizedGatewayHttpRequest,
 ): string[] {
+  return resolveSharedSecretHttpOperatorScopes(req, requestAuth);
+}
+
+export function resolveSharedSecretHttpOperatorScopes(
+  req: IncomingMessage,
+  requestAuth: AuthorizedGatewayHttpRequest,
+): string[] {
   if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
     // Shared-secret HTTP bearer auth is a documented trusted-operator surface
-    // for the compat APIs and direct /tools/invoke. This is designed-as-is:
+    // for direct HTTP surfaces that opt into it. This is designed-as-is:
     // token/password auth proves possession of the gateway operator secret, not
     // a narrower per-request scope identity, so restore the normal defaults.
     return [...CLI_DEFAULT_OPERATOR_SCOPES];
@@ -245,8 +254,8 @@ export function resolveOpenAiCompatibleHttpSenderIsOwner(
   if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
     // Shared-secret HTTP bearer auth also carries owner semantics on the compat
     // APIs and direct /tools/invoke. This is intentional: there is no separate
-    // per-request owner primitive on that shared-secret path, so owner-only
-    // tool policy follows the documented trusted-operator contract.
+    // per-request owner primitive on that shared-secret path, so managed
+    // attachment ownership follows the documented trusted-operator contract.
     return true;
   }
   return resolveHttpSenderIsOwner(req, requestAuth);

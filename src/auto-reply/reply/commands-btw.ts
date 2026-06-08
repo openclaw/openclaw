@@ -1,3 +1,4 @@
+/** Handles /btw side-question commands against the active session context. */
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { runBtwSideQuestion } from "../../agents/btw.js";
 import { extractBtwQuestion } from "./btw-command.js";
@@ -6,6 +7,7 @@ import type { CommandHandler } from "./commands-types.js";
 
 const BTW_USAGE = "Usage: /btw [side question]";
 
+/** Command handler for /btw side questions. */
 export const handleBtwCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -52,6 +54,8 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
 
   try {
     await params.typing?.startTypingLoop();
+    const currentChannelId =
+      params.ctx.OriginatingTo?.trim() || params.command.to || params.command.channelId;
     const reply = await runBtwSideQuestion({
       cfg: params.cfg,
       agentDir,
@@ -70,6 +74,9 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
       resolvedBlockStreamingBreak: params.resolvedBlockStreamingBreak,
       opts: params.opts,
       isNewSession: false,
+      ...(params.command.channel ? { messageChannel: params.command.channel } : {}),
+      ...(params.command.channel ? { messageProvider: params.command.channel } : {}),
+      ...(currentChannelId ? { currentChannelId } : {}),
     });
     return {
       shouldContinue: false,

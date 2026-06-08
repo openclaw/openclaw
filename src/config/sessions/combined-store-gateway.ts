@@ -1,3 +1,6 @@
+// Builds the gateway-visible combined session store across agent-specific stores.
+// Gateway callers need canonical per-agent keys even when stores are split by `{agentId}`.
+
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   canonicalizeSpawnedByForAgent,
@@ -10,9 +13,11 @@ import { loadSessionStore } from "./store-load.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
+  resolveSessionStoreTargets,
 } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
+// Template-backed stores need per-agent scans before they can be merged for Gateway views.
 function isStorePathTemplate(store?: string): boolean {
   return typeof store === "string" && store.includes("{agentId}");
 }
@@ -28,6 +33,7 @@ function mergeSessionEntryIntoCombined(params: {
   const existing = combined[canonicalKey];
 
   if (existing && (existing.updatedAt ?? 0) > (entry.updatedAt ?? 0)) {
+    // Preserve the freshest entry while still canonicalizing spawnedBy for this agent store.
     const spawnedBy = canonicalizeSpawnedByForAgent(
       cfg,
       agentId,
@@ -57,15 +63,17 @@ function mergeSessionEntryIntoCombined(params: {
   }
 }
 
+/** Loads and canonicalizes session entries for gateway views across one or more agent stores. */
 export function loadCombinedSessionStoreForGateway(
   cfg: OpenClawConfig,
-  opts: { agentId?: string } = {},
+  opts: { agentId?: string; configuredAgentsOnly?: boolean } = {},
 ): {
   storePath: string;
   store: Record<string, SessionEntry>;
 } {
   const storeConfig = cfg.session?.store;
   if (storeConfig && !isStorePathTemplate(storeConfig)) {
+    // A single shared store still needs keys canonicalized as if owned by the default agent.
     const storePath = resolveStorePath(storeConfig);
     const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
     const store = loadSessionStore(storePath, { clone: false });
@@ -93,7 +101,9 @@ export function loadCombinedSessionStoreForGateway(
       : undefined;
   const targets = requestedAgentId
     ? resolveAgentSessionStoreTargetsSync(cfg, requestedAgentId)
-    : resolveAllAgentSessionStoreTargetsSync(cfg);
+    : opts.configuredAgentsOnly === true
+      ? resolveSessionStoreTargets(cfg, { allAgents: true })
+      : resolveAllAgentSessionStoreTargetsSync(cfg);
   const combined: Record<string, SessionEntry> = {};
   for (const target of targets) {
     const agentId = target.agentId;

@@ -1,3 +1,4 @@
+// Bundled Plugin Assets tests cover bundled plugin assets script behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -46,10 +47,13 @@ describe("bundled plugin assets", () => {
         rootDir,
       });
 
-      expect(hooks).toMatchObject([
+      expect(hooks).toEqual([
         {
+          aliases: ["@openclaw/canvas-plugin", "canvas", "canvas-plugin"],
           command: "node scripts/bundle-a2ui.mjs",
+          packageName: "@openclaw/canvas-plugin",
           phase: "build",
+          pluginDir: path.join(rootDir, "extensions", "canvas"),
           pluginId: "canvas",
         },
       ]);
@@ -60,7 +64,7 @@ describe("bundled plugin assets", () => {
     await withPluginAssetFixture(async (rootDir) => {
       await expect(
         readBundledPluginAssetHooks({ phase: "copy", plugins: ["missing"], rootDir }),
-      ).resolves.toEqual([]);
+      ).resolves.toStrictEqual([]);
     });
   });
 

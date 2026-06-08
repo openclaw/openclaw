@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager sync control behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -91,7 +92,6 @@ export async function runMemorySyncWithReadonlyRecovery(
 ): Promise<void> {
   try {
     await state.runSync(params);
-    return;
   } catch (err) {
     if (!isMemoryReadonlyDbError(err) || state.closed) {
       throw err;
@@ -167,7 +167,7 @@ export function enqueueMemoryTargetedSessionSync(
   return state.getQueuedSessionSync() ?? Promise.resolve();
 }
 
-export function _createMemorySyncControlConfigForTests(
+export function createMemorySyncControlConfigForTests(
   workspaceDir: string,
   indexPath: string,
 ): OpenClawConfig {

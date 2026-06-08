@@ -9,6 +9,8 @@
 
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderPlugin,
@@ -31,6 +33,8 @@ export interface MediaStreamConfig {
   transcriptionProvider: RealtimeTranscriptionProviderPlugin;
   /** Provider-owned config blob passed into the transcription session. */
   providerConfig: RealtimeTranscriptionProviderConfig;
+  /** Full runtime config, used by providers that can resolve OAuth profiles. */
+  cfg?: OpenClawConfig;
   /** Close sockets that never send a valid `start` frame within this window. */
   preStartTimeoutMs?: number;
   /** Max concurrent pre-start sockets. */
@@ -118,6 +122,15 @@ function normalizeWsMessageData(data: RawData): Buffer {
   return Buffer.from(data);
 }
 
+export function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage {
+  const raw = normalizeWsMessageData(data);
+  try {
+    return JSON.parse(raw.toString("utf8")) as TwilioMediaMessage;
+  } catch (cause) {
+    throw new Error("Twilio media stream message was malformed JSON", { cause });
+  }
+}
+
 /**
  * Manages WebSocket connections for Twilio media streams.
  */
@@ -143,7 +156,10 @@ export class MediaStreamHandler {
 
   constructor(config: MediaStreamConfig) {
     this.config = config;
-    this.preStartTimeoutMs = config.preStartTimeoutMs ?? DEFAULT_PRE_START_TIMEOUT_MS;
+    this.preStartTimeoutMs = resolveTimerTimeoutMs(
+      config.preStartTimeoutMs,
+      DEFAULT_PRE_START_TIMEOUT_MS,
+    );
     this.maxPendingConnections = config.maxPendingConnections ?? DEFAULT_MAX_PENDING_CONNECTIONS;
     this.maxPendingConnectionsPerIp =
       config.maxPendingConnectionsPerIp ?? DEFAULT_MAX_PENDING_CONNECTIONS_PER_IP;
@@ -160,7 +176,9 @@ export class MediaStreamHandler {
         // Reject oversized frames before app-level parsing runs on unauthenticated sockets.
         maxPayload: MAX_INBOUND_MESSAGE_BYTES,
       });
-      this.wss.on("connection", (ws, req) => this.handleConnection(ws, req));
+      this.wss.on("connection", (ws, req) => {
+        void this.handleConnection(ws, req);
+      });
     }
 
     const currentConnections = this.getCurrentConnectionCount();
@@ -214,10 +232,9 @@ export class MediaStreamHandler {
       return;
     }
 
-    ws.on("message", async (data: RawData) => {
+    ws.on("message", (data: RawData) => {
       try {
-        const raw = normalizeWsMessageData(data);
-        const message = JSON.parse(raw.toString("utf8")) as TwilioMediaMessage;
+        const message = parseTwilioMediaMessage(data);
 
         switch (message.event) {
           case "connected":
@@ -314,6 +331,7 @@ export class MediaStreamHandler {
     }
 
     const sttSession = this.config.transcriptionProvider.createSession({
+      cfg: this.config.cfg,
       providerConfig: this.config.providerConfig,
       onPartial: (partial) => {
         const session = this.sessions.get(streamSid);

@@ -1,13 +1,14 @@
+// Control UI tests cover plugin activation behavior.
 import { describe, expect, it } from "vitest";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 
 describe("isPluginEnabledInConfigSnapshot", () => {
-  it("stays permissive when config has not loaded yet", () => {
+  it("uses the supplied default when config has not loaded yet", () => {
     expect(
       isPluginEnabledInConfigSnapshot({ hash: "hash-1" }, "memory-wiki", {
         enabledByDefault: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("treats bundled default-off plugins as disabled when config is present but silent", () => {

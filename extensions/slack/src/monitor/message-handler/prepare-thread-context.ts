@@ -1,6 +1,7 @@
+// Slack plugin module implements prepare thread context behavior.
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
-import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-types";
+import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   filterSupplementalContextItems,
@@ -13,6 +14,15 @@ import { readSessionUpdatedAt } from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMediaResult } from "../media-types.js";
 import { resolveSlackThreadHistory, type SlackThreadStarter } from "../thread.js";
+import {
+  applySlackThreadHistoryFilterPolicy,
+  ensureSlackThreadHistoryHasBotRoot,
+  formatSlackBotStarterThreadLabel,
+  isSlackThreadAuthorCurrentBot,
+  resolveSlackThreadHistoryFilterPolicy,
+  shouldIncludeBotThreadStarterContext,
+} from "./prepare-thread-context-root.js";
+import { resolveSlackTimestampMs } from "./timestamp.js";
 
 type SlackMediaModule = typeof import("../media.js");
 let slackMediaModulePromise: Promise<SlackMediaModule> | undefined;
@@ -95,6 +105,7 @@ export async function resolveSlackThreadContextData(params: {
   roomLabel: string;
   storePath: string;
   sessionKey: string;
+  forceInitialHistory?: boolean;
   allowFromLower: string[];
   allowNameMatching: boolean;
   contextVisibilityMode: ContextVisibilityMode;
@@ -103,17 +114,24 @@ export async function resolveSlackThreadContextData(params: {
   >;
   effectiveDirectMedia: SlackMediaResult[] | null;
 }): Promise<SlackThreadContextData> {
+  const botIdentity = {
+    botUserId: params.ctx.botUserId,
+    botId: params.ctx.botId,
+  };
   const isCurrentBotAuthor = (author: { userId?: string; botId?: string }): boolean =>
-    Boolean(
-      (params.ctx.botUserId && author.userId && author.userId === params.ctx.botUserId) ||
-      (params.ctx.botId && author.botId && author.botId === params.ctx.botId),
-    );
+    isSlackThreadAuthorCurrentBot({ identity: botIdentity, author });
 
   let threadStarterBody: string | undefined;
   let threadHistoryBody: string | undefined;
-  let threadSessionPreviousTimestamp: number | undefined;
   let threadLabel: string | undefined;
   let threadStarterMedia: SlackMediaResult[] | null = null;
+  const threadSessionPreviousTimestamp =
+    params.isThreadReply && params.threadTs
+      ? readSessionUpdatedAt({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+        })
+      : undefined;
 
   if (!params.isThreadReply || !params.threadTs) {
     return {
@@ -164,6 +182,7 @@ export async function resolveSlackThreadContextData(params: {
       const { resolveSlackMedia } = await loadSlackMediaModule();
       threadStarterMedia = await resolveSlackMedia({
         files: starter.files,
+        client: params.ctx.app.client,
         token: params.ctx.botToken,
         maxBytes: params.ctx.mediaMaxBytes,
       });
@@ -175,21 +194,35 @@ export async function resolveSlackThreadContextData(params: {
   } else {
     threadLabel = `Slack thread ${params.roomLabel}`;
   }
-  if (starter?.text && starterIsCurrentBot) {
+
+  const isNewThreadSession = !threadSessionPreviousTimestamp;
+  const includeBotStarterAsRootContext = shouldIncludeBotThreadStarterContext({
+    starterIsCurrentBot,
+    isNewThreadSession,
+    hasStarterText: Boolean(starter?.text),
+  });
+
+  if (starter?.text && starterIsCurrentBot && !includeBotStarterAsRootContext) {
     logVerbose("slack: omitted current-bot thread starter from context");
-  } else if (starter?.text && !includeStarterContext) {
+  } else if (starter?.text && !includeStarterContext && !starterIsCurrentBot) {
     logVerbose(
       `slack: omitted thread starter from context (mode=${params.contextVisibilityMode}, sender_allowed=${starterAllowed ? "yes" : "no"})`,
     );
+  } else if (includeBotStarterAsRootContext) {
+    threadLabel = formatSlackBotStarterThreadLabel({
+      roomLabel: params.roomLabel,
+      starterText: starter?.text,
+    });
+    logVerbose("slack: retained current-bot thread starter as assistant root context");
   }
 
   const threadInitialHistoryLimit = params.account.config?.thread?.initialHistoryLimit ?? 20;
-  threadSessionPreviousTimestamp = readSessionUpdatedAt({
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-  });
 
-  if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+  if (
+    threadInitialHistoryLimit > 0 &&
+    (!threadSessionPreviousTimestamp || params.forceInitialHistory)
+  ) {
+    const currentBotRootTs = starter?.ts ?? params.threadTs;
     const threadHistory = await resolveSlackThreadHistory({
       channelId: params.message.channel,
       threadTs: params.threadTs,
@@ -198,16 +231,25 @@ export async function resolveSlackThreadContextData(params: {
       limit: threadInitialHistoryLimit,
     });
 
-    if (threadHistory.length > 0) {
-      const threadHistoryWithoutCurrentBot = threadHistory.filter(
-        (historyMsg) =>
-          !isCurrentBotAuthor({
-            userId: historyMsg.userId,
-            botId: historyMsg.botId,
-          }),
-      );
-      const omittedCurrentBotHistoryCount =
-        threadHistory.length - threadHistoryWithoutCurrentBot.length;
+    const threadHistoryWithBotRoot = ensureSlackThreadHistoryHasBotRoot({
+      history: threadHistory,
+      includeBotStarterAsRootContext,
+      threadStarter: starter ? { ...starter, ts: currentBotRootTs } : null,
+    });
+
+    if (threadHistoryWithBotRoot.length > 0) {
+      const historyFilterPolicy = resolveSlackThreadHistoryFilterPolicy({
+        includeBotStarterAsRootContext,
+        starterTs: currentBotRootTs,
+      });
+      const {
+        kept: threadHistoryWithoutCurrentBot,
+        omittedCurrentBot: omittedCurrentBotHistoryCount,
+      } = applySlackThreadHistoryFilterPolicy({
+        history: threadHistoryWithBotRoot,
+        policy: historyFilterPolicy,
+        identity: botIdentity,
+      });
 
       const userMapForFilter =
         params.contextVisibilityMode !== "all" &&
@@ -226,6 +268,14 @@ export async function resolveSlackThreadContextData(params: {
               mode: params.contextVisibilityMode,
               kind: "thread",
               isSenderAllowed: (historyMsg) => {
+                if (
+                  isCurrentBotAuthor({
+                    userId: historyMsg.userId,
+                    botId: historyMsg.botId,
+                  })
+                ) {
+                  return true;
+                }
                 const msgUser = historyMsg.userId ? userMapForFilter.get(historyMsg.userId) : null;
                 return isSlackThreadContextSenderAllowed({
                   allowFromLower: params.allowFromLower,
@@ -249,15 +299,22 @@ export async function resolveSlackThreadContextData(params: {
       const historyParts: string[] = [];
       for (const historyMsg of filteredThreadHistory) {
         const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
-        const isBot = Boolean(historyMsg.botId);
-        const msgSenderName = msgUser?.name ?? (isBot ? `Bot (${historyMsg.botId})` : "Unknown");
-        const role = isBot ? "assistant" : "user";
+        const isOtherBot = Boolean(historyMsg.botId) && historyMsg.botId !== params.ctx.botId;
+        const isCurrentBot = isCurrentBotAuthor({
+          userId: historyMsg.userId,
+          botId: historyMsg.botId,
+        });
+        const isAssistantRole = isCurrentBot || isOtherBot || Boolean(historyMsg.botId);
+        const role = isAssistantRole ? "assistant" : "user";
+        const msgSenderName = isCurrentBot
+          ? "Bot (this assistant)"
+          : (msgUser?.name ?? (historyMsg.botId ? `Bot (${historyMsg.botId})` : "Unknown"));
         const msgWithId = `${historyMsg.text}\n[slack message id: ${historyMsg.ts ?? "unknown"} channel: ${params.message.channel}]`;
         historyParts.push(
           formatInboundEnvelope({
             channel: "Slack",
             from: `${msgSenderName} (${role})`,
-            timestamp: historyMsg.ts ? Math.round(Number(historyMsg.ts) * 1000) : undefined,
+            timestamp: resolveSlackTimestampMs(historyMsg.ts),
             body: msgWithId,
             chatType: "channel",
             envelope: params.envelopeOptions,

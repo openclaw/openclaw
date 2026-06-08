@@ -1,3 +1,4 @@
+// Memory Host SDK module implements read file behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -7,8 +8,10 @@ import {
   type OpenClawConfig,
 } from "./config-utils.js";
 import {
+  assertNoSymlinkParents,
   isFileMissingError,
   isPathInside,
+  isPathInsideWithRealpath,
   readRegularFile,
   root,
   statRegularFile,
@@ -19,7 +22,48 @@ import {
   DEFAULT_MEMORY_READ_LINES,
   type MemoryReadResult,
 } from "./read-file-shared.js";
+import { retryTransientMemoryRead } from "./read-retry.js";
 
+// Secure markdown memory-file reader for workspace and configured extra paths.
+
+/** Check that an absolute path stays inside an allowed extra directory without symlink escapes. */
+async function isAllowedAdditionalDirectoryPath(
+  additionalPath: string,
+  absPath: string,
+): Promise<boolean> {
+  if (!isPathInside(additionalPath, absPath)) {
+    return false;
+  }
+  try {
+    await assertNoSymlinkParents({ rootDir: additionalPath, targetPath: absPath });
+  } catch {
+    return false;
+  }
+  if (!isPathInsideWithRealpath(additionalPath, absPath)) {
+    try {
+      await fs.lstat(absPath);
+    } catch (err) {
+      return isFileMissingError(err);
+    }
+    return false;
+  }
+  return true;
+}
+
+/** Return true when a file vanished after path validation but before content read. */
+function isFileDisappearedDuringReadError(err: unknown): boolean {
+  return (
+    isFileMissingError(err) ||
+    Boolean(
+      err &&
+      typeof err === "object" &&
+      "code" in err &&
+      (err as { code?: unknown }).code === "path-mismatch",
+    )
+  );
+}
+
+/** Read a validated memory markdown file from workspace or configured extra paths. */
 export async function readMemoryFile(params: {
   workspaceDir: string;
   extraPaths?: string[];
@@ -49,7 +93,7 @@ export async function readMemoryFile(params: {
           continue;
         }
         if (stat.isDirectory()) {
-          if (isPathInside(additionalPath, absPath)) {
+          if (await isAllowedAdditionalDirectoryPath(additionalPath, absPath)) {
             const candidateStat = await fs.lstat(absPath).catch(() => null);
             if (candidateStat?.isSymbolicLink()) {
               continue;
@@ -74,6 +118,7 @@ export async function readMemoryFile(params: {
   }
   if (allowedWorkspace) {
     try {
+      // Workspace reads use the safe fs root so symlink escapes are rejected before file IO.
       const workspaceRoot = await root(params.workspaceDir);
       await workspaceRoot.resolve(relPath);
     } catch (err) {
@@ -89,9 +134,14 @@ export async function readMemoryFile(params: {
   }
   let content: string;
   try {
-    content = (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8");
+    content = (
+      await retryTransientMemoryRead(
+        () => readRegularFile({ filePath: absPath }),
+        `read memory file ${absPath}`,
+      )
+    ).buffer.toString("utf-8");
   } catch (err) {
-    if (isFileMissingError(err)) {
+    if (isFileDisappearedDuringReadError(err)) {
       return { text: "", path: relPath };
     }
     throw err;
@@ -107,6 +157,7 @@ export async function readMemoryFile(params: {
   });
 }
 
+/** Resolve agent memory config and read one memory file for that agent. */
 export async function readAgentMemoryFile(params: {
   cfg: OpenClawConfig;
   agentId: string;

@@ -1,5 +1,10 @@
+/**
+ * Live Anthropic transport smoke tests.
+ * Runs only when live credentials are enabled and verifies the native messages
+ * transport against the configured provider.
+ */
 import http from "node:http";
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
@@ -127,10 +132,9 @@ describeLive("anthropic transport stream live", () => {
         ? await Promise.race([requestBodyPromise, delay(500, requestBody)])
         : requestBody;
       if (capturedRequestBody.trim().length > 0) {
-        expect(JSON.parse(capturedRequestBody)).toMatchObject({
-          model: "claude-sonnet-4-6",
-          stream: true,
-        });
+        const body = JSON.parse(capturedRequestBody) as { model?: unknown; stream?: unknown };
+        expect(body.model).toBe("claude-sonnet-4-6");
+        expect(body.stream).toBe(true);
       }
     } finally {
       if (!controller.signal.aborted) {

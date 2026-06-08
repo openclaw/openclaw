@@ -1,3 +1,5 @@
+// Google Meet plugin module implements chrome browser proxy behavior.
+import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 
 type BrowserProxyResult = {
@@ -148,7 +150,13 @@ export async function resolveChromeNode(params: {
 function unwrapNodeInvokePayload(raw: unknown): unknown {
   const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   if (typeof record.payloadJSON === "string" && record.payloadJSON.trim()) {
-    return JSON.parse(record.payloadJSON);
+    try {
+      return JSON.parse(record.payloadJSON);
+    } catch (error) {
+      throw new Error("Google Meet browser proxy returned malformed payloadJSON.", {
+        cause: error,
+      });
+    }
   }
   if ("payload" in record) {
     return record.payload;
@@ -183,7 +191,7 @@ export async function callBrowserProxyOnNode(params: {
       body: params.body,
       timeoutMs: params.timeoutMs,
     },
-    timeoutMs: params.timeoutMs + 5_000,
+    timeoutMs: addTimerTimeoutGraceMs(params.timeoutMs) ?? 1,
   });
   return parseBrowserProxyResult(raw);
 }

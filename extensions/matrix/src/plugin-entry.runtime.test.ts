@@ -1,3 +1,4 @@
+// Matrix tests cover plugin entry plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -73,12 +74,11 @@ function importFixtureModule(fixtureRoot: string, relativePath: string) {
 }
 
 function expectRuntimeWrapperExports(mod: unknown) {
-  expect(mod).toMatchObject({
-    ensureMatrixCryptoRuntime: expect.any(Function),
-    handleVerifyRecoveryKey: expect.any(Function),
-    handleVerificationBootstrap: expect.any(Function),
-    handleVerificationStatus: expect.any(Function),
-  });
+  const exports = mod as Record<string, unknown>;
+  expect(exports.ensureMatrixCryptoRuntime).toBeTypeOf("function");
+  expect(exports.handleVerifyRecoveryKey).toBeTypeOf("function");
+  expect(exports.handleVerificationBootstrap).toBeTypeOf("function");
+  expect(exports.handleVerificationStatus).toBeTypeOf("function");
 }
 
 afterEach(() => {

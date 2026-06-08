@@ -1,7 +1,14 @@
+// Gateway Control UI HTTP handler.
+// Serves bundled UI assets, bootstrap config, avatars, assistant media, and auth checks.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { detectMime } from "@openclaw/media-core/mime";
+import {
+  asDateTimestampMs,
+  resolveTimestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
@@ -17,7 +24,6 @@ import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
-import { detectMime } from "../media/mime.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -45,7 +51,7 @@ import {
   normalizeControlUiBasePath,
   resolveAssistantAvatarUrl,
 } from "./control-ui-shared.js";
-import { sendGatewayAuthFailure } from "./http-common.js";
+import { buildMissingScopeForbiddenBody, sendGatewayAuthFailure } from "./http-common.js";
 import {
   getBearerToken,
   resolveHttpBrowserOriginPolicy,
@@ -53,6 +59,7 @@ import {
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestClientIp } from "./net.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
@@ -135,6 +142,16 @@ const STATIC_ASSET_EXTENSIONS = new Set([
   ".ico",
   ".txt",
   ".webmanifest",
+]);
+
+const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
+const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
+  "apple-touch-icon.png",
+  "favicon-32.png",
+  "favicon.ico",
+  "favicon.svg",
+  "manifest.webmanifest",
+  "sw.js",
 ]);
 
 export type ControlUiAvatarResolution =
@@ -313,7 +330,12 @@ async function authorizeControlUiReadRequest(
         retryAfterMs: deviceRateCheck.retryAfterMs,
       };
     } else {
-      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token);
+      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token, {
+        requiredSharedGatewaySessionGeneration: resolveSharedGatewaySessionGeneration(
+          opts.auth,
+          opts.trustedProxies,
+        ),
+      });
       if (deviceTokenOk) {
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
@@ -341,20 +363,17 @@ async function authorizeControlUiReadRequest(
     requestedScopes,
   );
   if (!scopeAuth.allowed) {
-    sendJson(res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: `missing scope: ${scopeAuth.missingScope}`,
-      },
-    });
+    sendJson(res, 403, buildMissingScopeForbiddenBody(scopeAuth.missingScope));
     return false;
   }
 
   return true;
 }
 
-async function authorizeControlUiDeviceReadToken(token: string): Promise<boolean> {
+async function authorizeControlUiDeviceReadToken(
+  token: string,
+  opts: { requiredSharedGatewaySessionGeneration?: string },
+): Promise<boolean> {
   const pairing = await listDevicePairing();
   for (const device of pairing.paired) {
     const operatorToken = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
@@ -369,6 +388,7 @@ async function authorizeControlUiDeviceReadToken(token: string): Promise<boolean
       token,
       role: CONTROL_UI_OPERATOR_ROLE,
       scopes: [CONTROL_UI_OPERATOR_READ_SCOPE],
+      requiredSharedGatewaySessionGeneration: opts.requiredSharedGatewaySessionGeneration,
     });
     if (verified.ok) {
       return true;
@@ -394,7 +414,14 @@ function signAssistantMediaTicketPayload(encodedPayload: string): string {
 }
 
 function createAssistantMediaTicket(source: string, nowMs = Date.now()) {
-  const exp = nowMs + CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS;
+  const now = asDateTimestampMs(nowMs);
+  if (now === undefined) {
+    return {};
+  }
+  const exp = asDateTimestampMs(now + CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS);
+  if (exp === undefined) {
+    return {};
+  }
   const payload: AssistantMediaTicketPayload = {
     scope: CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE,
     source,
@@ -404,11 +431,15 @@ function createAssistantMediaTicket(source: string, nowMs = Date.now()) {
   const sig = signAssistantMediaTicketPayload(encodedPayload);
   return {
     mediaTicket: `v1.${encodedPayload}.${sig}`,
-    mediaTicketExpiresAt: new Date(exp).toISOString(),
+    mediaTicketExpiresAt: resolveTimestampMsToIsoString(exp),
   };
 }
 
 function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs = Date.now()) {
+  const now = asDateTimestampMs(nowMs);
+  if (now === undefined) {
+    return false;
+  }
   const parts = ticket?.split(".");
   if (!parts || parts.length !== 3 || parts[0] !== "v1") {
     return false;
@@ -432,7 +463,7 @@ function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs
       payload.source === source &&
       typeof payload.exp === "number" &&
       Number.isFinite(payload.exp) &&
-      payload.exp >= nowMs
+      payload.exp >= now
     );
   } catch {
     return false;
@@ -559,7 +590,7 @@ export async function handleControlUiAssistantMediaRequest(
   }
 
   let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | null = null;
-  let localPath = source;
+  let localPath;
   let handleClosed = false;
   const closeOpenedHandle = async () => {
     if (!opened || handleClosed) {
@@ -723,6 +754,22 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string) {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   res.end(body);
+}
+
+function readOpenedFile(fd: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    fs.readFile(fd, (error, data) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(data);
+    });
+  });
+}
+
+async function readOpenedFileText(fd: number): Promise<string> {
+  return (await readOpenedFile(fd)).toString("utf8");
 }
 
 function isExpectedSafePathError(error: unknown): boolean {
@@ -925,6 +972,12 @@ export async function handleControlUiHttpRequest(
     if (uiPath === ROOT_PREFIX) {
       return "";
     }
+    if (uiPath.startsWith(CONTROL_UI_NAMESPACE_PREFIX)) {
+      const namespacedRel = uiPath.slice(CONTROL_UI_NAMESPACE_PREFIX.length);
+      if (CONTROL_UI_ROOT_PUBLIC_ASSETS.has(namespacedRel)) {
+        return namespacedRel;
+      }
+    }
     const assetsIndex = uiPath.indexOf("/assets/");
     if (assetsIndex >= 0) {
       return uiPath.slice(assetsIndex + 1);
@@ -960,10 +1013,10 @@ export async function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"));
+        serveResolvedIndexHtml(res, await readOpenedFileText(safeFile.fd));
         return true;
       }
-      serveResolvedFile(res, safeFile.path, fs.readFileSync(safeFile.fd));
+      serveResolvedFile(res, safeFile.path, await readOpenedFile(safeFile.fd));
       return true;
     } finally {
       fs.closeSync(safeFile.fd);
@@ -988,7 +1041,7 @@ export async function handleControlUiHttpRequest(
       if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"));
+      serveResolvedIndexHtml(res, await readOpenedFileText(safeIndex.fd));
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);

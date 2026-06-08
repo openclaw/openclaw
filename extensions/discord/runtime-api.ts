@@ -1,3 +1,4 @@
+// Discord API module exposes the plugin public contract.
 export {
   discordMessageActions,
   handleDiscordAction,
@@ -149,7 +150,8 @@ export {
   type ResolveDiscordOutboundSessionRouteParams,
 } from "./runtime-api.send.js";
 export {
-  __testing,
+  testing as __testing,
+  testing,
   autoBindSpawnedDiscordSubagent,
   createNoopThreadBindingManager,
   createThreadBindingManager,

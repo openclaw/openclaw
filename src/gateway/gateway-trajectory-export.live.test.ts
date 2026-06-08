@@ -1,3 +1,4 @@
+// Gateway trajectory export live tests verify Codex harness runs emit trajectory artifacts under live settings.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -82,10 +83,9 @@ async function connectGatewayClient(params: {
     deviceIdentity,
     timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
     requestTimeoutMs: 60_000,
+    tickWatchTimeoutMs: AGENT_REQUEST_TIMEOUT_MS + 120_000,
     clientDisplayName: "trajectory-live",
   });
-  (client as unknown as { tickIntervalMs?: number }).tickIntervalMs =
-    AGENT_REQUEST_TIMEOUT_MS + 120_000;
   return client;
 }
 
@@ -132,7 +132,9 @@ async function waitForPath(filePath: string, timeoutMs = 60_000): Promise<void> 
       await fs.stat(filePath);
       return;
     } catch {
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 500);
+      });
     }
   }
   throw new Error(`timed out waiting for ${filePath}`);
@@ -152,17 +154,21 @@ async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
   const approval = approvals.find((entry) =>
     entry.request?.command?.includes("sessions export-trajectory"),
   );
-  expect(approval?.id).toBeTruthy();
+  expect(typeof approval?.id).toBe("string");
+  expect(approval?.request?.command).toContain("sessions export-trajectory");
+  if (!approval?.id) {
+    throw new Error("expected trajectory export approval id");
+  }
   await client.request(
     "exec.approval.resolve",
-    { id: approval!.id, decision: "allow-once" },
+    { id: approval.id, decision: "allow-once" },
     { timeoutMs: 10_000 },
   );
-  return approval!.id!;
+  return approval.id;
 }
 
 describeLive("gateway live trajectory export", () => {
-  let cleanup: Array<() => Promise<void>> = [];
+  const cleanup: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
     for (const step of cleanup.splice(0).toReversed()) {
@@ -279,17 +285,18 @@ describeLive("gateway live trajectory export", () => {
       if (finalText) {
         expect(finalText).toContain("Approve once");
       }
-      expect(await listDirectoryNames(bundleDir)).toEqual(
-        expect.arrayContaining([
-          "artifacts.json",
-          "events.jsonl",
-          "manifest.json",
-          "metadata.json",
-          "prompts.json",
-          "session.jsonl",
-          "tools.json",
-        ]),
-      );
+      const bundleNames = await listDirectoryNames(bundleDir);
+      for (const expectedName of [
+        "artifacts.json",
+        "events.jsonl",
+        "manifest.json",
+        "metadata.json",
+        "prompts.json",
+        "session.jsonl",
+        "tools.json",
+      ]) {
+        expect(bundleNames).toContain(expectedName);
+      }
       expect(beforeExport.has("bundle")).toBe(false);
 
       const manifest = JSON.parse(

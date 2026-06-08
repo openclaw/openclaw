@@ -1,3 +1,4 @@
+// Vitest Process Group tests cover vitest process group script behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   forwardSignalToVitestProcessGroup,
@@ -7,6 +8,22 @@ import {
 } from "../../scripts/vitest-process-group.mjs";
 
 describe("vitest process group helpers", () => {
+  function getListenerSet(listeners: Map<string, Set<() => void>>, event: string) {
+    const set = listeners.get(event);
+    if (!set) {
+      throw new Error(`expected ${event} listener set`);
+    }
+    return set;
+  }
+
+  function expectListenerCount(
+    listeners: Map<string, Set<() => void>>,
+    event: string,
+    count: number,
+  ) {
+    expect(getListenerSet(listeners, event).size).toBe(count);
+  }
+
   it("uses detached process groups on non-Windows hosts", () => {
     expect(shouldUseDetachedVitestProcessGroup("darwin")).toBe(true);
     expect(shouldUseDetachedVitestProcessGroup("linux")).toBe(true);
@@ -77,24 +94,27 @@ describe("vitest process group helpers", () => {
       },
     };
     const kill = vi.fn();
+    const onSignal = vi.fn();
     const teardown = installVitestProcessGroupCleanup({
       child: { pid: 4200 },
       processObject: fakeProcess as unknown as NodeJS.Process,
       platform: "darwin",
       kill,
+      onSignal,
     });
 
-    expect(listeners.get("SIGINT")?.size).toBe(1);
-    expect(listeners.get("SIGTERM")?.size).toBe(1);
-    expect(listeners.get("exit")?.size).toBe(1);
+    expectListenerCount(listeners, "SIGINT", 1);
+    expectListenerCount(listeners, "SIGTERM", 1);
+    expectListenerCount(listeners, "exit", 1);
 
-    listeners.get("SIGTERM")?.values().next().value?.();
+    getListenerSet(listeners, "SIGTERM").values().next().value();
+    expect(onSignal).toHaveBeenCalledWith("SIGTERM");
     expect(kill).toHaveBeenCalledWith(-4200, "SIGTERM");
 
     teardown();
-    expect(listeners.get("SIGINT")?.size ?? 0).toBe(0);
-    expect(listeners.get("SIGTERM")?.size ?? 0).toBe(0);
-    expect(listeners.get("exit")?.size ?? 0).toBe(0);
+    expectListenerCount(listeners, "SIGINT", 0);
+    expectListenerCount(listeners, "SIGTERM", 0);
+    expectListenerCount(listeners, "exit", 0);
   });
 
   it("raises process listener limits for highly parallel cleanup handlers", () => {
@@ -134,8 +154,8 @@ describe("vitest process group helpers", () => {
     for (const teardown of teardowns) {
       teardown();
     }
-    expect(listeners.get("SIGINT")?.size ?? 0).toBe(0);
-    expect(listeners.get("SIGTERM")?.size ?? 0).toBe(0);
-    expect(listeners.get("exit")?.size ?? 0).toBe(0);
+    expectListenerCount(listeners, "SIGINT", 0);
+    expectListenerCount(listeners, "SIGTERM", 0);
+    expectListenerCount(listeners, "exit", 0);
   });
 });

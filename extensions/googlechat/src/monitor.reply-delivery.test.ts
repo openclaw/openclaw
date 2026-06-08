@@ -1,3 +1,4 @@
+// Googlechat tests cover monitor.reply delivery plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -37,7 +38,7 @@ function createCore(params?: {
         chunkMarkdownTextWithMode: vi.fn((text: string) => params?.chunks ?? [text]),
       },
       media: {
-        fetchRemoteMedia: vi.fn(async () => params?.media ?? { buffer: Buffer.from("image") }),
+        readRemoteMediaBuffer: vi.fn(async () => params?.media ?? { buffer: Buffer.from("image") }),
       },
     },
   } as unknown as GoogleChatCoreRuntime;
@@ -101,7 +102,7 @@ describe("Google Chat reply delivery", () => {
     });
     expect(statusSink).toHaveBeenCalledTimes(2);
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Google Chat message send failed"),
+      "Google Chat message send failed: Error: message not found",
     );
   });
 

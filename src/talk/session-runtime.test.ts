@@ -1,3 +1,4 @@
+// Talk session runtime tests cover provider lifecycle and session events.
 import { describe, expect, it, vi } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
@@ -20,6 +21,15 @@ function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoice
   };
 }
 
+function expectBridgeRequest(
+  request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined,
+): Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] {
+  if (!request) {
+    throw new Error("Expected realtime voice provider bridge request");
+  }
+  return request;
+}
+
 describe("realtime voice bridge session runtime", () => {
   it("routes provider output through an open audio sink", () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
@@ -39,6 +49,7 @@ describe("realtime voice bridge session runtime", () => {
 
     createRealtimeVoiceBridgeSession({
       provider,
+      cfg: { talk: { realtime: { provider: "test" } } } as never,
       providerConfig: {},
       audioSink: {
         isOpen: () => true,
@@ -52,8 +63,9 @@ describe("realtime voice bridge session runtime", () => {
     callbacks?.onClearAudio();
     callbacks?.onMark?.("mark-1");
 
+    expect(callbacks?.cfg).toEqual({ talk: { realtime: { provider: "test" } } });
     expect(sendAudio).toHaveBeenCalledWith(Buffer.from([1, 2]));
-    expect(clearAudio).toHaveBeenCalled();
+    expect(clearAudio).toHaveBeenCalledTimes(1);
     expect(sendMark).toHaveBeenCalledWith("mark-1");
   });
 
@@ -76,7 +88,9 @@ describe("realtime voice bridge session runtime", () => {
       audioSink: { sendAudio: vi.fn() },
     });
 
-    expect(request?.audioFormat).toEqual(REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ);
+    expect(expectBridgeRequest(request).audioFormat).toEqual(
+      REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+    );
   });
 
   it("passes the audio auto-response preference to the provider bridge", () => {
@@ -98,7 +112,29 @@ describe("realtime voice bridge session runtime", () => {
       audioSink: { sendAudio: vi.fn() },
     });
 
-    expect(request?.autoRespondToAudio).toBe(false);
+    expect(expectBridgeRequest(request).autoRespondToAudio).toBe(false);
+  });
+
+  it("passes the audio interrupt preference to the provider bridge", () => {
+    let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (nextRequest) => {
+        request = nextRequest;
+        return makeBridge();
+      },
+    };
+
+    createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      interruptResponseOnInputAudio: false,
+      audioSink: { sendAudio: vi.fn() },
+    });
+
+    expect(expectBridgeRequest(request).interruptResponseOnInputAudio).toBe(false);
   });
 
   it("can acknowledge provider marks without transport mark support", () => {
@@ -125,7 +161,7 @@ describe("realtime voice bridge session runtime", () => {
     callbacks?.onMark?.("mark-1");
 
     expect(sendMark).not.toHaveBeenCalled();
-    expect(bridge.acknowledgeMark).toHaveBeenCalled();
+    expect(bridge["acknowledgeMark"]).toHaveBeenCalledTimes(1);
   });
 
   it("can ignore provider marks", () => {
@@ -152,7 +188,7 @@ describe("realtime voice bridge session runtime", () => {
     callbacks?.onMark?.("mark-1");
 
     expect(sendMark).not.toHaveBeenCalled();
-    expect(bridge.acknowledgeMark).not.toHaveBeenCalled();
+    expect(bridge["acknowledgeMark"]).not.toHaveBeenCalled();
   });
 
   it("passes tool calls the active session and triggers initial greeting on ready", () => {
@@ -187,7 +223,7 @@ describe("realtime voice bridge session runtime", () => {
     callbacks?.onReady?.();
     callbacks?.onToolCall?.(event);
 
-    expect(bridge.triggerGreeting).toHaveBeenCalledWith("Say hello");
+    expect(bridge["triggerGreeting"]).toHaveBeenCalledWith("Say hello");
     expect(onToolCall).toHaveBeenCalledWith(event, session);
   });
 
@@ -207,7 +243,7 @@ describe("realtime voice bridge session runtime", () => {
 
     session.submitToolResult("call-1", { status: "working" }, { willContinue: true });
 
-    expect(bridge.submitToolResult).toHaveBeenCalledWith(
+    expect(bridge["submitToolResult"]).toHaveBeenCalledWith(
       "call-1",
       { status: "working" },
       { willContinue: true },

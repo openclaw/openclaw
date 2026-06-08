@@ -1,5 +1,6 @@
-import { resolveChannelStreamingPreviewChunk } from "openclaw/plugin-sdk/channel-streaming";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Telegram plugin module implements draft chunking behavior.
+import { resolveChannelStreamingPreviewChunk } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";

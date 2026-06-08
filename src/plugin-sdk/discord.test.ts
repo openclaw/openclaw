@@ -1,3 +1,6 @@
+/**
+ * Tests Discord SDK helpers and Discord-facing compatibility behavior.
+ */
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -160,19 +163,16 @@ describe("discord plugin-sdk facade", () => {
       childSessionKey: "child",
     });
 
-    expect(mocks.runtimeModule.autoBindSpawnedDiscordSubagent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "agent",
-        cfg: mocks.runtimeConfig,
-        childSessionKey: "child",
-      }),
-    );
-    expect(binding).toEqual(
-      expect.objectContaining({
-        cfg: mocks.runtimeConfig,
-        targetKind: "subagent",
-        targetSessionKey: "child",
-      }),
-    );
+    expect(mocks.runtimeModule.autoBindSpawnedDiscordSubagent).toHaveBeenCalledTimes(1);
+    const callParams = mocks.runtimeModule.autoBindSpawnedDiscordSubagent.mock.calls[0]?.[0];
+    expect(callParams.agentId).toBe("agent");
+    expect(callParams.cfg).toBe(mocks.runtimeConfig);
+    expect(callParams.childSessionKey).toBe("child");
+    if (!binding) {
+      throw new Error("expected Discord subagent binding");
+    }
+    expect(binding.cfg).toBe(mocks.runtimeConfig);
+    expect(binding.targetKind).toBe("subagent");
+    expect(binding.targetSessionKey).toBe("child");
   });
 });

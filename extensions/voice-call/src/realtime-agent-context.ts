@@ -1,13 +1,14 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Voice Call plugin module implements realtime agent context behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildRealtimeVoiceAgentConsultPolicyInstructions } from "openclaw/plugin-sdk/realtime-voice";
 import { root } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 
-type AgentEntryLike = {
-  id?: unknown;
-  systemPromptOverride?: unknown;
-};
+// Builds compact agent context injected into realtime voice sessions.
 
+/** Agent identity subset used by voice instructions. */
 type VoiceIdentityLike = {
   name?: unknown;
   emoji?: unknown;
@@ -16,31 +17,7 @@ type VoiceIdentityLike = {
   vibe?: unknown;
 };
 
-function normalizeString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readAgentEntries(cfg: CoreConfig): AgentEntryLike[] {
-  const agents = (cfg as { agents?: { list?: unknown } }).agents;
-  return Array.isArray(agents?.list)
-    ? agents.list.filter((entry): entry is AgentEntryLike =>
-        Boolean(entry && typeof entry === "object"),
-      )
-    : [];
-}
-
-function resolveAgentSystemPromptOverride(cfg: CoreConfig, agentId: string): string | undefined {
-  const entries = readAgentEntries(cfg);
-  const entry = entries.find((candidate) => normalizeString(candidate.id) === agentId);
-  return (
-    normalizeString(entry?.systemPromptOverride) ??
-    normalizeString(
-      (cfg as { agents?: { defaults?: { systemPromptOverride?: unknown } } }).agents?.defaults
-        ?.systemPromptOverride,
-    )
-  );
-}
-
+/** Limit injected context while preserving an explicit truncation marker. */
 function limitText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
@@ -48,6 +25,7 @@ function limitText(text: string, maxChars: number): string {
   return `${text.slice(0, Math.max(0, maxChars - 32)).trimEnd()}\n[truncated]`;
 }
 
+/** Read configured workspace context files through the safe workspace root. */
 async function readWorkspaceVoiceContextFiles(params: {
   workspaceDir: string;
   files: readonly string[];
@@ -76,28 +54,7 @@ async function readWorkspaceVoiceContextFiles(params: {
   return sections;
 }
 
-function buildConsultPolicyGuidance(
-  config: Pick<VoiceCallConfig["realtime"], "consultPolicy" | "toolPolicy">,
-): string | undefined {
-  if (config.toolPolicy === "none" || config.consultPolicy === "auto") {
-    return undefined;
-  }
-  if (config.consultPolicy === "always") {
-    return [
-      "Consult behavior:",
-      "- Call openclaw_agent_consult before every substantive answer.",
-      "- You may answer directly only for greetings, acknowledgements, brief latency tests, or filler while waiting for the consult result.",
-      "- After the consult result arrives, speak that result concisely.",
-    ].join("\n");
-  }
-  return [
-    "Consult behavior:",
-    "- Answer directly for greetings, acknowledgements, simple conversational glue, and brief latency tests.",
-    "- Call openclaw_agent_consult before answering requests that need facts, memory, current information, tools, workspace state, or the user's OpenClaw-specific context.",
-    "- Keep spoken replies concise and natural.",
-  ].join("\n");
-}
-
+/** Build final realtime instructions from base instructions, consult policy, and fast context. */
 export async function buildRealtimeVoiceInstructions(params: {
   baseInstructions: string;
   config: VoiceCallConfig;
@@ -106,7 +63,7 @@ export async function buildRealtimeVoiceInstructions(params: {
 }): Promise<string> {
   const { config } = params;
   const sections: string[] = [params.baseInstructions];
-  const consultGuidance = buildConsultPolicyGuidance(config.realtime);
+  const consultGuidance = buildRealtimeVoiceAgentConsultPolicyInstructions(config.realtime);
   if (consultGuidance) {
     sections.push(consultGuidance);
   }
@@ -143,18 +100,12 @@ export async function buildRealtimeVoiceInstructions(params: {
     }
   }
 
-  if (contextConfig.includeSystemPrompt) {
-    const systemPrompt = resolveAgentSystemPromptOverride(params.coreConfig, agentId);
-    if (systemPrompt) {
-      capsule.push(`Configured system prompt override:\n${systemPrompt}`);
-    }
-  }
-
   if (contextConfig.includeWorkspaceFiles) {
     const workspaceDir = params.agentRuntime.resolveAgentWorkspaceDir(
       params.coreConfig as OpenClawConfig,
       agentId,
     );
+    // Workspace reads stay under the agent root; missing or unreadable context files are omitted.
     const fileSections = await readWorkspaceVoiceContextFiles({
       workspaceDir,
       files: contextConfig.files,

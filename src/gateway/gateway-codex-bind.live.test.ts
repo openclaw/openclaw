@@ -1,8 +1,10 @@
+// Codex bind live gateway tests verify bundled Codex plugin channel binding and outbound session routing.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { ChannelOutboundContext } from "../channels/plugins/types.public.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -21,16 +23,24 @@ import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { sleep } from "../utils.js";
 import type { GatewayClient } from "./client.js";
-import { connectTestGatewayClient } from "./gateway-cli-backend.live-helpers.js";
-import { renderCatFacePngBase64 } from "./live-image-probe.js";
+import {
+  connectTestGatewayClient,
+  getFreeGatewayPort,
+} from "./gateway-cli-backend.live-helpers.js";
 import { startGatewayServer } from "./server.js";
 
 const LIVE = isLiveTestEnabled();
 const CODEX_BIND_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_BIND);
 const describeLive = LIVE && CODEX_BIND_LIVE ? describe : describe.skip;
-const CODEX_BIND_TIMEOUT_MS = 10 * 60_000;
-const CODEX_BIND_REQUEST_TIMEOUT_MS = 180_000;
-const DEFAULT_CODEX_BIND_MODEL = "gpt-5.4";
+const CODEX_BIND_TIMEOUT_MS = resolveLiveTimeoutMs(
+  process.env.OPENCLAW_LIVE_CODEX_BIND_TIMEOUT_MS,
+  900_000,
+);
+const CODEX_BIND_REQUEST_TIMEOUT_MS = resolveLiveTimeoutMs(
+  process.env.OPENCLAW_LIVE_CODEX_BIND_REQUEST_TIMEOUT_MS,
+  300_000,
+);
+const DEFAULT_CODEX_BIND_MODEL = "gpt-5.5";
 
 type CapturedOutboundReply = {
   accountId?: string;
@@ -38,6 +48,15 @@ type CapturedOutboundReply = {
   threadId?: string | number;
   to: string;
 };
+
+function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number {
+  const parsed = raw ? Number(raw) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function logCodexBindStep(message: string): void {
+  console.info(`[live-codex-bind] ${message}`);
+}
 
 function createSlackCurrentConversationBindingRegistry(outboundReplies: CapturedOutboundReply[]) {
   return createTestRegistry([
@@ -95,25 +114,21 @@ function createSlackCurrentConversationBindingRegistry(outboundReplies: Captured
   ]);
 }
 
-async function getFreeGatewayPort(): Promise<number> {
-  const { getFreePortBlockWithPermissionFallback } = await import("../test-utils/ports.js");
-  return await getFreePortBlockWithPermissionFallback({
-    offsets: [0, 1, 2, 4],
-    fallbackBase: 42_000,
-  });
-}
-
 function extractAssistantTexts(messages: unknown[]): string[] {
-  return messages
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return undefined;
-      }
-      return (entry as { role?: unknown }).role === "assistant"
-        ? extractFirstTextBlock(entry)
-        : undefined;
-    })
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const texts: string[] = [];
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    if ((entry as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    const text = extractFirstTextBlock(entry);
+    if (typeof text === "string" && text.trim().length > 0) {
+      texts.push(text);
+    }
+  }
+  return texts;
 }
 
 function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
@@ -134,9 +149,12 @@ async function waitForOutboundText(params: {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
-    const outboundTexts = params.replies
-      .map((reply) => reply.text)
-      .filter((value) => value.trim().length > 0);
+    const outboundTexts: string[] = [];
+    for (const reply of params.replies) {
+      if (reply.text.trim().length > 0) {
+        outboundTexts.push(reply.text);
+      }
+    }
     const minReplyCount = params.minReplyCount ?? 1;
     const matchedText = outboundTexts
       .slice(Math.max(0, minReplyCount - 1))
@@ -162,14 +180,24 @@ function restoreEnvVar(name: string, value: string | undefined): void {
   process.env[name] = value;
 }
 
-async function waitForAgentRunOk(client: GatewayClient, runId: string): Promise<void> {
-  const result: { status?: string } = await client.request(
-    "agent.wait",
-    { runId, timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS },
-    { timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS + 5_000 },
-  );
+async function waitForAgentRunOk(
+  client: GatewayClient,
+  runId: string,
+  context: string,
+): Promise<void> {
+  let result: { status?: string };
+  try {
+    result = await client.request(
+      "agent.wait",
+      { runId, timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS },
+      { timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS + 5_000 },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${context}: agent.wait error for ${runId}: ${message}`, { cause: error });
+  }
   if (result?.status !== "ok") {
-    throw new Error(`agent.wait failed for ${runId}: status=${String(result?.status)}`);
+    throw new Error(`${context}: agent.wait failed for ${runId}: status=${String(result?.status)}`);
   }
 }
 
@@ -177,6 +205,7 @@ async function sendChatAndWait(params: {
   client: GatewayClient;
   sessionKey: string;
   idempotencyKey: string;
+  context: string;
   message: string;
   originatingChannel: string;
   originatingTo: string;
@@ -199,9 +228,13 @@ async function sendChatAndWait(params: {
     attachments: params.attachments,
   });
   if (started?.status !== "started" || typeof started.runId !== "string") {
-    throw new Error(`chat.send did not start correctly: ${JSON.stringify(started)}`);
+    throw new Error(
+      `${params.context}: chat.send did not start correctly: ${JSON.stringify(started)}`,
+    );
   }
-  await waitForAgentRunOk(params.client, started.runId);
+  logCodexBindStep(`${params.context} started (${started.runId})`);
+  await waitForAgentRunOk(params.client, started.runId, params.context);
+  logCodexBindStep(`${params.context} completed`);
 }
 
 async function waitForAssistantText(params: {
@@ -312,10 +345,12 @@ async function writePluginBindingApproval(params: {
 async function writeGatewayConfig(params: {
   configPath: string;
   model: string;
+  modelProvider?: string;
   port: number;
   token: string;
   workspace: string;
 }): Promise<void> {
+  const modelProvider = params.modelProvider?.trim() || "codex";
   const cfg: OpenClawConfig = {
     gateway: {
       mode: "local",
@@ -340,8 +375,10 @@ async function writeGatewayConfig(params: {
     agents: {
       defaults: {
         workspace: params.workspace,
-        agentRuntime: { id: "codex" },
-        model: { primary: `codex/${params.model}` },
+        model: { primary: `${modelProvider}/${params.model}` },
+        models: {
+          [`${modelProvider}/${params.model}`]: { agentRuntime: { id: "codex" } },
+        },
         skipBootstrap: true,
         heartbeat: { every: "0m" },
         sandbox: { mode: "off" },
@@ -349,6 +386,14 @@ async function writeGatewayConfig(params: {
     },
   };
   await fs.writeFile(params.configPath, `${JSON.stringify(cfg, null, 2)}\n`);
+}
+
+function resolveCodexBindModelProvider(): string | undefined {
+  const configured = process.env.OPENCLAW_LIVE_CODEX_BIND_PROVIDER?.trim();
+  if (configured) {
+    return configured;
+  }
+  return process.env.OPENCLAW_LIVE_CODEX_HARNESS_AUTH === "api-key" ? "openai" : undefined;
 }
 
 describeLive("gateway live (native Codex conversation binding)", () => {
@@ -379,6 +424,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
       const conversationId = `user:${slackUserId}`;
       const bindModel =
         process.env.OPENCLAW_LIVE_CODEX_BIND_MODEL?.trim() || DEFAULT_CODEX_BIND_MODEL;
+      const bindProvider = resolveCodexBindModelProvider();
       const outboundReplies: CapturedOutboundReply[] = [];
 
       await fs.mkdir(workspace, { recursive: true });
@@ -393,7 +439,14 @@ describeLive("gateway live (native Codex conversation binding)", () => {
       );
       await fs.mkdir(tempHome, { recursive: true });
       await fs.mkdir(stateDir, { recursive: true });
-      await writeGatewayConfig({ configPath, model: bindModel, port, token, workspace });
+      await writeGatewayConfig({
+        configPath,
+        model: bindModel,
+        modelProvider: bindProvider,
+        port,
+        token,
+        workspace,
+      });
 
       clearConfigCache();
       clearRuntimeConfigSnapshot();
@@ -414,23 +467,30 @@ describeLive("gateway live (native Codex conversation binding)", () => {
       process.env.OPENCLAW_SKIP_CRON = "1";
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
       process.env.OPENCLAW_STATE_DIR = stateDir;
-
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
-      const client = await connectTestGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        token,
-        timeoutMs: 90_000,
-        requestTimeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
-        clientDisplayName: "vitest-codex-bind-live",
-      });
-      const channelRegistry = createSlackCurrentConversationBindingRegistry(outboundReplies);
-      pinActivePluginChannelRegistry(channelRegistry);
+      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+      let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
+      let pinnedChannelRegistry:
+        | ReturnType<typeof createSlackCurrentConversationBindingRegistry>
+        | undefined;
 
       try {
+        server = await startGatewayServer(port, {
+          bind: "loopback",
+          auth: { mode: "token", token },
+          controlUiEnabled: false,
+        });
+        client = await connectTestGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token,
+          timeoutMs: 90_000,
+          requestTimeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
+          clientDisplayName: "vitest-codex-bind-live",
+        });
+        const activeClient = client;
+        const channelRegistry = createSlackCurrentConversationBindingRegistry(outboundReplies);
+        pinActivePluginChannelRegistry(channelRegistry);
+        pinnedChannelRegistry = channelRegistry;
+
         await writePluginBindingApproval({
           homeDir: tempHome,
           pluginRoot: resolveCodexPluginRoot(),
@@ -439,10 +499,13 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         });
 
         await sendChatAndWait({
-          client,
+          client: activeClient,
           sessionKey,
           idempotencyKey: `idem-codex-bind-${randomUUID()}`,
-          message: `/codex bind --cwd ${workspace} --model ${bindModel}`,
+          context: "bind command",
+          message: `/codex bind --cwd ${workspace} --model ${bindModel}${
+            bindProvider ? ` --provider ${bindProvider}` : ""
+          }`,
           originatingChannel: "slack",
           originatingTo: conversationId,
           originatingAccountId: accountId,
@@ -453,18 +516,21 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           contains: "Bound this conversation to Codex thread",
           timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
         });
+        expect(bindReply.matchedText).toContain("Bound this conversation to Codex thread");
         const boundSessionKey = resolveBoundSessionKey({
           channel: "slack",
           accountId,
           conversationId,
         });
+        logCodexBindStep(`binding resolved to ${boundSessionKey}`);
         let commandReplyCount = bindReply.outboundTexts.length;
 
         const sendCodexCommand = async (message: string, contains: string, timeoutMs = 60_000) => {
           await sendChatAndWait({
-            client,
+            client: activeClient,
             sessionKey,
             idempotencyKey: `idem-codex-command-${randomUUID()}`,
+            context: message,
             message,
             originatingChannel: "slack",
             originatingTo: conversationId,
@@ -504,25 +570,28 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         const textNonce = randomBytes(4).toString("hex").toUpperCase();
         const textToken = `CODEX-BIND-${textNonce}`;
         await sendChatAndWait({
-          client,
+          client: activeClient,
           sessionKey,
           idempotencyKey: `idem-codex-bound-text-${randomUUID()}`,
+          context: "bound text turn",
           message: `Reply with exactly this token and nothing else: ${textToken}`,
           originatingChannel: "slack",
           originatingTo: conversationId,
           originatingAccountId: accountId,
         });
         const textHistory = await waitForAssistantText({
-          client,
+          client: activeClient,
           sessionKey: boundSessionKey,
           contains: textToken,
           timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
         });
+        expect(textHistory.matchedAssistantText).toContain(textToken);
 
         await sendChatAndWait({
-          client,
+          client: activeClient,
           sessionKey,
           idempotencyKey: `idem-codex-bound-image-${randomUUID()}`,
+          context: "bound image turn",
           message:
             "What animal is drawn in the attached image? Reply with only the lowercase animal name.",
           originatingChannel: "slack",
@@ -536,33 +605,42 @@ describeLive("gateway live (native Codex conversation binding)", () => {
             },
           ],
         });
-        await waitForAssistantText({
-          client,
+        const imageHistory = await waitForAssistantText({
+          client: activeClient,
           sessionKey: boundSessionKey,
           contains: "cat",
           caseInsensitive: true,
           minAssistantCount: textHistory.assistantTexts.length + 1,
           timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
         });
+        expect(imageHistory.matchedAssistantText.toLowerCase()).toContain("cat");
 
         await sendCodexCommand("/codex detach", "Detached this conversation from Codex.");
         await sendCodexCommand("/codex binding", "No Codex conversation binding is attached.");
       } finally {
-        releasePinnedPluginChannelRegistry(channelRegistry);
-        clearConfigCache();
-        clearRuntimeConfigSnapshot();
-        await client.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});
-        await server.close();
-        await fs.rm(tempRoot, { recursive: true, force: true });
-        restoreEnvVar("CODEX_HOME", previous.codexHome);
-        restoreEnvVar("OPENCLAW_CONFIG_PATH", previous.configPath);
-        restoreEnvVar("OPENCLAW_GATEWAY_TOKEN", previous.gatewayToken);
-        restoreEnvVar("HOME", previous.home);
-        restoreEnvVar("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
-        restoreEnvVar("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
-        restoreEnvVar("OPENCLAW_SKIP_CRON", previous.skipCron);
-        restoreEnvVar("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
-        restoreEnvVar("OPENCLAW_STATE_DIR", previous.stateDir);
+        try {
+          if (pinnedChannelRegistry) {
+            releasePinnedPluginChannelRegistry(pinnedChannelRegistry);
+          }
+          clearConfigCache();
+          clearRuntimeConfigSnapshot();
+          try {
+            await client?.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});
+          } finally {
+            await server?.close();
+          }
+        } finally {
+          await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+          restoreEnvVar("CODEX_HOME", previous.codexHome);
+          restoreEnvVar("OPENCLAW_CONFIG_PATH", previous.configPath);
+          restoreEnvVar("OPENCLAW_GATEWAY_TOKEN", previous.gatewayToken);
+          restoreEnvVar("HOME", previous.home);
+          restoreEnvVar("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
+          restoreEnvVar("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
+          restoreEnvVar("OPENCLAW_SKIP_CRON", previous.skipCron);
+          restoreEnvVar("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
+          restoreEnvVar("OPENCLAW_STATE_DIR", previous.stateDir);
+        }
       }
     },
     CODEX_BIND_TIMEOUT_MS,

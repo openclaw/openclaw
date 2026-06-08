@@ -40,8 +40,18 @@ on:
         description: Optional comma-separated Telegram scenario ids
         required: false
         type: string
+      advisory:
+        description: Treat package Telegram failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
+      advisory:
+        description: Treat package Telegram failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
       package_spec:
         description: Published OpenClaw package spec to test when no artifact is supplied
         required: true
@@ -93,13 +103,13 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.33.0"
+  NODE_VERSION: "24.15.0"
 
 jobs:
   run_package_telegram_e2e:
     name: Run package Telegram E2E
     runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
     timeout-minutes: 60
     environment: qa-live-shared
     permissions:
@@ -136,7 +146,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate inputs and secrets
@@ -209,6 +218,7 @@ jobs:
           OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: ci
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT: "1"
           INPUT_SCENARIO: ${{ inputs.scenario }}
@@ -259,7 +269,7 @@ jobs:
 
       - name: Upload npm Telegram E2E artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: npm-telegram-beta-e2e-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/

@@ -1,3 +1,4 @@
+// Matrix tests cover startup maintenance plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -118,9 +119,11 @@ describe("runMatrixStartupMaintenance", () => {
         log: {},
       });
 
-      expect(deps.maybeCreateMatrixMigrationSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({ trigger: "gateway-startup" }),
-      );
+      expect(deps.maybeCreateMatrixMigrationSnapshot).toHaveBeenCalledWith({
+        trigger: "gateway-startup",
+        env: process.env,
+        log: {},
+      });
       expect(deps.autoMigrateLegacyMatrixState).toHaveBeenCalledOnce();
       expect(autoPrepareLegacyMatrixCryptoMock).toHaveBeenCalledOnce();
     });
@@ -140,7 +143,7 @@ describe("runMatrixStartupMaintenance", () => {
 
       expectWarningOnlyMaintenanceSkipped(harness);
       expect(harness.log.warn).toHaveBeenCalledWith(
-        expect.stringContaining("could not be resolved yet"),
+        `matrix: Legacy Matrix state detected at ${path.join(home, ".openclaw", "matrix")}, but the new account-scoped target could not be resolved yet (need homeserver, userId, and access token for channels.matrix). Start the gateway once with a working Matrix login, or rerun "openclaw doctor --fix" after cached credentials are available.`,
       );
     });
   });

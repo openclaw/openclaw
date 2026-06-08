@@ -1,3 +1,4 @@
+// Covers commitment runtime scheduling, extraction, and notification behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,16 +14,32 @@ import {
 import { loadCommitmentStore } from "./store.js";
 import type { CommitmentExtractionBatchResult, CommitmentExtractionItem } from "./types.js";
 
-const runEmbeddedPiAgentMock = vi.hoisted(() => vi.fn());
+const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 const resolveDefaultModelMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  runEmbeddedPiAgent: runEmbeddedPiAgentMock,
+vi.mock("../agents/embedded-agent.js", () => ({
+  runEmbeddedAgent: runEmbeddedAgentMock,
 }));
 
 vi.mock("./model-selection.runtime.js", () => ({
   resolveCommitmentDefaultModelRef: resolveDefaultModelMock,
 }));
+
+function requireFirstEmbeddedAgentRequest(): {
+  provider?: string;
+  model?: string;
+  disableTools?: boolean;
+} {
+  const [call] = runEmbeddedAgentMock.mock.calls;
+  if (!call) {
+    throw new Error("expected embedded OpenClaw agent extraction request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected embedded OpenClaw agent extraction request");
+  }
+  return request as { provider?: string; model?: string; disableTools?: boolean };
+}
 
 describe("commitment extraction runtime", () => {
   const tmpDirs: string[] = [];
@@ -30,7 +47,7 @@ describe("commitment extraction runtime", () => {
 
   afterEach(async () => {
     resetCommitmentExtractionRuntimeForTests();
-    runEmbeddedPiAgentMock.mockReset();
+    runEmbeddedAgentMock.mockReset();
     resolveDefaultModelMock.mockReset();
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -145,12 +162,20 @@ describe("commitment extraction runtime", () => {
     const store = await loadCommitmentStore();
 
     expect(extractBatch).toHaveBeenCalledTimes(1);
-    const batchItems = extractBatch.mock.calls[0]?.[0].items;
+    const [extractCall] = extractBatch.mock.calls;
+    if (!extractCall) {
+      throw new Error("Expected commitment extraction batch call");
+    }
+    const batchItems = extractCall[0].items;
     expect(batchItems).toHaveLength(2);
-    expect(batchItems?.[0]?.itemId).not.toContain("main");
-    expect(batchItems?.[0]?.itemId).not.toContain("telegram");
-    expect(batchItems?.[0]?.itemId).not.toContain("15551234567");
-    expect(batchItems?.[0]?.itemId).not.toContain("m1");
+    const [firstBatchItem] = batchItems;
+    if (!firstBatchItem) {
+      throw new Error("Expected first commitment extraction batch item");
+    }
+    expect(firstBatchItem.itemId).not.toContain("main");
+    expect(firstBatchItem.itemId).not.toContain("telegram");
+    expect(firstBatchItem.itemId).not.toContain("15551234567");
+    expect(firstBatchItem.itemId).not.toContain("m1");
     expect(store.commitments.map((commitment) => commitment.dedupeKey)).toEqual([
       "event:1",
       "event:2",
@@ -164,15 +189,15 @@ describe("commitment extraction runtime", () => {
     cfg.agents = {
       defaults: {
         model: {
-          primary: "openai-codex/gpt-5.5",
+          primary: "openai/gpt-5.5",
         },
       },
     };
-    runEmbeddedPiAgentMock.mockResolvedValue({
+    runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: '{"candidates":[]}' }],
     });
     resolveDefaultModelMock.mockReturnValue({
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.5",
     });
     configureCommitmentExtractionRuntime({
@@ -195,13 +220,11 @@ describe("commitment extraction runtime", () => {
 
     await expect(drainCommitmentExtractionQueue()).resolves.toBe(1);
     expect(resolveDefaultModelMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai-codex",
-        model: "gpt-5.5",
-        disableTools: true,
-      }),
-    );
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    const request = requireFirstEmbeddedAgentRequest();
+    expect(request.provider).toBe("openai");
+    expect(request.model).toBe("gpt-5.5");
+    expect(request.disableTools).toBe(true);
   });
 
   it("backs off hidden extraction after terminal model or auth failures", async () => {
@@ -269,6 +292,49 @@ describe("commitment extraction runtime", () => {
         assistantText: "I hope it goes well.",
       }),
     ).toBe(true);
+  });
+
+  it("uses the queued item timestamp for terminal failure cooldowns", async () => {
+    const cfg = await createConfig();
+    const extractBatch = vi.fn(async () => {
+      throw new Error("OAuth token refresh failed");
+    });
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
+
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs,
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel-1",
+        channel: "discord",
+        userText: "I have an interview tomorrow.",
+        assistantText: "Good luck.",
+      }),
+    ).toBe(true);
+
+    try {
+      await expect(drainCommitmentExtractionQueue()).rejects.toThrow("OAuth token refresh failed");
+      expect(
+        enqueueCommitmentExtraction({
+          cfg,
+          nowMs: nowMs + 1,
+          agentId: "main",
+          sessionKey: "agent:main:discord:channel-1",
+          channel: "discord",
+          userText: "The interview is tomorrow.",
+          assistantText: "I hope it goes well.",
+        }),
+      ).toBe(false);
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("bounds hidden extraction queue growth before spending extractor tokens", async () => {

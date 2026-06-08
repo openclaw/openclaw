@@ -1,7 +1,8 @@
+// Official plugin setup tests cover plugin installation during onboarding.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
-import type { WizardPrompter } from "./prompts.js";
+import type { WizardMultiSelectParams, WizardPrompter } from "./prompts.js";
 
 const ensureOnboardingPluginInstalled = vi.hoisted(() =>
   vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({
@@ -15,7 +16,7 @@ vi.mock("../commands/onboarding-plugin-install.js", () => ({
 }));
 
 import {
-  __testing,
+  testing,
   resolveOfficialPluginOnboardingInstallEntries,
   setupOfficialPluginInstalls,
 } from "./setup.official-plugins.js";
@@ -28,6 +29,7 @@ describe("resolveOfficialPluginOnboardingInstallEntries", () => {
     expect(pluginIds).toContain("diagnostics-otel");
     expect(pluginIds).toContain("diagnostics-prometheus");
     expect(pluginIds).toContain("acpx");
+    expect(pluginIds).toContain("tokenjuice");
     expect(pluginIds).not.toContain("brave");
     expect(pluginIds).not.toContain("codex");
     expect(pluginIds).not.toContain("discord");
@@ -61,7 +63,7 @@ describe("resolveOfficialPluginOnboardingInstallEntries", () => {
 describe("formatInstallHint", () => {
   it("describes dual-source npm-default installs as npm first", () => {
     expect(
-      __testing.formatInstallHint({
+      testing.formatInstallHint({
         clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
         npmSpec: "@openclaw/diagnostics-otel",
         defaultChoice: "npm",
@@ -71,7 +73,7 @@ describe("formatInstallHint", () => {
 
   it("keeps dual-source clawhub-default installs ClawHub first", () => {
     expect(
-      __testing.formatInstallHint({
+      testing.formatInstallHint({
         clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
         npmSpec: "@openclaw/diagnostics-otel",
         defaultChoice: "clawhub",
@@ -91,38 +93,73 @@ describe("setupOfficialPluginInstalls", () => {
   });
 
   it("installs selected optional official plugins through the shared onboarding installer", async () => {
-    const multiselect = vi.fn(async () => ["diagnostics-otel"]);
+    const multiselect = vi.fn(async (_params: WizardMultiSelectParams) => ["diagnostics-otel"]);
     const prompter = createWizardPrompter({
-      multiselect: multiselect as WizardPrompter["multiselect"],
+      multiselect: multiselect as unknown as WizardPrompter["multiselect"],
     });
+    const runtime = createNonExitingRuntime();
 
     await setupOfficialPluginInstalls({
       config: {},
       prompter,
-      runtime: createNonExitingRuntime(),
+      runtime,
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(multiselect).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Install optional plugins",
-      }),
+    expect(multiselect).toHaveBeenCalledTimes(1);
+    const prompt = multiselect.mock.calls[0]?.[0];
+    if (!prompt) {
+      throw new Error("expected optional plugin multiselect prompt");
+    }
+    expect(prompt.message).toBe("Install optional plugins");
+    expect(prompt.options[0]).toEqual({
+      value: "__skip__",
+      label: "Skip for now",
+      hint: "Continue without installing optional plugins",
+    });
+    expect(prompt.options).toEqual(
+      expect.arrayContaining([
+        {
+          value: "acpx",
+          label: "ACPX Runtime",
+          hint: "OpenClaw ACP runtime backend",
+        },
+        {
+          value: "diagnostics-otel",
+          label: "Diagnostics OpenTelemetry",
+          hint: "OpenClaw diagnostics OpenTelemetry exporter",
+        },
+        {
+          value: "diagnostics-prometheus",
+          label: "Diagnostics Prometheus",
+          hint: "OpenClaw diagnostics Prometheus exporter",
+        },
+        {
+          value: "tokenjuice",
+          label: "Tokenjuice",
+          hint: "OpenClaw tokenjuice exec output compaction plugin",
+        },
+      ]),
     );
-    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: expect.objectContaining({
-          pluginId: "diagnostics-otel",
-          trustedSourceLinkedOfficialInstall: true,
-          install: expect.objectContaining({
-            clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
-            npmSpec: "@openclaw/diagnostics-otel",
-            defaultChoice: "npm",
-          }),
-        }),
-        promptInstall: false,
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
+    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledExactlyOnceWith({
+      cfg: {},
+      entry: {
+        pluginId: "diagnostics-otel",
+        label: "Diagnostics OpenTelemetry",
+        description: "OpenClaw diagnostics OpenTelemetry exporter",
+        install: {
+          clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
+          npmSpec: "@openclaw/diagnostics-otel",
+          defaultChoice: "npm",
+          minHostVersion: ">=2026.4.25",
+        },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      promptInstall: false,
+    });
   });
 
   it("does not install when the user skips optional plugins", async () => {

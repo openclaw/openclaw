@@ -1,11 +1,14 @@
+// Plugin Clawhub Release script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
+import { readBoundedResponseText } from "./bounded-response.ts";
 import {
   collectExtensionPackageJsonCandidates,
   collectChangedPathsFromGitRange,
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
+  assertPluginReleaseVersionFloors,
   parsePluginReleaseArgs,
   resolvePublishablePluginVersion,
   resolveGitCommitSha,
@@ -15,7 +18,7 @@ import {
   type PluginReleaseSelectionMode,
 } from "./plugin-npm-release.ts";
 
-export { parsePluginReleaseArgs };
+export { assertPluginReleaseVersionFloors, parsePluginReleaseArgs };
 
 type PluginPackageJson = {
   name?: string;
@@ -72,6 +75,7 @@ type ClawHubPublishablePluginPackageFilters = {
 };
 
 const CLAWHUB_DEFAULT_REGISTRY = "https://clawhub.ai";
+const CLAWHUB_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
 const SAFE_EXTENSION_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
 const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
   ".github/workflows/plugin-clawhub-release.yml",
@@ -79,6 +83,7 @@ const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
   "package.json",
   "pnpm-lock.yaml",
   "packages/plugin-package-contract/src/index.ts",
+  "scripts/lib/bounded-response.ts",
   "scripts/lib/npm-publish-plan.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
@@ -96,6 +101,19 @@ function getRegistryBaseUrl(explicit?: string) {
     process.env.CLAWHUB_SITE?.trim() ||
     CLAWHUB_DEFAULT_REGISTRY
   );
+}
+
+async function readClawHubPackageOwnerDetail(
+  response: Response,
+  packageName: string,
+): Promise<ClawHubPackageOwnerDetail> {
+  return JSON.parse(
+    await readBoundedResponseText(
+      response,
+      `ClawHub package owner response for ${packageName}`,
+      CLAWHUB_RESPONSE_BODY_MAX_BYTES,
+    ),
+  ) as ClawHubPackageOwnerDetail;
 }
 
 export function collectClawHubPublishablePluginPackages(
@@ -390,7 +408,7 @@ export async function collectClawHubOpenClawOwnerErrors(params: {
         return;
       }
 
-      const detail = (await response.json()) as ClawHubPackageOwnerDetail;
+      const detail = await readClawHubPackageOwnerDetail(response, plugin.packageName);
       const ownerHandle = typeof detail.owner?.handle === "string" ? detail.owner.handle : null;
       if (ownerHandle !== requiredOwnerHandle) {
         errors.push(
@@ -435,6 +453,11 @@ export async function collectPluginClawHubReleasePlan(params?: {
     gitRange: params?.gitRange,
     rootDir,
   });
+
+  const explicitPublishSelection = params?.selectionMode !== undefined || selection.length > 0;
+  if (explicitPublishSelection) {
+    assertPluginReleaseVersionFloors(selectedPublishable, "Plugin ClawHub release plan");
+  }
 
   const all = await Promise.all(
     selectedPublishable.map(async (plugin) =>

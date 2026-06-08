@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Canvas tests cover config migration plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, test } from "vitest";
 import { migrateLegacyCanvasHostConfig } from "./config-migration.js";
 
@@ -12,8 +13,11 @@ describe("migrateLegacyCanvasHostConfig", () => {
       },
     } as OpenClawConfig);
 
-    expect(result?.changes).toEqual(["migrated canvasHost to plugins.entries.canvas.config.host"]);
-    expect(result?.config).toEqual({
+    if (!result) {
+      throw new Error("expected Canvas config migration result");
+    }
+    expect(result.changes).toEqual(["migrated canvasHost to plugins.entries.canvas.config.host"]);
+    expect(result.config).toEqual({
       plugins: {
         entries: {
           canvas: {
@@ -51,7 +55,10 @@ describe("migrateLegacyCanvasHostConfig", () => {
       },
     } as OpenClawConfig);
 
-    expect(result?.config).toEqual({
+    if (!result) {
+      throw new Error("expected Canvas config migration result");
+    }
+    expect(result.config).toEqual({
       plugins: {
         entries: {
           canvas: {

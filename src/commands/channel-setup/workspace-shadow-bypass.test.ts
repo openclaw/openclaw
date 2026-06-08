@@ -31,6 +31,7 @@ const getChannelPluginCatalogEntry = vi.hoisted(() => vi.fn());
 
 vi.mock("../../channels/plugins/catalog.js", () => ({
   listChannelPluginCatalogEntries: (opts?: unknown) => listChannelPluginCatalogEntries(opts),
+  listRawChannelPluginCatalogEntries: (opts?: unknown) => listChannelPluginCatalogEntries(opts),
   getChannelPluginCatalogEntry: (...args: unknown[]) =>
     getChannelPluginCatalogEntry(...(args as [string, Record<string, unknown>])),
 }));
@@ -165,7 +166,9 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
     const fallbackCall = listChannelPluginCatalogEntries.mock.calls.find(
       ([opts]) => (opts as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace === true,
     );
-    expect(fallbackCall).toBeTruthy();
+    expect(
+      (fallbackCall?.[0] as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace,
+    ).toBe(true);
   });
 
   it("still returns bundled-origin entries", () => {
@@ -326,6 +329,6 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       installedPlugins: [],
     });
 
-    expect(result.installedCatalogEntries).toEqual([]);
+    expect(result.installedCatalogEntries).toStrictEqual([]);
   });
 });

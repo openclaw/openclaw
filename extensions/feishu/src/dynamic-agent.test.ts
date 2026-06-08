@@ -1,3 +1,4 @@
+// Feishu tests cover dynamic agent plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -97,7 +98,7 @@ describe("maybeCreateDynamicAgent", () => {
     expect(result.agentId).toBe("feishu-ou_sender");
     expect(replaceConfigFile).toHaveBeenCalledTimes(1);
     expect(replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig: expect.objectContaining({
+      nextConfig: {
         agents: {
           list: [
             {
@@ -116,7 +117,7 @@ describe("maybeCreateDynamicAgent", () => {
             },
           },
         ],
-      }),
+      },
       afterWrite: { mode: "auto" },
     });
     expect(await pathExists(path.join(tempRoot, "workspace-feishu-ou_sender"))).toBe(true);

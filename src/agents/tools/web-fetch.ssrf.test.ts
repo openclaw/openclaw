@@ -1,3 +1,5 @@
+// web_fetch SSRF tests cover URL, DNS, redirect, and proxy policy enforcement
+// before network requests reach fetch or provider fallbacks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import { type FetchMock, withFetchPreconnect } from "../../test-utils/fetch-mock.js";
@@ -32,6 +34,12 @@ function setMockFetch(
   const fetchSpy = vi.fn(impl);
   global.fetch = withFetchPreconnect(fetchSpy);
   return fetchSpy;
+}
+
+function expectRawFetchSuccessDetails(details: unknown) {
+  const typedDetails = details as { status?: number; extractor?: string };
+  expect(typedDetails.status).toBe(200);
+  expect(typedDetails.extractor).toBe("raw");
 }
 
 function createWebFetchToolForTest(params?: {
@@ -133,6 +141,8 @@ describe("web_fetch SSRF protection", () => {
   });
 
   it("blocks redirects to private hosts", async () => {
+    // Redirect targets are new network destinations and must be re-checked
+    // against the same SSRF policy as the original URL.
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
 
     const fetchSpy = setMockFetch().mockResolvedValueOnce(
@@ -153,13 +163,12 @@ describe("web_fetch SSRF protection", () => {
     const tool = createWebFetchToolForTest();
 
     const result = await tool?.execute?.("call", { url: "https://example.com" });
-    expect(result?.details).toMatchObject({
-      status: 200,
-      extractor: "raw",
-    });
+    expectRawFetchSuccessDetails(result?.details);
   });
 
   it("allows RFC2544 benchmark-range URLs only when web_fetch ssrfPolicy opts in", async () => {
+    // Benchmark ranges are fake-IP infrastructure in some deployments, but
+    // remain denied unless the web_fetch config opts in.
     const url = "http://198.18.0.153/file";
     lookupMock.mockResolvedValue([{ address: "198.18.0.153", family: 4 }]);
 
@@ -173,10 +182,7 @@ describe("web_fetch SSRF protection", () => {
     });
 
     const allowed = await allowedTool?.execute?.("call", { url });
-    expect(allowed?.details).toMatchObject({
-      status: 200,
-      extractor: "raw",
-    });
+    expectRawFetchSuccessDetails(allowed?.details);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const stricterTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
     await expectBlockedUrl(stricterTool, url, /private|internal|blocked/i);
@@ -196,10 +202,7 @@ describe("web_fetch SSRF protection", () => {
     });
 
     const allowed = await allowedTool?.execute?.("call", { url });
-    expect(allowed?.details).toMatchObject({
-      status: 200,
-      extractor: "raw",
-    });
+    expectRawFetchSuccessDetails(allowed?.details);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     const stricterTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });

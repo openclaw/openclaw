@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Qqbot tests cover slash command handler plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { QueuedMessage } from "../gateway/message-queue.js";
 import type { GatewayAccount } from "../gateway/types.js";
@@ -77,6 +78,6 @@ describe("trySlashCommand", () => {
     expect(result).toBe("handled");
     expect(writes).toHaveLength(1);
     expect(qqbot?.streaming).toBe(true);
-    expect(vi.mocked(sendText).mock.calls[0]?.[1]).toContain("已开启");
+    expect(vi.mocked(sendText).mock.calls.at(0)?.[1]).toContain("已开启");
   });
 });

@@ -1,21 +1,22 @@
-import { z } from "zod";
-import { parseByteSize } from "../cli/parse-bytes.js";
-import { parseDurationMs } from "../cli/parse-duration.js";
+// Assembles the canonical Zod schema for OpenClaw config parsing.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { z } from "zod";
+import { parseByteSize } from "../cli/parse-bytes.js";
+import { parseDurationMs } from "../cli/parse-duration.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   isValidControlUiChatMessageMaxWidth,
   normalizeControlUiChatMessageMaxWidth,
 } from "./control-ui-css.js";
-import {
-  SilentReplyPolicyConfigSchema,
-  SilentReplyRewriteConfigSchema,
-} from "./zod-schema.agent-defaults.js";
+import type { GatewayRemoteConfig } from "./types.gateway.js";
+import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
+import { ChannelsSchema } from "./zod-schema.channels-config.js";
 import {
   HexColorSchema,
   ModelsConfigSchema,
@@ -23,7 +24,6 @@ import {
   SecretsConfigSchema,
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
-import { ChannelsSchema } from "./zod-schema.providers.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
@@ -53,12 +53,84 @@ const NodeHostSchema = z
   .strict()
   .optional();
 
+type ConfigSchemaShape<T extends object> = {
+  [Key in keyof T]-?: z.ZodType<T[Key]>;
+};
+
+const GatewayRemoteSchemaShape = {
+  enabled: z.boolean().optional(),
+  url: z.string().optional(),
+  transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
+  remotePort: z.number().int().min(1).max(65_535).optional(),
+  token: SecretInputSchema.optional().register(sensitive),
+  password: SecretInputSchema.optional().register(sensitive),
+  tlsFingerprint: z.string().optional(),
+  sshTarget: z.string().optional(),
+  sshIdentity: z.string().optional(),
+} satisfies ConfigSchemaShape<GatewayRemoteConfig>;
+
+const GatewayRemoteConfigSchema = z.object(GatewayRemoteSchemaShape).strict().optional();
+
+const TailscaleServiceNameSchema = z.string().regex(/^svc:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/, {
+  message:
+    'Tailscale serviceName must use the "svc:<dns-label>" format, for example "svc:openclaw"',
+});
+
 const LegacyCanvasHostSchema = z
   .object({
     enabled: z.boolean().optional(),
     root: z.string().optional(),
     port: z.number().int().positive().optional(),
     liveReload: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const SecuritySchema = z
+  .object({
+    audit: z
+      .object({
+        suppressions: z
+          .array(
+            z
+              .object({
+                checkId: z.string().min(1),
+                titleIncludes: z.string().min(1).optional(),
+                detailIncludes: z.string().min(1).optional(),
+                reason: z.string().min(1).optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    installPolicy: z
+      .object({
+        enabled: z.boolean().optional(),
+        targets: z
+          .array(z.union([z.literal("skill"), z.literal("plugin")]))
+          .min(1)
+          .optional(),
+        exec: z
+          .object({
+            source: z.literal("exec"),
+            command: z.string().min(1),
+            args: z.array(z.string()).optional(),
+            timeoutMs: z.number().int().min(1).optional(),
+            noOutputTimeoutMs: z.number().int().min(1).optional(),
+            maxOutputBytes: z.number().int().min(1).optional(),
+            env: z.record(z.string(), z.string().register(sensitive)).optional(),
+            passEnv: z.array(z.string()).optional(),
+            trustedDirs: z.array(z.string()).optional(),
+            allowInsecurePath: z.boolean().optional(),
+            allowSymlinkCommand: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
@@ -148,6 +220,7 @@ const MemoryQmdSchema = z
     command: z.string().optional(),
     mcporter: MemoryQmdMcporterSchema.optional(),
     searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
+    rerank: z.boolean().optional(),
     searchTool: z.string().trim().min(1).optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
@@ -174,6 +247,14 @@ const HttpUrlSchema = z
     const protocol = new URL(value).protocol;
     return protocol === "http:" || protocol === "https:";
   }, "Expected http:// or https:// URL");
+
+const McpOAuthClientMetadataUrlSchema = z
+  .string()
+  .url()
+  .refine((value) => {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.pathname !== "/";
+  }, "Expected https:// URL with a non-root pathname");
 
 const ResponsesEndpointUrlFetchShape = {
   allowUrl: z.boolean().optional(),
@@ -212,6 +293,14 @@ const PluginEntrySchema = z
       })
       .strict()
       .optional(),
+    llm: z
+      .object({
+        allowModelOverride: z.boolean().optional(),
+        allowedModels: z.array(z.string()).optional(),
+        allowAgentIdOverride: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     config: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
@@ -227,10 +316,14 @@ const TalkRealtimeSchema = z
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     model: z.string().optional(),
+    speakerVoice: z.string().optional(),
+    speakerVoiceId: z.string().optional(),
     voice: z.string().optional(),
+    instructions: z.string().optional(),
     mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
     transport: z.enum(["webrtc", "provider-websocket", "gateway-relay", "managed-room"]).optional(),
     brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
+    consultRouting: z.enum(["provider-direct", "force-agent-consult"]).optional(),
   })
   .strict()
   .superRefine((realtime, ctx) => {
@@ -260,6 +353,10 @@ const TalkSchema = z
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     realtime: TalkRealtimeSchema.optional(),
+    consultThinkingLevel: z
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
+      .optional(),
+    consultFastMode: z.boolean().optional(),
     speechLocale: z.string().optional(),
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),
@@ -288,6 +385,7 @@ const TalkSchema = z
 
 const McpServerSchema = z
   .object({
+    enabled: z.boolean().optional(),
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
     env: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
@@ -300,6 +398,51 @@ const McpServerSchema = z
         z.string(),
         z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
       )
+      .optional(),
+    connectionTimeoutMs: z.number().finite().positive().optional(),
+    connectTimeout: z.number().finite().positive().optional(),
+    connect_timeout: z.number().finite().positive().optional(),
+    requestTimeoutMs: z.number().finite().positive().optional(),
+    timeout: z.number().finite().positive().optional(),
+    supportsParallelToolCalls: z.boolean().optional(),
+    supports_parallel_tool_calls: z.boolean().optional(),
+    auth: z.literal("oauth").optional(),
+    oauth: z
+      .object({
+        scope: z.string().trim().min(1).optional(),
+        redirectUrl: HttpUrlSchema.optional(),
+        clientMetadataUrl: McpOAuthClientMetadataUrlSchema.optional(),
+      })
+      .strict()
+      .optional(),
+    sslVerify: z.boolean().optional(),
+    ssl_verify: z.boolean().optional(),
+    clientCert: z.string().optional(),
+    client_cert: z.string().optional(),
+    clientKey: z.string().optional(),
+    client_key: z.string().optional(),
+    toolFilter: z
+      .object({
+        include: z.array(z.string().trim().min(1)).min(1).optional(),
+        exclude: z.array(z.string().trim().min(1)).min(1).optional(),
+      })
+      .strict()
+      .optional(),
+    codex: z
+      .object({
+        agents: z
+          .array(
+            z
+              .string()
+              .trim()
+              .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/i),
+          )
+          .min(1)
+          .optional(),
+        defaultToolsApprovalMode: z.enum(["auto", "prompt", "approve"]).optional(),
+        default_tools_approval_mode: z.enum(["auto", "prompt", "approve"]).optional(),
+      })
+      .strict()
       .optional(),
   })
   .catchall(z.unknown());
@@ -345,14 +488,17 @@ export const OpenClawSchema = z
         lastTouchedAt: z
           .union([
             z.string(),
-            z.number().transform((n, ctx) => {
-              const d = new Date(n);
-              if (Number.isNaN(d.getTime())) {
-                ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid timestamp" });
-                return z.NEVER;
-              }
-              return d.toISOString();
-            }),
+            z
+              .number()
+              .transform((n, ctx) => {
+                const d = new Date(n);
+                if (Number.isNaN(d.getTime())) {
+                  ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid timestamp" });
+                  return z.NEVER;
+                }
+                return d.toISOString();
+              })
+              .pipe(z.string()),
           ])
           .optional(),
       })
@@ -387,6 +533,7 @@ export const OpenClawSchema = z
         flags: z.array(z.string()).optional(),
         stuckSessionWarnMs: z.number().int().positive().optional(),
         stuckSessionAbortMs: z.number().int().positive().optional(),
+        memoryPressureSnapshot: z.boolean().optional(),
         otel: z
           .object({
             enabled: z.boolean().optional(),
@@ -413,6 +560,7 @@ export const OpenClawSchema = z
                     toolInputs: z.boolean().optional(),
                     toolOutputs: z.boolean().optional(),
                     systemPrompt: z.boolean().optional(),
+                    toolDefinitions: z.boolean().optional(),
                   })
                   .strict(),
               ])
@@ -611,6 +759,7 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         backend: z.string().optional(),
+        fallbacks: z.array(z.string()).optional(),
         defaultAgent: z.string().optional(),
         allowedAgents: z.array(z.string()).optional(),
         maxConcurrentSessions: z.number().int().positive().optional(),
@@ -648,6 +797,7 @@ export const OpenClawSchema = z
     nodeHost: NodeHostSchema,
     agents: AgentsSchema,
     tools: ToolsSchema,
+    security: SecuritySchema,
     bindings: BindingsSchema,
     broadcast: BroadcastSchema,
     audio: AudioSchema,
@@ -743,6 +893,28 @@ export const OpenClawSchema = z
           }
         }
       })
+      .optional(),
+    transcripts: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxUtterances: z.number().int().min(1).max(10_000).optional(),
+        autoStart: z
+          .array(
+            z
+              .object({
+                providerId: z.string().min(1),
+                sessionId: z.string().min(1).optional(),
+                title: z.string().min(1).optional(),
+                accountId: z.string().min(1).optional(),
+                guildId: z.string().min(1).optional(),
+                channelId: z.string().min(1).optional(),
+                meetingUrl: z.string().min(1).optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
       .optional(),
     commitments: CommitmentsSchema,
     hooks: z
@@ -889,12 +1061,6 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
-        webchat: z
-          .object({
-            chatHistoryMaxChars: z.number().int().positive().max(500_000).optional(),
-          })
-          .strict()
-          .optional(),
         handshakeTimeoutMs: z.number().int().min(1).optional(),
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
         channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),
@@ -903,21 +1069,12 @@ export const OpenClawSchema = z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
+            serviceName: TailscaleServiceNameSchema.optional(),
+            preserveFunnel: z.boolean().optional(),
           })
           .strict()
           .optional(),
-        remote: z
-          .object({
-            url: z.string().optional(),
-            transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
-            token: SecretInputSchema.optional().register(sensitive),
-            password: SecretInputSchema.optional().register(sensitive),
-            tlsFingerprint: z.string().optional(),
-            sshTarget: z.string().optional(),
-            sshIdentity: z.string().optional(),
-          })
-          .strict()
-          .optional(),
+        remote: GatewayRemoteConfigSchema,
         reload: z
           .object({
             mode: z
@@ -1067,6 +1224,7 @@ export const OpenClawSchema = z
         load: z
           .object({
             extraDirs: z.array(z.string()).optional(),
+            allowSymlinkTargets: z.array(z.string()).optional(),
             watch: z.boolean().optional(),
             watchDebounceMs: z.number().int().min(0).optional(),
           })
@@ -1078,6 +1236,7 @@ export const OpenClawSchema = z
             nodeManager: z
               .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn"), z.literal("bun")])
               .optional(),
+            allowUploadedArchives: z.boolean().optional(),
           })
           .strict()
           .optional(),
@@ -1088,6 +1247,20 @@ export const OpenClawSchema = z
             maxSkillsInPrompt: z.number().int().min(0).optional(),
             maxSkillsPromptChars: z.number().int().min(0).optional(),
             maxSkillFileBytes: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
+        workshop: z
+          .object({
+            autonomous: z
+              .object({
+                enabled: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),
+            maxPending: z.number().int().min(1).optional(),
+            maxSkillBytes: z.number().int().min(1).optional(),
           })
           .strict()
           .optional(),
@@ -1125,7 +1298,6 @@ export const OpenClawSchema = z
         z
           .object({
             silentReply: SilentReplyPolicyConfigSchema.optional(),
-            silentReplyRewrite: SilentReplyRewriteConfigSchema.optional(),
           })
           .strict(),
       )
@@ -1139,6 +1311,28 @@ export const OpenClawSchema = z
       return;
     }
     const agentIds = new Set(agents.map((agent) => agent.id));
+    const effectiveAgentIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
+
+    // Bindings referencing a missing agent id silently misroute at gateway
+    // load time. Match routing's normalized id semantics; otherwise valid
+    // configured routes like "Team Ops" -> "team-ops" would fail at load.
+    const bindings = cfg.bindings;
+    if (Array.isArray(bindings)) {
+      for (let idx = 0; idx < bindings.length; idx += 1) {
+        const binding = bindings[idx];
+        if (!binding || typeof binding !== "object") {
+          continue;
+        }
+        const agentId = (binding as { agentId?: unknown }).agentId;
+        if (typeof agentId === "string" && !effectiveAgentIds.has(normalizeAgentId(agentId))) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["bindings", idx, "agentId"],
+            message: `Unknown agent id "${agentId}" (not in agents.list).`,
+          });
+        }
+      }
+    }
 
     const broadcast = cfg.broadcast;
     if (!broadcast) {

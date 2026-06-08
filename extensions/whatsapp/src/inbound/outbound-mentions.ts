@@ -1,4 +1,5 @@
-import type { AnyMessageContent } from "@whiskeysockets/baileys";
+// Whatsapp plugin module implements outbound mentions behavior.
+import type { AnyMessageContent } from "baileys";
 
 export type WhatsAppOutboundMentionParticipant =
   | string

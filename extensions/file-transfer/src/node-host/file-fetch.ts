@@ -1,15 +1,17 @@
-import { spawnSync } from "node:child_process";
+// File Transfer plugin module implements file fetch behavior.
 import crypto from "node:crypto";
 import path from "node:path";
+import { detectMime } from "openclaw/plugin-sdk/media-mime";
+import { root } from "openclaw/plugin-sdk/security-runtime";
 import {
-  FsSafeError,
-  resolveAbsolutePathForRead,
-  root,
-} from "openclaw/plugin-sdk/security-runtime";
-import { EXTENSION_MIME } from "../shared/mime.js";
+  classifyFsSafeReadError,
+  readAbsolutePath,
+  resolveCanonicalReadPath,
+} from "./path-errors.js";
 
 export const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
 export const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
+const TEXT_SNIFF_MAX_BYTES = 8192;
 
 type FileFetchParams = {
   path?: unknown;
@@ -47,25 +49,6 @@ type FileFetchErr = {
 
 type FileFetchResult = FileFetchOk | FileFetchErr;
 
-function detectMimeType(filePath: string): string {
-  if (process.platform !== "win32") {
-    try {
-      const result = spawnSync("file", ["-b", "--mime-type", filePath], {
-        encoding: "utf-8",
-        timeout: 2000,
-      });
-      const stdout = result.stdout?.trim();
-      if (result.status === 0 && stdout) {
-        return stdout;
-      }
-    } catch {
-      // fall through to extension fallback
-    }
-  }
-  const ext = path.extname(filePath).toLowerCase();
-  return EXTENSION_MIME[ext] ?? "application/octet-stream";
-}
-
 function clampMaxBytes(input: unknown): number {
   if (typeof input !== "number" || !Number.isFinite(input) || input <= 0) {
     return FILE_FETCH_DEFAULT_MAX_BYTES;
@@ -74,21 +57,14 @@ function clampMaxBytes(input: unknown): number {
 }
 
 function classifyFsError(err: unknown): FileFetchErrCode {
-  if (err instanceof FsSafeError) {
-    if (err.code === "not-found") {
-      return "NOT_FOUND";
-    }
-    if (err.code === "symlink") {
-      return "SYMLINK_REDIRECT";
-    }
-    if (err.code === "invalid-path") {
-      return "INVALID_PATH";
-    }
-    if (err.code === "not-file") {
-      return "IS_DIRECTORY";
-    }
+  const safeCode = classifyFsSafeReadError(err);
+  if (safeCode) {
+    return safeCode;
   }
   const code = (err as { code?: string } | null)?.code;
+  if (code === "not-file") {
+    return "IS_DIRECTORY";
+  }
   if (code === "ENOENT") {
     return "NOT_FOUND";
   }
@@ -101,50 +77,57 @@ function classifyFsError(err: unknown): FileFetchErrCode {
   return "READ_ERROR";
 }
 
+function isLikelyPlainText(buffer: Buffer): boolean {
+  if (buffer.byteLength === 0) {
+    return true;
+  }
+  const sample = buffer.subarray(0, TEXT_SNIFF_MAX_BYTES);
+  if (sample.includes(0)) {
+    return false;
+  }
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(sample);
+  } catch {
+    return false;
+  }
+  let controlBytes = 0;
+  for (const byte of sample) {
+    if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) {
+      controlBytes += 1;
+    }
+  }
+  return controlBytes / sample.byteLength < 0.01;
+}
+
+async function detectFetchedFileMime(params: {
+  buffer: Buffer;
+  filePath: string;
+}): Promise<string> {
+  const detected = await detectMime(params);
+  if (detected) {
+    return detected;
+  }
+  return isLikelyPlainText(params.buffer) ? "text/plain" : "application/octet-stream";
+}
+
 export async function handleFileFetch(params: FileFetchParams): Promise<FileFetchResult> {
-  const requestedPath = params.path;
-  if (typeof requestedPath !== "string" || requestedPath.length === 0) {
-    return { ok: false, code: "INVALID_PATH", message: "path required" };
-  }
-  if (requestedPath.includes("\0")) {
-    return { ok: false, code: "INVALID_PATH", message: "path contains NUL byte" };
-  }
-  if (!path.isAbsolute(requestedPath)) {
-    return { ok: false, code: "INVALID_PATH", message: "path must be absolute" };
+  const requestedPath = readAbsolutePath(params.path);
+  if (typeof requestedPath !== "string") {
+    return requestedPath;
   }
 
   const maxBytes = clampMaxBytes(params.maxBytes);
   const followSymlinks = params.followSymlinks === true;
   const preflightOnly = params.preflightOnly === true;
 
-  let canonical: string;
-  try {
-    canonical = (
-      await resolveAbsolutePathForRead(requestedPath, {
-        symlinks: followSymlinks ? "follow" : "reject",
-      })
-    ).canonicalPath;
-  } catch (err) {
-    const code = classifyFsError(err);
-    const canonicalPath =
-      err instanceof FsSafeError &&
-      err.cause &&
-      typeof err.cause === "object" &&
-      "canonicalPath" in err.cause &&
-      typeof err.cause.canonicalPath === "string"
-        ? err.cause.canonicalPath
-        : undefined;
-    return {
-      ok: false,
-      code,
-      message:
-        code === "NOT_FOUND"
-          ? "file not found"
-          : code === "SYMLINK_REDIRECT"
-            ? "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)"
-            : `realpath failed: ${String(err)}`,
-      ...(canonicalPath ? { canonicalPath } : {}),
-    };
+  const canonical = await resolveCanonicalReadPath({
+    requestedPath,
+    followSymlinks,
+    classifyError: classifyFsError,
+    notFoundMessage: "file not found",
+  });
+  if (typeof canonical !== "string") {
+    return canonical;
   }
 
   let opened: Awaited<ReturnType<Awaited<ReturnType<typeof root>>["open"]>>;
@@ -196,7 +179,7 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
 
     const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
     const base64 = buffer.toString("base64");
-    const mimeType = detectMimeType(opened.realPath);
+    const mimeType = await detectFetchedFileMime({ buffer, filePath: opened.realPath });
 
     return {
       ok: true,

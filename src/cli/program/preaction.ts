@@ -1,3 +1,4 @@
+// Global Commander pre-action hook: startup presentation, config guard, logging, and plugin preflight.
 import type { Command } from "commander";
 import { setVerbose } from "../../globals.js";
 import type { LogLevel } from "../../logging/levels.js";
@@ -75,6 +76,27 @@ function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[
   return primary === actionCommand.name() || actionCommand.aliases().includes(primary);
 }
 
+function isGuidedConfigAction(actionCommand: Command): boolean {
+  return actionCommand.name() === "config" && !actionCommand.parent?.parent;
+}
+
+function isGuidedConfigCommandPath(commandPath: string[]): boolean {
+  const [primary, secondary, extra] = commandPath;
+  if (primary !== "config" || extra !== undefined) {
+    return false;
+  }
+  return (
+    secondary !== "get" &&
+    secondary !== "set" &&
+    secondary !== "patch" &&
+    secondary !== "unset" &&
+    secondary !== "file" &&
+    secondary !== "schema" &&
+    secondary !== "validate"
+  );
+}
+
+/** Register global pre-action bootstrap hooks for every non-help command invocation. */
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
@@ -101,7 +123,11 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
-    if (shouldBypassConfigGuardForCommandPath(commandPath)) {
+    if (
+      shouldBypassConfigGuardForCommandPath(commandPath) ||
+      isGuidedConfigAction(actionCommand) ||
+      isGuidedConfigCommandPath(commandPath)
+    ) {
       return;
     }
     await ensureCliExecutionBootstrap({
@@ -109,6 +135,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       commandPath,
       startupPolicy,
       allowInvalid: shouldAllowInvalidConfigForAction(actionCommand, commandPath),
+      skipConfigGuard: shouldBypassConfigGuardForCommandPath(commandPath),
     });
   });
 }

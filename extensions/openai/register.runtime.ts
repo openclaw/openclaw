@@ -1,10 +1,6 @@
-export { buildOpenAICodexCliBackend } from "./cli-backend.js";
+// Openai plugin module implements register behavior.
 export { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
-export {
-  openaiCodexMediaUnderstandingProvider,
-  openaiMediaUnderstandingProvider,
-} from "./media-understanding-provider.js";
-export { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
+export { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 export { buildOpenAIProvider } from "./openai-provider.js";
 export {
   OPENAI_FRIENDLY_PROMPT_OVERLAY,

@@ -1,3 +1,4 @@
+// CLI command wrapper for backup archive creation and optional verification.
 import {
   createBackupArchive,
   formatBackupCreateSummary,
@@ -18,11 +19,15 @@ function loadBackupVerifyRuntime(): Promise<BackupVerifyRuntime> {
   return backupVerifyRuntimeLoader.load();
 }
 
+/** Create a backup archive, optionally verify it, and emit text or JSON output. */
 export async function backupCreateCommand(
   runtime: RuntimeEnv,
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
-  const result = await createBackupArchive(opts);
+  const result = await createBackupArchive({
+    ...opts,
+    log: opts.log ?? (opts.json ? undefined : (message: string) => runtime.log(message)),
+  });
   if (opts.verify && !opts.dryRun) {
     const { backupVerifyCommand } = await loadBackupVerifyRuntime();
     await backupVerifyCommand(

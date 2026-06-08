@@ -1,3 +1,4 @@
+// Setup migration import tests cover importing existing config into onboarding.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -50,12 +51,10 @@ describe("setup migration import freshness", () => {
     });
 
     expect(result.fresh).toBe(false);
-    expect(result.reasons).toEqual(
-      expect.arrayContaining([
-        "existing config values are loaded",
-        "workspace MEMORY.md exists",
-        "state agents/ exists",
-      ]),
-    );
+    expect(result.reasons).toEqual([
+      "existing config values are loaded",
+      "workspace MEMORY.md exists",
+      "state agents/ exists",
+    ]);
   });
 });

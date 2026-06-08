@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Xai helper module supports x search config behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isRecord } from "./tool-config-shared.js";
 
 type JsonRecord = Record<string, unknown>;

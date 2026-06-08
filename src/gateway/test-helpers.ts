@@ -1,3 +1,6 @@
+/**
+ * Public barrel for gateway integration test helpers.
+ */
 export {
   agentCommand,
   cronIsolatedRun,
@@ -5,7 +8,7 @@ export {
   embeddedRunMock,
   getReplyFromConfig,
   mockGetReplyFromConfigOnce,
-  piSdkMock,
+  agentDiscoveryMock,
   testState,
   testTailnetIPv4,
   testTailscaleWhois,

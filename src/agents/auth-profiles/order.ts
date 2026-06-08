@@ -1,28 +1,145 @@
+/**
+ * Auth profile ordering and eligibility.
+ * Resolves configured/stored auth order, provider aliases, cooldowns, and
+ * profile compatibility for provider auth selection.
+ */
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../provider-id.js";
+import {
+  type ProviderAuthAliasLookupParams,
+  resolveProviderIdForAuth,
+} from "../provider-auth-aliases.js";
 import {
   evaluateStoredCredentialEligibility,
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import {
   clearExpiredCooldowns,
   isProfileInCooldown,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 
+/** Reason a profile is or is not eligible for provider auth. */
 export type AuthProfileEligibilityReasonCode =
   | AuthCredentialReasonCode
   | "profile_missing"
   | "provider_mismatch"
   | "mode_mismatch";
 
+/** Eligibility decision for one auth profile candidate. */
 export type AuthProfileEligibility = {
   eligible: boolean;
   reasonCode: AuthProfileEligibilityReasonCode;
 };
+
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CODEX_PROVIDER_ID = "openai";
+
+// OpenAI Codex auth can reuse OpenAI API-key credentials. Keep this special
+// case local so generic provider alias resolution stays provider-owned.
+function isOpenAIApiKeyCompatibleWithCodexAuth(params: {
+  cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
+  providerAuthKey: string;
+  credential?: AuthProfileCredential;
+  profileProvider?: string;
+  profileMode?: string;
+}): boolean {
+  if (params.providerAuthKey !== OPENAI_CODEX_PROVIDER_ID) {
+    return false;
+  }
+  const providerKey = resolveProviderIdForAuth(params.profileProvider ?? "", {
+    config: params.cfg,
+    ...params.authAliasLookupParams,
+  });
+  const mode = params.credential?.type ?? params.profileMode;
+  return providerKey === OPENAI_PROVIDER_ID && mode === "api_key";
+}
+
+function isCredentialProviderCompatibleWithAuthProvider(params: {
+  cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
+  providerAuthKey: string;
+  credential: AuthProfileCredential;
+}): boolean {
+  const credentialProviderKey = resolveProviderIdForAuth(params.credential.provider, {
+    config: params.cfg,
+    ...params.authAliasLookupParams,
+  });
+  return (
+    credentialProviderKey === params.providerAuthKey ||
+    isOpenAIApiKeyCompatibleWithCodexAuth({
+      cfg: params.cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
+      providerAuthKey: params.providerAuthKey,
+      credential: params.credential,
+      profileProvider: params.credential.provider,
+    })
+  );
+}
+
+/** Returns true when a stored credential can authenticate the requested provider. */
+export function isStoredCredentialCompatibleWithAuthProvider(params: {
+  cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
+  provider: string;
+  credential: AuthProfileCredential;
+}): boolean {
+  return isCredentialProviderCompatibleWithAuthProvider({
+    cfg: params.cfg,
+    authAliasLookupParams: params.authAliasLookupParams,
+    providerAuthKey: resolveProviderIdForAuth(params.provider, {
+      config: params.cfg,
+      ...params.authAliasLookupParams,
+    }),
+    credential: params.credential,
+  });
+}
+
+function isConfiguredProfileCompatibleWithAuthProvider(params: {
+  cfg?: OpenClawConfig;
+  providerAuthKey: string;
+  provider: string;
+  mode?: string;
+  credential?: AuthProfileCredential;
+}): boolean {
+  const configProviderKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
+  return (
+    configProviderKey === params.providerAuthKey ||
+    isOpenAIApiKeyCompatibleWithCodexAuth({
+      cfg: params.cfg,
+      providerAuthKey: params.providerAuthKey,
+      credential: params.credential,
+      profileProvider: params.provider,
+      profileMode: params.mode,
+    })
+  );
+}
+
+function listProfilesCompatibleWithAuthProvider(params: {
+  cfg?: OpenClawConfig;
+  store: AuthProfileStore;
+  provider: string;
+  providerAuthKey: string;
+}): string[] {
+  if (params.providerAuthKey !== OPENAI_CODEX_PROVIDER_ID) {
+    return listProfilesForProvider(params.store, params.provider);
+  }
+  return Object.entries(params.store.profiles)
+    .filter(([, credential]) =>
+      isCredentialProviderCompatibleWithAuthProvider({
+        cfg: params.cfg,
+        providerAuthKey: params.providerAuthKey,
+        credential,
+      }),
+    )
+    .map(([profileId]) => profileId);
+}
 
 function resolveProviderAuthMode(
   cfg: OpenClawConfig | undefined,
@@ -39,12 +156,10 @@ function resolveProviderAuthMode(
 
 function providerAllowsAwsSdkAuth(cfg: OpenClawConfig | undefined, provider: string): boolean {
   const authMode = resolveProviderAuthMode(cfg, provider);
-  return (
-    authMode === "aws-sdk" ||
-    (authMode === undefined && normalizeProviderId(provider) === "amazon-bedrock")
-  );
+  return authMode === "aws-sdk";
 }
 
+/** Returns true when config declares an aws-sdk auth profile for a provider. */
 export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -63,6 +178,7 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   return providerAllowsAwsSdkAuth(params.cfg, params.provider);
 }
 
+/** Resolves whether a profile can be used for a provider right now. */
 export function resolveAuthProfileEligibility(params: {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
@@ -84,13 +200,25 @@ export function resolveAuthProfileEligibility(params: {
     }
     return { eligible: false, reasonCode: "profile_missing" };
   }
-  if (resolveProviderIdForAuth(cred.provider, { config: params.cfg }) !== providerAuthKey) {
+  if (
+    !isCredentialProviderCompatibleWithAuthProvider({
+      cfg: params.cfg,
+      providerAuthKey,
+      credential: cred,
+    })
+  ) {
     return { eligible: false, reasonCode: "provider_mismatch" };
   }
   const profileConfig = params.cfg?.auth?.profiles?.[params.profileId];
   if (profileConfig) {
     if (
-      resolveProviderIdForAuth(profileConfig.provider, { config: params.cfg }) !== providerAuthKey
+      !isConfiguredProfileCompatibleWithAuthProvider({
+        cfg: params.cfg,
+        providerAuthKey,
+        provider: profileConfig.provider,
+        mode: profileConfig.mode,
+        credential: cred,
+      })
     ) {
       return { eligible: false, reasonCode: "provider_mismatch" };
     }
@@ -111,6 +239,8 @@ export function resolveAuthProfileEligibility(params: {
   };
 }
 
+/** Resolves ordered auth profile candidates for a provider. */
+/** Resolve ordered usable auth profile ids for a provider. */
 export function resolveAuthProfileOrder(params: {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
@@ -126,23 +256,67 @@ export function resolveAuthProfileOrder(params: {
   // get a fresh error count and are not immediately re-penalized on the
   // next transient failure. See #3604.
   clearExpiredCooldowns(store, now);
-  const storedOrder =
+  const openAIOrderAliasProvider =
+    providerAuthKey === OPENAI_CODEX_PROVIDER_ID || providerKey === OPENAI_CODEX_PROVIDER_ID
+      ? OPENAI_PROVIDER_ID
+      : undefined;
+  const directStoredOrder =
     resolveAuthOrder(store.order, providerAuthKey) ?? resolveAuthOrder(store.order, providerKey);
-  const configuredOrder =
+  const aliasStoredOrder = openAIOrderAliasProvider
+    ? resolveAuthOrder(store.order, openAIOrderAliasProvider)
+    : undefined;
+  const directConfiguredOrder =
     resolveAuthOrder(cfg?.auth?.order, providerAuthKey) ??
     resolveAuthOrder(cfg?.auth?.order, providerKey);
-  const explicitOrder = storedOrder ?? configuredOrder;
+  const aliasConfiguredOrder = openAIOrderAliasProvider
+    ? resolveAuthOrder(cfg?.auth?.order, openAIOrderAliasProvider)
+    : undefined;
+  const directExplicitOrder = directStoredOrder ?? directConfiguredOrder;
+  const aliasExplicitOrder = aliasStoredOrder ?? aliasConfiguredOrder;
+  // Stored order repairs are allowed to fall back to live store profiles when
+  // old setup flows persisted profile ids that no longer exist.
+  const explicitOrderFromStore =
+    directStoredOrder !== undefined ||
+    (directExplicitOrder === undefined && aliasStoredOrder !== undefined);
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
-        .filter(
-          ([, profile]) =>
-            resolveProviderIdForAuth(profile.provider, { config: cfg }) === providerAuthKey,
+        .filter(([profileId, profile]) =>
+          isConfiguredProfileCompatibleWithAuthProvider({
+            cfg,
+            providerAuthKey,
+            provider: profile.provider,
+            mode: profile.mode,
+            credential: store.profiles[profileId],
+          }),
         )
         .map(([profileId]) => profileId)
     : [];
+  const storeProfiles = listProfilesCompatibleWithAuthProvider({
+    cfg,
+    store,
+    provider,
+    providerAuthKey,
+  });
+  const nativeStoreProfiles =
+    openAIOrderAliasProvider && providerAuthKey === OPENAI_CODEX_PROVIDER_ID
+      ? storeProfiles.filter((profileId) =>
+          isNativeCredentialProviderCompatibleWithAuthProvider({
+            cfg,
+            providerAuthKey,
+            credential: store.profiles[profileId],
+          }),
+        )
+      : [];
+  const explicitOrder =
+    directExplicitOrder ??
+    (aliasExplicitOrder
+      ? mergeAliasOrderWithNativeProfiles({
+          aliasOrder: aliasExplicitOrder,
+          nativeProfiles: nativeStoreProfiles,
+        })
+      : undefined);
   const baseOrder =
-    explicitOrder ??
-    (explicitProfiles.length > 0 ? explicitProfiles : listProfilesForProvider(store, provider));
+    explicitOrder ?? (explicitProfiles.length > 0 ? explicitProfiles : storeProfiles);
   if (baseOrder.length === 0) {
     return [];
   }
@@ -156,24 +330,26 @@ export function resolveAuthProfileOrder(params: {
       now,
     }).eligible;
   let filtered = baseOrder.filter(isValidProfile);
+  let repairedFallbackToStoreProfiles = false;
 
-  // Repair config/store profile-id drift from older setup flows:
-  // if configured profile ids no longer exist in auth-profiles.json, scan the
-  // provider's stored credentials and use any valid entries.
+  // Repair stored-order and config-profile drift from older setup flows:
+  // bare config auth.order is a hard constraint, but configured profile ids
+  // can drift from their stored credential ids and still need repair.
   const allBaseProfilesMissing = baseOrder.every((profileId) => !store.profiles[profileId]);
-  if (filtered.length === 0 && explicitProfiles.length > 0 && allBaseProfilesMissing) {
-    const storeProfiles = listProfilesForProvider(store, provider);
+  if (
+    filtered.length === 0 &&
+    allBaseProfilesMissing &&
+    (explicitOrderFromStore || explicitProfiles.length > 0)
+  ) {
     filtered = storeProfiles.filter(isValidProfile);
+    repairedFallbackToStoreProfiles = true;
   }
 
   const deduped = dedupeProfileIds(filtered);
 
-  // If user specified explicit order (store override or config), respect it
-  // exactly, but still apply cooldown sorting to avoid repeatedly selecting
-  // known-bad/rate-limited keys as the first candidate.
-  if (explicitOrder && explicitOrder.length > 0) {
-    // ...but still respect cooldown tracking to avoid repeatedly selecting a
-    // known-bad/rate-limited key as the first candidate.
+  // Explicit order remains a hard user/config preference, but cooldown tracking
+  // moves temporarily bad profiles behind available ones.
+  if (explicitOrder && explicitOrder.length > 0 && !repairedFallbackToStoreProfiles) {
     const available: string[] = [];
     const inCooldown: Array<{ profileId: string; cooldownUntil: number }> = [];
 
@@ -193,16 +369,15 @@ export function resolveAuthProfileOrder(params: {
 
     const ordered = [...available, ...cooldownSorted];
 
-    // Still put preferredProfile first if specified
+    // Explicit user choice still wins when it is part of the filtered order.
     if (preferredProfile && ordered.includes(preferredProfile)) {
       return [preferredProfile, ...ordered.filter((e) => e !== preferredProfile)];
     }
     return ordered;
   }
 
-  // Otherwise, use round-robin: sort by lastUsed (oldest first)
-  // preferredProfile goes first if specified (for explicit user choice)
-  // lastGood is NOT prioritized - that would defeat round-robin
+  // Otherwise, use round-robin by lastUsed. lastGood is intentionally ignored
+  // because prioritizing it would starve other healthy profiles.
   const sorted = orderProfilesByMode(deduped, store);
 
   if (preferredProfile && sorted.includes(preferredProfile)) {
@@ -217,6 +392,33 @@ function resolveAuthOrder(
   provider: string,
 ): string[] | undefined {
   return findNormalizedProviderValue(order, provider);
+}
+
+function isNativeCredentialProviderCompatibleWithAuthProvider(params: {
+  cfg?: OpenClawConfig;
+  providerAuthKey: string;
+  credential: AuthProfileCredential | undefined;
+}): boolean {
+  if (!params.credential) {
+    return false;
+  }
+  return (
+    resolveProviderIdForAuth(params.credential.provider, { config: params.cfg }) ===
+    params.providerAuthKey
+  );
+}
+
+function mergeAliasOrderWithNativeProfiles(params: {
+  aliasOrder: string[];
+  nativeProfiles: string[];
+}): string[] {
+  const nativeIds = new Set(params.nativeProfiles);
+  const aliasHasNativeProfile = params.aliasOrder.some((profileId) => nativeIds.has(profileId));
+  return dedupeProfileIds(
+    aliasHasNativeProfile
+      ? [...params.aliasOrder, ...params.nativeProfiles]
+      : [...params.nativeProfiles, ...params.aliasOrder],
+  );
 }
 
 function orderProfilesByMode(order: string[], store: AuthProfileStore): string[] {

@@ -1,10 +1,38 @@
+// Memory Core tests cover dreaming markdown plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeDailyDreamingPhaseBlock, writeDeepDreamingReport } from "./dreaming-markdown.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  const error = await fs.access(targetPath).then(
+    () => undefined,
+    (accessError: unknown) => accessError,
+  );
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
+
+function requireInlinePath(result: { inlinePath?: string }): string {
+  if (!result.inlinePath) {
+    throw new Error("Expected inline dreaming markdown path");
+  }
+  return result.inlinePath;
+}
+
+function requireReportPath(reportPath: string | undefined): string {
+  if (!reportPath) {
+    throw new Error("Expected deep dreaming report path");
+  }
+  return reportPath;
+}
 
 describe("dreaming markdown storage", () => {
   const nowMs = Date.parse("2026-04-05T10:00:00Z");
@@ -25,10 +53,30 @@ describe("dreaming markdown storage", () => {
       },
     });
 
-    expect(result.inlinePath).toBe(path.join(workspaceDir, "memory", "2026-04-05.md"));
-    const content = await fs.readFile(result.inlinePath!, "utf-8");
+    const inlinePath = requireInlinePath(result);
+    expect(inlinePath).toBe(path.join(workspaceDir, "memory", "2026-04-05.md"));
+    const content = await fs.readFile(inlinePath, "utf-8");
     expect(content).toContain("## Light Sleep");
     expect(content).toContain("- Candidate: remember the API key is fake");
+  });
+
+  it("falls back when the injected timestamp is outside Date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 4, 30, 12, 0, 0));
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+
+    const result = await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: ["- Candidate: bounded fallback"],
+      nowMs: 8_640_000_000_000_001,
+      timezone,
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+    });
+
+    expect(requireInlinePath(result)).toBe(path.join(workspaceDir, "memory", "2026-05-30.md"));
   });
 
   it("keeps multiple inline phases in the shared daily memory file", async () => {
@@ -82,8 +130,9 @@ describe("dreaming markdown storage", () => {
       },
     });
 
-    expect(result.inlinePath).toBe(path.join(workspaceDir, "memory", "2026-04-05.md"));
-    const content = await fs.readFile(result.inlinePath!, "utf-8");
+    const inlinePath = requireInlinePath(result);
+    expect(inlinePath).toBe(path.join(workspaceDir, "memory", "2026-04-05.md"));
+    const content = await fs.readFile(inlinePath, "utf-8");
     expect(content).toContain("## REM Sleep");
     expect(content).toContain("- Theme: `glacier` kept surfacing.");
     await expect(fs.readFile(lowercasePath, "utf-8")).resolves.toBe("# Scratch\n\n");
@@ -103,11 +152,14 @@ describe("dreaming markdown storage", () => {
       timezone: "UTC",
     });
 
-    expect(reportPath).toBe(path.join(workspaceDir, "memory", "dreaming", "deep", "2026-04-05.md"));
-    const content = await fs.readFile(reportPath!, "utf-8");
+    const requiredReportPath = requireReportPath(reportPath);
+    expect(requiredReportPath).toBe(
+      path.join(workspaceDir, "memory", "dreaming", "deep", "2026-04-05.md"),
+    );
+    const content = await fs.readFile(requiredReportPath, "utf-8");
     expect(content).toContain("# Deep Sleep");
     expect(content).toContain("- Promoted: durable preference");
 
-    await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toThrow();
+    await expectPathMissing(path.join(workspaceDir, "DREAMS.md"));
   });
 });

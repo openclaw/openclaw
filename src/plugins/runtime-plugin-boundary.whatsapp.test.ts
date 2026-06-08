@@ -1,3 +1,4 @@
+// Verifies WhatsApp runtime imports respect plugin boundary rules.
 import fs from "node:fs";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
@@ -181,7 +182,7 @@ describe("runtime plugin boundary whatsapp seam", () => {
       loadPluginBoundaryModule<{ ok: boolean; loadedVia: string }>(modulePath, loaders, {
         origin: "workspace",
       }),
-    ).toMatchObject({ ok: true, loadedVia: "jiti-source-package" });
+    ).toEqual({ ok: true, loadedVia: "jiti-source-package" });
     expect(loaders.size).toBe(1);
   });
 });

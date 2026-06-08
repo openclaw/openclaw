@@ -1,6 +1,8 @@
+/** Loads plugin CLI registrations lazily for the command tree and plugin-owned subcommands. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { collectUniqueCommandDescriptors } from "../cli/program/command-descriptor-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
 import type { PluginLoadOptions } from "./loader.js";
@@ -21,6 +23,7 @@ import type {
 
 export type PluginCliLoaderOptions = Pick<PluginLoadOptions, "pluginSdkResolution">;
 
+/** Public CLI loader options passed from command bootstrap surfaces. */
 export type PluginCliPublicLoadParams = {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -43,6 +46,7 @@ export type PluginCliCommandGroupEntry = {
   register: (program: OpenClawPluginCliContext["program"]) => Promise<void>;
 };
 
+/** Creates the default plugin CLI logger shared with runtime loading. */
 export function createPluginCliLogger(): PluginLogger {
   return createPluginRuntimeLoaderLogger();
 }
@@ -91,20 +95,18 @@ function listPluginCliRootOwnerIds(registry: PluginRegistry, primaryCommand: str
   if (!normalizedPrimary) {
     return [];
   }
-  return [
-    ...new Set(
-      registry.cliRegistrars
-        .filter((entry) => {
-          const parentPath = entry.parentPath ?? [];
-          const roots =
-            parentPath.length > 0
-              ? [parentPath[0]]
-              : [...entry.commands, ...entry.descriptors.map((descriptor) => descriptor.name)];
-          return roots.includes(normalizedPrimary);
-        })
-        .map((entry) => entry.pluginId),
-    ),
-  ];
+  return uniqueStrings(
+    registry.cliRegistrars
+      .filter((entry) => {
+        const parentPath = entry.parentPath ?? [];
+        const roots =
+          parentPath.length > 0
+            ? [parentPath[0]]
+            : [...entry.commands, ...entry.descriptors.map((descriptor) => descriptor.name)];
+        return roots.includes(normalizedPrimary);
+      })
+      .map((entry) => entry.pluginId),
+  );
 }
 
 async function resolvePrimaryCommandPluginIds(
@@ -128,6 +130,7 @@ async function resolvePrimaryCommandPluginIds(
   return listPluginCliRootOwnerIds(registry, normalizedPrimary);
 }
 
+/** Builds the runtime load context used for CLI-only plugin registry loading. */
 export function resolvePluginCliLoadContext(params: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -182,6 +185,7 @@ export async function loadPluginCliCommandRegistryWithContext(params: {
         ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
         activate: false,
         cache: false,
+        forceFullRuntimeForChannelPlugins: true,
         runtimeOptions: {
           nodes: createPluginCliGatewayNodesRuntime(),
         },

@@ -1,6 +1,9 @@
+// Covers session delivery queue recovery behavior.
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
+  drainPendingSessionDeliveries,
   enqueueSessionDelivery,
   failSessionDelivery,
   isSessionDeliveryEligibleForRetry,
@@ -33,8 +36,46 @@ describe("session-delivery queue recovery", () => {
 
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(summary.recovered).toBe(1);
-      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
+      expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
     });
+  });
+
+  it("defers recovery when the recovery budget would exceed the date range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
+
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      await enqueueSessionDelivery(
+        {
+          kind: "systemEvent",
+          sessionKey: "agent:main:main",
+          text: "leave queued",
+        },
+        tempDir,
+      );
+
+      const deliver = vi.fn(async () => undefined);
+      const warn = vi.fn();
+      const summary = await recoverPendingSessionDeliveries({
+        deliver,
+        stateDir: tempDir,
+        maxRecoveryMs: 1,
+        log: {
+          info: vi.fn(),
+          warn,
+          error: vi.fn(),
+        },
+      });
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        "Session delivery recovery time budget exceeded — remaining entries deferred",
+      );
+      expect(summary.recovered).toBe(0);
+      expect(await loadPendingSessionDeliveries(tempDir)).toHaveLength(1);
+    });
+
+    vi.useRealTimers();
   });
 
   it("keeps failed entries queued with retry metadata for later recovery", async () => {
@@ -65,6 +106,44 @@ describe("session-delivery queue recovery", () => {
       expect(summary.failed).toBe(1);
       expect(failedEntry?.retryCount).toBe(1);
       expect(failedEntry?.lastError).toBe("transient failure");
+    });
+  });
+
+  it("uses the entry retry budget when draining entries", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "continue",
+          messageId: "restart-sentinel:agent:main:main:agentTurn:123",
+          maxRetries: 20,
+        },
+        tempDir,
+      );
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await failSessionDelivery(id, "busy", tempDir);
+      }
+
+      const deliver = vi.fn(async () => undefined);
+      await drainPendingSessionDeliveries({
+        drainKey: "test-restart-continuation",
+        logLabel: "test restart continuation",
+        deliver,
+        stateDir: tempDir,
+        log: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        selectEntry: (entry) => ({
+          match: entry.id === id,
+          bypassBackoff: true,
+        }),
+      });
+
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
     });
   });
 
@@ -134,11 +213,15 @@ describe("session-delivery queue recovery", () => {
       await failSessionDelivery(id, "transient failure", tempDir);
 
       const [failedEntry] = await loadPendingSessionDeliveries(tempDir);
-      expect(failedEntry).toBeDefined();
-      expect(failedEntry?.retryCount).toBe(1);
-      expect(failedEntry?.lastAttemptAt).toBeDefined();
+      if (!failedEntry) {
+        throw new Error("expected failed session delivery to remain pending");
+      }
+      expect(failedEntry.retryCount).toBe(1);
 
-      const lastAttemptAt = failedEntry?.lastAttemptAt ?? 0;
+      const lastAttemptAt = failedEntry.lastAttemptAt;
+      if (typeof lastAttemptAt !== "number") {
+        throw new Error("expected failed delivery attempt timestamp");
+      }
       const notReady = isSessionDeliveryEligibleForRetry(failedEntry, lastAttemptAt + 4_999);
       expect(notReady).toEqual({ eligible: false, remainingBackoffMs: 1 });
 

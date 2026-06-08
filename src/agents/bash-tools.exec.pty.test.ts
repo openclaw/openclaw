@@ -1,3 +1,8 @@
+/**
+ * Exec PTY integration tests.
+ * Starts PTY sessions, polls them through the process tool, and verifies
+ * terminal input/output handling.
+ */
 import { afterEach, expect, test } from "vitest";
 import { markBackgrounded, resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
@@ -40,7 +45,7 @@ async function startPtySession(command: string) {
   return { processTool, sessionId: run.session.id };
 }
 
-async function waitForSessionCompletion(params: {
+async function expectSessionCompletion(params: {
   processTool: ReturnType<typeof createProcessTool>;
   sessionId: string;
   expectedText: string | string[];
@@ -103,7 +108,7 @@ test("exec supports pty output, OPENCLAW_SHELL, send-keys, and submit", async ()
     sessionId,
   });
 
-  await waitForSessionCompletion({
+  await expectSessionCompletion({
     processTool,
     sessionId,
     expectedText: ["submitted", "ok", "exec"],

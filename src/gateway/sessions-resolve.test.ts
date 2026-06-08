@@ -1,6 +1,8 @@
+// Session resolve tests cover canonical/legacy key lookup, store migration,
+// agent scoping, listed-session selection, and protocol error mapping.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { ErrorCodes } from "./protocol/index.js";
 
 const hoisted = vi.hoisted(() => ({
   loadSessionStoreMock: vi.fn(),
@@ -50,6 +52,21 @@ describe("resolveSessionKeyFromResolveParams", () => {
   const legacyKey = "agent:main:legacy";
   const storePath = "/tmp/sessions.json";
 
+  const expectResolveToCanonicalKey = async (
+    p: Parameters<typeof resolveSessionKeyFromResolveParams>[0]["p"],
+  ) => {
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      key: canonicalKey,
+    });
+    expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
+  };
+
   beforeEach(() => {
     hoisted.loadSessionStoreMock.mockReset();
     hoisted.updateSessionStoreMock.mockReset();
@@ -98,37 +115,39 @@ describe("resolveSessionKeyFromResolveParams", () => {
     });
   });
 
+  it("does not page-limit exact key spawnedBy visibility checks", async () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      [canonicalKey]: {
+        sessionId: "sess-target",
+        spawnedBy: "controller-1",
+        updatedAt: now - 10_000,
+      },
+    };
+    for (let i = 0; i < 120; i += 1) {
+      store[`agent:main:sibling-${i}`] = {
+        sessionId: `sess-sibling-${i}`,
+        spawnedBy: "controller-1",
+        updatedAt: now - i,
+      };
+    }
+    hoisted.loadSessionStoreMock.mockReturnValue(store);
+
+    await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
+  });
+
   it("re-checks migrated legacy keys through the same visibility filter", async () => {
     const store = {
-      [legacyKey]: { sessionId: "sess-legacy", updatedAt: 1 },
+      [legacyKey]: { sessionId: "sess-legacy", spawnedBy: "controller-1", updatedAt: Date.now() },
     } satisfies Record<string, SessionEntry>;
     hoisted.loadSessionStoreMock.mockImplementation(() => store);
-    hoisted.listSessionsFromStoreMock.mockReturnValue({
-      sessions: [{ key: canonicalKey }],
-    });
 
-    await expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { key: canonicalKey, spawnedBy: "controller-1" },
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      key: canonicalKey,
-    });
+    await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
 
-    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledWith(storePath, expect.any(Function));
-    expect(hoisted.listSessionsFromStoreMock).toHaveBeenCalledWith({
-      cfg: {},
-      storePath,
-      store,
-      opts: {
-        includeGlobal: false,
-        includeUnknown: false,
-        spawnedBy: "controller-1",
-        agentId: undefined,
-      },
-    });
+    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    const updateSessionStoreCall = hoisted.updateSessionStoreMock.mock.calls[0];
+    expect(updateSessionStoreCall?.[0]).toBe(storePath);
+    expect(typeof updateSessionStoreCall?.[1]).toBe("function");
   });
 
   it("rejects sessions belonging to a deleted agent (key-based lookup)", async () => {
@@ -218,12 +237,16 @@ describe("resolveSessionKeyFromResolveParams", () => {
       throw new Error("session rows should not be materialized for exact sessionId lookup");
     });
 
+    const cfg = {};
     const result = await resolveSessionKeyFromResolveParams({
-      cfg: {},
-      p: { sessionId: "sess-target" },
+      cfg,
+      p: { sessionId: "sess-target", agentId: "main" },
     });
 
     expect(result).toEqual({ ok: true, key: "agent:main:target" });
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
+      agentId: "main",
+    });
     expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -238,11 +261,15 @@ describe("resolveSessionKeyFromResolveParams", () => {
     });
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
 
+    const cfg = {};
     const result = await resolveSessionKeyFromResolveParams({
-      cfg: {},
-      p: { label: "my-label" },
+      cfg,
+      p: { label: "my-label", agentId: "main" },
     });
 
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
+      agentId: "main",
+    });
     expect(result).toEqual({
       ok: false,
       error: {

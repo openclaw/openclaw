@@ -1,8 +1,10 @@
+// Covers APNs HTTP/2 session and proxy behavior.
 import type http2 from "node:http2";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HttpConnectTunnelParams } from "./net/http-connect-tunnel.js";
 import {
-  _resetActiveManagedProxyStateForTests,
+  resetActiveManagedProxyStateForTests,
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
 } from "./net/proxy/active-proxy-state.js";
@@ -43,34 +45,34 @@ const { connectSpy, tunnelSpy, fakeRequest, fakeSession, fakeTlsSocket } = vi.ho
     }
   }
 
-  const fakeRequest = Object.assign(new FakeEmitter(), {
+  const fakeRequestLocal = Object.assign(new FakeEmitter(), {
     setEncoding: vi.fn(),
     end: vi.fn(() => {
       queueMicrotask(() => {
-        fakeRequest.emit("response", { ":status": 403 });
-        fakeRequest.emit("data", '{"reason":"InvalidProviderToken"}');
-        fakeRequest.emit("end");
+        fakeRequestLocal.emit("response", { ":status": 403 });
+        fakeRequestLocal.emit("data", '{"reason":"InvalidProviderToken"}');
+        fakeRequestLocal.emit("end");
       });
     }),
   });
-  const fakeSession = Object.assign(new FakeEmitter(), {
+  const fakeSessionLocal = Object.assign(new FakeEmitter(), {
     closed: false,
     destroyed: false,
     close: vi.fn(() => {
-      fakeSession.closed = true;
+      fakeSessionLocal.closed = true;
     }),
     destroy: vi.fn(() => {
-      fakeSession.destroyed = true;
+      fakeSessionLocal.destroyed = true;
     }),
-    request: vi.fn(() => fakeRequest),
+    request: vi.fn(() => fakeRequestLocal),
   });
-  const fakeTlsSocket = { encrypted: true };
+  const fakeTlsSocketLocal = { encrypted: true };
   return {
-    fakeRequest,
-    fakeSession,
-    fakeTlsSocket,
-    connectSpy: vi.fn(() => fakeSession),
-    tunnelSpy: vi.fn(async (_params: HttpConnectTunnelParams) => fakeTlsSocket),
+    fakeRequest: fakeRequestLocal,
+    fakeSession: fakeSessionLocal,
+    fakeTlsSocket: fakeTlsSocketLocal,
+    connectSpy: vi.fn(() => fakeSessionLocal),
+    tunnelSpy: vi.fn(async (_params: HttpConnectTunnelParams) => fakeTlsSocketLocal),
   };
 });
 
@@ -83,6 +85,24 @@ vi.mock("node:http2", () => ({
 vi.mock("./net/http-connect-tunnel.js", () => ({
   openHttpConnectTunnel: tunnelSpy,
 }));
+
+function lastTunnelCall(): HttpConnectTunnelParams {
+  const calls = tunnelSpy.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("expected HTTP CONNECT tunnel call");
+  }
+  return call[0];
+}
+
+function lastConnectCall(): [string, http2.ClientSessionOptions] {
+  const calls = connectSpy.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("expected http2 connect call");
+  }
+  return call as unknown as [string, http2.ClientSessionOptions];
+}
 
 describe("connectApnsHttp2Session", () => {
   beforeEach(() => {
@@ -97,7 +117,7 @@ describe("connectApnsHttp2Session", () => {
     fakeSession.close.mockClear();
     fakeSession.destroy.mockClear();
     fakeSession.request.mockClear();
-    _resetActiveManagedProxyStateForTests();
+    resetActiveManagedProxyStateForTests();
   });
   it("uses direct http2.connect when managed proxy is inactive", async () => {
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
@@ -143,7 +163,10 @@ describe("connectApnsHttp2Session", () => {
   });
 
   it("uses an HTTP CONNECT tunnel when managed proxy is active", async () => {
-    const registration = registerActiveManagedProxyUrl(new URL("http://proxy.example:8080"));
+    const registration = registerActiveManagedProxyUrl(new URL("https://proxy.example:8443"), {
+      loopbackMode: "gateway-only",
+      proxyTls: { ca: "active-proxy-ca" },
+    });
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
 
     const session = await connectApnsHttp2Session({
@@ -153,24 +176,38 @@ describe("connectApnsHttp2Session", () => {
     stopActiveManagedProxyRegistration(registration);
 
     expect(session).toBe(fakeSession);
-    const tunnelCall = tunnelSpy.mock.calls.at(-1)?.[0];
-    const proxyUrl = tunnelCall?.proxyUrl;
+    const tunnelCall = lastTunnelCall();
+    const proxyUrl = tunnelCall.proxyUrl;
     expect(proxyUrl).toBeInstanceOf(URL);
     if (!(proxyUrl instanceof URL)) {
       throw new Error("expected active managed proxy URL");
     }
-    expect(proxyUrl.href).toBe("http://proxy.example:8080/");
-    expect(tunnelCall?.targetHost).toBe("api.push.apple.com");
-    expect(tunnelCall?.targetPort).toBe(443);
-    expect(tunnelCall?.timeoutMs).toBe(10_000);
-    expect(connectSpy).toHaveBeenCalledWith("https://api.push.apple.com", {
-      createConnection: expect.any(Function),
-    });
-    const connectCall = connectSpy.mock.calls.at(-1) as
-      | [string, http2.ClientSessionOptions]
-      | undefined;
-    const createConnection = connectCall?.[1].createConnection;
+    expect(proxyUrl.href).toBe("https://proxy.example:8443/");
+    expect(tunnelCall.proxyTls).toEqual({ ca: "active-proxy-ca" });
+    expect(tunnelCall.targetHost).toBe("api.push.apple.com");
+    expect(tunnelCall.targetPort).toBe(443);
+    expect(tunnelCall.timeoutMs).toBe(10_000);
+    expect(connectSpy).toHaveBeenCalledTimes(1);
+    const connectCall = lastConnectCall();
+    expect(connectCall[0]).toBe("https://api.push.apple.com");
+    const createConnection = connectCall[1].createConnection;
+    expect(typeof createConnection).toBe("function");
     expect(createConnection?.(new URL("https://api.push.apple.com"), {})).toBe(fakeTlsSocket);
+  });
+
+  it("caps oversized managed proxy timeouts before opening the APNs tunnel", async () => {
+    const registration = registerActiveManagedProxyUrl(new URL("https://proxy.example:8443"), {
+      loopbackMode: "gateway-only",
+    });
+    const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
+
+    await connectApnsHttp2Session({
+      authority: "https://api.push.apple.com",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+    stopActiveManagedProxyRegistration(registration);
+
+    expect(lastTunnelCall().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("ignores ambient proxy env when managed proxy is inactive", async () => {
@@ -201,6 +238,7 @@ describe("connectApnsHttp2Session", () => {
     const result = await probeApnsHttp2ReachabilityViaProxy({
       authority: "https://api.sandbox.push.apple.com",
       proxyUrl: "http://proxy.example:8080",
+      proxyTls: { ca: "probe-proxy-ca" },
       timeoutMs: 10_000,
     });
 
@@ -209,13 +247,14 @@ describe("connectApnsHttp2Session", () => {
       body: '{"reason":"InvalidProviderToken"}',
       responseHeaders: {},
     });
-    const tunnelCall = tunnelSpy.mock.calls.at(-1)?.[0];
-    const proxyUrl = tunnelCall?.proxyUrl;
+    const tunnelCall = lastTunnelCall();
+    const proxyUrl = tunnelCall.proxyUrl;
     expect(proxyUrl).toBeInstanceOf(URL);
     if (!(proxyUrl instanceof URL)) {
       throw new Error("expected explicit proxy URL");
     }
     expect(proxyUrl.href).toBe("http://proxy.example:8080/");
+    expect(tunnelCall.proxyTls).toEqual({ ca: "probe-proxy-ca" });
     expect(tunnelCall?.targetHost).toBe("api.sandbox.push.apple.com");
     expect(tunnelCall?.targetPort).toBe(443);
     expect(tunnelCall?.timeoutMs).toBe(10_000);
@@ -228,6 +267,18 @@ describe("connectApnsHttp2Session", () => {
       "apns-priority": "10",
     });
     expect(fakeSession.close).toHaveBeenCalledOnce();
+  });
+
+  it("caps oversized explicit proxy probe timeouts", async () => {
+    const { probeApnsHttp2ReachabilityViaProxy } = await import("./push-apns-http2.js");
+
+    await probeApnsHttp2ReachabilityViaProxy({
+      authority: "https://api.sandbox.push.apple.com",
+      proxyUrl: "http://proxy.example:8080",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(lastTunnelCall().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("rejects non-APNs authorities", async () => {

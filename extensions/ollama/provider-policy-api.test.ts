@@ -1,3 +1,4 @@
+// Ollama tests cover provider policy api plugin behavior.
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
 import { normalizeConfig, resolveThinkingProfile } from "./provider-policy-api.js";
@@ -27,7 +28,7 @@ describe("ollama provider policy public artifact", () => {
         provider: "ollama",
         providerConfig: {},
       }),
-    ).toMatchObject({
+    ).toStrictEqual({
       baseUrl: OLLAMA_DEFAULT_BASE_URL,
       models: [],
     });
@@ -44,7 +45,7 @@ describe("ollama provider policy public artifact", () => {
           models,
         },
       }),
-    ).toMatchObject({
+    ).toStrictEqual({
       baseUrl: "http://ollama.internal:11434",
       models,
     });
@@ -56,7 +57,7 @@ describe("ollama provider policy public artifact", () => {
         provider: "openai",
         providerConfig: {},
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 
   it("exposes max thinking for reasoning-capable models without full plugin activation", () => {

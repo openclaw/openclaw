@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Matrix plugin module implements migration snapshot behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { detectLegacyMatrixCrypto } from "./legacy-crypto.js";
 import { detectLegacyMatrixState } from "./legacy-state.js";
 import {

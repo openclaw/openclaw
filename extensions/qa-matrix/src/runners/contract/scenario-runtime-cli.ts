@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime cli behavior.
 import { spawn as startOpenClawCliProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -30,6 +31,8 @@ export type MatrixQaCliSession = {
 };
 
 const MATRIX_QA_CLI_SECRET_ARG_FLAGS = new Set(["--access-token", "--password", "--recovery-key"]);
+const MATRIX_QA_CLI_TIMEOUT_KILL_GRACE_MS = 250;
+const MATRIX_QA_CLI_TIMEOUT_FORCE_SETTLE_MS = 100;
 
 function isMatrixQaCliSecretPositionalArg(args: string[], index: number): boolean {
   return args[0] === "matrix" && args[1] === "verify" && args[2] === "device" && index === 3;
@@ -91,6 +94,31 @@ function formatMatrixQaCliExitError(result: MatrixQaCliRunResult) {
     .join("\n");
 }
 
+function formatMatrixQaCliTimeoutError(result: MatrixQaCliRunResult, timeoutMs: number) {
+  return [
+    `${formatMatrixQaCliCommand(result.args)} timed out after ${timeoutMs}ms`,
+    result.stderr.trim() ? `stderr:\n${redactMatrixQaCliOutput(result.stderr.trim())}` : null,
+    result.stdout.trim() ? `stdout:\n${redactMatrixQaCliOutput(result.stdout.trim())}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function killMatrixQaCliChild(
+  child: ReturnType<typeof startOpenClawCliProcess>,
+  signal: NodeJS.Signals,
+): void {
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Fall back to the direct child if process-group signaling is unavailable.
+    }
+  }
+  child.kill(signal);
+}
+
 export function startMatrixQaOpenClawCli(params: {
   allowNonZero?: boolean;
   args: string[];
@@ -104,8 +132,11 @@ export function startMatrixQaOpenClawCli(params: {
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
   let closed = false;
+  let closeError: Error | undefined;
   let closeResult: MatrixQaCliRunResult | undefined;
   let timedOut = false;
+  let forceKillTimeout: NodeJS.Timeout | undefined;
+  let forceSettleTimeout: NodeJS.Timeout | undefined;
   let settleWait:
     | {
         reject: (error: Error) => void;
@@ -115,6 +146,7 @@ export function startMatrixQaOpenClawCli(params: {
 
   const child = startOpenClawCliProcess(process.execPath, [distEntryPath, ...params.args], {
     cwd,
+    detached: process.platform !== "win32",
     env: params.env,
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -127,6 +159,7 @@ export function startMatrixQaOpenClawCli(params: {
       return;
     }
     closed = true;
+    closeError = error;
     closeResult = result;
     if (!settleWait) {
       return;
@@ -140,30 +173,20 @@ export function startMatrixQaOpenClawCli(params: {
 
   const timeout = setTimeout(() => {
     timedOut = true;
-    child.kill("SIGTERM");
-    setTimeout(() => {
-      const result = buildMatrixQaCliResult({
-        args: params.args,
-        exitCode: 1,
-        output: readOutput(),
-      });
-      finish(
-        result,
-        new Error(
-          [
-            `${formatMatrixQaCliCommand(params.args)} timed out after ${params.timeoutMs}ms`,
-            result.stderr.trim()
-              ? `stderr:\n${redactMatrixQaCliOutput(result.stderr.trim())}`
-              : null,
-            result.stdout.trim()
-              ? `stdout:\n${redactMatrixQaCliOutput(result.stdout.trim())}`
-              : null,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        ),
-      );
-    }, 25);
+    killMatrixQaCliChild(child, "SIGTERM");
+    forceKillTimeout = setTimeout(() => {
+      if (!closed) {
+        killMatrixQaCliChild(child, "SIGKILL");
+        forceSettleTimeout = setTimeout(() => {
+          const result = buildMatrixQaCliResult({
+            args: params.args,
+            exitCode: 1,
+            output: readOutput(),
+          });
+          finish(result, new Error(formatMatrixQaCliTimeoutError(result, params.timeoutMs)));
+        }, MATRIX_QA_CLI_TIMEOUT_FORCE_SETTLE_MS);
+      }
+    }, MATRIX_QA_CLI_TIMEOUT_KILL_GRACE_MS);
   }, params.timeoutMs);
 
   child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
@@ -173,6 +196,12 @@ export function startMatrixQaOpenClawCli(params: {
   }
   child.on("error", (error) => {
     clearTimeout(timeout);
+    if (forceKillTimeout) {
+      clearTimeout(forceKillTimeout);
+    }
+    if (forceSettleTimeout) {
+      clearTimeout(forceSettleTimeout);
+    }
     finish(
       buildMatrixQaCliResult({
         args: params.args,
@@ -184,14 +213,21 @@ export function startMatrixQaOpenClawCli(params: {
   });
   child.on("close", (exitCode) => {
     clearTimeout(timeout);
-    if (timedOut) {
-      return;
+    if (forceKillTimeout) {
+      clearTimeout(forceKillTimeout);
+    }
+    if (forceSettleTimeout) {
+      clearTimeout(forceSettleTimeout);
     }
     const result = buildMatrixQaCliResult({
       args: params.args,
       exitCode: exitCode ?? 1,
       output: readOutput(),
     });
+    if (timedOut) {
+      finish(result, new Error(formatMatrixQaCliTimeoutError(result, params.timeoutMs)));
+      return;
+    }
     if (result.exitCode !== 0 && params.allowNonZero !== true) {
       finish(result, new Error(formatMatrixQaCliExitError(result)));
       return;
@@ -210,7 +246,9 @@ export function startMatrixQaOpenClawCli(params: {
     wait: async () =>
       await new Promise<MatrixQaCliRunResult>((resolve, reject) => {
         if (closed && closeResult) {
-          if (closeResult.exitCode === 0 || params.allowNonZero === true) {
+          if (closeError) {
+            reject(closeError);
+          } else if (closeResult.exitCode === 0 || params.allowNonZero === true) {
             resolve(closeResult);
           } else {
             reject(new Error(formatMatrixQaCliExitError(closeResult)));
@@ -218,7 +256,7 @@ export function startMatrixQaOpenClawCli(params: {
           return;
         }
         settleWait = { reject, resolve };
-      }).catch((error) => {
+      }).catch((error: unknown) => {
         throw new Error(
           `Matrix QA CLI command failed (${formatMatrixQaCliCommand(params.args)}): ${redactMatrixQaCliOutput(formatErrorMessage(error))}`,
         );
@@ -243,12 +281,14 @@ export function startMatrixQaOpenClawCli(params: {
     },
     writeStdin: async (text) => {
       if (!child.stdin.write(text)) {
-        await new Promise<void>((resolve) => child.stdin.once("drain", resolve));
+        await new Promise<void>((resolve) => {
+          child.stdin.once("drain", resolve);
+        });
       }
     },
     kill: () => {
       if (!closed) {
-        child.kill("SIGTERM");
+        killMatrixQaCliChild(child, "SIGTERM");
       }
     },
   };

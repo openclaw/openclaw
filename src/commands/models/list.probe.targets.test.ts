@@ -1,7 +1,9 @@
+// Model probe target tests cover selecting provider/model targets for probing.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 let mockStore: AuthProfileStore;
 let mockAgentStore: AuthProfileStore | undefined;
@@ -113,46 +115,12 @@ async function buildAnthropicProbePlan(order: string[]) {
   });
 }
 
-async function withClearedAnthropicEnv<T>(fn: () => Promise<T>): Promise<T> {
-  const previousAnthropic = process.env.ANTHROPIC_API_KEY;
-  const previousAnthropicOauth = process.env.ANTHROPIC_OAUTH_TOKEN;
-  delete process.env.ANTHROPIC_API_KEY;
-  delete process.env.ANTHROPIC_OAUTH_TOKEN;
-  try {
-    return await fn();
-  } finally {
-    if (previousAnthropic === undefined) {
-      delete process.env.ANTHROPIC_API_KEY;
-    } else {
-      process.env.ANTHROPIC_API_KEY = previousAnthropic;
-    }
-    if (previousAnthropicOauth === undefined) {
-      delete process.env.ANTHROPIC_OAUTH_TOKEN;
-    } else {
-      process.env.ANTHROPIC_OAUTH_TOKEN = previousAnthropicOauth;
-    }
-  }
+function withClearedAnthropicEnv<T>(fn: () => Promise<T>): Promise<T> {
+  return withEnvAsync({ ANTHROPIC_API_KEY: undefined, ANTHROPIC_OAUTH_TOKEN: undefined }, fn);
 }
 
-async function withClearedZaiEnv<T>(fn: () => Promise<T>): Promise<T> {
-  const previousZai = process.env.ZAI_API_KEY;
-  const previousLegacyZai = process.env.Z_AI_API_KEY;
-  delete process.env.ZAI_API_KEY;
-  delete process.env.Z_AI_API_KEY;
-  try {
-    return await fn();
-  } finally {
-    if (previousZai === undefined) {
-      delete process.env.ZAI_API_KEY;
-    } else {
-      process.env.ZAI_API_KEY = previousZai;
-    }
-    if (previousLegacyZai === undefined) {
-      delete process.env.Z_AI_API_KEY;
-    } else {
-      process.env.Z_AI_API_KEY = previousLegacyZai;
-    }
-  }
+function withClearedZaiEnv<T>(fn: () => Promise<T>): Promise<T> {
+  return withEnvAsync({ ZAI_API_KEY: undefined, Z_AI_API_KEY: undefined }, fn);
 }
 
 async function buildAnthropicPlanFromModelsJsonApiKey(apiKey: string) {
@@ -221,9 +189,21 @@ describe("buildProbeTargets reason codes", () => {
   it("reports invalid_expires with a legacy-compatible first error line", async () => {
     const plan = await buildAnthropicProbePlan(["anthropic:default"]);
 
-    expect(plan.targets).toHaveLength(0);
-    expect(plan.results).toHaveLength(1);
-    expectLegacyMissingCredentialsError(plan.results[0], "invalid_expires");
+    expect(plan.targets).toStrictEqual([]);
+    expect(plan.results).toStrictEqual([
+      {
+        error:
+          "Auth profile credentials are missing or expired.\n↳ Auth reason [invalid_expires]: token expires must be a positive Unix ms timestamp.",
+        label: "anthropic:default",
+        mode: "token",
+        model: "anthropic/claude-sonnet-4-6",
+        profileId: "anthropic:default",
+        provider: "anthropic",
+        reasonCode: "invalid_expires",
+        source: "profile",
+        status: "unknown",
+      },
+    ]);
   });
 
   it("reports excluded_by_auth_order when profile id is not present in explicit order", async () => {
@@ -232,10 +212,20 @@ describe("buildProbeTargets reason codes", () => {
     };
     const plan = await buildAnthropicProbePlan(["anthropic:work"]);
 
-    expect(plan.targets).toHaveLength(0);
-    expect(plan.results).toHaveLength(1);
-    expect(plan.results[0]?.reasonCode).toBe("excluded_by_auth_order");
-    expect(plan.results[0]?.error).toBe("Excluded by auth.order for this provider.");
+    expect(plan.targets).toStrictEqual([]);
+    expect(plan.results).toStrictEqual([
+      {
+        error: "Excluded by auth.order for this provider.",
+        label: "anthropic:default",
+        mode: "token",
+        model: "anthropic/claude-sonnet-4-6",
+        profileId: "anthropic:default",
+        provider: "anthropic",
+        reasonCode: "excluded_by_auth_order",
+        source: "profile",
+        status: "unknown",
+      },
+    ]);
   });
 
   it("reports unresolved_ref when a ref-only profile cannot resolve its SecretRef", async () => {
@@ -271,8 +261,8 @@ describe("buildProbeTargets reason codes", () => {
     };
     await withClearedAnthropicEnv(async () => {
       const plan = await buildAnthropicPlanFromModelsJsonApiKey("ollama-local");
-      expect(plan.targets).toEqual([]);
-      expect(plan.results).toEqual([]);
+      expect(plan.targets).toStrictEqual([]);
+      expect(plan.results).toStrictEqual([]);
     });
   });
 
@@ -284,15 +274,16 @@ describe("buildProbeTargets reason codes", () => {
     };
     await withClearedAnthropicEnv(async () => {
       const plan = await buildAnthropicPlanFromModelsJsonApiKey("ALLCAPS_SAMPLE");
-      expect(plan.results).toEqual([]);
-      expect(plan.targets).toHaveLength(1);
-      expect(plan.targets[0]).toEqual(
-        expect.objectContaining({
+      expect(plan.results).toStrictEqual([]);
+      expect(plan.targets).toStrictEqual([
+        {
+          label: "models.json",
+          mode: "api_key",
+          model: { provider: "anthropic", model: "claude-sonnet-4-6" },
           provider: "anthropic",
           source: "models.json",
-          label: "models.json",
-        }),
-      );
+        },
+      ]);
     });
   });
 
@@ -329,17 +320,69 @@ describe("buildProbeTargets reason codes", () => {
         },
       });
 
-      expect(plan.results).toEqual([]);
-      expect(plan.targets).toHaveLength(1);
-      expect(plan.targets[0]).toEqual(
-        expect.objectContaining({
-          provider: "zai",
-          model: { provider: "zai", model: "glm-4.7" },
-          source: "models.json",
+      expect(plan.results).toStrictEqual([]);
+      expect(plan.targets).toStrictEqual([
+        {
           label: "models.json",
-        }),
-      );
+          mode: "api_key",
+          model: { provider: "zai", model: "glm-4.7" },
+          provider: "zai",
+          source: "models.json",
+        },
+      ]);
     });
+  });
+
+  it("prefers live Anthropic Haiku 4.5 catalog entries over stale Claude 3 probes", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {},
+      order: {},
+    };
+    loadModelCatalogMock.mockResolvedValueOnce([
+      { provider: "anthropic", id: "claude-3-haiku-20240307", name: "Claude Haiku 3" },
+      {
+        provider: "anthropic",
+        id: "claude-haiku-4-5-20251001",
+        name: "Claude Haiku 4.5",
+      },
+      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+    ]);
+
+    const plan = await withClearedAnthropicEnv(async () =>
+      buildProbeTargets({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: "https://api.anthropic.com/v1",
+                api: "anthropic-messages",
+                apiKey: "sk-ant-test",
+                models: [],
+              },
+            },
+          },
+        } as OpenClawConfig,
+        providers: ["anthropic"],
+        modelCandidates: [],
+        options: {
+          timeoutMs: 5_000,
+          concurrency: 1,
+          maxTokens: 16,
+        },
+      }),
+    );
+
+    expect(plan.results).toStrictEqual([]);
+    expect(plan.targets).toStrictEqual([
+      {
+        label: "models.json",
+        mode: "api_key",
+        model: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
+        provider: "anthropic",
+        source: "models.json",
+      },
+    ]);
   });
 
   it("uses workspace-scoped auth evidence when building env probe targets", async () => {
@@ -374,16 +417,16 @@ describe("buildProbeTargets reason codes", () => {
       },
     });
 
-    expect(withoutWorkspace.targets).toEqual([]);
-    expect(withWorkspace.targets).toHaveLength(1);
-    expect(withWorkspace.targets[0]).toEqual(
-      expect.objectContaining({
+    expect(withoutWorkspace.targets).toStrictEqual([]);
+    expect(withWorkspace.targets).toStrictEqual([
+      {
+        label: "env",
+        mode: "api_key",
+        model: { provider: "workspace-cloud", model: "workspace-model" },
         provider: "workspace-cloud",
         source: "env",
-        label: "env",
-        model: { provider: "workspace-cloud", model: "workspace-model" },
-      }),
-    );
+      },
+    ]);
   });
 
   it("uses the requested agent auth store when building profile probe targets", async () => {
@@ -428,15 +471,17 @@ describe("buildProbeTargets reason codes", () => {
       }),
     }));
 
-    expect(defaultPlan.targets).toEqual([]);
-    expect(agentPlan.results).toEqual([]);
-    expect(agentPlan.targets).toHaveLength(1);
-    expect(agentPlan.targets[0]).toEqual(
-      expect.objectContaining({
-        provider: "anthropic",
+    expect(defaultPlan.targets).toStrictEqual([]);
+    expect(agentPlan.results).toStrictEqual([]);
+    expect(agentPlan.targets).toStrictEqual([
+      {
+        label: "anthropic:coder",
+        mode: "api_key",
+        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
         profileId: "anthropic:coder",
+        provider: "anthropic",
         source: "profile",
-      }),
-    );
+      },
+    ]);
   });
 });

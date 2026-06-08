@@ -1,3 +1,4 @@
+// Outside-workspace store tests cover media storage outside project roots.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -19,12 +20,26 @@ vi.mock("./store.runtime.js", () => {
 
 type StoreModule = typeof import("./store.js");
 
+let SaveMediaSourceError: StoreModule["SaveMediaSourceError"];
 let saveMediaSource: StoreModule["saveMediaSource"];
 
 async function expectOutsideWorkspaceStoreFailure(sourcePath: string) {
-  await expect(saveMediaSource(sourcePath)).rejects.toMatchObject({
-    code: "invalid-path",
-    message: "Media path is outside workspace root",
+  let storeError: unknown;
+  try {
+    await saveMediaSource(sourcePath);
+  } catch (error) {
+    storeError = error;
+  }
+  expect(storeError).toBeInstanceOf(SaveMediaSourceError);
+  if (!(storeError instanceof SaveMediaSourceError)) {
+    throw new Error("expected SaveMediaSourceError");
+  }
+  expect(storeError.name).toBe("SaveMediaSourceError");
+  expect(storeError.code).toBe("invalid-path");
+  expect(storeError.message).toBe("Media path is outside workspace root");
+  expect(storeError.cause).toStrictEqual({
+    code: "outside-workspace",
+    message: "file is outside workspace root",
   });
 }
 
@@ -33,7 +48,7 @@ describe("media store outside-workspace mapping", () => {
   let home = "";
 
   beforeAll(async () => {
-    ({ saveMediaSource } = await import("./store.js"));
+    ({ SaveMediaSourceError, saveMediaSource } = await import("./store.js"));
     tempHome = await createTempHomeEnv("openclaw-media-store-test-home-");
     home = tempHome.home;
   });

@@ -1,3 +1,9 @@
+/**
+ * Browser client response types.
+ *
+ * Shared by the browser control client, CLI, and Browser agent tool.
+ */
+/** Browser transport backing the selected profile. */
 export type BrowserTransport = "cdp" | "chrome-mcp";
 type BrowserHeadlessSource =
   | "request"
@@ -7,6 +13,7 @@ type BrowserHeadlessSource =
   | "linux-display-fallback"
   | "default";
 
+/** Browser status response returned by the control server. */
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
@@ -15,6 +22,13 @@ export type BrowserStatus = {
   running: boolean;
   cdpReady?: boolean;
   cdpHttp?: boolean;
+  /**
+   * For Chrome MCP existing-session profiles, true only if a page-level tool
+   * round-trip (`list_pages`) completes; for managed CDP profiles, mirrors
+   * `cdpReady`. Distinguishes "transport handshake passed" from "page tools
+   * are actually usable".
+   */
+  pageReady?: boolean;
   pid: number | null;
   cdpPort: number | null;
   cdpUrl?: string | null;
@@ -31,6 +45,7 @@ export type BrowserStatus = {
   attachOnly: boolean;
 };
 
+/** Browser tab record exposed by tab listing and tab mutation endpoints. */
 export type BrowserTab = {
   /** Best handle for agents to pass back as targetId: label, then tabId, then raw targetId. */
   suggestedTargetId?: string;
@@ -45,6 +60,7 @@ export type BrowserTab = {
   type?: string;
 };
 
+/** ARIA snapshot node exposed in structured snapshot responses. */
 export type SnapshotAriaNode = {
   ref: string;
   role: string;

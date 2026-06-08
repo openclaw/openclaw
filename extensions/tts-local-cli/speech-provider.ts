@@ -1,3 +1,4 @@
+// Tts Local Cli provider module implements model/runtime integration.
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -275,11 +276,11 @@ async function convertAudio(
   const outputPath = path.join(outputDir, outputFileName);
   const args = ["-y", "-i", inputPath];
   if (target === "opus") {
-    args.push("-c:a", "libopus", "-b:a", "64k");
+    args.push("-c:a", "libopus", "-b:a", "64k", "-f", "opus");
   } else if (target === "wav") {
-    args.push("-c:a", "pcm_s16le");
+    args.push("-c:a", "pcm_s16le", "-f", "wav");
   } else {
-    args.push("-c:a", "libmp3lame", "-b:a", "128k");
+    args.push("-c:a", "libmp3lame", "-b:a", "128k", "-f", "mp3");
   }
   await writeExternalFileWithinRoot({
     rootDir: outputDir,

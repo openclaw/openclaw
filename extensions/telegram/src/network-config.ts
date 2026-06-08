@@ -1,8 +1,9 @@
+// Telegram helper module supports network config behavior.
 import * as dns from "node:dns";
 import process from "node:process";
-import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-types";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isTruthyEnvValue, isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const TELEGRAM_DISABLE_AUTO_SELECT_FAMILY_ENV =
   "OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY";

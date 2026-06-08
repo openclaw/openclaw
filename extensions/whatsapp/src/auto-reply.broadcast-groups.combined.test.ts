@@ -1,5 +1,6 @@
+// Whatsapp tests cover auto reply.broadcast groups.combined plugin behavior.
 import "./test-helpers.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   monitorWebChannelWithCapture,

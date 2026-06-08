@@ -1,3 +1,4 @@
+// Verifies channel config loading surfaces visible plugin settings.
 import fs from "node:fs";
 import path from "node:path";
 import type { createJiti as createJitiType } from "jiti";
@@ -141,9 +142,8 @@ describe("loadChannelConfigSurfaceModule", () => {
           typeof import("../../scripts/load-channel-config-surface.ts")
         >(import.meta.url, "../../scripts/load-channel-config-surface.ts?scope=prefer-jiti");
 
-        await expect(
-          imported.loadChannelConfigSurfaceModule(modulePath, { repoRoot }),
-        ).resolves.toMatchObject(expectedOkSchema("string"));
+        const surface = await imported.loadChannelConfigSurfaceModule(modulePath, { repoRoot });
+        expect(surface).toStrictEqual(expectedOkSchema("string"));
         expect(spawnSync).not.toHaveBeenCalled();
       } finally {
         vi.doUnmock("node:child_process");
@@ -158,9 +158,8 @@ describe("loadChannelConfigSurfaceModule", () => {
       const { loadChannelConfigSurfaceModule: loadWithMissingBun, spawnSync } =
         await importLoaderWithMissingBun();
 
-      await expect(loadWithMissingBun(modulePath, { repoRoot })).resolves.toMatchObject(
-        expectedOkSchema("string"),
-      );
+      const surface = await loadWithMissingBun(modulePath, { repoRoot });
+      expect(surface).toStrictEqual(expectedOkSchema("string"));
       expect(spawnSync).not.toHaveBeenCalled();
     });
   });
@@ -172,10 +171,16 @@ describe("loadChannelConfigSurfaceModule", () => {
       const { loadChannelConfigSurfaceModule: loadWithFailingJiti, spawnSync } =
         await importLoaderWithFailingJitiAndWorkingBun();
 
-      await expect(loadWithFailingJiti(modulePath, { repoRoot })).resolves.toMatchObject(
-        expectedOkSchema("number"),
-      );
-      expect(spawnSync).toHaveBeenCalledWith("bun", expect.any(Array), expect.any(Object));
+      const surface = await loadWithFailingJiti(modulePath, { repoRoot });
+      expect(surface).toStrictEqual(expectedOkSchema("number"));
+
+      const spawnCalls = spawnSync.mock.calls as unknown as Array<
+        [string, string[], Record<string, unknown>]
+      >;
+      const spawnCall = spawnCalls[0];
+      expect(spawnCall?.[0]).toBe("bun");
+      expect(Array.isArray(spawnCall?.[1])).toBe(true);
+      expect(typeof spawnCall?.[2]).toBe("object");
     });
   });
 });

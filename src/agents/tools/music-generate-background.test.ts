@@ -1,3 +1,5 @@
+// Music background tests cover task-run creation, progress recording, and
+// completion delivery through announcement agents or direct fallback sends.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MUSIC_GENERATION_TASK_KIND } from "../music-generation-task-status.js";
 import {
@@ -20,6 +22,27 @@ const {
   recordMusicGenerationTaskProgress,
   wakeMusicGenerationTaskCompletion,
 } = await import("./music-generate-background.js");
+
+function getDeliveredInternalEvents(): Array<Record<string, unknown>> {
+  // Completion agents receive internal events; tests inspect them to keep the
+  // visible-reply media contract explicit.
+  const params = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls.at(0)?.[0] as
+    | { internalEvents?: unknown }
+    | undefined;
+  if (!Array.isArray(params?.internalEvents)) {
+    throw new Error("Expected delivered internal events");
+  }
+  return params.internalEvents as Array<Record<string, unknown>>;
+}
+
+function expectReplyInstructionContains(text: string) {
+  const event = getDeliveredInternalEvents().find(
+    (item) => typeof item.replyInstruction === "string" && item.replyInstruction.includes(text),
+  );
+  if (!event) {
+    throw new Error(`Expected reply instruction containing ${text}`);
+  }
+}
 
 describe("music generate background helpers", () => {
   beforeEach(() => {
@@ -45,11 +68,12 @@ describe("music generate background helpers", () => {
       providerId: "google",
     });
 
-    expect(handle).toMatchObject({
-      taskId: "task-123",
-      requesterSessionKey: "agent:main:discord:direct:123",
-      taskLabel: "night-drive synthwave",
-    });
+    if (!handle) {
+      throw new Error("Expected music generation task handle");
+    }
+    expect(handle.taskId).toBe("task-123");
+    expect(handle.requesterSessionKey).toBe("agent:main:discord:direct:123");
+    expect(handle.taskLabel).toBe("night-drive synthwave");
     expectQueuedTaskRun({
       taskExecutorMocks,
       taskKind: MUSIC_GENERATION_TASK_KIND,
@@ -92,10 +116,10 @@ describe("music generate background helpers", () => {
     });
 
     expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalled();
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
-  it("warns channel completion agents that normal final replies are private", async () => {
+  it("tells channel completion agents to follow the visible-reply contract", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: true,
       path: "direct",
@@ -115,29 +139,64 @@ describe("music generate background helpers", () => {
       },
     });
 
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
-      expect.objectContaining({
-        internalEvents: expect.arrayContaining([
-          expect.objectContaining({
-            replyInstruction: expect.stringContaining(
-              "the user will NOT see your normal assistant final reply",
-            ),
-          }),
-        ]),
-      }),
-    );
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
-      expect.objectContaining({
-        internalEvents: expect.arrayContaining([
-          expect.objectContaining({
-            replyInstruction: expect.stringContaining(
-              "Do not put MEDIA: lines only in your final answer",
-            ),
-          }),
-        ]),
-      }),
-    );
+    expectReplyInstructionContains("visible-reply contract");
+    expectReplyInstructionContains("final-reply MEDIA lines");
   });
+
+  it("delivers failure completion notices directly", async () => {
+    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+      delivered: false,
+      path: "direct",
+      reason: "generated_media_missing",
+      error: "completion agent did not deliver generated media",
+    });
+    const completion = createMediaCompletionFixture({
+      runId: "tool:music_generate:abc",
+      taskLabel: "night-drive synthwave",
+      result: "provider failed",
+    });
+
+    await wakeMusicGenerationTaskCompletion({
+      ...completion,
+      status: "error",
+      statusLabel: "failed",
+    });
+
+    expect(taskDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Music generation failed: provider failed",
+        idempotencyKey: "music_generate:task-123:error:direct",
+      }),
+    );
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["agent:main:discord:guild-123:channel-456", "agent:main:whatsapp:123@g.us"])(
+    "warns legacy group/channel completion agents for %s",
+    async (requesterSessionKey) => {
+      announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+        delivered: true,
+        path: "direct",
+      });
+      const completion = createMediaCompletionFixture({
+        runId: "tool:music_generate:abc",
+        taskLabel: "night-drive synthwave",
+        result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+        mediaUrls: ["/tmp/generated-night-drive.mp3"],
+      });
+
+      await wakeMusicGenerationTaskCompletion({
+        ...completion,
+        handle: {
+          ...completion.handle,
+          requesterSessionKey,
+        },
+      });
+
+      expectReplyInstructionContains("visible-reply contract");
+      expectReplyInstructionContains("final-reply MEDIA lines");
+    },
+  );
 
   it("queues a completion event when direct send is enabled globally", async () => {
     taskDeliveryRuntimeMocks.sendMessage.mockResolvedValue({

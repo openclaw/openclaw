@@ -1,3 +1,4 @@
+// Lmstudio tests cover index plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
@@ -35,16 +36,19 @@ function createRemoteProviderConfig(overrides?: Partial<ModelProviderConfig>): M
 describe("lmstudio plugin", () => {
   it("canonicalizes base URLs during provider normalization", () => {
     const provider = registerProvider();
+    const providerConfig = createRemoteProviderConfig({
+      baseUrl: "http://localhost:1234/api/v1/",
+    });
 
     expect(
       provider?.normalizeConfig?.({
         provider: "lmstudio",
-        providerConfig: createRemoteProviderConfig({
-          baseUrl: "http://localhost:1234/api/v1/",
-        }),
+        providerConfig,
       }),
-    ).toMatchObject({
+    ).toEqual({
+      ...providerConfig,
       baseUrl: "http://localhost:1234/v1",
+      request: { allowPrivateNetwork: true },
     });
   });
 

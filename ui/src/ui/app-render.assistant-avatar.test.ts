@@ -2,13 +2,19 @@
 
 import { html, render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import type { ChatProps } from "./views/chat.ts";
 import type { QuickSettingsProps } from "./views/config-quick.ts";
 
 const quickSettingsProps = vi.hoisted(() => ({
   current: null as QuickSettingsProps | null,
 }));
+const chatProps = vi.hoisted(() => ({
+  current: null as ChatProps | null,
+}));
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
+const renderChatControlsMock = vi.hoisted(() => vi.fn(() => "chat-controls"));
 
 vi.mock("../local-storage.ts", () => ({
   getSafeLocalStorage: () => ({
@@ -27,8 +33,19 @@ vi.mock("./views/config-quick.ts", () => ({
 }));
 
 vi.mock("./views/chat.ts", () => ({
-  renderChat: () => html`<div data-testid="chat"></div>`,
+  renderChat: (props: ChatProps) => {
+    chatProps.current = props;
+    return html`<div data-testid="chat">${props.composerControls}</div>`;
+  },
 }));
+
+vi.mock("./app-render.helpers.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./app-render.helpers.ts")>();
+  return {
+    ...actual,
+    renderChatControls: renderChatControlsMock,
+  };
+});
 
 vi.mock("./icons.ts", () => ({
   icons: {},
@@ -52,7 +69,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
       navCollapsed: false,
       navGroupsCollapsed: {},
       borderRadius: 50,
-      chatFocusMode: false,
+      textScale: 100,
       chatShowThinking: false,
       chatShowToolCalls: true,
     },
@@ -75,6 +92,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     hello: null,
     lastError: null,
     lastErrorCode: null,
+    chatError: null,
     eventLog: [],
     assistantName: "Nova",
     assistantAvatar: "/avatar/main",
@@ -190,7 +208,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     dreamingRestartConfirmLoading: false,
     dreamingStatusError: null,
     client: null,
-    refreshSessionsAfterChat: new Set(),
+    refreshSessionsAfterChat: new Map(),
     connect: vi.fn(),
     setTab: vi.fn(),
     setTheme: vi.fn(),
@@ -200,6 +218,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     importCustomTheme: vi.fn(),
     clearCustomTheme: vi.fn(),
     setBorderRadius: vi.fn(),
+    setTextScale: vi.fn(),
     applySettings: vi.fn(),
     applyLocalUserIdentity: vi.fn(),
     loadOverview: vi.fn(),
@@ -209,9 +228,12 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
   } as unknown as AppViewState;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await i18n.setLocale("en");
   localStorageValues.clear();
   quickSettingsProps.current = null;
+  chatProps.current = null;
+  renderChatControlsMock.mockClear();
 });
 
 describe("renderApp assistant avatar routing", () => {
@@ -241,8 +263,146 @@ describe("renderApp assistant avatar routing", () => {
     expect(shell?.style.getPropertyValue("--chat-message-max-width")).toBe("min(1280px, 82%)");
   });
 
-  it("does not throw when stale cron state contains a job without a payload", () => {
-    expect(() =>
+  it("marks the logs route so the page can hand scroll ownership to the log stream", () => {
+    const container = document.createElement("div");
+
+    render(renderApp(createState({ tab: "logs" })), container);
+
+    const content = container.querySelector<HTMLElement>("main.content");
+    expect(content?.classList.contains("content--logs")).toBe(true);
+    expect(content?.classList.contains("content--chat")).toBe(false);
+  });
+
+  it("does not render chat errors in non-chat page headers", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "sessions",
+          lastError: "transient tool failure",
+          chatError: "transient tool failure",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".page-meta .pill.danger")?.textContent?.trim()).toBeUndefined();
+  });
+
+  it("keeps non-chat global errors visible in non-chat page headers", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "nodes",
+          lastError: "node list failed",
+          chatError: "previous chat failure",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".page-meta .pill.danger")?.textContent?.trim()).toBe(
+      "node list failed",
+    );
+  });
+
+  it("routes chat errors through the chat view instead of the shared header", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          lastError: "transient tool failure",
+          chatError: "transient tool failure",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".page-meta .pill.danger")?.textContent?.trim()).toBeUndefined();
+    expect(chatProps.current?.error).toBe("transient tool failure");
+  });
+
+  it("routes newer global errors through the chat view ahead of stale chat errors", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          lastError: "gateway disconnected",
+          chatError: "previous chat failure",
+        }),
+      ),
+      container,
+    );
+
+    expect(chatProps.current?.error).toBe("gateway disconnected");
+  });
+
+  it("does not rebuild chat composer controls for draft-only rerenders", () => {
+    const container = document.createElement("div");
+    const state = createState({ tab: "chat", chatMessage: "" });
+
+    render(renderApp(state), container);
+    state.chatMessage = "h";
+    render(renderApp(state), container);
+    state.chatMessage = "hello";
+    render(renderApp(state), container);
+
+    expect(renderChatControlsMock).toHaveBeenCalledTimes(1);
+
+    state.chatSending = true;
+    render(renderApp(state), container);
+
+    expect(renderChatControlsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rebuilds chat composer controls after locale changes", async () => {
+    const container = document.createElement("div");
+    const state = createState({ tab: "chat", chatMessage: "" });
+
+    render(renderApp(state), container);
+    await i18n.setLocale("zh-CN");
+    render(renderApp(state), container);
+
+    expect(renderChatControlsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes security quick setting fields to Quick Settings", () => {
+    const state = createState({
+      configForm: {
+        browser: { enabled: false },
+        tools: { profile: "messaging", exec: { security: "full" } },
+        agents: { defaults: { exec: { security: "deny" } } },
+      },
+    });
+
+    renderApp(state);
+
+    expect(quickSettingsProps.current?.security.execPolicy).toBe("full");
+    expect(quickSettingsProps.current?.security.browserEnabled).toBe(false);
+    expect(quickSettingsProps.current?.security.toolProfile).toBe("messaging");
+
+    quickSettingsProps.current?.onBrowserEnabledToggle?.(true);
+    quickSettingsProps.current?.onToolProfileChange?.("full");
+
+    expect(state.configForm?.browser).toEqual({ enabled: true });
+    const tools = state.configForm?.tools as
+      | { profile?: string; exec?: { security?: string } }
+      | undefined;
+    expect(tools?.profile).toBe("full");
+    expect(tools?.exec?.security).toBe("full");
+  });
+
+  it("renders stale cron state containing a job without a payload", () => {
+    const container = document.createElement("div");
+
+    render(
       renderApp(
         createState({
           cronJobs: [
@@ -260,6 +420,216 @@ describe("renderApp assistant avatar routing", () => {
           ],
         }),
       ),
-    ).not.toThrow();
+      container,
+    );
+
+    expect(container.querySelector(".shell")).toBeInstanceOf(HTMLElement);
+  });
+
+  it("filters sidebar recent sessions to the active chat agent", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "agent:work:main",
+          assistantAgentId: "work",
+          agentsList: {
+            defaultId: "main",
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "work", name: "Work" },
+            ],
+          } as AppViewState["agentsList"],
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 3,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:dashboard:old",
+                kind: "direct",
+                label: "Main old",
+                updatedAt: 30,
+              },
+              {
+                key: "agent:work:dashboard:new",
+                kind: "direct",
+                label: "Work new",
+                updatedAt: 20,
+              },
+              {
+                key: "agent:work:dashboard:older",
+                kind: "direct",
+                label: "Work older",
+                updatedAt: 10,
+              },
+            ],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(labels).toEqual(["Work new", "Work older"]);
+  });
+
+  it("keeps legacy main sessions tied to the default agent when identity is stale", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "main",
+          assistantAgentId: "work",
+          agentsList: {
+            defaultId: "main",
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "work", name: "Work" },
+            ],
+          } as AppViewState["agentsList"],
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 3,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                label: "Main legacy",
+                updatedAt: 30,
+              },
+              {
+                key: "agent:main:dashboard:old",
+                kind: "direct",
+                label: "Main old",
+                updatedAt: 20,
+              },
+              {
+                key: "agent:work:dashboard:new",
+                kind: "direct",
+                label: "Work new",
+                updatedAt: 10,
+              },
+            ],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(labels).toEqual(["Main legacy", "Main old"]);
+  });
+
+  it("uses hello default agent for global sidebar sessions before agent list hydration", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "global",
+          assistantAgentId: null,
+          agentsList: null,
+          hello: {
+            snapshot: {
+              sessionDefaults: {
+                defaultAgentId: "ops",
+              },
+            },
+          } as AppViewState["hello"],
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 2,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:dashboard:old",
+                kind: "direct",
+                label: "Main old",
+                updatedAt: 20,
+              },
+              {
+                key: "agent:ops:dashboard:new",
+                kind: "direct",
+                label: "Ops new",
+                updatedAt: 10,
+              },
+            ],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(labels).toEqual(["Ops new"]);
+  });
+
+  it("keeps unknown sidebar sessions unscoped", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "unknown",
+          assistantAgentId: "work",
+          agentsList: {
+            defaultId: "main",
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "work", name: "Work" },
+            ],
+          } as AppViewState["agentsList"],
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 3,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:dashboard:old",
+                kind: "direct",
+                label: "Main old",
+                updatedAt: 30,
+              },
+              {
+                key: "agent:work:dashboard:new",
+                kind: "direct",
+                label: "Work new",
+                updatedAt: 20,
+              },
+              {
+                key: "unknown",
+                kind: "unknown",
+                label: "Unknown sentinel",
+                updatedAt: 10,
+              },
+            ],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(labels).toEqual(["Main old", "Work new"]);
   });
 });

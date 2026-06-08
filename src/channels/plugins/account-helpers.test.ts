@@ -1,3 +1,4 @@
+// Account helper tests cover channel account normalization and lookup helpers.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
@@ -121,6 +122,41 @@ describe("createAccountListHelpers", () => {
         input,
         expected,
       });
+    });
+
+    it("keeps an implicit default account when root credential keys coexist with named accounts", () => {
+      const helpers = createAccountListHelpers("testchannel", {
+        implicitDefaultAccount: { channelKeys: ["token"] },
+      });
+
+      expect(
+        helpers.listAccountIds({
+          channels: {
+            testchannel: {
+              token: "root-token",
+              accounts: { work: {} },
+            },
+          },
+        } as unknown as OpenClawConfig),
+      ).toEqual(["default", "work"]);
+    });
+
+    it("keeps an implicit default account when root env credentials coexist with named accounts", () => {
+      const previous = process.env.TESTCHANNEL_TOKEN;
+      process.env.TESTCHANNEL_TOKEN = "env-token";
+      try {
+        const helpers = createAccountListHelpers("testchannel", {
+          implicitDefaultAccount: { envVars: ["TESTCHANNEL_TOKEN"] },
+        });
+
+        expect(helpers.listAccountIds(cfg({ work: {} }))).toEqual(["default", "work"]);
+      } finally {
+        if (previous === undefined) {
+          delete process.env.TESTCHANNEL_TOKEN;
+        } else {
+          process.env.TESTCHANNEL_TOKEN = previous;
+        }
+      }
     });
   });
 

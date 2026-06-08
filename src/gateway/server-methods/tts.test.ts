@@ -1,5 +1,9 @@
+/**
+ * Tests for text-to-speech gateway methods and provider error envelopes.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ErrorCodes } from "../protocol/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -76,14 +80,10 @@ describe("ttsHandlers", () => {
       context: { getRuntimeConfig: mocks.getRuntimeConfig },
     } as never);
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: 'Error: Unknown TTS provider "bad".',
-      }),
-    );
+    expectGatewayErrorResponse(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: 'Error: Unknown TTS provider "bad".',
+    });
     expect(mocks.textToSpeech).not.toHaveBeenCalled();
   });
 });

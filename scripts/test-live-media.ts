@@ -1,12 +1,10 @@
 #!/usr/bin/env -S node --import tsx
+// Test Live Media script supports OpenClaw repository automation.
 
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
 import { formatErrorMessage } from "../src/infra/errors.ts";
-import { loadShellEnvFallback } from "../src/infra/shell-env.js";
-import { getProviderEnvVars } from "../src/secrets/provider-env-vars.js";
 type SpawnPnpmRunner = (params: {
   pnpmArgs: string[];
   stdio: "inherit";
@@ -33,13 +31,13 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
     id: "image",
     testFile: "test/image-generation.runtime.live.test.ts",
     providerEnvVar: "OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS",
-    providers: ["deepinfra", "fal", "google", "minimax", "openai", "vydra", "xai"],
+    providers: ["deepinfra", "fal", "google", "minimax", "openai", "openrouter", "vydra", "xai"],
   },
   music: {
     id: "music",
     testFile: "extensions/music-generation-providers.live.test.ts",
     providerEnvVar: "OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS",
-    providers: ["google", "minimax"],
+    providers: ["fal", "google", "minimax", "openrouter"],
   },
   video: {
     id: "video",
@@ -53,6 +51,7 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
       "google",
       "minimax",
       "openai",
+      "openrouter",
       "qwen",
       "runway",
       "together",
@@ -66,6 +65,7 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
       "google",
       "minimax",
       "openai",
+      "openrouter",
       "qwen",
       "runway",
       "together",
@@ -78,6 +78,7 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
 const DEFAULT_SUITES: MediaSuiteId[] = ["image", "music", "video"];
 
 export type CliOptions = {
+  allowEmpty: boolean;
   suites: MediaSuiteId[];
   globalProviders: Set<string> | null;
   suiteProviders: Partial<Record<MediaSuiteId, Set<string>>>;
@@ -93,21 +94,52 @@ export type SuiteRunPlan = {
   skippedReason?: string;
 };
 
-function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }): ChildProcess {
-  const npmExecPath = process.env.npm_execpath?.trim();
-  if (npmExecPath) {
-    return spawn(process.execPath, [npmExecPath, ...params.pnpmArgs], {
-      stdio: "inherit",
-      env: params.env,
-      shell: false,
-    });
-  }
+export type BuildRunPlanDeps = {
+  collectProviderApiKeysImpl?: (provider: string) => Promise<unknown[]> | unknown[];
+  getProviderEnvVarsImpl?: (provider: string) => Promise<string[]> | string[];
+  loadShellEnvFallbackImpl?: (params: {
+    enabled: true;
+    env: NodeJS.ProcessEnv;
+    expectedKeys: string[];
+    logger: { warn: (message: string) => void };
+  }) => Promise<void> | void;
+};
 
-  return spawn(process.platform === "win32" ? "pnpm.cmd" : "pnpm", params.pnpmArgs, {
+export type RunCliDeps = {
+  buildRunPlanImpl?: (options: CliOptions) => Promise<SuiteRunPlan[]> | SuiteRunPlan[];
+  runSuiteImpl?: typeof runSuite;
+};
+
+function formatProviderList(providers: Iterable<string>): string {
+  return [...providers].toSorted().join(", ");
+}
+
+function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }): ChildProcess {
+  return _spawnPnpmRunner({
+    pnpmArgs: params.pnpmArgs,
     stdio: "inherit",
     env: params.env,
-    shell: false,
   });
+}
+
+async function collectProviderApiKeysForLiveMedia(provider: string): Promise<unknown[]> {
+  const { collectProviderApiKeys } = await import("../src/agents/live-auth-keys.js");
+  return collectProviderApiKeys(provider);
+}
+
+async function getProviderEnvVarsForLiveMedia(provider: string): Promise<string[]> {
+  const { getProviderEnvVars } = await import("../src/secrets/provider-env-vars.js");
+  return getProviderEnvVars(provider);
+}
+
+async function loadShellEnvFallbackForLiveMedia(params: {
+  enabled: true;
+  env: NodeJS.ProcessEnv;
+  expectedKeys: string[];
+  logger: { warn: (message: string) => void };
+}): Promise<void> {
+  const { loadShellEnvFallback } = await import("../src/infra/shell-env.js");
+  loadShellEnvFallback(params);
 }
 
 function parseCsv(raw: string | undefined): Set<string> | null {
@@ -131,6 +163,9 @@ function parseSuiteToken(raw: string): MediaSuiteId | null {
 }
 
 export function parseArgs(argv: string[]): CliOptions {
+  const separatorIndex = argv.indexOf("--");
+  const optionArgs = separatorIndex >= 0 ? argv.slice(0, separatorIndex) : argv;
+  const separatorPassthroughArgs = separatorIndex >= 0 ? argv.slice(separatorIndex + 1) : [];
   const suites = new Set<MediaSuiteId>();
   const suiteProviders: Partial<Record<MediaSuiteId, Set<string>>> = {};
   const passthroughArgs: string[] = [];
@@ -138,18 +173,19 @@ export function parseArgs(argv: string[]): CliOptions {
   let globalProviders: Set<string> | null = null;
   let requireAuth = true;
   let help = false;
+  let allowEmpty = false;
 
   const readValue = (index: number): string => {
-    const value = argv[index + 1]?.trim();
+    const value = optionArgs[index + 1]?.trim();
     if (!value) {
-      throw new Error(`Missing value for ${argv[index]}`);
+      throw new Error(`Missing value for ${optionArgs[index]}`);
     }
     return value;
   };
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index] ?? "";
-    if (!arg || arg === "--") {
+  for (let index = 0; index < optionArgs.length; index += 1) {
+    const arg = optionArgs[index] ?? "";
+    if (!arg) {
       continue;
     }
     if (arg === "--help" || arg === "-h") {
@@ -183,6 +219,10 @@ export function parseArgs(argv: string[]): CliOptions {
       requireAuth = true;
       continue;
     }
+    if (arg === "--allow-empty") {
+      allowEmpty = true;
+      continue;
+    }
     if (arg === "--all-providers" || arg === "--no-auth-filter") {
       requireAuth = false;
       continue;
@@ -210,23 +250,79 @@ export function parseArgs(argv: string[]): CliOptions {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return {
+  const options = {
+    allowEmpty,
     suites: (suites.size ? [...suites] : DEFAULT_SUITES).toSorted(),
     globalProviders,
     suiteProviders,
     requireAuth,
     quietArgs,
-    passthroughArgs,
+    passthroughArgs: [...passthroughArgs, ...separatorPassthroughArgs],
     help,
   };
+  validateProviderFilters(options);
+  return options;
 }
 
-function selectProviders(params: {
+function validateProviderFilters(options: CliOptions): void {
+  if (options.globalProviders) {
+    const selectedProviders = new Set(
+      options.suites.flatMap((suiteId) => MEDIA_SUITES[suiteId].providers),
+    );
+    const unknown = [...options.globalProviders].filter(
+      (provider) => !selectedProviders.has(provider),
+    );
+    if (unknown.length > 0) {
+      throw new Error(
+        `Unknown provider(s) for selected media suite(s): ${formatProviderList(unknown)}`,
+      );
+    }
+  }
+
+  for (const [suiteId, providers] of Object.entries(options.suiteProviders) as [
+    MediaSuiteId,
+    Set<string>,
+  ][]) {
+    const suite = MEDIA_SUITES[suiteId];
+    const supported = new Set(suite.providers);
+    const unknown = [...providers].filter((provider) => !supported.has(provider));
+    if (unknown.length > 0) {
+      throw new Error(`Unknown ${suiteId} provider(s): ${formatProviderList(unknown)}`);
+    }
+  }
+}
+
+function hasExplicitProviderSelection(options: CliOptions): boolean {
+  return options.globalProviders !== null || Object.keys(options.suiteProviders).length > 0;
+}
+
+function hasExplicitProviderSelectionForSuite(options: CliOptions, suiteId: MediaSuiteId): boolean {
+  if (Object.hasOwn(options.suiteProviders, suiteId)) {
+    return true;
+  }
+  if (!options.globalProviders) {
+    return false;
+  }
+  return MEDIA_SUITES[suiteId].providers.some((provider) => options.globalProviders?.has(provider));
+}
+
+export function findSkippedExplicitProviderSelections(
+  options: CliOptions,
+  plan: SuiteRunPlan[],
+): SuiteRunPlan[] {
+  return plan.filter(
+    (entry) =>
+      entry.providers.length === 0 && hasExplicitProviderSelectionForSuite(options, entry.suite.id),
+  );
+}
+
+async function selectProviders(params: {
+  collectProviderApiKeysImpl?: BuildRunPlanDeps["collectProviderApiKeysImpl"];
   suite: MediaSuiteConfig;
   globalProviders: Set<string> | null;
   suiteProviders: Set<string> | undefined;
   requireAuth: boolean;
-}): string[] {
+}): Promise<string[]> {
   const explicit = params.suiteProviders ?? params.globalProviders;
   const candidates = explicit
     ? params.suite.providers
@@ -235,20 +331,38 @@ function selectProviders(params: {
   if (!params.requireAuth) {
     return providers;
   }
-  providers = providers.filter((provider) => collectProviderApiKeys(provider).length > 0);
+  const providerAuth = await Promise.all(
+    providers.map(async (provider) => ({
+      provider,
+      hasAuth:
+        (await (params.collectProviderApiKeysImpl ?? collectProviderApiKeysForLiveMedia)(provider))
+          .length > 0,
+    })),
+  );
+  providers = providerAuth.filter((entry) => entry.hasAuth).map((entry) => entry.provider);
   return providers;
 }
 
-export function buildRunPlan(options: CliOptions): SuiteRunPlan[] {
+export async function buildRunPlan(
+  options: CliOptions,
+  deps: BuildRunPlanDeps = {},
+): Promise<SuiteRunPlan[]> {
+  const getProviderEnvVarsImpl = deps.getProviderEnvVarsImpl ?? getProviderEnvVarsForLiveMedia;
   const expectedKeys = [
     ...new Set(
-      options.suites.flatMap((suiteId) =>
-        MEDIA_SUITES[suiteId].providers.flatMap((provider) => getProviderEnvVars(provider)),
-      ),
+      (
+        await Promise.all(
+          options.suites.flatMap((suiteId) =>
+            MEDIA_SUITES[suiteId].providers.map(
+              async (provider) => await getProviderEnvVarsImpl(provider),
+            ),
+          ),
+        )
+      ).flat(),
     ),
   ];
   if (expectedKeys.length) {
-    loadShellEnvFallback({
+    await (deps.loadShellEnvFallbackImpl ?? loadShellEnvFallbackForLiveMedia)({
       enabled: true,
       env: process.env,
       expectedKeys,
@@ -256,26 +370,29 @@ export function buildRunPlan(options: CliOptions): SuiteRunPlan[] {
     });
   }
 
-  return options.suites.map((suiteId) => {
-    const suite = MEDIA_SUITES[suiteId];
-    const providers = selectProviders({
-      suite,
-      globalProviders: options.globalProviders,
-      suiteProviders: options.suiteProviders[suiteId],
-      requireAuth: options.requireAuth,
-    });
-    return {
-      suite,
-      providers,
-      ...(providers.length === 0
-        ? {
-            skippedReason: options.requireAuth
-              ? "no providers with usable auth"
-              : "no providers selected",
-          }
-        : {}),
-    };
-  });
+  return await Promise.all(
+    options.suites.map(async (suiteId) => {
+      const suite = MEDIA_SUITES[suiteId];
+      const providers = await selectProviders({
+        collectProviderApiKeysImpl: deps.collectProviderApiKeysImpl,
+        suite,
+        globalProviders: options.globalProviders,
+        suiteProviders: options.suiteProviders[suiteId],
+        requireAuth: options.requireAuth,
+      });
+      return {
+        suite,
+        providers,
+        ...(providers.length === 0
+          ? {
+              skippedReason: options.requireAuth
+                ? "no providers with usable auth"
+                : "no providers selected",
+            }
+          : {}),
+      };
+    }),
+  );
 }
 
 function printHelp(): void {
@@ -300,6 +417,7 @@ Flags:
   --music-providers <csv>   music-suite provider filter
   --video-providers <csv>   video-suite provider filter
   --all-providers           do not auto-filter by available auth
+  --allow-empty             exit 0 when auth filtering leaves no runnable providers
   --quiet | --no-quiet      passed through to test:live
 `);
 }
@@ -346,13 +464,13 @@ async function runSuite(params: {
   });
 }
 
-export async function runCli(argv: string[]): Promise<number> {
+export async function runCli(argv: string[], deps: RunCliDeps = {}): Promise<number> {
   const options = parseArgs(argv);
   if (options.help) {
     printHelp();
     return 0;
   }
-  const plan = buildRunPlan(options);
+  const plan = await (deps.buildRunPlanImpl ?? buildRunPlan)(options);
   const runnable = plan.filter((entry) => entry.providers.length > 0);
   const skipped = plan.filter((entry) => entry.providers.length === 0);
 
@@ -361,13 +479,28 @@ export async function runCli(argv: string[]): Promise<number> {
       `[live:media] skip ${entry.suite.id}: ${entry.skippedReason ?? "no providers selected"}`,
     );
   }
+  const skippedExplicit = findSkippedExplicitProviderSelections(options, plan);
+  if (skippedExplicit.length > 0) {
+    console.error(
+      `[live:media] no runnable providers matched explicit provider selection for: ${skippedExplicit.map((entry) => entry.suite.id).join(", ")}`,
+    );
+    return 1;
+  }
   if (runnable.length === 0) {
     console.log("[live:media] nothing to run");
-    return 0;
+    if (options.allowEmpty) {
+      return 0;
+    }
+    console.error(
+      hasExplicitProviderSelection(options)
+        ? "[live:media] no runnable providers matched the explicit provider selection"
+        : "[live:media] no runnable providers matched available auth; pass --allow-empty to accept an empty live-media run",
+    );
+    return 1;
   }
 
   for (const entry of runnable) {
-    const exitCode = await runSuite({
+    const exitCode = await (deps.runSuiteImpl ?? runSuite)({
       plan: entry,
       quietArgs: options.quietArgs,
       passthroughArgs: options.passthroughArgs,
@@ -382,7 +515,7 @@ export async function runCli(argv: string[]): Promise<number> {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   runCli(process.argv.slice(2))
     .then((code) => process.exit(code))
-    .catch((error) => {
+    .catch((error: unknown) => {
       console.error(formatErrorMessage(error));
       process.exit(1);
     });

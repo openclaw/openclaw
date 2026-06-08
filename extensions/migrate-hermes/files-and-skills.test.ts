@@ -1,5 +1,7 @@
+// Migrate Hermes tests cover files and skills plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import { MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildHermesMigrationProvider } from "./provider.js";
@@ -31,6 +33,20 @@ describe("Hermes migration file and skill items", () => {
     } as never;
   }
 
+  function itemById<T extends { id: string }>(items: T[], id: string): T | undefined {
+    return items.find((item) => item.id === id);
+  }
+
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    try {
+      await fs.access(targetPath);
+    } catch (error) {
+      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+      return;
+    }
+    throw new Error(`Expected path to be missing: ${targetPath}`);
+  }
+
   it("reports normalized skill-name collisions instead of overwriting during apply", async () => {
     const root = await makeTempRoot();
     const source = path.join(root, "hermes");
@@ -44,16 +60,10 @@ describe("Hermes migration file and skill items", () => {
     const skillItems = plan.items.filter((item) => item.kind === "skill");
 
     expect(skillItems).toHaveLength(2);
-    expect(skillItems).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "skill:ship-it",
-          status: "conflict",
-          reason: 'multiple Hermes skill directories normalize to "ship-it"',
-          target: path.join(workspaceDir, "skills", "ship-it"),
-        }),
-      ]),
-    );
+    const shipIt = itemById(skillItems, "skill:ship-it");
+    expect(shipIt?.status).toBe("conflict");
+    expect(shipIt?.reason).toBe('multiple Hermes skill directories normalize to "ship-it"');
+    expect(shipIt?.target).toBe(path.join(workspaceDir, "skills", "ship-it"));
 
     const result = await provider.apply(
       makeContext({
@@ -66,9 +76,7 @@ describe("Hermes migration file and skill items", () => {
     );
 
     expect(result.summary.conflicts).toBe(2);
-    await expect(fs.access(path.join(workspaceDir, "skills", "ship-it"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(workspaceDir, "skills", "ship-it"));
   });
 
   it("reports late-created copy targets as conflicts without overwriting", async () => {
@@ -86,15 +94,9 @@ describe("Hermes migration file and skill items", () => {
 
     const result = await provider.apply(ctx, plan);
 
-    expect(result.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "workspace:AGENTS.md",
-          status: "conflict",
-          reason: MIGRATION_REASON_TARGET_EXISTS,
-        }),
-      ]),
-    );
+    const agents = itemById(result.items, "workspace:AGENTS.md");
+    expect(agents?.status).toBe("conflict");
+    expect(agents?.reason).toBe(MIGRATION_REASON_TARGET_EXISTS);
     expect(result.summary.conflicts).toBe(1);
     expect(await fs.readFile(path.join(workspaceDir, "AGENTS.md"), "utf8")).toBe("# Late agents\n");
   });
@@ -138,20 +140,36 @@ describe("Hermes migration file and skill items", () => {
       "Imported from Hermes",
     );
     const copiedAgentsItem = result.items.find((item) => item.id === "workspace:AGENTS.md");
-    expect(copiedAgentsItem?.details?.backupPath).toEqual(expect.stringContaining("AGENTS.md"));
-    const authStore = JSON.parse(
-      await fs.readFile(
-        path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"),
-        "utf8",
-      ),
-    ) as { profiles?: Record<string, { key?: string; provider?: string }> };
-    expect(authStore.profiles?.["openai:hermes-import"]).toMatchObject({
-      provider: "openai",
-      key: "sk-hermes",
-    });
+    expect(String(copiedAgentsItem?.details?.backupPath)).toContain("AGENTS.md");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.OPENCLAW_AGENT_DIR = agentDir;
+    try {
+      const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+      expect(authStore.profiles?.["openai:hermes-import"]).toEqual(
+        expect.objectContaining({
+          type: "api_key",
+          provider: "openai",
+          key: "sk-hermes",
+        }),
+      );
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      if (previousAgentDir === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+      }
+    }
   });
 
-  it("archives unsupported Hermes state into the report without importing it", async () => {
+  it("archives unsupported Hermes state without copying raw auth credentials", async () => {
     const root = await makeTempRoot();
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
@@ -163,48 +181,89 @@ describe("Hermes migration file and skill items", () => {
     const provider = buildHermesMigrationProvider();
     const plan = await provider.plan(makeContext({ source, stateDir, workspaceDir, reportDir }));
 
-    expect(plan.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "archive:logs",
-          kind: "archive",
-          action: "archive",
-          status: "planned",
-        }),
-        expect.objectContaining({
-          id: "archive:auth.json",
-          kind: "archive",
-          action: "archive",
-          status: "planned",
-        }),
-      ]),
-    );
-    expect(plan.warnings).toEqual(
-      expect.arrayContaining([expect.stringContaining("archive-only")]),
-    );
+    const plannedLogs = itemById(plan.items, "archive:logs");
+    expect(plannedLogs?.kind).toBe("archive");
+    expect(plannedLogs?.action).toBe("archive");
+    expect(plannedLogs?.status).toBe("planned");
+    expect(plan.items.find((item) => item.id === "archive:auth.json")).toBeUndefined();
+    expect(plan.warnings).toEqual([
+      "Some Hermes files are archive-only. They will be copied into the migration report for manual review, not loaded into OpenClaw.",
+    ]);
 
     const result = await provider.apply(makeContext({ source, stateDir, workspaceDir, reportDir }));
 
     expect(result.summary.errors).toBe(0);
-    expect(result.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "archive:logs",
-          status: "migrated",
-          target: path.join(reportDir, "archive", "logs"),
-        }),
-        expect.objectContaining({
-          id: "archive:auth.json",
-          status: "migrated",
-          target: path.join(reportDir, "archive", "auth.json"),
-        }),
-      ]),
-    );
+    const migratedLogs = itemById(result.items, "archive:logs");
+    expect(migratedLogs?.status).toBe("migrated");
+    expect(migratedLogs?.target).toBe(path.join(reportDir, "archive", "logs"));
     expect(await fs.readFile(path.join(reportDir, "archive", "logs", "session.log"), "utf8")).toBe(
       "log line\n",
     );
-    await expect(fs.access(path.join(workspaceDir, "logs", "session.log"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(reportDir, "archive", "auth.json"));
+    await expectPathMissing(path.join(workspaceDir, "logs", "session.log"));
+  });
+
+  it("reports legacy Hermes OpenAI auth.json OAuth state as manual reauth work", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    await writeFile(
+      path.join(source, "auth.json"),
+      JSON.stringify({
+        providers: {
+          openai: {
+            tokens: {
+              access_token: "old-access",
+              refresh_token: "old-refresh",
+            },
+          },
+        },
+        credential_pool: {
+          openai: [
+            {
+              access_token: "pool-access",
+              refresh_token: "pool-refresh",
+            },
+          ],
+        },
+      }),
+    );
+
+    const provider = buildHermesMigrationProvider();
+    const plan = await provider.plan(
+      makeContext({ source, stateDir, workspaceDir, includeSecrets: true }),
+    );
+
+    const manualAuth = itemById(plan.items, "manual:legacy-hermes-auth-json");
+    expect(manualAuth?.kind).toBe("manual");
+    expect(manualAuth?.status).toBe("skipped");
+    expect(manualAuth?.message).toContain("no longer imports");
+    expect(plan.items.some((item) => item.kind === "auth")).toBe(false);
+    expect(plan.warnings).toContain(
+      "Some Hermes settings require manual review before they can be activated safely.",
+    );
+  });
+
+  it("ignores empty Hermes auth.json credential containers", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    await writeFile(
+      path.join(source, "auth.json"),
+      JSON.stringify({
+        providers: {},
+        credential_pool: {},
+        tokens: { anthropic: { access: "other-access", refresh: "other-refresh" } },
+      }),
+    );
+
+    const provider = buildHermesMigrationProvider();
+    const plan = await provider.plan(
+      makeContext({ source, stateDir, workspaceDir, includeSecrets: true }),
+    );
+
+    expect(plan.items.find((item) => item.id === "manual:legacy-hermes-auth-json")).toBeUndefined();
   });
 });

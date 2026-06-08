@@ -1,3 +1,4 @@
+/** Tests secret target registry matching and docs coverage. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -33,9 +34,21 @@ describe("secret target registry", () => {
   it("resolves config targets by exact path including sibling ref metadata", () => {
     const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
 
-    expect(target).not.toBeNull();
     expect(target?.entry?.id).toBe("channels.googlechat.serviceAccount");
     expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
+  });
+
+  it("resolves talk realtime provider api key targets", () => {
+    const target = resolveConfigSecretTargetByPath([
+      "talk",
+      "realtime",
+      "providers",
+      "openai",
+      "apiKey",
+    ]);
+
+    expect(target?.entry?.id).toBe("talk.realtime.providers.*.apiKey");
+    expect(target?.providerId).toBe("openai");
   });
 
   it("returns null when no config target path matches", () => {
@@ -58,7 +71,6 @@ describe("secret target registry", () => {
       "apiKey",
     ]);
 
-    expect(target).not.toBeNull();
     expect(target?.entry?.id).toBe("plugins.entries.exa.config.webSearch.apiKey");
 
     const fetchTarget = resolveConfigSecretTargetByPath([
@@ -69,7 +81,6 @@ describe("secret target registry", () => {
       "webFetch",
       "apiKey",
     ]);
-    expect(fetchTarget).not.toBeNull();
     expect(fetchTarget?.entry?.id).toBe("plugins.entries.firecrawl.config.webFetch.apiKey");
   });
 
@@ -88,7 +99,6 @@ describe("secret target registry", () => {
       "apiKey",
     ]);
 
-    expect(target).not.toBeNull();
     expect(target?.entry?.id).toBe("plugins.entries.voice-call.config.tts.providers.*.apiKey");
   });
 });

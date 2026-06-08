@@ -1,3 +1,4 @@
+// Verifies talk-mode config normalization behavior.
 import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../test-utils/talk-test-provider.js";
 import { buildTalkConfigResponse, normalizeTalkSection } from "./talk.js";
@@ -10,6 +11,8 @@ describe("talk normalization", () => {
       modelId: "eleven_v3",
       outputFormat: "pcm_44100",
       apiKey: "secret-key", // pragma: allowlist secret
+      consultThinkingLevel: " low ",
+      consultFastMode: true,
       speechLocale: " ru-RU ",
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
@@ -17,6 +20,8 @@ describe("talk normalization", () => {
 
     expect(normalized).toEqual({
       speechLocale: "ru-RU",
+      consultThinkingLevel: "low",
+      consultFastMode: true,
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     });
@@ -39,10 +44,12 @@ describe("talk normalization", () => {
           },
         },
         model: "gpt-realtime",
-        voice: "alloy",
+        speakerVoice: "alloy",
+        speakerVoiceId: "voice-123",
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
+        consultRouting: "force-agent-consult",
       },
       interruptOnSpeech: true,
     });
@@ -63,10 +70,12 @@ describe("talk normalization", () => {
           },
         },
         model: "gpt-realtime",
-        voice: "alloy",
+        speakerVoice: "alloy",
+        speakerVoiceId: "voice-123",
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
+        consultRouting: "force-agent-consult",
       },
       interruptOnSpeech: true,
     });
@@ -126,6 +135,37 @@ describe("talk normalization", () => {
       },
       speechLocale: "ru-RU",
       interruptOnSpeech: true,
+    });
+  });
+
+  it("preserves normalized realtime instructions in talk.config payloads", () => {
+    const payload = buildTalkConfigResponse({
+      realtime: {
+        provider: "openai",
+        providers: {
+          openai: {
+            model: "gpt-realtime",
+            speakerVoice: "alloy",
+          },
+        },
+        instructions: " Speak with crisp diction. ",
+      },
+    });
+
+    expect(payload?.realtime?.provider).toBe("openai");
+    expect(payload?.realtime?.instructions).toBe("Speak with crisp diction.");
+  });
+
+  it("maps legacy realtime voice to speakerVoice while preserving legacy output", () => {
+    const normalized = normalizeTalkSection({
+      realtime: {
+        voice: " alloy ",
+      },
+    });
+
+    expect(normalized?.realtime).toEqual({
+      speakerVoice: "alloy",
+      voice: "alloy",
     });
   });
 

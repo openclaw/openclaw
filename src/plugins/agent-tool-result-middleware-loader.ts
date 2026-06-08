@@ -1,3 +1,4 @@
+// Loads agent tool result middleware from plugin runtime surfaces.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
@@ -93,6 +94,7 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
   }
 }
 
-export const __testing = {
+export const testing = {
   listMiddlewareOwnerPluginIds,
 };
+export { testing as __testing };

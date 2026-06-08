@@ -1,4 +1,5 @@
-import { stripAssistantInternalScaffolding } from "openclaw/plugin-sdk/text-runtime";
+// Imessage plugin module implements sanitize outbound behavior.
+import { stripAssistantInternalScaffolding } from "openclaw/plugin-sdk/text-chunking";
 
 /**
  * Patterns that indicate assistant-internal metadata leaked into text.

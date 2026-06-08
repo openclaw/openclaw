@@ -1,3 +1,4 @@
+// Channels remove tests cover config mutation, plugin catalog repair hints, and account removal behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -35,6 +36,7 @@ vi.mock("../channels/plugins/catalog.js", async () => {
   return {
     ...actual,
     listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
+    listRawChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
   };
 });
 
@@ -64,6 +66,12 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 const runtime = createTestRuntime();
+
+function firstWrittenChannelsConfig() {
+  return configMocks.writeConfigFile.mock.calls[0]?.[0] as
+    | { channels?: Record<string, unknown> }
+    | undefined;
+}
 
 describe("channelsRemoveCommand", () => {
   beforeAll(async () => {
@@ -129,7 +137,7 @@ describe("channelsRemoveCommand", () => {
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
-      'Channel plugin "external-chat" is not installed. Run "openclaw channels add --channel external-chat" first.',
+      'Channel plugin "external-chat" is not installed. Run openclaw channels add --channel external-chat first.',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
@@ -171,13 +179,8 @@ describe("channelsRemoveCommand", () => {
 
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
     expect(registryRefreshMocks.refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
-    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        channels: expect.objectContaining({
-          "external-chat": expect.anything(),
-        }),
-      }),
-    );
+    const writtenConfig = firstWrittenChannelsConfig();
+    expect(writtenConfig?.channels?.["external-chat"]).toBeUndefined();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
@@ -240,12 +243,7 @@ describe("channelsRemoveCommand", () => {
       clientName: "gateway-client",
       deviceIdentity: null,
     });
-    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        channels: expect.objectContaining({
-          "external-chat": expect.anything(),
-        }),
-      }),
-    );
+    const writtenConfig = firstWrittenChannelsConfig();
+    expect(writtenConfig?.channels?.["external-chat"]).toBeUndefined();
   });
 });

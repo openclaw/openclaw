@@ -1,4 +1,6 @@
+// Googlechat tests cover monitor webhook plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { FixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebhookTarget } from "./monitor-types.js";
 import type { GoogleChatEvent } from "./types.js";
@@ -25,14 +27,21 @@ type ProcessEventFn = (event: GoogleChatEvent, target: WebhookTarget) => Promise
 let createGoogleChatWebhookRequestHandler: typeof import("./monitor-webhook.js").createGoogleChatWebhookRequestHandler;
 let warnAppPrincipalMisconfiguration: typeof import("./monitor-webhook.js").warnAppPrincipalMisconfiguration;
 
-function createRequest(authorization?: string): IncomingMessage {
+function createRequest(options?: {
+  authorization?: string;
+  headers?: Record<string, string>;
+  remoteAddress?: string;
+  url?: string;
+}): IncomingMessage {
   return {
     method: "POST",
-    url: "/googlechat",
+    url: options?.url ?? "/googlechat",
     headers: {
-      authorization: authorization ?? "",
+      authorization: options?.authorization ?? "",
       "content-type": "application/json",
+      ...options?.headers,
     },
+    socket: { remoteAddress: options?.remoteAddress ?? "203.0.113.10" },
   } as IncomingMessage;
 }
 
@@ -78,15 +87,21 @@ function installSimplePipeline(targets: unknown[]) {
 async function runWebhookHandler(options?: {
   processEvent?: ProcessEventFn;
   authorization?: string;
+  webhookRateLimiter?: FixedWindowRateLimiter;
 }) {
   const processEvent: ProcessEventFn =
     options?.processEvent ?? (vi.fn(async () => {}) as ProcessEventFn);
   const handler = createGoogleChatWebhookRequestHandler({
     webhookTargets: new Map(),
+    webhookRateLimiter: options?.webhookRateLimiter ?? {
+      isRateLimited: vi.fn(() => false),
+      size: vi.fn(() => 0),
+      clear: vi.fn(),
+    },
     webhookInFlightLimiter: {} as never,
     processEvent,
   });
-  const req = createRequest(options?.authorization);
+  const req = createRequest({ authorization: options?.authorization });
   const res = createResponse();
   await expect(handler(req, res)).resolves.toBe(true);
   return { processEvent, res };
@@ -109,19 +124,134 @@ describe("googlechat monitor webhook", () => {
     vi.resetModules();
   });
 
-  it("accepts add-on payloads that carry systemIdToken in the body", async () => {
-    installSimplePipeline([
-      {
-        account: {
-          accountId: "default",
-          config: { appPrincipal: "chat-app" },
-        },
-        runtime: { error: vi.fn() },
-        statusSink: vi.fn(),
-        audienceType: "app-url",
-        audience: "https://example.com/googlechat",
-      },
+  it("passes a fixed-window request limiter to the shared webhook pipeline", async () => {
+    const rateLimiter: FixedWindowRateLimiter = {
+      isRateLimited: vi.fn(() => false),
+      size: vi.fn(() => 0),
+      clear: vi.fn(),
+    };
+    const webhookTargets = new Map<string, WebhookTarget[]>([
+      [
+        "/googlechat",
+        [
+          {
+            account: {
+              accountId: "default",
+              config: { appPrincipal: "chat-app" },
+            },
+            config: {
+              gateway: {
+                trustedProxies: ["10.0.0.0/24"],
+              },
+            },
+            runtime: {},
+            core: {} as never,
+            path: "/googlechat",
+            mediaMaxMb: 20,
+          } as unknown as WebhookTarget,
+        ],
+      ],
     ]);
+    const webhookInFlightLimiter = {} as never;
+    const processEvent = vi.fn(async () => {});
+    const handler = createGoogleChatWebhookRequestHandler({
+      webhookTargets,
+      webhookRateLimiter: rateLimiter,
+      webhookInFlightLimiter,
+      processEvent,
+    });
+    const req = createRequest({
+      url: "/googlechat?ignored=1",
+      headers: {
+        "x-forwarded-for": "198.51.100.7, 10.0.0.1",
+      },
+      remoteAddress: "10.0.0.1",
+    });
+    const res = createResponse();
+    withResolvedWebhookRequestPipeline.mockResolvedValue(true);
+
+    await expect(handler(req, res)).resolves.toBe(true);
+
+    expect(withResolvedWebhookRequestPipeline).toHaveBeenCalledWith({
+      req,
+      res,
+      targetsByPath: webhookTargets,
+      allowMethods: ["POST"],
+      requireJsonContentType: true,
+      rateLimiter,
+      rateLimitKey: "/googlechat:198.51.100.7",
+      inFlightLimiter: webhookInFlightLimiter,
+      handle: expect.any(Function),
+    });
+  });
+
+  it("uses the unknown rate-limit bucket when a trusted proxy omits client headers", async () => {
+    const rateLimiter: FixedWindowRateLimiter = {
+      isRateLimited: vi.fn(() => false),
+      size: vi.fn(() => 0),
+      clear: vi.fn(),
+    };
+    const webhookTargets = new Map<string, WebhookTarget[]>([
+      [
+        "/googlechat",
+        [
+          {
+            account: {
+              accountId: "default",
+              config: { appPrincipal: "chat-app" },
+            },
+            config: {
+              gateway: {
+                trustedProxies: ["10.0.0.0/24"],
+              },
+            },
+            runtime: {},
+            core: {} as never,
+            path: "/googlechat",
+            mediaMaxMb: 20,
+          } as unknown as WebhookTarget,
+        ],
+      ],
+    ]);
+    const webhookInFlightLimiter = {} as never;
+    const processEvent = vi.fn(async () => {});
+    const handler = createGoogleChatWebhookRequestHandler({
+      webhookTargets,
+      webhookRateLimiter: rateLimiter,
+      webhookInFlightLimiter,
+      processEvent,
+    });
+    const req = createRequest({ remoteAddress: "10.0.0.1" });
+    const res = createResponse();
+    withResolvedWebhookRequestPipeline.mockResolvedValue(true);
+
+    await expect(handler(req, res)).resolves.toBe(true);
+
+    expect(withResolvedWebhookRequestPipeline).toHaveBeenCalledWith({
+      req,
+      res,
+      targetsByPath: webhookTargets,
+      allowMethods: ["POST"],
+      requireJsonContentType: true,
+      rateLimiter,
+      rateLimitKey: "/googlechat:unknown",
+      inFlightLimiter: webhookInFlightLimiter,
+      handle: expect.any(Function),
+    });
+  });
+
+  it("accepts add-on payloads that carry systemIdToken in the body", async () => {
+    const target = {
+      account: {
+        accountId: "default",
+        config: { appPrincipal: "chat-app" },
+      },
+      runtime: { error: vi.fn() },
+      statusSink: vi.fn(),
+      audienceType: "app-url",
+      audience: "https://example.com/googlechat",
+    };
+    installSimplePipeline([target]);
     readJsonWebhookBodyOrReject.mockResolvedValue({
       ok: true,
       value: {
@@ -138,9 +268,9 @@ describe("googlechat monitor webhook", () => {
       },
     });
     resolveWebhookTargetWithAuthOrReject.mockImplementation(async ({ isMatch, targets }) => {
-      for (const target of targets) {
-        if (await isMatch(target)) {
-          return target;
+      for (const targetLocal of targets) {
+        if (await isMatch(targetLocal)) {
+          return targetLocal;
         }
       }
       return null;
@@ -148,21 +278,102 @@ describe("googlechat monitor webhook", () => {
     verifyGoogleChatRequest.mockResolvedValue({ ok: true });
     const { processEvent, res } = await runWebhookHandler();
 
-    expect(verifyGoogleChatRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bearer: "addon-token",
-        expectedAddOnPrincipal: "chat-app",
-      }),
-    );
+    expect(verifyGoogleChatRequest).toHaveBeenCalledWith({
+      bearer: "addon-token",
+      audienceType: "app-url",
+      audience: "https://example.com/googlechat",
+      expectedAddOnPrincipal: "chat-app",
+    });
     expect(processEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         type: "MESSAGE",
         space: { name: "spaces/AAA" },
-      }),
-      expect.anything(),
+        message: { name: "spaces/AAA/messages/1", text: "hello" },
+        user: { name: "users/123" },
+        eventTime: "2026-03-22T00:00:00.000Z",
+      },
+      target,
     );
     expect(res.statusCode).toBe(200);
     expect(res.headers["Content-Type"]).toBe("application/json");
+    expect(res.body).toBe("{}");
+  });
+
+  it("normalizes add-on card-click payloads for approval actions", async () => {
+    const target = {
+      account: {
+        accountId: "default",
+        config: { appPrincipal: "chat-app" },
+      },
+      runtime: { error: vi.fn() },
+      statusSink: vi.fn(),
+      audienceType: "app-url",
+      audience: "https://example.com/googlechat",
+    };
+    installSimplePipeline([target]);
+    readJsonWebhookBodyOrReject.mockResolvedValue({
+      ok: true,
+      value: {
+        commonEventObject: {
+          hostApp: "CHAT",
+          parameters: {
+            openclaw_action: "approval",
+            token: "token-1",
+          },
+        },
+        authorizationEventObject: { systemIdToken: "addon-token" },
+        chat: {
+          eventTime: "2026-03-22T00:00:00.000Z",
+          user: { name: "users/123" },
+          buttonClickedPayload: {
+            space: { name: "spaces/AAA" },
+            message: { name: "spaces/AAA/messages/1" },
+          },
+        },
+      },
+    });
+    resolveWebhookTargetWithAuthOrReject.mockImplementation(async ({ isMatch, targets }) => {
+      for (const targetLocal of targets) {
+        if (await isMatch(targetLocal)) {
+          return targetLocal;
+        }
+      }
+      return null;
+    });
+    verifyGoogleChatRequest.mockResolvedValue({ ok: true });
+    const { processEvent, res } = await runWebhookHandler();
+
+    expect(verifyGoogleChatRequest).toHaveBeenCalledWith({
+      bearer: "addon-token",
+      audienceType: "app-url",
+      audience: "https://example.com/googlechat",
+      expectedAddOnPrincipal: "chat-app",
+    });
+    expect(processEvent).toHaveBeenCalledWith(
+      {
+        type: "CARD_CLICKED",
+        space: { name: "spaces/AAA" },
+        message: { name: "spaces/AAA/messages/1" },
+        user: { name: "users/123" },
+        eventTime: "2026-03-22T00:00:00.000Z",
+        action: {
+          parameters: [
+            { key: "openclaw_action", value: "approval" },
+            { key: "token", value: "token-1" },
+          ],
+        },
+        commonEventObject: {
+          parameters: {
+            openclaw_action: "approval",
+            token: "token-1",
+          },
+        },
+      },
+      target,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["Content-Type"]).toBe("application/json");
+    expect(res.body).toBe("{}");
   });
 
   it("logs WARN with reason when verification fails (missing token)", async () => {
@@ -204,8 +415,7 @@ describe("googlechat monitor webhook", () => {
     verifyGoogleChatRequest.mockResolvedValue({ ok: false, reason: "missing token" });
     const { processEvent, res } = await runWebhookHandler();
 
-    expect(logFn).toHaveBeenCalledWith(expect.stringContaining("acct-1"));
-    expect(logFn).toHaveBeenCalledWith(expect.stringContaining("missing token"));
+    expect(logFn).toHaveBeenCalledWith("[acct-1] Google Chat webhook auth rejected: missing token");
     expect(processEvent).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(401);
   });
@@ -252,9 +462,8 @@ describe("googlechat monitor webhook", () => {
     });
     const { processEvent, res } = await runWebhookHandler();
 
-    expect(logFn).toHaveBeenCalledWith(expect.stringContaining("acct-2"));
     expect(logFn).toHaveBeenCalledWith(
-      expect.stringContaining("unexpected add-on principal: 999999999999999999999"),
+      "[acct-2] Google Chat webhook auth rejected: unexpected add-on principal: 999999999999999999999",
     );
     expect(processEvent).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(401);
@@ -302,32 +511,33 @@ describe("googlechat monitor webhook", () => {
 
     expect(logFn).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(200);
+    expect(res.headers["Content-Type"]).toBe("application/json");
+    expect(res.body).toBe("{}");
   });
 
   it("does not log failed candidate targets when another target verifies", async () => {
     const logA = vi.fn();
     const logB = vi.fn();
-    installSimplePipeline([
-      {
-        account: {
-          accountId: "acct-a",
-          config: { appPrincipal: "chat-app-a" },
-        },
-        runtime: { log: logA, error: vi.fn() },
-        audienceType: "app-url",
-        audience: "https://example.com/googlechat",
+    const targetA = {
+      account: {
+        accountId: "acct-a",
+        config: { appPrincipal: "chat-app-a" },
       },
-      {
-        account: {
-          accountId: "acct-b",
-          config: { appPrincipal: "chat-app-b" },
-        },
-        runtime: { log: logB, error: vi.fn() },
-        statusSink: vi.fn(),
-        audienceType: "app-url",
-        audience: "https://example.com/googlechat",
+      runtime: { log: logA, error: vi.fn() },
+      audienceType: "app-url",
+      audience: "https://example.com/googlechat",
+    };
+    const targetB = {
+      account: {
+        accountId: "acct-b",
+        config: { appPrincipal: "chat-app-b" },
       },
-    ]);
+      runtime: { log: logB, error: vi.fn() },
+      statusSink: vi.fn(),
+      audienceType: "app-url",
+      audience: "https://example.com/googlechat",
+    };
+    installSimplePipeline([targetA, targetB]);
     readJsonWebhookBodyOrReject.mockResolvedValue({
       ok: true,
       value: {
@@ -359,12 +569,18 @@ describe("googlechat monitor webhook", () => {
     expect(logA).not.toHaveBeenCalled();
     expect(logB).not.toHaveBeenCalled();
     expect(processEvent).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        account: expect.objectContaining({ accountId: "acct-b" }),
-      }),
+      {
+        type: "MESSAGE",
+        space: { name: "spaces/BBB" },
+        message: { name: "spaces/BBB/messages/1", text: "hi" },
+        user: { name: "users/123" },
+        eventTime: "2026-03-22T00:00:00.000Z",
+      },
+      targetB,
     );
     expect(res.statusCode).toBe(200);
+    expect(res.headers["Content-Type"]).toBe("application/json");
+    expect(res.body).toBe("{}");
   });
 
   it("rejects missing add-on bearer tokens before dispatch", async () => {
@@ -393,8 +609,9 @@ describe("googlechat monitor webhook", () => {
     const { processEvent, res } = await runWebhookHandler();
 
     expect(processEvent).not.toHaveBeenCalled();
-    expect(logFn).toHaveBeenCalledWith(expect.stringContaining("default"));
-    expect(logFn).toHaveBeenCalledWith(expect.stringContaining("missing token"));
+    expect(logFn).toHaveBeenCalledWith(
+      "[default] Google Chat webhook auth rejected: missing token",
+    );
     expect(res.statusCode).toBe(401);
     expect(res.body).toBe("unauthorized");
   });
@@ -410,9 +627,9 @@ describe("warnAppPrincipalMisconfiguration", () => {
       log,
     });
     expect(log).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("acct-missing"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("appPrincipal is missing"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("numeric OAuth 2.0 client ID"));
+    expect(log).toHaveBeenCalledWith(
+      '[acct-missing] appPrincipal is missing for audienceType "app-url"; add-on token verification will fail. Set appPrincipal to the numeric OAuth 2.0 client ID (uniqueId, 21 digits), not an email.',
+    );
   });
 
   it("warns when appPrincipal contains @ for app-url audience", () => {
@@ -424,9 +641,9 @@ describe("warnAppPrincipalMisconfiguration", () => {
       log,
     });
     expect(log).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("acct-email"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("looks like an email"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("numeric OAuth 2.0 client ID"));
+    expect(log).toHaveBeenCalledWith(
+      '[acct-email] appPrincipal "bot@example.iam.gserviceaccount.com" looks like an email address. Set appPrincipal to the numeric OAuth 2.0 client ID (uniqueId, 21 digits), not an email.',
+    );
   });
 
   it("does not warn for valid numeric appPrincipal with app-url audience", () => {

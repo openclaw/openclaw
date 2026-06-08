@@ -1,3 +1,4 @@
+/** Tests that explicit channel secret target lookup avoids broad manifest rediscovery. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
@@ -53,9 +54,11 @@ describe("secret target registry fast path", () => {
   it("resolves bundled channel targets by explicit channel id without manifest scans", () => {
     const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
 
-    expect(target).not.toBeNull();
-    expect(target?.entry.id).toBe("channels.googlechat.serviceAccount");
-    expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
+    if (!target) {
+      throw new Error("expected googlechat service account target");
+    }
+    expect(target.entry.id).toBe("channels.googlechat.serviceAccount");
+    expect(target.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "googlechat",
       artifactBasename: "secret-contract-api.js",

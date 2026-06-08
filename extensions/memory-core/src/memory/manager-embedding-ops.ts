@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager embedding ops behavior.
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -12,9 +13,11 @@ import {
   chunkMarkdown,
   hashText,
   remapChunkLines,
+  retryTransientMemoryRead,
   type MemoryChunk,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   MEMORY_BATCH_FAILURE_LIMIT,
   recordMemoryBatchFailure,
@@ -25,12 +28,15 @@ import {
   loadMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
+import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   buildMemoryEmbeddingBatches,
   buildTextEmbeddingInputs,
   filterNonEmptyMemoryChunks,
   isRetryableMemoryEmbeddingError,
+  isSplittableMemoryEmbeddingTransportError,
   resolveMemoryEmbeddingRetryDelay,
+  runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
 import { deleteMemoryFtsRows } from "./manager-fts-state.js";
@@ -52,6 +58,17 @@ const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
 
 const log = createSubsystemLogger("memory");
+
+function resolveEmbeddingSecondsTimeoutMs(seconds: number): number {
+  if (!Number.isFinite(seconds)) {
+    return MAX_TIMER_TIMEOUT_MS;
+  }
+  const timeoutMs = Math.floor(seconds * 1000);
+  return resolveTimerTimeoutMs(
+    Number.isFinite(timeoutMs) ? timeoutMs : MAX_TIMER_TIMEOUT_MS,
+    MAX_TIMER_TIMEOUT_MS,
+  );
+}
 
 type MemoryIndexEntry = {
   path: string;
@@ -76,7 +93,7 @@ export function resolveEmbeddingTimeoutMs(params: {
   if (params.kind === "query") {
     const runtimeTimeoutMs = params.providerRuntime?.inlineQueryTimeoutMs;
     if (typeof runtimeTimeoutMs === "number" && runtimeTimeoutMs > 0) {
-      return runtimeTimeoutMs;
+      return resolveTimerTimeoutMs(runtimeTimeoutMs, EMBEDDING_QUERY_TIMEOUT_REMOTE_MS);
     }
     return params.providerId === "local"
       ? EMBEDDING_QUERY_TIMEOUT_LOCAL_MS
@@ -85,11 +102,11 @@ export function resolveEmbeddingTimeoutMs(params: {
 
   const configuredTimeoutSeconds = params.configuredBatchTimeoutSeconds;
   if (typeof configuredTimeoutSeconds === "number" && configuredTimeoutSeconds > 0) {
-    return configuredTimeoutSeconds * 1000;
+    return resolveEmbeddingSecondsTimeoutMs(configuredTimeoutSeconds);
   }
   const runtimeTimeoutMs = params.providerRuntime?.inlineBatchTimeoutMs;
   if (typeof runtimeTimeoutMs === "number" && runtimeTimeoutMs > 0) {
-    return runtimeTimeoutMs;
+    return resolveTimerTimeoutMs(runtimeTimeoutMs, EMBEDDING_BATCH_TIMEOUT_REMOTE_MS);
   }
   return params.providerId === "local"
     ? EMBEDDING_BATCH_TIMEOUT_LOCAL_MS
@@ -111,11 +128,40 @@ export function resolveMemoryIndexConcurrency(params: {
   return params.providerId === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
 }
 
+export async function runEmbeddingOperationWithTimeout<T>(params: {
+  timeoutMs: number;
+  message: string;
+  run: (signal: AbortSignal) => Promise<T>;
+}): Promise<T> {
+  const controller = new AbortController();
+  if (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0) {
+    return await params.run(controller.signal);
+  }
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  let timer: NodeJS.Timeout | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(params.message);
+      reject(error);
+      controller.abort(error);
+    }, timeoutMs);
+  });
+  try {
+    const operation = params.run(controller.signal);
+    return (await Promise.race([operation, timeoutPromise])) as T;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected abstract batchFailureCount: number;
   protected abstract batchFailureLastError?: string;
   protected abstract batchFailureLastProvider?: string;
   protected abstract batchFailureLock: Promise<void>;
+  protected abstract markLocalEmbeddingProviderDegraded(err: unknown): void;
 
   protected pruneEmbeddingCacheIfNeeded(): void {
     if (!this.cache.enabled) {
@@ -167,9 +213,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       const inputs = buildTextEmbeddingInputs(batch);
       const hasStructuredInputs = inputs.some((input) => hasNonTextEmbeddingParts(input));
       if (hasStructuredInputs && !provider.embedBatchInputs) {
-        throw new Error(
-          `Embedding provider "${provider.id}" does not support multimodal memory inputs.`,
-        );
+        throw createMemoryEmbeddingOperationError({
+          operation: "structured-batch",
+          providerId: provider.id,
+          cause: new Error(
+            `Embedding provider "${provider.id}" does not support multimodal memory inputs.`,
+          ),
+        });
       }
       const batchEmbeddings = hasStructuredInputs
         ? await this.embedBatchInputsWithRetry(inputs)
@@ -296,27 +346,43 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!provider) {
       throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
     }
-    return await runMemoryEmbeddingRetryLoop({
-      run: async () => {
-        const timeoutMs = this.resolveEmbeddingTimeout("batch");
-        log.debug("memory embeddings: batch start", {
-          provider: provider.id,
-          items: texts.length,
-          timeoutMs,
-        });
-        return await this.withTimeout(
-          provider.embedBatch(texts),
-          timeoutMs,
-          `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
-        );
-      },
-      isRetryable: isRetryableMemoryEmbeddingError,
-      waitForRetry: async (delayMs) => {
-        await this.waitForEmbeddingRetry(delayMs, "retrying");
-      },
-      maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-      baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
-    });
+    try {
+      return await runMemoryEmbeddingBatchRetryWithSplit({
+        items: texts,
+        run: async (batchTexts) => {
+          const timeoutMs = this.resolveEmbeddingTimeout("batch");
+          log.debug("memory embeddings: batch start", {
+            provider: provider.id,
+            items: batchTexts.length,
+            timeoutMs,
+          });
+          return await runEmbeddingOperationWithTimeout({
+            timeoutMs,
+            message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
+            run: async (signal) => await provider.embedBatch(batchTexts, { signal }),
+          });
+        },
+        isRetryable: isRetryableMemoryEmbeddingError,
+        isSplittable: isSplittableMemoryEmbeddingTransportError,
+        waitForRetry: async (delayMs) => {
+          await this.waitForEmbeddingRetry(delayMs, "retrying");
+        },
+        maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
+        baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+        onSplit: ({ itemCount, splitAt }) => {
+          log.warn(
+            `memory embeddings transport failed after retries; splitting batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
+          );
+        },
+      });
+    } catch (err) {
+      this.markLocalEmbeddingProviderDegraded(err);
+      throw createMemoryEmbeddingOperationError({
+        operation: "batch",
+        providerId: provider.id,
+        cause: err,
+      });
+    }
   }
 
   protected async embedBatchInputsWithRetry(inputs: EmbeddingInput[]): Promise<number[][]> {
@@ -328,27 +394,43 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!embedBatchInputs) {
       return await this.embedBatchWithRetry(inputs.map((input) => input.text));
     }
-    return await runMemoryEmbeddingRetryLoop({
-      run: async () => {
-        const timeoutMs = this.resolveEmbeddingTimeout("batch");
-        log.debug("memory embeddings: structured batch start", {
-          provider: provider.id,
-          items: inputs.length,
-          timeoutMs,
-        });
-        return await this.withTimeout(
-          embedBatchInputs(inputs),
-          timeoutMs,
-          `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
-        );
-      },
-      isRetryable: isRetryableMemoryEmbeddingError,
-      waitForRetry: async (delayMs) => {
-        await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
-      },
-      maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-      baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
-    });
+    try {
+      return await runMemoryEmbeddingBatchRetryWithSplit({
+        items: inputs,
+        run: async (batchInputs) => {
+          const timeoutMs = this.resolveEmbeddingTimeout("batch");
+          log.debug("memory embeddings: structured batch start", {
+            provider: provider.id,
+            items: batchInputs.length,
+            timeoutMs,
+          });
+          return await runEmbeddingOperationWithTimeout({
+            timeoutMs,
+            message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
+            run: async (signal) => await embedBatchInputs(batchInputs, { signal }),
+          });
+        },
+        isRetryable: isRetryableMemoryEmbeddingError,
+        isSplittable: isSplittableMemoryEmbeddingTransportError,
+        waitForRetry: async (delayMs) => {
+          await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
+        },
+        maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
+        baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+        onSplit: ({ itemCount, splitAt }) => {
+          log.warn(
+            `memory embeddings transport failed after retries; splitting structured batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
+          );
+        },
+      });
+    } catch (err) {
+      this.markLocalEmbeddingProviderDegraded(err);
+      throw createMemoryEmbeddingOperationError({
+        operation: "structured-batch",
+        providerId: provider.id,
+        cause: err,
+      });
+    }
   }
 
   private async waitForEmbeddingRetry(delayMs: number, action: string): Promise<void> {
@@ -357,8 +439,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       Math.random(),
       EMBEDDING_RETRY_MAX_DELAY_MS,
     );
-    log.warn(`memory embeddings rate limited; ${action} in ${waitMs}ms`);
-    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    log.warn(`memory embeddings retryable error; ${action} in ${waitMs}ms`);
+    await new Promise((resolve) => {
+      setTimeout(resolve, waitMs);
+    });
   }
 
   private resolveEmbeddingTimeout(kind: "query" | "batch"): number {
@@ -370,17 +454,37 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  protected async embedQueryWithTimeout(text: string): Promise<number[]> {
-    if (!this.provider) {
+  protected async embedQueryWithRetry(text: string): Promise<number[]> {
+    const provider = this.provider;
+    if (!provider) {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
-    const timeoutMs = this.resolveEmbeddingTimeout("query");
-    log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
-    return await this.withTimeout(
-      this.provider.embedQuery(text),
-      timeoutMs,
-      `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
-    );
+    try {
+      return await runMemoryEmbeddingRetryLoop({
+        run: async () => {
+          const timeoutMs = this.resolveEmbeddingTimeout("query");
+          log.debug("memory embeddings: query start", { provider: provider.id, timeoutMs });
+          return await runEmbeddingOperationWithTimeout({
+            timeoutMs,
+            message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
+            run: async (signal) => await provider.embedQuery(text, { signal }),
+          });
+        },
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry: async (delayMs) => {
+          await this.waitForEmbeddingRetry(delayMs, "retrying query");
+        },
+        maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
+        baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+      });
+    } catch (err) {
+      this.markLocalEmbeddingProviderDegraded(err);
+      throw createMemoryEmbeddingOperationError({
+        operation: "query",
+        providerId: provider.id,
+        cause: err,
+      });
+    }
   }
 
   protected async withTimeout<T>(
@@ -391,9 +495,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       return await promise;
     }
+    const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
     let timer: NodeJS.Timeout | null = null;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      timer = setTimeout(() => reject(new Error(message)), resolvedTimeoutMs);
     });
     try {
       return (await Promise.race([promise, timeoutPromise])) as T;
@@ -652,7 +757,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       if ("kind" in entry && entry.kind === "multimodal") {
         return;
       }
-      const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
+      const content =
+        options.content ??
+        (await retryTransientMemoryRead(
+          () => fs.readFile(entry.absPath, "utf-8"),
+          `read memory markdown for indexing ${entry.absPath}`,
+        ));
       const chunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
       if (options.source === "sessions" && "lineMap" in entry) {
         remapChunkLines(chunks, entry.lineMap);
@@ -682,7 +792,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       structuredInputBytes = multimodalChunk.structuredInputBytes;
       chunks = [multimodalChunk.chunk];
     } else {
-      const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
+      const content =
+        options.content ??
+        (await retryTransientMemoryRead(
+          () => fs.readFile(entry.absPath, "utf-8"),
+          `read memory markdown for indexing ${entry.absPath}`,
+        ));
       const baseChunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
       chunks = this.provider
         ? enforceEmbeddingMaxInputTokens(this.provider, baseChunks, EMBEDDING_BATCH_MAX_TOKENS)

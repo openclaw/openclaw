@@ -1,3 +1,5 @@
+// Pinned mutation helper tests cover the Python helper that performs sandbox
+// filesystem mutations through directory file descriptors.
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -54,6 +56,17 @@ function runWritePlan(args: string[], input?: string, env?: NodeJS.ProcessEnv) {
     stdio: ["pipe", "pipe", "pipe"],
     env,
   });
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let err: unknown;
+  try {
+    await fs.access(targetPath);
+  } catch (caught) {
+    err = caught;
+  }
+  expect(err).toBeInstanceOf(Error);
+  expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
 const hasAbsolutePythonCandidate = SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES.some((candidate) =>
@@ -217,6 +230,8 @@ describe("sandbox pinned mutation helper", () => {
   it.runIf(process.platform !== "win32")(
     "rejects symlink-parent writes instead of materializing a temp file outside the mount",
     async () => {
+      // The helper must fail before creating temp files when a parent path is a
+      // symlink to another host directory.
       await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
         const workspace = path.join(root, "workspace");
         const outside = path.join(root, "outside");
@@ -227,7 +242,7 @@ describe("sandbox pinned mutation helper", () => {
         const result = runMutation(["write", workspace, "alias", "escape.txt", "0"], "owned");
 
         expect(result.status).not.toBe(0);
-        await expect(fs.readFile(path.join(outside, "escape.txt"), "utf8")).rejects.toThrow();
+        await expectPathMissing(path.join(outside, "escape.txt"));
       });
     },
   );
@@ -243,7 +258,7 @@ describe("sandbox pinned mutation helper", () => {
       const result = runMutation(["mkdirp", workspace, "alias/nested"]);
 
       expect(result.status).not.toBe(0);
-      await expect(fs.readFile(path.join(outside, "nested"), "utf8")).rejects.toThrow();
+      await expectPathMissing(path.join(outside, "nested"));
     });
   });
 
@@ -259,7 +274,7 @@ describe("sandbox pinned mutation helper", () => {
       const result = runMutation(["remove", workspace, "", "link.txt", "0", "0"]);
 
       expect(result.status).toBe(0);
-      await expect(fs.readlink(path.join(workspace, "link.txt"))).rejects.toThrow();
+      await expectPathMissing(path.join(workspace, "link.txt"));
       await expect(fs.readFile(path.join(outside, "secret.txt"), "utf8")).resolves.toBe(
         "classified",
       );
@@ -292,7 +307,7 @@ describe("sandbox pinned mutation helper", () => {
         await expect(fs.readFile(path.join(workspace, "from.txt"), "utf8")).resolves.toBe(
           "payload",
         );
-        await expect(fs.readFile(path.join(outside, "escape.txt"), "utf8")).rejects.toThrow();
+        await expectPathMissing(path.join(outside, "escape.txt"));
       });
     },
   );
@@ -322,7 +337,7 @@ describe("sandbox pinned mutation helper", () => {
         await expect(
           fs.readFile(path.join(destRoot, "moved", "nested", "file.txt"), "utf8"),
         ).resolves.toBe("payload");
-        await expect(fs.stat(path.join(sourceRoot, "dir"))).rejects.toThrow();
+        await expectPathMissing(path.join(sourceRoot, "dir"));
       });
     },
   );
@@ -353,7 +368,7 @@ describe("sandbox pinned mutation helper", () => {
 
         expect(result.status).not.toBe(0);
         expect(result.stderr).toMatch(/hardlinked file/i);
-        await expect(fs.stat(path.join(destRoot, "copied.txt"))).rejects.toThrow();
+        await expectPathMissing(path.join(destRoot, "copied.txt"));
         await expect(fs.readFile(path.join(outsideRoot, "secret.txt"), "utf8")).resolves.toBe(
           "classified",
         );
@@ -364,6 +379,8 @@ describe("sandbox pinned mutation helper", () => {
   it.runIf(process.platform !== "win32")(
     "keeps source intact and cleans temp directories when directory rename fallback fails",
     async () => {
+      // EXDEV fallback copies first and removes only after validation; failures
+      // must not delete or partially replace the source tree.
       await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
         const sourceRoot = path.join(root, "source");
         const destRoot = path.join(root, "dest");
@@ -397,8 +414,8 @@ describe("sandbox pinned mutation helper", () => {
         await expect(
           fs.readFile(path.join(sourceRoot, "dir", "nested", "linked.txt"), "utf8"),
         ).resolves.toBe("classified");
-        await expect(fs.stat(path.join(destRoot, "moved"))).rejects.toThrow();
-        await expect(fs.readdir(destRoot)).resolves.toEqual([]);
+        await expectPathMissing(path.join(destRoot, "moved"));
+        await expect(fs.readdir(destRoot)).resolves.toStrictEqual([]);
       });
     },
   );

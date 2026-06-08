@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for process poll timeout and retry hints.
+ * Poll waits, aborts, and diagnostic retry suggestions must stay bounded.
+ */
 import { afterEach, expect, test, vi } from "vitest";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import {
@@ -128,9 +132,7 @@ test("process poll clamps long waits to 30 seconds", async () => {
 
 test("process poll schema advertises the 30 second wait cap", () => {
   const timeoutSchema = processSchema.properties.timeout;
-  expect(timeoutSchema).toMatchObject({
-    description: expect.stringContaining("max 30000 ms"),
-  });
+  expect((timeoutSchema as { description?: string }).description).toContain("max 30000 ms");
 });
 
 test("process poll aborts while waiting for completion", async () => {
@@ -149,7 +151,14 @@ test("process poll aborts while waiting for completion", async () => {
     await vi.advanceTimersByTimeAsync(500);
     controller.abort();
 
-    await expect(pollPromise).rejects.toMatchObject({ name: "AbortError" });
+    let err: unknown;
+    try {
+      await pollPromise;
+    } catch (caught) {
+      err = caught;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("AbortError");
   } finally {
     vi.useRealTimers();
   }

@@ -1,22 +1,31 @@
+/**
+ * Subagent registry state persistence bridge.
+ *
+ * Merges process-local active runs with persisted SQLite state for cross-process readers.
+ */
 import {
-  loadSubagentRegistryFromDisk,
-  saveSubagentRegistryToDisk,
-} from "./subagent-registry.store.js";
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function persistSubagentRunsToDisk(runs: Map<string, SubagentRunRecord>) {
   try {
-    saveSubagentRegistryToDisk(runs);
+    saveSubagentRegistryToSqlite(runs);
   } catch {
     // ignore persistence failures
   }
+}
+
+export function persistSubagentRunsToDiskOrThrow(runs: Map<string, SubagentRunRecord>) {
+  saveSubagentRegistryToSqlite(runs);
 }
 
 export function restoreSubagentRunsFromDisk(params: {
   runs: Map<string, SubagentRunRecord>;
   mergeOnly?: boolean;
 }) {
-  const restored = loadSubagentRegistryFromDisk();
+  const restored = loadSubagentRegistryFromSqlite();
   if (restored.size === 0) {
     return 0;
   }
@@ -44,7 +53,7 @@ export function getSubagentRunsSnapshotForRead(
   if (shouldReadDisk) {
     try {
       // Persisted state lets other worker processes observe active runs.
-      for (const [runId, entry] of loadSubagentRegistryFromDisk().entries()) {
+      for (const [runId, entry] of loadSubagentRegistryFromSqlite().entries()) {
         merged.set(runId, entry);
       }
     } catch {

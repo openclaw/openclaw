@@ -1,3 +1,4 @@
+// Googlechat tests cover monitor.webhook routing plugin behavior.
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import {
@@ -219,7 +220,7 @@ describe("Google Chat webhook routing", () => {
       const onSpy = vi.spyOn(req, "on");
       const res = await dispatchWebhookRequest(req);
       expect(res.statusCode).toBe(401);
-      expect(onSpy).not.toHaveBeenCalledWith("data", expect.any(Function));
+      expect(onSpy.mock.calls.map(([event]) => event)).not.toContain("data");
     } finally {
       unregister();
     }

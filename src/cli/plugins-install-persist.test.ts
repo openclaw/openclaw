@@ -1,3 +1,4 @@
+// Plugin install persist tests cover saving installed plugin records after install.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -17,6 +18,22 @@ import {
   writePersistedInstalledPluginIndexInstallRecords,
   applyPluginUninstallDirectoryRemoval,
 } from "./plugins-cli-test-helpers.js";
+
+function requireMockCallArg(
+  mockFn: { mock: { calls: unknown[][] } },
+  label: string,
+  index = 0,
+): Record<string, unknown> {
+  const arg = mockFn.mock.calls[index]?.[0] as Record<string, unknown> | undefined;
+  if (!arg) {
+    throw new Error(`expected ${label} call #${index + 1}`);
+  }
+  return arg;
+}
+
+function expectRuntimeLogIncludes(fragment: string) {
+  expect(runtimeLogs.join("\n")).toContain(fragment);
+}
 
 describe("persistPluginInstall", () => {
   beforeEach(() => {
@@ -59,12 +76,15 @@ describe("persistPluginInstall", () => {
     });
 
     expect(next).toEqual(enabledConfig);
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
-      alpha: expect.objectContaining({
-        source: "npm",
-        spec: "alpha@1.0.0",
-        installPath: "/tmp/alpha",
-      }),
+    const persistedRecords = requireMockCallArg(
+      writePersistedInstalledPluginIndexInstallRecords,
+      "writePersistedInstalledPluginIndexInstallRecords",
+    );
+    expect(persistedRecords.alpha).toEqual({
+      source: "npm",
+      spec: "alpha@1.0.0",
+      installPath: "/tmp/alpha",
+      installedAt: "2026-04-25T00:00:00.000Z",
     });
     expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
     expect(replaceConfigFile).toHaveBeenCalledWith({
@@ -75,16 +95,14 @@ describe("persistPluginInstall", () => {
         unsetPaths: [["plugins", "installs"]],
       },
     });
-    expect(refreshPluginRegistry).toHaveBeenCalledWith({
-      config: enabledConfig,
-      installRecords: {
-        alpha: expect.objectContaining({
-          source: "npm",
-          spec: "alpha@1.0.0",
-          installPath: "/tmp/alpha",
-        }),
-      },
-      reason: "source-changed",
+    const refreshParams = requireMockCallArg(refreshPluginRegistry, "refreshPluginRegistry");
+    expect(refreshParams.config).toBe(enabledConfig);
+    expect(refreshParams.reason).toBe("source-changed");
+    expect((refreshParams.installRecords as Record<string, unknown>).alpha).toEqual({
+      source: "npm",
+      spec: "alpha@1.0.0",
+      installPath: "/tmp/alpha",
+      installedAt: "2026-04-25T00:00:00.000Z",
     });
     expect(clearPluginRegistryLoadCache).toHaveBeenCalledTimes(1);
   });
@@ -122,10 +140,8 @@ describe("persistPluginInstall", () => {
     });
 
     expect(next).toEqual(enabledConfig);
-    expect(refreshPluginRegistry).toHaveBeenCalled();
-    expect(
-      runtimeLogs.some((line) => line.includes("Plugin runtime cache invalidation failed")),
-    ).toBe(true);
+    expect(refreshPluginRegistry).toHaveBeenCalledTimes(1);
+    expectRuntimeLogIncludes("Plugin runtime cache invalidation failed");
   });
 
   it("removes a replaced managed install directory before refreshing the registry", async () => {
@@ -386,9 +402,44 @@ describe("persistPluginInstall", () => {
     });
 
     expect(next).toEqual(enabledConfig);
-    expect(refreshPluginRegistry).toHaveBeenCalled();
+    expect(refreshPluginRegistry).toHaveBeenCalledTimes(1);
     expect(clearPluginRegistryLoadCache).toHaveBeenCalledTimes(1);
-    expect(runtimeLogs.some((line) => line.includes("Plugin registry refresh failed"))).toBe(true);
+    expectRuntimeLogIncludes("Plugin registry refresh failed");
+  });
+
+  it("skips runtime cache invalidation when the caller opts out", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          alpha: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "alpha",
+      install: {
+        source: "npm",
+        spec: "alpha@1.0.0",
+        installPath: "/tmp/alpha",
+      },
+      invalidateRuntimeCache: false,
+    });
+
+    expect(next).toEqual(enabledConfig);
+    expect(refreshPluginRegistry).toHaveBeenCalledTimes(1);
+    expect(clearPluginRegistryLoadCache).not.toHaveBeenCalled();
   });
 
   it("removes stale denylist entries before enabling installed plugins", async () => {
@@ -498,11 +549,9 @@ describe("persistPluginInstall", () => {
       config: enabledConfig,
       onlyPluginIds: ["legacy-memory"],
     });
-    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: enabledConfig,
-      }),
-    );
+    expect(
+      requireMockCallArg(loadPluginManifestRegistry, "loadPluginManifestRegistry").config,
+    ).toBe(enabledConfig);
     expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
     expect(next.plugins?.slots?.memory).toBe("legacy-memory");
   });
@@ -568,11 +617,9 @@ describe("persistPluginInstall", () => {
     });
 
     expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
-    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: enabledConfig,
-      }),
-    );
+    expect(
+      requireMockCallArg(loadPluginManifestRegistry, "loadPluginManifestRegistry").config,
+    ).toBe(enabledConfig);
     expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
     expect(next.plugins?.slots?.memory).toBe("memory-b");
   });
@@ -624,11 +671,9 @@ describe("persistPluginInstall", () => {
       config: enabledConfig,
       onlyPluginIds: ["plain"],
     });
-    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: enabledConfig,
-      }),
-    );
+    expect(
+      requireMockCallArg(loadPluginManifestRegistry, "loadPluginManifestRegistry").config,
+    ).toBe(enabledConfig);
     expect(next).toEqual(enabledConfig);
   });
 
@@ -658,11 +703,16 @@ describe("persistPluginInstall", () => {
     expect(next).toEqual(baseConfig);
     expect(enablePluginInConfig).not.toHaveBeenCalled();
     expect(applyExclusiveSlotSelection).not.toHaveBeenCalled();
-    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
-      "memory-lancedb": expect.objectContaining({
-        source: "path",
-        sourcePath: "/app/dist/extensions/memory-lancedb",
-      }),
+    const persistedRecords = requireMockCallArg(
+      writePersistedInstalledPluginIndexInstallRecords,
+      "writePersistedInstalledPluginIndexInstallRecords",
+    );
+    expect(persistedRecords["memory-lancedb"]).toEqual({
+      source: "path",
+      spec: "memory-lancedb",
+      sourcePath: "/app/dist/extensions/memory-lancedb",
+      installPath: "/app/dist/extensions/memory-lancedb",
+      installedAt: "2026-04-25T00:00:00.000Z",
     });
     expect(writeConfigFile).toHaveBeenCalledWith(baseConfig);
   });

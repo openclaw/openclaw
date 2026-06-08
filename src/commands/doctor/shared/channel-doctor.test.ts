@@ -1,3 +1,4 @@
+// Channel doctor tests cover shared channel health checks and repair hints.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectChannelDoctorCompatibilityMutations,
@@ -127,7 +128,7 @@ describe("channel doctor compatibility mutations", () => {
   it("skips plugin discovery when no channels are configured", () => {
     const result = collectChannelDoctorCompatibilityMutations({} as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
   });
 
@@ -140,7 +141,7 @@ describe("channel doctor compatibility mutations", () => {
       },
     } as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
     expect(mocks.getLoadedChannelPlugin).not.toHaveBeenCalled();
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalled();
@@ -156,7 +157,7 @@ describe("channel doctor compatibility mutations", () => {
       },
     } as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
     expect(mocks.getLoadedChannelPlugin).not.toHaveBeenCalled();
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalled();
@@ -267,7 +268,7 @@ describe("channel doctor compatibility mutations", () => {
       },
     } as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("discord");
     expect(mocks.getBundledChannelSetupPlugin).toHaveBeenCalledWith("discord");
     expect(mocks.getBundledChannelPlugin).toHaveBeenCalledWith("discord");

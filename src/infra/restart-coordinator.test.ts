@@ -1,3 +1,4 @@
+// Covers safe gateway restart preflight and requests.
 import { describe, expect, it, vi } from "vitest";
 import {
   createSafeGatewayRestartPreflight,
@@ -115,5 +116,66 @@ describe("safe gateway restart coordinator", () => {
     });
 
     expect(result.status).toBe("coalesced");
+  });
+
+  it("forwards skipDeferral to scheduleGatewaySigusr1Restart and marks status scheduled", () => {
+    scheduleGatewaySigusr1Restart.mockReturnValueOnce({
+      ok: true,
+      pid: 123,
+      signal: "SIGUSR1",
+      delayMs: 0,
+      mode: "emit",
+      coalesced: false,
+      cooldownMsApplied: 0,
+    });
+
+    const result = requestSafeGatewayRestart({
+      reason: "test.skip-deferral",
+      skipDeferral: true,
+      inspect: {
+        getQueueSize: () => 1,
+        getPendingReplies: () => 0,
+        getEmbeddedRuns: () => 0,
+        getActiveTasks: () => 0,
+        getTaskBlockers: () => [],
+      },
+    });
+
+    expect(result.status).toBe("scheduled");
+    expect(result.preflight.safe).toBe(false);
+    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
+      delayMs: 0,
+      preservePendingEmitHooksOnDeferralBypass: true,
+      reason: "test.skip-deferral",
+      skipDeferral: true,
+    });
+  });
+
+  it("omits skipDeferral when not requested", () => {
+    scheduleGatewaySigusr1Restart.mockReturnValueOnce({
+      ok: true,
+      pid: 123,
+      signal: "SIGUSR1",
+      delayMs: 0,
+      mode: "emit",
+      coalesced: false,
+      cooldownMsApplied: 0,
+    });
+
+    requestSafeGatewayRestart({
+      reason: "test.no-skip",
+      inspect: {
+        getQueueSize: () => 0,
+        getPendingReplies: () => 0,
+        getEmbeddedRuns: () => 0,
+        getActiveTasks: () => 0,
+        getTaskBlockers: () => [],
+      },
+    });
+
+    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
+      delayMs: 0,
+      reason: "test.no-skip",
+    });
   });
 });

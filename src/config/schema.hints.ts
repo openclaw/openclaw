@@ -1,10 +1,11 @@
-import { z } from "zod";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
+// Provides schema hint metadata for config docs and UI labels.
 import {
   isSensitiveUrlConfigPath,
   SENSITIVE_URL_HINT_TAG,
-} from "../shared/net/redact-sensitive-url.js";
+} from "@openclaw/net-policy/redact-sensitive-url";
+import { z } from "zod";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";
@@ -87,7 +88,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.controlUi.basePath": "/openclaw",
   "gateway.controlUi.root": "dist/control-ui",
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
-  "gateway.push.apns.relay.baseUrl": "https://relay.example.com",
+  "gateway.push.apns.relay.baseUrl": "https://ios-push-relay.openclaw.ai",
   "channels.mattermost.baseUrl": "https://chat.example.com",
   "agents.list[].identity.avatar": "avatars/openclaw.png",
 };
@@ -104,6 +105,7 @@ function isKernelOwnedChannelHintPath(path: string): boolean {
   );
 }
 
+/** Return whether a channel hint path belongs to a plugin-owned channel namespace. */
 export function isPluginOwnedChannelHintPath(path: string): boolean {
   if (!path.startsWith(CHANNEL_NAMESPACE_PREFIX)) {
     return false;
@@ -113,6 +115,7 @@ export function isPluginOwnedChannelHintPath(path: string): boolean {
 
 export { isSensitiveConfigPath };
 
+/** Build core config UI hints while leaving plugin-owned channel hints to plugin schemas. */
 export function buildBaseHints(): ConfigUiHints {
   const hints: ConfigUiHints = {};
   for (const [group, label] of Object.entries(GROUP_LABELS)) {
@@ -146,6 +149,7 @@ export function buildBaseHints(): ConfigUiHints {
   return applyDerivedTags(hints);
 }
 
+/** Mark sensitive config paths in a hint map without overwriting explicit sensitivity metadata. */
 export function applySensitiveHints(
   hints: ConfigUiHints,
   allowedKeys?: ReadonlySet<string>,
@@ -164,6 +168,7 @@ export function applySensitiveHints(
   return next;
 }
 
+/** Add the sensitive-url tag to hint paths that carry URLs with credential risk. */
 export function applySensitiveUrlHints(
   hints: ConfigUiHints,
   allowedKeys?: ReadonlySet<string>,
@@ -185,6 +190,7 @@ export function applySensitiveUrlHints(
   return next;
 }
 
+/** Walk a Zod schema and collect concrete/wildcard paths accepted by `matchesPath`. */
 export function collectMatchingSchemaPaths(
   schema: z.ZodType,
   path: string,
@@ -207,7 +213,7 @@ export function collectMatchingSchemaPaths(
       const nextPath = path ? `${path}.${key}` : key;
       collectMatchingSchemaPaths(shape[key], nextPath, matchesPath, paths);
     }
-    const catchallSchema = currentSchema._def.catchall as z.ZodType | undefined;
+    const catchallSchema = currentSchema["_def"].catchall as z.ZodType | undefined;
     if (catchallSchema && !(catchallSchema instanceof z.ZodNever)) {
       const nextPath = path ? `${path}.*` : "*";
       collectMatchingSchemaPaths(catchallSchema, nextPath, matchesPath, paths);
@@ -218,7 +224,7 @@ export function collectMatchingSchemaPaths(
   } else if (currentSchema instanceof z.ZodRecord) {
     const nextPath = path ? `${path}.*` : "*";
     collectMatchingSchemaPaths(
-      currentSchema._def.valueType as z.ZodType,
+      currentSchema["_def"].valueType as z.ZodType,
       nextPath,
       matchesPath,
       paths,
@@ -231,8 +237,8 @@ export function collectMatchingSchemaPaths(
       collectMatchingSchemaPaths(option as z.ZodType, path, matchesPath, paths);
     }
   } else if (currentSchema instanceof z.ZodIntersection) {
-    collectMatchingSchemaPaths(currentSchema._def.left as z.ZodType, path, matchesPath, paths);
-    collectMatchingSchemaPaths(currentSchema._def.right as z.ZodType, path, matchesPath, paths);
+    collectMatchingSchemaPaths(currentSchema["_def"].left as z.ZodType, path, matchesPath, paths);
+    collectMatchingSchemaPaths(currentSchema["_def"].right as z.ZodType, path, matchesPath, paths);
   }
 
   return paths;
@@ -245,15 +251,17 @@ interface ZodDummy {
   unwrap: () => z.ZodType;
 }
 function isUnwrappable(object: unknown): object is ZodDummy {
+  if (!object || typeof object !== "object") {
+    return false;
+  }
   return (
-    !!object &&
-    typeof object === "object" &&
     "unwrap" in object &&
     typeof (object as Record<string, unknown>).unwrap === "function" &&
     !(object instanceof z.ZodArray)
   );
 }
 
+/** Walk a Zod schema and mark hints for fields registered with the sensitive schema marker. */
 export function mapSensitivePaths(
   schema: z.ZodType,
   path: string,
@@ -280,7 +288,7 @@ export function mapSensitivePaths(
       const nextPath = path ? `${path}.${key}` : key;
       next = mapSensitivePaths(shape[key], nextPath, next);
     }
-    const catchallSchema = currentSchema._def.catchall as z.ZodType | undefined;
+    const catchallSchema = currentSchema["_def"].catchall as z.ZodType | undefined;
     if (catchallSchema && !(catchallSchema instanceof z.ZodNever)) {
       const nextPath = path ? `${path}.*` : "*";
       next = mapSensitivePaths(catchallSchema, nextPath, next);
@@ -290,7 +298,7 @@ export function mapSensitivePaths(
     next = mapSensitivePaths(currentSchema.element as z.ZodType, nextPath, next);
   } else if (currentSchema instanceof z.ZodRecord) {
     const nextPath = path ? `${path}.*` : "*";
-    next = mapSensitivePaths(currentSchema._def.valueType as z.ZodType, nextPath, next);
+    next = mapSensitivePaths(currentSchema["_def"].valueType as z.ZodType, nextPath, next);
   } else if (
     currentSchema instanceof z.ZodUnion ||
     currentSchema instanceof z.ZodDiscriminatedUnion
@@ -299,15 +307,16 @@ export function mapSensitivePaths(
       next = mapSensitivePaths(option as z.ZodType, path, next);
     }
   } else if (currentSchema instanceof z.ZodIntersection) {
-    next = mapSensitivePaths(currentSchema._def.left as z.ZodType, path, next);
-    next = mapSensitivePaths(currentSchema._def.right as z.ZodType, path, next);
+    next = mapSensitivePaths(currentSchema["_def"].left as z.ZodType, path, next);
+    next = mapSensitivePaths(currentSchema["_def"].right as z.ZodType, path, next);
   }
 
   return next;
 }
 
 /** @internal */
-export const __test__ = {
+export const testApi = {
   collectMatchingSchemaPaths,
   mapSensitivePaths,
 };
+export { testApi as __test__ };

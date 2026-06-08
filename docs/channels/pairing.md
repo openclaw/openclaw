@@ -45,7 +45,7 @@ That gives first-time setups an explicit owner for privileged commands and exec
 approval prompts. After an owner exists, later pairing approvals only grant DM
 access; they do not add more owners.
 
-Supported channels: `bluebubbles`, `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `openclaw-weixin`, `signal`, `slack`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
+Supported channels: `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `openclaw-weixin`, `signal`, `slack`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
 
 ### Reusable sender groups
 
@@ -123,12 +123,13 @@ The setup code is a base64-encoded JSON payload that contains:
 
 That bootstrap token carries the built-in pairing bootstrap profile:
 
-- primary handed-off `node` token stays `scopes: []`
-- any handed-off `operator` token stays bounded to the bootstrap allowlist:
-  `operator.approvals`, `operator.read`, `operator.talk.secrets`, `operator.write`
-- bootstrap scope checks are role-prefixed, not one flat scope pool:
-  operator scope entries only satisfy operator requests, and non-operator roles
-  must still request scopes under their own role prefix
+- the built-in setup profile allows the fresh QR/setup-code baseline only:
+  `node` plus a bounded `operator` handoff
+- the handed-off `node` token stays `scopes: []`
+- the handed-off `operator` token is limited to `operator.approvals`,
+  `operator.read`, and `operator.write`
+- `operator.admin` and `operator.pairing` are not granted by QR/setup-code
+  bootstrap; they require a separate approved operator pairing or token flow
 - later token rotation/revocation remains bounded by both the device's approved
   role contract and the caller session's operator scopes
 
@@ -209,6 +210,5 @@ Stored under `~/.openclaw/devices/`:
   - WhatsApp: [WhatsApp](/channels/whatsapp)
   - Signal: [Signal](/channels/signal)
   - iMessage: [iMessage](/channels/imessage)
-  - BlueBubbles (legacy iMessage bridge): [BlueBubbles](/channels/bluebubbles)
   - Discord: [Discord](/channels/discord)
   - Slack: [Slack](/channels/slack)

@@ -1,3 +1,4 @@
+// Canvas tests cover server plugin behavior.
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
@@ -29,6 +30,7 @@ type CapturedResponse = {
   status: number;
   headers: Record<string, number | string | string[]>;
   body: string;
+  bodyBytes: Buffer;
 };
 
 type HttpRequestHandler = (
@@ -73,6 +75,7 @@ async function captureHttpResponse(
     status: 200,
     headers: {},
     body: "",
+    bodyBytes: Buffer.alloc(0),
   };
   const res = {
     statusCode: 200,
@@ -84,7 +87,8 @@ async function captureHttpResponse(
     },
     end(chunk?: string | Buffer) {
       response.status = this.statusCode;
-      response.body = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : (chunk ?? "");
+      response.bodyBytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk ?? "");
+      response.body = response.bodyBytes.toString("utf8");
       return this;
     },
   };
@@ -217,6 +221,20 @@ describe("canvas host", () => {
     }
   });
 
+  it("falls back to the default mount when the configured base path is malformed", async () => {
+    const dir = await createCaseDir();
+    await fs.writeFile(path.join(dir, "index.html"), "<html><body>fallback</body></html>", "utf8");
+    const handler = await createTestCanvasHostHandler(dir, { basePath: "/%E0%A4%A" });
+
+    try {
+      const response = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/`);
+      expect(response.status).toBe(200);
+      expect(response.body).toContain("fallback");
+    } finally {
+      await handler.close();
+    }
+  });
+
   it("serves canvas content from the mounted base path and reuses handlers without double close", async () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>v1</body></html>", "utf8");
@@ -231,6 +249,10 @@ describe("canvas host", () => {
       expect(response.status).toBe(200);
       expect(response.body).toContain("v1");
       expect(response.body).toContain(CANVAS_WS_PATH);
+
+      const malformed = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/%E0%A4%A`);
+      expect(malformed.status).toBe(404);
+      expect(malformed.body).toBe("not found");
 
       const miss = await captureHandlerResponse(handler, "/");
       expect(miss.handled).toBe(false);
@@ -260,7 +282,7 @@ describe("canvas host", () => {
     const dir = await createCaseDir();
     const index = path.join(dir, "index.html");
     await fs.writeFile(index, "<html><body>v1</body></html>", "utf8");
-    let resolveReload!: () => void;
+    let resolveReload: (() => void) | undefined;
     const reloadSent = new Promise<void>((resolve) => {
       resolveReload = resolve;
     });
@@ -306,6 +328,9 @@ describe("canvas host", () => {
           send: (message: string) => {
             ws.sent.push(message);
             if (message === "reload") {
+              if (!resolveReload) {
+                throw new Error("Expected Canvas reload resolver to be initialized");
+              }
               resolveReload();
             }
           },
@@ -333,21 +358,29 @@ describe("canvas host", () => {
 
     try {
       const watcher = watcherState.watchers[watcherStart];
-      expect(watcher).toBeTruthy();
+      if (!watcher) {
+        throw new Error("expected Canvas host watcher");
+      }
       const upgraded = handler.handleUpgrade(
         { url: CANVAS_WS_PATH } as IncomingMessage,
         {} as Duplex,
         Buffer.alloc(0),
       );
       expect(upgraded).toBe(true);
-      expect(TrackingWebSocketServerClass.latestInstance?.connectionCount).toBe(1);
+      const latestServer = TrackingWebSocketServerClass.latestInstance;
+      if (!latestServer) {
+        throw new Error("expected Canvas host websocket server");
+      }
+      expect(latestServer.connectionCount).toBe(1);
       const ws = TrackingWebSocketServerClass.latestSocket;
-      expect(ws).toBeTruthy();
+      if (!ws) {
+        throw new Error("expected Canvas host websocket");
+      }
 
       await fs.writeFile(index, "<html><body>v2</body></html>", "utf8");
-      watcher.__emit("all", "change", index);
+      watcher["__emit"]("all", "change", index);
       await reloadSent;
-      expect(ws?.sent[0]).toBe("reload");
+      expect(ws.sent[0]).toBe("reload");
     } finally {
       await handler.close();
     }
@@ -359,7 +392,6 @@ describe("canvas host", () => {
     const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
     const linkPath = path.join(a2uiRoot, linkName);
     let createdBundle = false;
-    let createdLink = false;
 
     try {
       await fs.stat(bundlePath);
@@ -369,7 +401,6 @@ describe("canvas host", () => {
     }
 
     await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
-    createdLink = true;
 
     try {
       const res = await captureA2uiResponse(`${A2UI_PATH}/`);
@@ -382,16 +413,30 @@ describe("canvas host", () => {
       const js = bundleRes.body;
       expect(bundleRes.status).toBe(200);
       expect(js).toContain("openclawA2UI");
+      const expectedPngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      for (const assetPath of [
+        "assets/providers/google.png",
+        "assets/providers/x.png",
+        "granola.png",
+      ]) {
+        const assetRes = await captureA2uiResponse(`${A2UI_PATH}/${assetPath}`);
+        expect(assetRes.status).toBe(200);
+        expect(assetRes.headers["content-type"]).toBe("image/png");
+        expect(assetRes.bodyBytes.subarray(0, expectedPngSignature.length)).toEqual(
+          expectedPngSignature,
+        );
+      }
       const traversalRes = await captureA2uiResponse(`${A2UI_PATH}/%2e%2e%2fpackage.json`);
       expect(traversalRes.status).toBe(404);
       expect(traversalRes.body).toBe("not found");
+      const malformedRes = await captureA2uiResponse(`${A2UI_PATH}/%E0%A4%A`);
+      expect(malformedRes.status).toBe(404);
+      expect(malformedRes.body).toBe("not found");
       const symlinkRes = await captureA2uiResponse(`${A2UI_PATH}/${linkName}`);
       expect(symlinkRes.status).toBe(404);
       expect(symlinkRes.body).toBe("not found");
     } finally {
-      if (createdLink) {
-        await fs.rm(linkPath, { force: true });
-      }
+      await fs.rm(linkPath, { force: true });
       if (createdBundle) {
         await fs.rm(bundlePath, { force: true });
       }

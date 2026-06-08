@@ -1,3 +1,4 @@
+// Resolves the OpenClaw package root from runtime and package metadata.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openClawRootFs, openClawRootFsSync } from "./openclaw-root.fs.runtime.js";
@@ -188,10 +189,11 @@ function createPackageRootCacheKey(candidates: readonly string[]): string {
   return candidates.join("\0");
 }
 
-export const __testing = {
+export const testing = {
   clearOpenClawPackageRootCaches(): void {
     packageNameCache.clear();
     packageRootCache.clear();
     argv1CandidateCache.clear();
   },
 };
+export { testing as __testing };

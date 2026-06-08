@@ -1,18 +1,22 @@
-import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
-import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { selectAgentHarness } from "../agents/harness/selection.js";
-import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.js";
-import { isCronSessionKey } from "../sessions/session-key-utils.js";
+// Runtime helpers for building status summaries.
+// Kept behind a lazy surface because status summary imports model/session/runtime metadata helpers.
+
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
+import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
 
 function resolveStatusModelRefFromRaw(params: {
@@ -26,6 +30,7 @@ function resolveStatusModelRefFromRaw(params: {
   }
   const configuredModels = params.cfg.agents?.defaults?.models ?? {};
   if (!trimmed.includes("/")) {
+    // Bare model names may be aliases from agents.defaults.models before falling back to default provider.
     const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
     for (const [modelKey, entry] of Object.entries(configuredModels)) {
       const aliasValue = (entry as { alias?: unknown } | undefined)?.alias;
@@ -59,6 +64,7 @@ function resolveConfiguredStatusModelRef(params: {
       )
     : undefined;
   if (agentRawModel) {
+    // Agent-specific primary model wins over global defaults for session status rows.
     const parsed = resolveStatusModelRefFromRaw({
       cfg: params.cfg,
       rawModel: agentRawModel,
@@ -126,25 +132,6 @@ function resolveConfiguredProviderContextTokens(
   return undefined;
 }
 
-function classifySessionKey(key: string, entry?: SessionEntry) {
-  if (key === "global") {
-    return "global";
-  }
-  if (key === "unknown") {
-    return "unknown";
-  }
-  if (isCronSessionKey(key)) {
-    return "cron";
-  }
-  if (entry?.chatType === "group" || entry?.chatType === "channel") {
-    return "group";
-  }
-  if (key.includes(":group:") || key.includes(":channel:")) {
-    return "group";
-  }
-  return "direct";
-}
-
 function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?:
@@ -159,6 +146,7 @@ function resolveSessionModelRef(
     agentId,
   });
   return (
+    // Persisted selected model or overrides describe the active session, not just current config.
     resolvePersistedSelectedModelRef({
       defaultProvider: resolved.provider || DEFAULT_PROVIDER,
       runtimeProvider: entry?.modelProvider,
@@ -178,37 +166,26 @@ function resolveSessionRuntimeLabel(params: {
   agentId?: string;
   sessionKey: string;
 }): string {
-  const agentRuntime = resolveAgentRuntimeMetadata(params.cfg, params.agentId ?? "");
-  const explicitRuntime =
-    normalizeOptionalLowercaseString(params.entry?.agentRuntimeOverride) ??
-    normalizeOptionalLowercaseString(params.entry?.agentHarnessId) ??
-    (agentRuntime.source === "implicit"
-      ? undefined
-      : normalizeOptionalLowercaseString(agentRuntime.id));
-  if (explicitRuntime && explicitRuntime !== "auto" && explicitRuntime !== "default") {
-    return resolveAgentRuntimeLabel({
-      config: params.cfg,
-      sessionEntry: params.entry,
-      resolvedHarness: explicitRuntime,
-      fallbackProvider: params.provider,
-    });
-  }
-
-  let resolvedHarness: string | undefined;
-  try {
-    const selected = selectAgentHarness({
-      provider: params.provider,
-      modelId: params.model,
-      config: params.cfg,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      agentHarnessId: params.entry?.agentHarnessId,
-    });
-    const id = normalizeOptionalLowercaseString(selected.id);
-    resolvedHarness = id && id !== "pi" ? id : undefined;
-  } catch {
-    resolvedHarness = undefined;
-  }
+  const acpSessionKey = params.agentId
+    ? resolveStoredSessionKeyForAgentStore({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      })
+    : params.sessionKey;
+  const acpMeta = readAcpSessionMeta({ sessionKey: acpSessionKey });
+  const runtime = resolveModelAgentRuntimeMetadata({
+    cfg: params.cfg,
+    agentId: params.agentId ?? "",
+    provider: params.provider,
+    model: params.model,
+    sessionKey: acpSessionKey,
+    acpRuntime: acpMeta != null,
+    acpBackend: acpMeta?.backend,
+  });
+  const id = normalizeOptionalLowercaseString(runtime.id);
+  // OpenClaw/auto are generic labels; concrete harness ids give better operator signal.
+  const resolvedHarness = id && id !== "openclaw" && id !== "auto" ? id : undefined;
   return resolveAgentRuntimeLabel({
     config: params.cfg,
     sessionEntry: params.entry,
@@ -226,6 +203,7 @@ function resolveContextTokensForModel(params: {
   allowAsyncLoad?: boolean;
 }): number | undefined {
   void params.allowAsyncLoad;
+  // Status summaries are synchronous/read-only; caller passes allowAsyncLoad for interface parity only.
   if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
     return params.contextTokensOverride;
   }
@@ -244,7 +222,7 @@ function resolveContextTokensForModel(params: {
 
 export const statusSummaryRuntime = {
   resolveContextTokensForModel,
-  classifySessionKey,
+  classifySessionKey: classifySessionKind,
   resolveSessionModelRef,
   resolveSessionRuntimeLabel,
   resolveConfiguredStatusModelRef,

@@ -1,3 +1,5 @@
+// Env deprecation tests ensure legacy prefixed variables warn once without
+// leaking secret-shaped names or values.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resetLegacyOpenClawEnvWarningForTest,
@@ -31,7 +33,7 @@ describe("warnLegacyOpenClawEnvVars", () => {
     });
 
     expect(emitWarning).toHaveBeenCalledOnce();
-    const [message, options] = emitWarning.mock.calls[0] as [
+    const [message, options] = emitWarning.mock.calls.at(0) as [
       string,
       { code: string; type: string },
     ];

@@ -1,4 +1,6 @@
+// Qa Lab plugin module implements bus state behavior.
 import { randomUUID } from "node:crypto";
+import { sanitizeQaBusToolCalls } from "openclaw/plugin-sdk/qa-channel-protocol";
 import {
   buildQaBusSnapshot,
   cloneMessage,
@@ -25,6 +27,7 @@ import type {
   QaBusSearchMessagesInput,
   QaBusStateSnapshot,
   QaBusThread,
+  QaBusToolCall,
   QaBusWaitForInput,
 } from "./runtime-api.js";
 
@@ -115,8 +118,10 @@ export function createQaBusState() {
     threadTitle?: string;
     replyToId?: string;
     attachments?: QaBusAttachment[];
+    toolCalls?: QaBusToolCall[];
   }): QaBusMessage => {
     const conversation = ensureConversation(params.conversation);
+    const toolCalls = sanitizeQaBusToolCalls(params.toolCalls);
     const message: QaBusMessage = {
       id: randomUUID(),
       accountId: params.accountId,
@@ -130,6 +135,7 @@ export function createQaBusState() {
       threadTitle: params.threadTitle,
       replyToId: params.replyToId,
       attachments: params.attachments?.map((attachment) => ({ ...attachment })) ?? [],
+      ...(toolCalls ? { toolCalls } : {}),
       reactions: [],
     };
     messages.set(message.id, message);
@@ -169,6 +175,7 @@ export function createQaBusState() {
         threadTitle: input.threadTitle,
         replyToId: input.replyToId,
         attachments: input.attachments,
+        toolCalls: input.toolCalls,
       });
       pushEvent({
         kind: "inbound-message",
@@ -191,6 +198,7 @@ export function createQaBusState() {
         threadId: input.threadId ?? threadId,
         replyToId: input.replyToId,
         attachments: input.attachments,
+        toolCalls: input.toolCalls,
       });
       pushEvent({
         kind: "outbound-message",

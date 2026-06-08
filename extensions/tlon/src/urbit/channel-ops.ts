@@ -1,3 +1,4 @@
+// Tlon plugin module implements channel ops behavior.
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { UrbitHttpError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
@@ -88,7 +89,11 @@ export async function scryUrbitPath(
     if (!response.ok) {
       throw new Error(`Scry failed: ${response.status} for path ${params.path}`);
     }
-    return await response.json();
+    try {
+      return await response.json();
+    } catch (cause) {
+      throw new Error(`Urbit scry response was malformed JSON for path ${params.path}`, { cause });
+    }
   } finally {
     await release();
   }

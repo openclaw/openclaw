@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Whatsapp plugin module implements message line behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getPrimaryIdentityId, getReplyContext, getSenderIdentity } from "../../identity.js";
 import type { WebInboundMsg } from "../types.js";
 import {

@@ -1,14 +1,18 @@
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+// Zalo tests cover monitor.polling.media reply plugin behavior.
 import type { ServerResponse } from "node:http";
-import { join } from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createEmptyPluginRegistry,
   createRuntimeEnv,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
+import { setZaloRuntime } from "./runtime.js";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
@@ -34,10 +38,14 @@ vi.mock("./outbound-media.js", async () => {
 
 import { clearHostedZaloMediaForTest } from "./outbound-media.js";
 
-const ZALO_OUTBOUND_MEDIA_DIR = join(
-  resolvePreferredOpenClawTmpDir(),
-  "openclaw-zalo-outbound-media",
-);
+function installZaloRuntimeForTest(): void {
+  setZaloRuntime({
+    state: {
+      openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreForTests<T>("zalo", options),
+    },
+  } as unknown as PluginRuntime);
+}
 
 async function writeHostedZaloMediaFixture(params: {
   id: string;
@@ -46,21 +54,28 @@ async function writeHostedZaloMediaFixture(params: {
   buffer: Buffer;
   contentType?: string;
 }): Promise<void> {
-  await mkdir(ZALO_OUTBOUND_MEDIA_DIR, { recursive: true, mode: 0o700 });
-  await chmod(ZALO_OUTBOUND_MEDIA_DIR, 0o700).catch(() => undefined);
-  await Promise.all([
-    writeFile(
-      join(ZALO_OUTBOUND_MEDIA_DIR, `${params.id}.json`),
-      JSON.stringify({
-        routePath: params.routePath,
-        token: params.token,
-        contentType: params.contentType,
-        expiresAt: Date.now() + 60_000,
-      }),
-      { encoding: "utf8", mode: 0o600 },
-    ),
-    writeFile(join(ZALO_OUTBOUND_MEDIA_DIR, `${params.id}.bin`), params.buffer, { mode: 0o600 }),
-  ]);
+  const metaStore = createPluginStateKeyedStoreForTests("zalo", {
+    namespace: "hosted-outbound-media",
+    maxEntries: 80,
+  });
+  const chunkStore = createPluginStateKeyedStoreForTests("zalo", {
+    namespace: "hosted-outbound-media-chunks",
+    maxEntries: 16_384,
+  });
+  await chunkStore.register(`media:${params.id}:chunk:0000`, {
+    id: params.id,
+    index: 0,
+    dataBase64: params.buffer.toString("base64"),
+  });
+  await metaStore.register(`media:${params.id}:meta`, {
+    id: params.id,
+    routePath: params.routePath,
+    token: params.token,
+    ...(params.contentType ? { contentType: params.contentType } : {}),
+    expiresAt: Date.now() + 60_000,
+    chunkCount: 1,
+    byteLength: params.buffer.byteLength,
+  });
 }
 
 function createHostedMediaResponse() {
@@ -79,6 +94,16 @@ function createHostedMediaResponse() {
   return { headers, res: res as unknown as ServerResponse & { end: ReturnType<typeof vi.fn> } };
 }
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 describe("Zalo polling media replies", () => {
   const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
   const recordInboundSessionMock = vi.fn(async () => undefined);
@@ -94,7 +119,9 @@ describe("Zalo polling media replies", () => {
 
   beforeEach(async () => {
     await resetLifecycleTestState();
-    clearHostedZaloMediaForTest();
+    await clearHostedZaloMediaForTest();
+    resetPluginStateStoreForTests();
+    installZaloRuntimeForTest();
     prepareHostedZaloMediaUrlMock.mockReset();
     prepareHostedZaloMediaUrlMock.mockResolvedValue(
       "https://example.com/hooks/zalo/media/abc123abc123abc123abc123?token=secret",
@@ -131,7 +158,7 @@ describe("Zalo polling media replies", () => {
   });
 
   afterAll(async () => {
-    clearHostedZaloMediaForTest();
+    await clearHostedZaloMediaForTest();
     await resetLifecycleTestState();
   });
 
@@ -285,12 +312,10 @@ describe("Zalo polling media replies", () => {
       );
       expect(firstHostedMediaRoutes).toHaveLength(1);
       const hostedMediaRoute = firstHostedMediaRoutes[0];
-      expect(hostedMediaRoute).toEqual(
-        expect.objectContaining({
-          path: "/hooks/zalo/media",
-          pluginId: "zalo",
-        }),
-      );
+      expect(hostedMediaRoute?.path).toBe("/hooks/zalo/media");
+      expect(hostedMediaRoute?.pluginId).toBe("zalo");
+      expect(hostedMediaRoute?.source).toBe("zalo-hosted-media");
+      expect(hostedMediaRoute?.handler).toBeTypeOf("function");
 
       const secondRuntime = createRuntimeEnv();
       const secondSetup = createLifecycleMonitorSetup({
@@ -335,9 +360,12 @@ describe("Zalo polling media replies", () => {
 
       firstAbort.abort();
       await firstRun;
-      expect(registry.httpRoutes.filter((route) => route.source === "zalo-hosted-media")).toEqual([
+      expect(registry.httpRoutes.find((route) => route.source === "zalo-hosted-media")).toEqual(
         hostedMediaRoute,
-      ]);
+      );
+      expect(
+        countMatching(registry.httpRoutes, (route) => route.source === "zalo-hosted-media"),
+      ).toBe(1);
 
       await writeHostedZaloMediaFixture({
         id: "def456def456def456def456",

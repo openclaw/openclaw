@@ -1,3 +1,8 @@
+/**
+ * Runtime contract tests for auth profile forwarding.
+ * Ensures CLI and embedded agent runtimes receive the selected auth profile
+ * across provider aliases and plugin runtime manifests.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,10 +14,22 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import type * as ManifestRegistryModule from "../plugins/manifest-registry.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { runAgentAttempt } from "./command/attempt-execution.js";
-import type { EmbeddedPiRunResult } from "./pi-embedded.js";
-import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
+import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
+import {
+  resetProviderAuthAliasMapCacheForTest,
+  resolveProviderIdForAuth,
+} from "./provider-auth-aliases.js";
 
 type LoadPluginManifestRegistry = typeof ManifestRegistryModule.loadPluginManifestRegistry;
 
@@ -23,7 +40,7 @@ const loadPluginManifestRegistry = vi.hoisted(() =>
   })),
 );
 const runCliAgentMock = vi.hoisted(() => vi.fn());
-const runEmbeddedPiAgentMock = vi.hoisted(() => vi.fn());
+const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
@@ -64,11 +81,32 @@ vi.mock("./model-selection.js", () => ({
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
 }));
 
-vi.mock("./pi-embedded.js", () => ({
-  runEmbeddedPiAgent: runEmbeddedPiAgentMock,
+vi.mock("./embedded-agent.js", () => ({
+  runEmbeddedAgent: runEmbeddedAgentMock,
 }));
 
-function makeCliResult(text: string): EmbeddedPiRunResult {
+function mockCallArg(
+  mockFn: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  argIndex = 0,
+): unknown {
+  const call = mockFn.mock.calls[0];
+  if (!call) {
+    throw new Error("expected mock to be called");
+  }
+  return call[argIndex];
+}
+
+function capturedCliRunParams(): { authProfileId?: string } {
+  expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+  return mockCallArg(runCliAgentMock) as { authProfileId?: string };
+}
+
+function capturedEmbeddedRunParams(): RunEmbeddedAgentParams {
+  expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  return mockCallArg(runEmbeddedAgentMock) as RunEmbeddedAgentParams;
+}
+
+function makeCliResult(text: string): EmbeddedAgentRunResult {
   return {
     payloads: [{ text }],
     meta: {
@@ -96,7 +134,7 @@ function makeCliResult(text: string): EmbeddedPiRunResult {
   };
 }
 
-function makeEmbeddedResult(text: string): EmbeddedPiRunResult {
+function makeEmbeddedResult(text: string): EmbeddedAgentRunResult {
   return {
     payloads: [{ text }],
     meta: {
@@ -122,6 +160,81 @@ function makeEmbeddedResult(text: string): EmbeddedPiRunResult {
       },
     },
   };
+}
+
+function createAuthAliasMetadataSnapshot(
+  manifestRegistry: PluginManifestRegistry,
+): PluginMetadataSnapshot {
+  const policyHash = resolveInstalledPluginIndexPolicyHash({});
+  const index: InstalledPluginIndex = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 1,
+    installRecords: {},
+    plugins: manifestRegistry.plugins.map((plugin) => ({
+      pluginId: plugin.id,
+      manifestPath: plugin.manifestPath,
+      manifestHash: `${plugin.id}:manifest`,
+      rootDir: plugin.rootDir,
+      origin: plugin.origin,
+      enabled: true,
+      enabledByDefault: true,
+      startup: {
+        sidecar: false,
+        memory: false,
+        deferConfiguredChannelFullLoadUntilAfterListen: false,
+        agentHarnesses: [],
+      },
+      compat: [],
+    })),
+    diagnostics: [],
+  };
+
+  return {
+    policyHash,
+    index,
+    registryDiagnostics: [],
+    manifestRegistry,
+    plugins: manifestRegistry.plugins,
+    diagnostics: manifestRegistry.diagnostics,
+    byPluginId: new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
+    normalizePluginId: (pluginId) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: manifestRegistry.plugins.length,
+      manifestPluginCount: manifestRegistry.plugins.length,
+    },
+  };
+}
+
+function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        [provider]: {
+          baseUrl: "https://api.openclaw.test/v1",
+          agentRuntime: { id: runtime },
+          models: [],
+        },
+      },
+    },
+  } as OpenClawConfig;
 }
 
 async function runAuthContractAttempt(params: {
@@ -161,7 +274,7 @@ async function runAuthContractAttempt(params: {
     resolvedThinkLevel: "medium",
     timeoutMs: 1_000,
     runId: AUTH_PROFILE_RUNTIME_CONTRACT.runId,
-    opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+    opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
     runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
     spawnedBy: undefined,
     messageChannel: undefined,
@@ -183,21 +296,30 @@ async function runAuthContractAttempt(params: {
   };
 }
 
-describe("Auth profile runtime contract - Pi and CLI adapter", () => {
+describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", () => {
   let tmpDir: string;
   let storePath: string;
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-contract-"));
     storePath = path.join(tmpDir, "sessions.json");
-    loadPluginManifestRegistry.mockReset().mockReturnValue(createAuthAliasManifestRegistry());
+    const manifestRegistry = createAuthAliasManifestRegistry();
+    loadPluginManifestRegistry.mockReset().mockReturnValue(manifestRegistry);
+    resetProviderAuthAliasMapCacheForTest();
+    setCurrentPluginMetadataSnapshot(createAuthAliasMetadataSnapshot(manifestRegistry), {
+      config: {},
+      env: process.env,
+      workspaceDir: tmpDir,
+    });
     runCliAgentMock.mockReset();
-    runEmbeddedPiAgentMock.mockReset();
+    runEmbeddedAgentMock.mockReset();
     runCliAgentMock.mockResolvedValue(makeCliResult("ok"));
-    runEmbeddedPiAgentMock.mockResolvedValue(makeEmbeddedResult("ok"));
+    runEmbeddedAgentMock.mockResolvedValue(makeEmbeddedResult("ok"));
   });
 
   afterEach(async () => {
+    clearCurrentPluginMetadataSnapshot();
+    resetProviderAuthAliasMapCacheForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -205,12 +327,9 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     [AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider],
     [
       AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+      AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
     ],
-    [
-      AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
-      AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-    ],
+    [AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider, AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider],
     [
       AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider,
       AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider,
@@ -227,7 +346,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     },
   );
 
-  it("forwards an OpenAI Codex auth profile when the selected provider is codex-cli", async () => {
+  it("forwards a legacy OpenAI Codex auth profile when the selected provider is codex-cli", async () => {
     const { aliasLookupParams } = await runAuthContractAttempt({
       tmpDir,
       storePath,
@@ -236,8 +355,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     });
 
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBe(
+    expect(capturedCliRunParams().authProfileId).toBe(
       expectedForwardedAuthProfile({
         provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
         authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
@@ -247,7 +365,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     );
   });
 
-  it("forwards an OpenAI Codex auth profile when the auth provider is the legacy codex-cli alias", async () => {
+  it("forwards a legacy OpenAI Codex auth profile when the auth provider is the legacy codex-cli alias", async () => {
     const { aliasLookupParams } = await runAuthContractAttempt({
       tmpDir,
       storePath,
@@ -256,8 +374,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     });
 
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBe(
+    expect(capturedCliRunParams().authProfileId).toBe(
       expectedForwardedAuthProfile({
         provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
         authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
@@ -267,8 +384,8 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     );
   });
 
-  it("does not leak an OpenAI API-key auth profile into the Codex CLI alias", async () => {
-    await runAuthContractAttempt({
+  it("forwards OpenAI auth profiles into the Codex CLI alias", async () => {
+    const { aliasLookupParams } = await runAuthContractAttempt({
       tmpDir,
       storePath,
       providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
@@ -276,8 +393,14 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
     });
 
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBeUndefined();
+    expect(capturedCliRunParams().authProfileId).toBe(
+      expectedForwardedAuthProfile({
+        provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
+        authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+        aliasLookupParams,
+        sessionAuthProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
+      }),
+    );
   });
 
   it("does not leak an OpenAI Codex auth profile into an unrelated CLI provider", async () => {
@@ -289,8 +412,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     });
 
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBeUndefined();
+    expect(capturedCliRunParams().authProfileId).toBeUndefined();
   });
 
   it("does not let a configured Codex harness leak OpenAI Codex auth into unrelated CLI providers", async () => {
@@ -301,19 +423,22 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
       cfg: {
-        agents: {
-          defaults: {
-            agentRuntime: { id: "codex" },
+        models: {
+          providers: {
+            [AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider]: {
+              baseUrl: "https://api.openclaw.test/v1",
+              agentRuntime: { id: "codex" },
+              models: [],
+            },
           },
         },
       } as OpenClawConfig,
     });
 
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBeUndefined();
+    expect(capturedCliRunParams().authProfileId).toBeUndefined();
   });
 
-  it("forwards an OpenAI Codex auth profile through the embedded Pi path", async () => {
+  it("forwards a legacy OpenAI Codex auth profile through the embedded OpenClaw path", async () => {
     await runAuthContractAttempt({
       tmpDir,
       storePath,
@@ -322,13 +447,12 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.authProfileId).toBe(
+    expect(capturedEmbeddedRunParams().authProfileId).toBe(
       AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     );
   });
 
-  it("accepts the legacy codex-cli auth-provider alias on the embedded OpenAI Codex path", async () => {
+  it("accepts the legacy codex-cli auth-provider alias on the embedded OpenAI path", async () => {
     const { aliasLookupParams } = await runAuthContractAttempt({
       tmpDir,
       storePath,
@@ -337,8 +461,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.authProfileId).toBe(
+    expect(capturedEmbeddedRunParams().authProfileId).toBe(
       expectedForwardedAuthProfile({
         provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
         authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
@@ -348,31 +471,22 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     );
   });
 
-  it("forwards an OpenAI auth profile through the explicit embedded OpenAI PI path", async () => {
+  it("forwards an OpenAI auth profile through the explicit embedded OpenAI OpenClaw path", async () => {
     await runAuthContractAttempt({
       tmpDir,
       storePath,
       providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
-      cfg: {
-        agents: {
-          defaults: {
-            agentRuntime: { id: "pi" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "openclaw"),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
-      agentHarnessId: "pi",
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
-    });
+    const params = capturedEmbeddedRunParams();
+    expect(params.provider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider);
+    expect(params.authProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId);
   });
 
-  it("forwards an OpenAI Codex auth profile through the default OpenAI Codex harness path", async () => {
+  it("forwards a legacy OpenAI Codex auth profile through the default OpenAI harness path", async () => {
     await runAuthContractAttempt({
       tmpDir,
       storePath,
@@ -381,35 +495,24 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      agentHarnessId: "codex",
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-    });
+    expect(capturedEmbeddedRunParams().authProfileId).toBe(
+      AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+    );
   });
 
-  it("routes explicit OpenAI PI runs with Codex OAuth through OpenAI Codex transport", async () => {
+  it("routes explicit OpenAI OpenClaw runs with legacy Codex OAuth through OpenAI transport", async () => {
     await runAuthContractAttempt({
       tmpDir,
       storePath,
       providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-      cfg: {
-        agents: {
-          defaults: {
-            agentRuntime: { id: "pi" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "openclaw"),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      agentHarnessId: "pi",
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-    });
+    const params = capturedEmbeddedRunParams();
+    expect(params.provider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider);
+    expect(params.authProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
   });
 
   it("preserves OpenAI Codex auth profiles through the real codex/* harness startup path", async () => {
@@ -419,20 +522,12 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-      cfg: {
-        agents: {
-          defaults: {
-            agentRuntime: { id: "codex" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider, "codex"),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      agentHarnessId: "codex",
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-    });
+    expect(capturedEmbeddedRunParams().authProfileId).toBe(
+      AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+    );
   });
 
   it("validates openai/* forced through the Codex harness can use OpenAI Codex OAuth profiles", async () => {
@@ -442,20 +537,12 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-      cfg: {
-        agents: {
-          defaults: {
-            agentRuntime: { id: "codex" },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "codex"),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      agentHarnessId: "codex",
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-    });
+    expect(capturedEmbeddedRunParams().authProfileId).toBe(
+      AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+    );
   });
 
   it("preserves configured Codex harness when a skeleton session entry is considered history", async () => {
@@ -466,22 +553,11 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
       sessionHasHistory: true,
-      cfg: {
-        agents: {
-          list: [
-            {
-              id: "main",
-              agentRuntime: { id: "codex" },
-            },
-          ],
-        },
-      } as OpenClawConfig,
+      cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "codex"),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      agentHarnessId: "codex",
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-    });
+    expect(capturedEmbeddedRunParams().authProfileId).toBe(
+      AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+    );
   });
 });

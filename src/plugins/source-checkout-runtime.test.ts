@@ -1,3 +1,4 @@
+/** Verifies source-checkout plugin runtime resolution and dependency diagnostics. */
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setBundledPluginsDirOverrideForTest } from "./bundled-dir.js";
@@ -26,10 +27,8 @@ describe("source checkout bundled plugin runtime", () => {
     });
 
     const tokenjuice = registry.plugins.find((plugin) => plugin.id === "tokenjuice");
-    expect(tokenjuice).toMatchObject({
-      status: "loaded",
-      origin: "bundled",
-    });
+    expect(tokenjuice?.status).toBe("loaded");
+    expect(tokenjuice?.origin).toBe("bundled");
 
     const expectedRuntime = `${path.sep}extensions${path.sep}tokenjuice${path.sep}index.ts`;
     const expectedRoot = `${path.sep}extensions${path.sep}tokenjuice`;

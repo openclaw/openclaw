@@ -1,3 +1,4 @@
+// Msteams tests cover graph group management plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
@@ -27,8 +28,8 @@ vi.mock("./graph.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./conversation-store-fs.js", () => ({
-  createMSTeamsConversationStoreFs: () => ({
+vi.mock("./conversation-store-state.js", () => ({
+  createMSTeamsConversationStoreState: () => ({
     findPreferredDmByUserId: mockState.findPreferredDmByUserId,
   }),
 }));
@@ -36,6 +37,18 @@ vi.mock("./conversation-store-fs.js", () => ({
 const TOKEN = "test-graph-token";
 const CHAT_ID = "19:abc@thread.tacv2";
 const CHANNEL_TO = "team-id-1/channel-id-1";
+
+function postGraphBodyAt(index: number): Record<string, unknown> {
+  const call = mockState.postGraphJson.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected Graph post call ${index}`);
+  }
+  const body = call[0]?.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new Error(`expected Graph post call ${index} body`);
+  }
+  return body as Record<string, unknown>;
+}
 
 describe("addParticipantMSTeams", () => {
   beforeEach(() => {
@@ -96,13 +109,15 @@ describe("addParticipantMSTeams", () => {
       role: " OWNER ",
     });
 
-    expect(mockState.postGraphJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          roles: ["owner"],
-        }),
-      }),
-    );
+    expect(mockState.postGraphJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/members`,
+      body: {
+        "@odata.type": "#microsoft.graph.aadUserConversationMember",
+        roles: ["owner"],
+        "user@odata.bind": "https://graph.microsoft.com/v1.0/users('user-aad-id-2')",
+      },
+    });
   });
 
   it("rejects unknown roles", async () => {
@@ -127,7 +142,7 @@ describe("addParticipantMSTeams", () => {
       userId: "abc-def-123",
     });
 
-    const calledBody = mockState.postGraphJson.mock.calls[0][0].body;
+    const calledBody = postGraphBodyAt(0);
     expect(calledBody["user@odata.bind"]).toBe(
       "https://graph.microsoft.com/v1.0/users('abc-def-123')",
     );
@@ -142,7 +157,7 @@ describe("addParticipantMSTeams", () => {
       userId: "o'hara@example.com",
     });
 
-    const calledBody = mockState.postGraphJson.mock.calls[0][0].body;
+    const calledBody = postGraphBodyAt(0);
     expect(calledBody["user@odata.bind"]).toBe(
       "https://graph.microsoft.com/v1.0/users('o''hara@example.com')",
     );

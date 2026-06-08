@@ -1,3 +1,4 @@
+// Cron delivery tests cover delivery execution and status recording.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -170,11 +171,11 @@ describe("resolveCronDeliveryPlan", () => {
     }
   });
 
-  it("does not treat channel-owned service prefixes as provider selection", () => {
+  it("uses iMessage target prefixes as provider selection", () => {
     setCronDeliveryTestRegistry([
       {
-        pluginId: "bluebubbles",
-        plugin: createPrefixOnlyChannelPlugin("bluebubbles", ["bluebubbles"]),
+        pluginId: "imessage",
+        plugin: createPrefixOnlyChannelPlugin("imessage", ["imessage"]),
       },
       { pluginId: "imessage", plugin: createPrefixOnlyChannelPlugin("imessage") },
     ]);
@@ -189,7 +190,7 @@ describe("resolveCronDeliveryPlan", () => {
       }),
     );
     expect(plan.mode).toBe("announce");
-    expect(plan.channel).toBe("last");
+    expect(plan.channel).toBe("imessage");
     expect(plan.to).toBe("imessage:+15551234567");
   });
 });
@@ -355,6 +356,33 @@ describe("resolveFailureDestination", () => {
       channel: "last",
       to: undefined,
       accountId: undefined,
+    });
+  });
+
+  it("keeps inherited announce targets when a job clears only failure destination mode", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "111",
+          failureDestination: {
+            mode: undefined,
+          },
+        },
+      }),
+      {
+        channel: "signal",
+        to: "group-abc",
+        accountId: "global-account",
+        mode: "announce",
+      },
+    );
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "signal",
+      to: "group-abc",
+      accountId: "global-account",
     });
   });
 

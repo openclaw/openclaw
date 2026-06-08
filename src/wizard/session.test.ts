@@ -1,3 +1,4 @@
+// Wizard session tests cover session creation and state transitions.
 import { describe, expect, test } from "vitest";
 import { WizardSession } from "./session.js";
 
@@ -53,14 +54,12 @@ describe("WizardSession", () => {
     });
 
     const first = await session.next();
-    expect(first.step).toMatchObject({
-      type: "note",
-      message: '{"ok":true}',
-      format: "plain",
-    });
     if (!first.step) {
       throw new Error("expected plain note");
     }
+    expect(first.step.type).toBe("note");
+    expect(first.step.message).toBe('{"ok":true}');
+    expect(first.step.format).toBe("plain");
     await session.answer(first.step.id, null);
     const done = await session.next();
     expect(done.done).toBe(true);

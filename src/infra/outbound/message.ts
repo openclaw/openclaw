@@ -1,25 +1,25 @@
+// Outbound message entrypoint resolves channel/target, durable capability
+// requirements, payload plans, gateway fallback, and optional mirroring.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { deriveDurableFinalDeliveryRequirements } from "../../channels/message/capabilities.js";
+import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  type GatewayClientMode,
-  type GatewayClientName,
-} from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
-  deliverOutboundPayloads,
   resolveOutboundDurableFinalDeliverySupport,
   type DurableFinalDeliveryRequirements,
   type OutboundDeliveryResult,
   type OutboundDeliveryQueuePolicy,
   type OutboundSendDeps,
 } from "./deliver.js";
+import {
+  resolveOutboundMessageGatewayOptions,
+  type OutboundMessageGatewayOptionsInput,
+} from "./message-gateway-options.js";
 import type { OutboundMirror } from "./mirror.js";
 import {
   createOutboundPayloadPlan,
@@ -33,8 +33,11 @@ let messageConfigRuntimePromise: Promise<typeof import("./message.config.runtime
   null;
 let messageGatewayRuntimePromise: Promise<typeof import("./message.gateway.runtime.js")> | null =
   null;
+const SEND_BUFFER_MEDIA_URL = "buffer://message-send/attachment";
 
 function loadMessageConfigRuntime() {
+  // Keep config/runtime loading lazy so importing message helpers does not
+  // bootstrap plugin registries or gateway clients.
   messageConfigRuntimePromise ??= import("./message.config.runtime.js");
   return messageConfigRuntimePromise;
 }
@@ -44,14 +47,7 @@ function loadMessageGatewayRuntime() {
   return messageGatewayRuntimePromise;
 }
 
-export type MessageGatewayOptions = {
-  url?: string;
-  token?: string;
-  timeoutMs?: number;
-  clientName?: GatewayClientName;
-  clientDisplayName?: string;
-  mode?: GatewayClientMode;
-};
+export type MessageGatewayOptions = OutboundMessageGatewayOptionsInput;
 
 type MessageSendParams = {
   to: string;
@@ -73,6 +69,9 @@ type MessageSendParams = {
   channel?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  buffer?: string;
+  filename?: string;
+  contentType?: string;
   asVoice?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
@@ -91,6 +90,7 @@ type MessageSendParams = {
   mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
+  parseMode?: "HTML";
 };
 
 export type MessageSendResult = {
@@ -253,28 +253,14 @@ async function assertRequiredMessageSendDurability(params: {
     support.reason === "capability_mismatch" && support.capability
       ? `missing ${support.capability}`
       : support.reason;
-  throw new Error(`Required durable message send is unsupported for ${params.channel}: ${suffix}`);
+  throw new Error(
+    `Required durable message send is unsupported for ${params.channel}: ${suffix}. ` +
+      'Use queuePolicy:"best_effort" for best-effort delivery, omit bestEffort:false in message-tool calls, or use a channel with required durable delivery support.',
+  );
 }
 
 function resolveGatewayOptions(opts?: MessageGatewayOptions) {
-  // Security: backend callers (tools/agents) must not accept user-controlled gateway URLs.
-  // Use config-derived gateway target only.
-  const url =
-    opts?.mode === GATEWAY_CLIENT_MODES.BACKEND ||
-    opts?.clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
-      ? undefined
-      : opts?.url;
-  return {
-    url,
-    token: opts?.token,
-    timeoutMs:
-      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-        ? Math.max(1, Math.floor(opts.timeoutMs))
-        : 10_000,
-    clientName: opts?.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-    clientDisplayName: opts?.clientDisplayName,
-    mode: opts?.mode ?? GATEWAY_CLIENT_MODES.CLI,
-  };
+  return resolveOutboundMessageGatewayOptions(opts);
 }
 
 async function callMessageGateway<T>(params: {
@@ -317,14 +303,22 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
   const plugin = resolveRequiredPlugin(channel, cfg);
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
+  const mediaSources = [params.mediaUrl, ...(params.mediaUrls ?? [])].filter(
+    (source): source is string => Boolean(source),
+  );
+  const hasRealMediaSource = mediaSources.some((source) => source !== SEND_BUFFER_MEDIA_URL);
+  const shouldForwardBuffer =
+    deliveryMode === "gateway" && Boolean(params.buffer) && !hasRealMediaSource;
+  const mediaUrl = params.mediaUrl ?? (shouldForwardBuffer ? SEND_BUFFER_MEDIA_URL : undefined);
+  const mediaUrls = params.mediaUrls ?? (shouldForwardBuffer ? [SEND_BUFFER_MEDIA_URL] : undefined);
   const outboundPayloads =
     params.payloads && params.payloads.length > 0
       ? params.payloads
       : [
           {
             text: params.content,
-            mediaUrl: params.mediaUrl,
-            mediaUrls: params.mediaUrls,
+            mediaUrl,
+            mediaUrls,
             audioAsVoice: params.asVoice === true,
           },
         ];
@@ -333,7 +327,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPlan);
   const mirrorText = mirrorProjection.text;
   const mirrorMediaUrls = mirrorProjection.mediaUrls;
-  const primaryMediaUrl = mirrorMediaUrls[0] ?? params.mediaUrl ?? null;
+  const primaryMediaUrl = mirrorMediaUrls[0] ?? mediaUrl ?? null;
 
   if (params.dryRun) {
     return {
@@ -379,7 +373,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         silent: params.silent,
       });
     }
-    const results = await deliverOutboundPayloads({
+    const send = await sendDurableMessageBatch({
       cfg,
       channel: outboundChannel,
       to: resolvedTarget.to,
@@ -392,10 +386,12 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       forceDocument: params.forceDocument,
       deps: params.deps,
       bestEffort: params.bestEffort,
-      queuePolicy: params.queuePolicy,
-      abortSignal: params.abortSignal,
+      durability:
+        params.bestEffort || params.queuePolicy === "best_effort" ? "best_effort" : "required",
+      signal: params.abortSignal,
       silent: params.silent,
       mediaAccess: params.mediaAccess,
+      formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
       mirror: params.mirror
         ? {
             ...params.mirror,
@@ -405,6 +401,10 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
           }
         : undefined,
     });
+    if (!params.bestEffort && (send.status === "failed" || send.status === "partial_failed")) {
+      throw send.error;
+    }
+    const results = send.status === "sent" || send.status === "partial_failed" ? send.results : [];
 
     return {
       channel,
@@ -422,14 +422,21 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     params: {
       to: params.to,
       message: params.content,
-      mediaUrl: params.mediaUrl,
-      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : params.mediaUrls,
+      mediaUrl,
+      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : mediaUrls,
+      buffer: shouldForwardBuffer ? params.buffer : undefined,
+      filename: shouldForwardBuffer ? params.filename : undefined,
+      contentType: shouldForwardBuffer ? params.contentType : undefined,
       asVoice: params.asVoice,
       gifPlayback: params.gifPlayback,
       accountId: params.accountId,
       agentId: params.agentId,
       channel,
       replyToId: params.replyToId,
+      threadId: params.threadId != null ? String(params.threadId) : undefined,
+      forceDocument: params.forceDocument,
+      silent: params.silent,
+      parseMode: params.parseMode,
       sessionKey: params.mirror?.sessionKey,
       idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
     },

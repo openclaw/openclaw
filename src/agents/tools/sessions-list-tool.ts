@@ -1,4 +1,13 @@
+/**
+ * sessions_list built-in tool.
+ *
+ * Lists visible sessions and optionally hydrates titles, last messages, and transcript-derived metadata.
+ */
 import path from "node:path";
+import {
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -14,13 +23,23 @@ import {
   readSessionTitleFieldsFromTranscriptAsync,
 } from "../../gateway/session-utils.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import {
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+} from "../schema/typebox.js";
 import {
   describeSessionsListTool,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringArrayParam, readStringParam } from "./common.js";
+import {
+  jsonResult,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readStringArrayParam,
+  readStringParam,
+} from "./common.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityRowChecker,
@@ -37,9 +56,9 @@ import {
 
 const SessionsListToolSchema = Type.Object({
   kinds: Type.Optional(Type.Array(Type.String())),
-  limit: Type.Optional(Type.Number({ minimum: 1 })),
-  activeMinutes: Type.Optional(Type.Number({ minimum: 1 })),
-  messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
+  limit: optionalPositiveIntegerSchema(),
+  activeMinutes: optionalPositiveIntegerSchema(),
+  messageLimit: optionalNonNegativeIntegerSchema(),
   label: Type.Optional(Type.String({ minLength: 1 })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   search: Type.Optional(Type.String({ minLength: 1 })),
@@ -61,6 +80,7 @@ function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
     : undefined;
 }
 
+/** Creates the sessions-list tool with gateway-backed listing and local transcript enrichment. */
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
@@ -96,18 +116,9 @@ export function createSessionsListTool(opts?: {
       );
       const allowedKinds = allowedKindsList.length ? new Set(allowedKindsList) : undefined;
 
-      const limit =
-        typeof params.limit === "number" && Number.isFinite(params.limit)
-          ? Math.max(1, Math.floor(params.limit))
-          : undefined;
-      const activeMinutes =
-        typeof params.activeMinutes === "number" && Number.isFinite(params.activeMinutes)
-          ? Math.max(1, Math.floor(params.activeMinutes))
-          : undefined;
-      const messageLimitRaw =
-        typeof params.messageLimit === "number" && Number.isFinite(params.messageLimit)
-          ? Math.max(0, Math.floor(params.messageLimit))
-          : 0;
+      const limit = readPositiveIntegerParam(params, "limit");
+      const activeMinutes = readPositiveIntegerParam(params, "activeMinutes");
+      const messageLimitRaw = readNonNegativeIntegerParam(params, "messageLimit") ?? 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
       const label = readStringParam(params, "label");
       const agentId = readStringParam(params, "agentId");
@@ -175,6 +186,8 @@ export function createSessionsListTool(opts?: {
           continue;
         }
 
+        // Gateway listings include pseudo/global rows for UI callers. The tool only exposes real
+        // sessions and the explicit global session when the requester is already global.
         if (key === "unknown") {
           continue;
         }
@@ -201,10 +214,7 @@ export function createSessionsListTool(opts?: {
             : undefined;
         const originChannel =
           typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
-        const deliveryContext =
-          entry.deliveryContext && typeof entry.deliveryContext === "object"
-            ? (entry.deliveryContext as Record<string, unknown>)
-            : undefined;
+        const deliveryContext = deliveryContextFromSession(entry);
         const deliveryChannel = readStringValue(deliveryContext?.channel);
         const deliveryTo = readStringValue(deliveryContext?.to);
         const deliveryAccountId = readStringValue(deliveryContext?.accountId);
@@ -419,9 +429,19 @@ export function createSessionsListTool(opts?: {
         await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
       }
 
+      const visibilityMetadata =
+        visibility === "all"
+          ? undefined
+          : {
+              mode: visibility,
+              restricted: true,
+              warning: `Session visibility is restricted (effective tools.sessions.visibility=${visibility}). Results may omit sessions outside the current scope. The count field reflects only sessions within the current scope.`,
+            };
+
       return jsonResult({
         count: rows.length,
         sessions: rows,
+        ...(visibilityMetadata ? { visibility: visibilityMetadata } : {}),
       });
     },
   };

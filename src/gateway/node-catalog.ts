@@ -1,7 +1,10 @@
+// Gateway node catalog builder.
+// Merges paired devices, approved node records, and live websocket sessions.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
 import type { NodePairingPairedNode } from "../infra/node-pairing.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { NodeSession } from "./node-registry.js";
 
 type KnownNodeDevicePairingSource = {
@@ -47,20 +50,8 @@ type KnownNodeCatalog = {
   entriesById: Map<string, KnownNodeEntry>;
 };
 
-function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): string[] {
-  const values = new Set<string>();
-  for (const item of items) {
-    if (!item) {
-      continue;
-    }
-    for (const value of item) {
-      const trimmed = value.trim();
-      if (trimmed) {
-        values.add(trimmed);
-      }
-    }
-  }
-  return [...values].toSorted((left, right) => left.localeCompare(right));
+function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): string[] {
+  return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
 }
 
 function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSource {
@@ -103,6 +94,8 @@ function resolveEffectiveLastSeen(params: {
   devicePairing?: KnownNodeDevicePairingSource;
   nodePairing?: KnownNodeApprovedSource;
 }): { lastSeenAtMs?: number; lastSeenReason?: string } {
+  // Live connected time is the freshest signal; stored last-seen values fill in
+  // disconnected rows without letting stale device-pairing data override nodes.
   const candidates: Array<{ atMs: number; reason?: string }> = [
     params.live?.connectedAtMs ? { atMs: params.live.connectedAtMs, reason: "connect" } : undefined,
     params.nodePairing?.lastSeenAtMs
@@ -115,7 +108,12 @@ function resolveEffectiveLastSeen(params: {
       ? { atMs: params.devicePairing.lastSeenAtMs, reason: params.devicePairing.lastSeenReason }
       : undefined,
   ].filter((entry) => entry !== undefined);
-  const newest = candidates.toSorted((left, right) => right.atMs - left.atMs)[0];
+  let newest: { atMs: number; reason?: string } | undefined;
+  for (const candidate of candidates) {
+    if (!newest || candidate.atMs > newest.atMs) {
+      newest = candidate;
+    }
+  }
   if (!newest) {
     return {};
   }
@@ -175,6 +173,7 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
   return left.nodeId.localeCompare(right.nodeId);
 }
 
+/** Builds a node catalog keyed by node id from pairing stores and live sessions. */
 export function createKnownNodeCatalog(params: {
   pairedDevices: readonly PairedDevice[];
   pairedNodes?: readonly NodePairingPairedNode[];
@@ -215,12 +214,14 @@ export function createKnownNodeCatalog(params: {
   return { entriesById };
 }
 
+/** Lists known nodes with connected nodes first and deterministic display ordering. */
 export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
   return [...catalog.entriesById.values()]
     .map((entry) => entry.effective)
     .toSorted(compareKnownNodes);
 }
 
+/** Returns the merged catalog entry for diagnostics that need source details. */
 export function getKnownNodeEntry(
   catalog: KnownNodeCatalog,
   nodeId: string,
@@ -228,6 +229,7 @@ export function getKnownNodeEntry(
   return catalog.entriesById.get(nodeId) ?? null;
 }
 
+/** Returns the effective node row shown to gateway clients. */
 export function getKnownNode(catalog: KnownNodeCatalog, nodeId: string): NodeListNode | null {
   return getKnownNodeEntry(catalog, nodeId)?.effective ?? null;
 }

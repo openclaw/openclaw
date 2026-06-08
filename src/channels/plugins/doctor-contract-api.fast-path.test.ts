@@ -1,3 +1,4 @@
+// Doctor contract API fast-path tests cover lightweight channel doctor contract loading.
 import { describe, expect, it, vi } from "vitest";
 
 const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
@@ -60,7 +61,7 @@ describe("channel doctor contract api fast path", () => {
   it("treats empty explicit doctor contract rules as authoritative", () => {
     const api = loadBundledChannelDoctorContractApi("whatsapp");
 
-    expect(api?.legacyConfigRules).toEqual([]);
+    expect(api?.legacyConfigRules).toStrictEqual([]);
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "whatsapp",
       artifactBasename: "doctor-contract-api.js",

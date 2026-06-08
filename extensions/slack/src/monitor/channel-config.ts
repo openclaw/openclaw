@@ -1,16 +1,20 @@
+// Slack helper module supports channel config behavior.
 import {
   applyChannelMatchMeta,
   buildChannelKeyCandidates,
   resolveChannelEntryMatchWithFallback,
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import type { ChannelBotLoopProtectionConfig } from "openclaw/plugin-sdk/config-contracts";
+import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeSlackSlug } from "./allow-list.js";
 
 export type SlackChannelConfigResolved = {
   allowed: boolean;
   requireMention: boolean;
-  allowBots?: boolean;
+  allowBots?: boolean | "mentions";
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
@@ -21,7 +25,8 @@ export type SlackChannelConfigResolved = {
 type SlackChannelConfigEntry = {
   enabled?: boolean;
   requireMention?: boolean;
-  allowBots?: boolean;
+  allowBots?: boolean | "mentions";
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
@@ -109,6 +114,10 @@ export function resolveSlackChannelConfig(params: {
     firstDefined(resolved.requireMention, fallback?.requireMention, requireMentionDefault) ??
     requireMentionDefault;
   const allowBots = firstDefined(resolved.allowBots, fallback?.allowBots);
+  const botLoopProtection = mergePairLoopGuardConfig(
+    fallback?.botLoopProtection,
+    matched?.botLoopProtection,
+  );
   const users = firstDefined(resolved.users, fallback?.users);
   const skills = firstDefined(resolved.skills, fallback?.skills);
   const systemPrompt = firstDefined(resolved.systemPrompt, fallback?.systemPrompt);
@@ -116,6 +125,7 @@ export function resolveSlackChannelConfig(params: {
     allowed,
     requireMention,
     allowBots,
+    botLoopProtection,
     users,
     skills,
     systemPrompt,

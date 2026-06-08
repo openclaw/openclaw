@@ -1,38 +1,49 @@
+/**
+ * Session-level auth profile override rotation.
+ * Keeps automatic profile choice stable within a session while still rotating
+ * across new sessions, compactions, provider changes, and cooldowns.
+ */
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
+  isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileOrder,
 } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 
 const sessionStoreRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/store.runtime.js"),
 );
 
+// Session-store writes are lazy-loaded so read-only auth resolution paths do not
+// import persistence code unless an override must be updated.
 function loadSessionStoreRuntime() {
   return sessionStoreRuntimeLoader.load();
 }
 
+// Current session overrides are only valid when the selected provider can use
+// that profile, including configured aws-sdk profiles without stored secrets.
 function isProfileForProvider(params: {
   cfg: OpenClawConfig;
   providers: readonly string[];
   profileId: string;
   store: ReturnType<typeof ensureAuthProfileStore>;
 }): boolean {
-  const providerKeys = params.providers.map((provider) =>
-    resolveProviderIdForAuth(provider, { config: params.cfg }),
-  );
   const entry = params.store.profiles[params.profileId];
   if (entry) {
     if (!entry.provider) {
       return false;
     }
-    const profileProviderKey = resolveProviderIdForAuth(entry.provider, { config: params.cfg });
-    return providerKeys.includes(profileProviderKey);
+    return params.providers.some((provider) =>
+      isStoredCredentialCompatibleWithAuthProvider({
+        cfg: params.cfg,
+        provider,
+        credential: entry,
+      }),
+    );
   }
   return params.providers.some((provider) =>
     isConfiguredAwsSdkAuthProfileForProvider({
@@ -57,6 +68,7 @@ function uniqueProviders(provider: string, acceptedProviderIds?: readonly string
   return [...providers];
 }
 
+/** Clears an auth-profile override from a session and persists it when possible. */
 export async function clearSessionAuthProfileOverride(params: {
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
@@ -78,6 +90,7 @@ export async function clearSessionAuthProfileOverride(params: {
   }
 }
 
+/** Resolves and optionally rotates the session auth-profile override. */
 export async function resolveSessionAuthProfileOverride(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -188,6 +201,8 @@ export async function resolveSessionAuthProfileOverride(params: {
     current && isProfileInCooldown(store, current)
       ? order.find((profileId) => profileId !== current && !isProfileInCooldown(store, profileId))
       : undefined;
+  // User-pinned profiles persist unless unusable/mismatched. Auto-selected
+  // profiles rotate on new sessions or compaction boundaries.
   if (replacementForUnusableCurrent) {
     current = undefined;
   }
@@ -222,8 +237,8 @@ export async function resolveSessionAuthProfileOverride(params: {
     if (storePath) {
       await (
         await loadSessionStoreRuntime()
-      ).updateSessionStore(storePath, (store) => {
-        store[sessionKey] = sessionEntry;
+      ).updateSessionStore(storePath, (storeLocal) => {
+        storeLocal[sessionKey] = sessionEntry;
       });
     }
   }

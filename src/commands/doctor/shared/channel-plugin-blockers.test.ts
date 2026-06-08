@@ -1,3 +1,4 @@
+// Channel plugin blocker tests cover doctor diagnostics for blocked channel plugin setup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import { scanConfiguredChannelPluginBlockers } from "./channel-plugin-blockers.js";
@@ -22,7 +23,7 @@ describe("channel plugin blockers", () => {
       },
     });
 
-    expect(hits).toEqual([]);
+    expect(hits).toStrictEqual([]);
     expect(registrySpy).not.toHaveBeenCalled();
   });
 
@@ -153,7 +154,7 @@ describe("channel plugin blockers", () => {
       },
     });
 
-    expect(hits).toEqual([]);
+    expect(hits).toStrictEqual([]);
   });
 
   it("still reports the disabled bundled owner when an external channel owner is not trusted", () => {
