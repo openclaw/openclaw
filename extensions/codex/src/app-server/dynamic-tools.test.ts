@@ -372,6 +372,35 @@ describe("createCodexDynamicToolBridge", () => {
     expect(badExecute).not.toHaveBeenCalled();
   });
 
+  it("quarantines unreadable dynamic tool schemas before bridge construction", () => {
+    const badExecute = vi.fn();
+    const badTool = createTool({
+      name: "dofbot_move_angles",
+      execute: badExecute,
+    });
+    Object.defineProperty(badTool, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("dofbot schema getter exploded");
+      },
+    });
+
+    const bridge = createCodexDynamicToolBridge({
+      tools: [badTool, createTool({ name: "message" })],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableSpecs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.specs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.telemetry.quarantinedTools).toEqual([
+      {
+        tool: "dofbot_move_angles",
+        violations: ["dofbot_move_angles.inputSchema is unreadable"],
+      },
+    ]);
+    expect(badExecute).not.toHaveBeenCalled();
+  });
+
   it("can expose all dynamic tools directly for compatibility", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [createTool({ name: "web_search" }), createTool({ name: "message" })],

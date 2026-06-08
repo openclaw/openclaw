@@ -30,6 +30,7 @@ const effectiveInventoryState = vi.hoisted(() => ({
     mockTool({ name: "docs_lookup", label: "Docs Lookup", description: "Search docs" }),
   ] as AnyAgentTool[],
   pluginMeta: {} as Record<string, { pluginId: string } | undefined>,
+  pluginMetaByTool: new WeakMap<object, { pluginId: string }>(),
   channelMeta: {} as Record<string, { channelId: string } | undefined>,
   effectivePolicy: {} as { profile?: string; providerProfile?: string },
   normalizeToolsMock: vi.fn((options: { tools: AnyAgentTool[] }) => options.tools),
@@ -61,7 +62,9 @@ vi.mock("./agent-tools.js", () => ({
 }));
 
 vi.mock("../plugins/tools.js", () => ({
-  getPluginToolMeta: (tool: { name: string }) => effectiveInventoryState.pluginMeta[tool.name],
+  getPluginToolMeta: (tool: { name: string }) =>
+    effectiveInventoryState.pluginMetaByTool.get(tool) ??
+    effectiveInventoryState.pluginMeta[tool.name],
   buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
     JSON.stringify([pluginId, toolName]),
 }));
@@ -115,6 +118,7 @@ async function loadHarness(options?: {
   tools?: AnyAgentTool[];
   createToolsMock?: typeof effectiveInventoryState.createToolsMock;
   pluginMeta?: Record<string, { pluginId: string } | undefined>;
+  pluginMetaByTool?: WeakMap<object, { pluginId: string }>;
   channelMeta?: Record<string, { channelId: string } | undefined>;
   effectivePolicy?: { profile?: string; providerProfile?: string };
   normalizeToolsMock?: typeof effectiveInventoryState.normalizeToolsMock;
@@ -124,6 +128,7 @@ async function loadHarness(options?: {
     mockTool({ name: "docs_lookup", label: "Docs Lookup", description: "Search docs" }),
   ];
   effectiveInventoryState.pluginMeta = options?.pluginMeta ?? {};
+  effectiveInventoryState.pluginMetaByTool = options?.pluginMetaByTool ?? new WeakMap();
   effectiveInventoryState.channelMeta = options?.channelMeta ?? {};
   effectiveInventoryState.effectivePolicy = options?.effectivePolicy ?? {};
   effectiveInventoryState.normalizeToolsMock =
@@ -151,6 +156,7 @@ describe("resolveEffectiveToolInventory", () => {
       mockTool({ name: "docs_lookup", label: "Docs Lookup", description: "Search docs" }),
     ];
     effectiveInventoryState.pluginMeta = {};
+    effectiveInventoryState.pluginMetaByTool = new WeakMap();
     effectiveInventoryState.channelMeta = {};
     effectiveInventoryState.effectivePolicy = {};
     effectiveInventoryState.normalizeToolsMock = vi.fn((options) => options.tools);
@@ -376,6 +382,43 @@ describe("resolveEffectiveToolInventory", () => {
         severity: "warning",
         message:
           'Tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has an unsupported runtime input schema (fuzzplugin_move_angles.parameters.type must be "object") and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
+      },
+    ]);
+  });
+
+  it("preserves plugin ownership for unreadable pre-normalization tool names", async () => {
+    const unreadable = mockTool({
+      name: "fuzzplugin_move_angles",
+      label: "Fuzzplugin Move Angles",
+      description: "Move fixture joints",
+    });
+    Object.defineProperty(unreadable, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin name getter exploded");
+      },
+    });
+    const pluginMetaByTool = new WeakMap<object, { pluginId: string }>([
+      [unreadable, { pluginId: "fuzzplugin" }],
+    ]);
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal14 } =
+      await loadHarness({
+        tools: [
+          unreadable,
+          mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
+        ],
+        pluginMetaByTool,
+      });
+
+    const result = resolveEffectiveToolInventoryLocal14({ cfg: {} });
+
+    expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual(["exec"]);
+    expect(result.notices).toEqual([
+      {
+        id: "unsupported-tool-schema:tool[0]",
+        severity: "warning",
+        message:
+          'Tool "tool[0]" from plugin "fuzzplugin" has an unsupported runtime input schema (tool[0].name is unreadable) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
       },
     ]);
   });

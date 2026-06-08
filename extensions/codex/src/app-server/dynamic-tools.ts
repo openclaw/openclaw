@@ -15,7 +15,7 @@ import {
   isMessagingTool,
   isMessagingToolSendAction,
   normalizeHeartbeatToolResponse,
-  projectRuntimeToolInputSchema,
+  projectRuntimeCompatibleToolInputSchemas,
   runAgentHarnessAfterToolCallHook,
   setBeforeToolCallDiagnosticsEnabled,
   type AnyAgentTool,
@@ -322,17 +322,19 @@ function projectCodexDynamicTools(tools: readonly AnyAgentTool[]): {
   tools: ProjectedCodexDynamicTool[];
   quarantinedTools: CodexDynamicToolSchemaQuarantine[];
 } {
-  const projectedTools: ProjectedCodexDynamicTool[] = [];
-  const quarantinedTools: CodexDynamicToolSchemaQuarantine[] = [];
-  for (const tool of tools) {
-    const projection = projectRuntimeToolInputSchema(tool.parameters, `${tool.name}.inputSchema`);
-    if (projection.violations.length > 0) {
-      quarantinedTools.push({ tool: tool.name, violations: projection.violations });
-      continue;
-    }
-    projectedTools.push({ tool, inputSchema: projection.schema as JsonValue });
-  }
-  return { tools: projectedTools, quarantinedTools };
+  const projection = projectRuntimeCompatibleToolInputSchemas(tools, {
+    schemaLabel: "inputSchema",
+  });
+  return {
+    tools: projection.tools.map(({ tool, schema }) => ({
+      tool,
+      inputSchema: schema as JsonValue,
+    })),
+    quarantinedTools: projection.diagnostics.map((diagnostic) => ({
+      tool: diagnostic.toolName,
+      violations: diagnostic.violations,
+    })),
+  };
 }
 
 function warnQuarantinedDynamicTools(tools: readonly CodexDynamicToolSchemaQuarantine[]): void {

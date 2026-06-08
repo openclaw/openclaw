@@ -105,12 +105,17 @@ function buildUnsupportedToolSchemaNotices(params: {
   diagnostics: readonly RuntimeToolSchemaDiagnostic[];
   tools: readonly AnyAgentTool[];
   rawToolsByName: ReadonlyMap<string, AnyAgentTool>;
+  fallbackToolsByIndex?: readonly AnyAgentTool[];
 }): EffectiveToolInventoryNotice[] {
   return params.diagnostics.map((diagnostic) =>
     buildUnsupportedToolSchemaNotice({
       diagnostic,
       tool: readMatchingTool(params.tools, diagnostic),
-      fallbackTool: params.rawToolsByName.get(diagnostic.toolName),
+      fallbackTool:
+        params.rawToolsByName.get(diagnostic.toolName) ??
+        (params.fallbackToolsByIndex
+          ? readToolByIndex(params.fallbackToolsByIndex, diagnostic.toolIndex)
+          : undefined),
     }),
   );
 }
@@ -122,6 +127,17 @@ function readMatchingTool(
   try {
     const tool = tools[diagnostic.toolIndex];
     return tool?.name === diagnostic.toolName ? tool : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readToolByIndex(
+  tools: readonly AnyAgentTool[],
+  toolIndex: number,
+): AnyAgentTool | undefined {
+  try {
+    return tools[toolIndex];
   } catch {
     return undefined;
   }
@@ -223,9 +239,10 @@ export function buildRuntimeCompatibleToolInventory(params: {
 } {
   const rawToolsByName = buildReadableRawToolsByName(params.tools);
   const preNormalizationProjection = filterProviderNormalizableTools(params.tools);
-  const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [
+  const sourceProjectionDiagnostics: RuntimeToolSchemaDiagnostic[] = [
     ...preNormalizationProjection.diagnostics,
   ];
+  const normalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
   const normalizedTools = normalizeAgentRuntimeTools({
     // Schema normalization can replace tool definitions, so hand the runtime
     // policy a mutable copy while keeping this inventory API readonly.
@@ -237,17 +254,30 @@ export function buildRuntimeCompatibleToolInventory(params: {
     modelApi: params.modelApi ?? undefined,
     model: params.runtimeModel,
     onPreNormalizationSchemaDiagnostics: (diagnostics) =>
-      preNormalizationDiagnostics.push(...diagnostics),
+      normalizationDiagnostics.push(...diagnostics),
   });
   const projection = filterRuntimeCompatibleTools(normalizedTools);
-  const diagnostics = [...preNormalizationDiagnostics, ...projection.diagnostics];
   return {
     entries: buildEffectiveToolInventoryEntries(projection.tools, rawToolsByName),
-    notices: buildUnsupportedToolSchemaNotices({
-      diagnostics,
-      tools: normalizedTools,
-      rawToolsByName,
-    }),
+    notices: [
+      ...buildUnsupportedToolSchemaNotices({
+        diagnostics: sourceProjectionDiagnostics,
+        tools: params.tools,
+        rawToolsByName,
+        fallbackToolsByIndex: params.tools,
+      }),
+      ...buildUnsupportedToolSchemaNotices({
+        diagnostics: normalizationDiagnostics,
+        tools: preNormalizationProjection.tools,
+        rawToolsByName,
+        fallbackToolsByIndex: preNormalizationProjection.tools,
+      }),
+      ...buildUnsupportedToolSchemaNotices({
+        diagnostics: projection.diagnostics,
+        tools: normalizedTools,
+        rawToolsByName,
+      }),
+    ],
   };
 }
 

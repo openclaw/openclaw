@@ -20,6 +20,14 @@ export type RuntimeToolInputSchemaProjection = {
   readonly violations: readonly string[];
 };
 
+/** Runtime tool paired with its projected JSON-safe schema. */
+export type RuntimeToolInputSchemaProjectedTool<
+  TTool extends Pick<AnyAgentTool, "name" | "parameters">,
+> = {
+  readonly tool: TTool;
+  readonly schema: RuntimeToolInputSchemaJson;
+};
+
 /** Diagnostic for one incompatible runtime tool schema. */
 export type RuntimeToolSchemaDiagnostic = {
   readonly toolName: string;
@@ -30,6 +38,14 @@ export type RuntimeToolSchemaDiagnostic = {
 /** Runtime tool list split into compatible tools and schema diagnostics. */
 export type RuntimeToolSchemaInspection<TTool extends Pick<AnyAgentTool, "name" | "parameters">> = {
   readonly tools: readonly TTool[];
+  readonly diagnostics: readonly RuntimeToolSchemaDiagnostic[];
+};
+
+/** Runtime tool list split into projected compatible tools and schema diagnostics. */
+export type RuntimeToolInputSchemaProjectionInspection<
+  TTool extends Pick<AnyAgentTool, "name" | "parameters">,
+> = {
+  readonly tools: readonly RuntimeToolInputSchemaProjectedTool<TTool>[];
   readonly diagnostics: readonly RuntimeToolSchemaDiagnostic[];
 };
 
@@ -45,6 +61,10 @@ type RuntimeToolEntryRead<TTool extends Pick<AnyAgentTool, "name" | "parameters"
     };
 
 type ToolSchemaInspectionMode = "runtime" | "provider-normalizable";
+
+type RuntimeToolProjectionOptions = {
+  schemaLabel?: string;
+};
 
 function unreadableRuntimeToolEntry(
   toolIndex: number,
@@ -250,6 +270,50 @@ function inspectToolSchema(
   return violations.length > 0 ? { toolName, toolIndex, violations } : undefined;
 }
 
+function projectToolSchema<TTool extends Pick<AnyAgentTool, "name" | "parameters">>(
+  tool: TTool,
+  toolIndex: number,
+  options: RuntimeToolProjectionOptions,
+):
+  | { ok: true; tool: TTool; schema: RuntimeToolInputSchemaJson }
+  | { ok: false; diagnostic: RuntimeToolSchemaDiagnostic } {
+  const schemaLabel = options.schemaLabel ?? "parameters";
+  const nameRead = readToolProjectionField(tool, "name");
+  const toolName =
+    nameRead.readable && typeof nameRead.value === "string" && nameRead.value
+      ? nameRead.value
+      : `tool[${toolIndex}]`;
+  const descriptorViolations = nameRead.readable ? [] : [`${toolName}.name is unreadable`];
+  const parametersRead = readToolProjectionField(tool, "parameters");
+  if (!parametersRead.readable) {
+    return {
+      ok: false,
+      diagnostic: {
+        toolName,
+        toolIndex,
+        violations: [...descriptorViolations, `${toolName}.${schemaLabel} is unreadable`],
+      },
+    };
+  }
+
+  const projection = projectRuntimeToolInputSchema(
+    parametersRead.value,
+    `${toolName}.${schemaLabel}`,
+  );
+  const violations = [...descriptorViolations, ...projection.violations];
+  if (violations.length > 0) {
+    return {
+      ok: false,
+      diagnostic: {
+        toolName,
+        toolIndex,
+        violations,
+      },
+    };
+  }
+  return { ok: true, tool, schema: projection.schema };
+}
+
 function inspectToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameters">>(
   entries: readonly RuntimeToolEntryRead<TTool>[],
   mode: ToolSchemaInspectionMode,
@@ -283,6 +347,30 @@ export function filterRuntimeCompatibleTools<
   TTool extends Pick<AnyAgentTool, "name" | "parameters">,
 >(tools: readonly TTool[]): RuntimeToolSchemaInspection<TTool> {
   return inspectToolEntries(readRuntimeToolEntries(tools), "runtime");
+}
+
+/** Projects and filters tools to schemas accepted by runtime dynamic tool surfaces. */
+export function projectRuntimeCompatibleToolInputSchemas<
+  TTool extends Pick<AnyAgentTool, "name" | "parameters">,
+>(
+  tools: readonly TTool[],
+  options: RuntimeToolProjectionOptions = {},
+): RuntimeToolInputSchemaProjectionInspection<TTool> {
+  const diagnostics: RuntimeToolSchemaDiagnostic[] = [];
+  const projectedTools: RuntimeToolInputSchemaProjectedTool<TTool>[] = [];
+  for (const entry of readRuntimeToolEntries(tools)) {
+    if (!entry.ok) {
+      diagnostics.push(entry.diagnostic);
+      continue;
+    }
+    const projection = projectToolSchema(entry.tool, entry.toolIndex, options);
+    if (projection.ok) {
+      projectedTools.push({ tool: projection.tool, schema: projection.schema });
+      continue;
+    }
+    diagnostics.push(projection.diagnostic);
+  }
+  return { tools: projectedTools, diagnostics };
 }
 
 /** Filters tools to those that providers can normalize before dispatch. */

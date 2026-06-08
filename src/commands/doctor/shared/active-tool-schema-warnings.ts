@@ -115,6 +115,17 @@ function readPluginId(tool: AnyAgentTool | undefined): string | undefined {
   }
 }
 
+function resolveDiagnosticPluginId(params: {
+  tools: readonly AnyAgentTool[];
+  rawToolsByName: ReadonlyMap<string, AnyAgentTool>;
+  diagnostic: RuntimeToolSchemaDiagnostic;
+}): string | undefined {
+  return (
+    readPluginId(readToolByIndex(params.tools, params.diagnostic.toolIndex)) ??
+    readPluginId(params.rawToolsByName.get(params.diagnostic.toolName))
+  );
+}
+
 /** Collect per-agent warnings for active plugin tools rejected by runtime schema projection. */
 export function collectActiveToolSchemaProjectionWarnings(params: {
   cfg: OpenClawConfig;
@@ -172,7 +183,10 @@ export function collectActiveToolSchemaProjectionWarnings(params: {
     }
 
     const rawToolsByName = buildReadableToolsByName(tools);
-    const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
+    const preNormalizationDiagnostics: {
+      diagnostic: RuntimeToolSchemaDiagnostic;
+      sourceTools: readonly AnyAgentTool[];
+    }[] = [];
     let normalizedTools: typeof tools;
     try {
       normalizedTools = normalizeAgentRuntimeTools({
@@ -184,8 +198,11 @@ export function collectActiveToolSchemaProjectionWarnings(params: {
         modelId: modelRef.model,
         modelApi: runtimeModelContext.modelApi,
         model: runtimeModelContext.model,
-        onPreNormalizationSchemaDiagnostics: (diagnostics) =>
-          preNormalizationDiagnostics.push(...diagnostics),
+        onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) => {
+          for (const diagnostic of diagnostics) {
+            preNormalizationDiagnostics.push({ diagnostic, sourceTools });
+          }
+        },
       });
     } catch (error) {
       warnings.push(
@@ -195,9 +212,12 @@ export function collectActiveToolSchemaProjectionWarnings(params: {
       );
       continue;
     }
-    for (const diagnostic of preNormalizationDiagnostics) {
-      const rawTool = rawToolsByName.get(diagnostic.toolName);
-      const pluginId = readPluginId(rawTool);
+    for (const { diagnostic, sourceTools } of preNormalizationDiagnostics) {
+      const pluginId = resolveDiagnosticPluginId({
+        tools: sourceTools,
+        rawToolsByName,
+        diagnostic,
+      });
       warnings.push(
         formatDiagnostic({
           agentId,
@@ -208,9 +228,11 @@ export function collectActiveToolSchemaProjectionWarnings(params: {
     }
     const projection = filterRuntimeCompatibleTools(normalizedTools);
     for (const diagnostic of projection.diagnostics) {
-      const tool = readToolByIndex(normalizedTools, diagnostic.toolIndex);
-      const rawTool = rawToolsByName.get(diagnostic.toolName);
-      const pluginId = readPluginId(tool) ?? readPluginId(rawTool);
+      const pluginId = resolveDiagnosticPluginId({
+        tools: normalizedTools,
+        rawToolsByName,
+        diagnostic,
+      });
       warnings.push(
         formatDiagnostic({
           agentId,

@@ -5,6 +5,7 @@ import {
   filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
   inspectRuntimeToolInputSchemas,
+  projectRuntimeCompatibleToolInputSchemas,
   projectRuntimeToolInputSchema,
 } from "./tool-schema-projection.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -161,6 +162,43 @@ describe("runtime tool input schema projection", () => {
           toolName: "fuzzplugin_unreadable",
           toolIndex: 0,
           violations: ["fuzzplugin_unreadable.parameters is unreadable"],
+        },
+      ],
+    });
+  });
+
+  it("projects compatible schemas while quarantining unreadable runtime fields", () => {
+    const unreadable = {
+      name: "fuzzplugin_unreadable",
+      parameters: { type: "object", properties: {} },
+    };
+    Object.defineProperty(unreadable, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin parameters getter exploded");
+      },
+    });
+    const healthy = {
+      name: "healthy",
+      parameters: { type: "object", properties: { query: { type: "string" } } },
+    };
+
+    expect(
+      projectRuntimeCompatibleToolInputSchemas([unreadable, healthy], {
+        schemaLabel: "inputSchema",
+      }),
+    ).toEqual({
+      tools: [
+        {
+          tool: healthy,
+          schema: { type: "object", properties: { query: { type: "string" } } },
+        },
+      ],
+      diagnostics: [
+        {
+          toolName: "fuzzplugin_unreadable",
+          toolIndex: 0,
+          violations: ["fuzzplugin_unreadable.inputSchema is unreadable"],
         },
       ],
     });

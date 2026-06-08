@@ -178,8 +178,11 @@ export {
 export {
   filterProviderNormalizableTools,
   inspectRuntimeToolInputSchemas,
+  projectRuntimeCompatibleToolInputSchemas,
   projectRuntimeToolInputSchema,
   type RuntimeToolInputSchemaJson,
+  type RuntimeToolInputSchemaProjectedTool,
+  type RuntimeToolInputSchemaProjectionInspection,
   type RuntimeToolInputSchemaProjection,
   type RuntimeToolSchemaDiagnostic,
 } from "../agents/tool-schema-projection.js";

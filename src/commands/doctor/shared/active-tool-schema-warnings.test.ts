@@ -6,6 +6,7 @@ import type { AnyAgentTool } from "../../../agents/tools/common.js";
 const toolState = vi.hoisted(() => ({
   tools: [] as AnyAgentTool[],
   pluginIds: {} as Record<string, string | undefined>,
+  pluginIdsByTool: new WeakMap<object, string>(),
   throwError: null as Error | null,
   runtimeModel: null as {
     id: string;
@@ -19,7 +20,12 @@ const toolState = vi.hoisted(() => ({
   resolveModel: vi.fn(),
   createTools: vi.fn<typeof createOpenClawCodingTools>(),
   normalizeTools: vi.fn(
-    (options: { tools: AnyAgentTool[]; modelApi?: string; model?: unknown }) => options.tools,
+    (options: {
+      tools: AnyAgentTool[];
+      modelApi?: string;
+      model?: unknown;
+      onPreNormalizationSchemaDiagnostics?: (diagnostics: unknown[], tools: AnyAgentTool[]) => void;
+    }) => options.tools,
   ),
 }));
 
@@ -39,7 +45,8 @@ vi.mock("../../../agents/agent-tools.js", () => ({
 
 vi.mock("../../../plugins/tools.js", () => ({
   getPluginToolMeta: (toolLocal: { name: string }) => {
-    const pluginId = toolState.pluginIds[toolLocal.name];
+    const pluginId =
+      toolState.pluginIdsByTool.get(toolLocal) ?? toolState.pluginIds[toolLocal.name];
     return pluginId ? { pluginId, optional: false } : undefined;
   },
 }));
@@ -66,6 +73,7 @@ describe("active tool schema doctor warnings", () => {
   beforeEach(() => {
     toolState.tools = [];
     toolState.pluginIds = {};
+    toolState.pluginIdsByTool = new WeakMap();
     toolState.throwError = null;
     toolState.runtimeModel = null;
     toolState.resolveModelError = null;
@@ -133,6 +141,50 @@ describe("active tool schema doctor warnings", () => {
       }),
     ).toEqual([
       '- agents.main: active tool "tool[0]" has unsupported runtime input schema (tool[0] is unreadable). OpenClaw will quarantine this tool at runtime; fix or disable the plugin, or remove the tool from active allowlists.',
+    ]);
+  });
+
+  it("preserves plugin ownership for pre-normalization tools with unreadable names", () => {
+    const unreadable = tool("fuzzplugin_move_angles", {
+      type: "object",
+      properties: {},
+    });
+    Object.defineProperty(unreadable, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin name getter exploded");
+      },
+    });
+    const healthy = tool("message", { type: "object", properties: {} });
+    toolState.tools = [unreadable, healthy];
+    toolState.pluginIdsByTool.set(unreadable, "fuzzplugin");
+    toolState.normalizeTools.mockImplementation((options) => {
+      options.onPreNormalizationSchemaDiagnostics?.(
+        [
+          {
+            toolName: "tool[0]",
+            toolIndex: 0,
+            violations: ["tool[0].name is unreadable"],
+          },
+        ],
+        options.tools,
+      );
+      return [healthy];
+    });
+
+    expect(
+      collectActiveToolSchemaProjectionWarnings({
+        cfg: {
+          plugins: {
+            entries: {
+              fuzzplugin: { enabled: true },
+            },
+          },
+        },
+        env: { HOME: "/tmp/openclaw-test" },
+      }),
+    ).toEqual([
+      '- agents.main: active tool "tool[0]" from plugin "fuzzplugin" has unsupported runtime input schema (tool[0].name is unreadable). OpenClaw will quarantine this tool at runtime; fix or disable the plugin, or remove the tool from active allowlists.',
     ]);
   });
 
