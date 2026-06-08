@@ -17,7 +17,7 @@
  * Without these contracts pinned, a regression that reverts the rejection-
  * obs cure would re-introduce opaque `Spawn rejected (forbidden)` /
  * `Tool delegate spawn rejected (forbidden)` log lines + the hard-coded
- * `delegation was not accepted.` system-event text — leaving the cohort
+ * `delegation was not accepted.` system-event text — leaving observers
  * unable to disambiguate which forbidden-shape fired (cap, depth, agent-id
  * policy, sandbox policy, allowAgents target-policy, cwd policy, capability
  * gate, etc).

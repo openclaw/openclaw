@@ -444,7 +444,7 @@ Each agent session (at any depth) can have at most `maxChildrenPerAgent`
 (default `5`) active children at a time. This prevents runaway fan-out
 from a single orchestrator.
 
-**Interaction with continuation knobs:** when `agents.defaults.continuation.enabled === true`, the per-agent children-cap acts as a complementary floor alongside the continuation runaway-safety guards (`maxDelegatesPerTurn`, `maxChainLength`, `costCapTokens`). Token-budget (`costCapTokens`) and chain-length (`maxChainLength`) remain the primary runaway-safety guards; `maxChildrenPerAgent` provides per-session-children pressure-relief for wide-fanout patterns like prince-cohort PROOFS-distribute, code-agent fan-out, or fleet-deploy chains.
+**Interaction with continuation knobs:** when `agents.defaults.continuation.enabled === true`, the per-agent children-cap acts as a complementary floor alongside the continuation runaway-safety guards (`maxDelegatesPerTurn`, `maxChainLength`, `costCapTokens`). Token-budget (`costCapTokens`) and chain-length (`maxChainLength`) remain the primary runaway-safety guards; `maxChildrenPerAgent` provides per-session-children pressure-relief for wide-fanout patterns like large-scale distribution, code-agent fan-out, or batch deployment chains.
 
 **Override-headroom:** the zod schema permits values up to `10000` via config-override. The default stays at `5` for interactive single-agent safety; operators running wide-fanout patterns should raise via `agents.defaults.subagents.maxChildrenPerAgent` in `~/.openclaw/openclaw.json`.
 
@@ -648,7 +648,7 @@ still need normal device approval for scope upgrades.
 - `sessions_spawn` is always non-blocking: it returns `{ status: "accepted", runId, childSessionKey }` immediately.
 - Sub-agent context only injects `AGENTS.md` and `TOOLS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, `HEARTBEAT.md`, or `BOOTSTRAP.md`). Codex-native subagents follow the same boundary: `TOOLS.md` stays in inherited Codex thread instructions, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
 - Maximum nesting depth is 5 (`maxSpawnDepth` range: 1–5). Depth 2 is recommended for most use cases.
-- `maxChildrenPerAgent` caps active children per session (default `5`, range `1–10000`). Default stays low for interactive single-agent safety; raise via config for wide-fanout patterns (continuation-delegate cohort proofs, fleet-deploys, distributed investigation).
+- `maxChildrenPerAgent` caps active children per session (default `5`, range `1–10000`). Default stays low for interactive single-agent safety; raise via config for wide-fanout patterns (parallel delegate fan-out, batch processing, distributed investigation).
 
 ## Related
 

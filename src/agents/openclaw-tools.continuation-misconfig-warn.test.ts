@@ -76,7 +76,7 @@ function buildRequestCompactionOpts() {
   };
 }
 
-describe("createOpenClawTools — silent partial-registration guard (karmaterminal/openclaw#619)", () => {
+describe("createOpenClawTools — silent partial-registration guard", () => {
   beforeEach(() => {
     warnSpy.mockClear();
   });
@@ -141,12 +141,12 @@ describe("createOpenClawTools — silent partial-registration guard (karmatermin
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  // karmaterminal/openclaw#923 — inventory/catalog callsites (gateway
+  // inventory/catalog callsites (gateway
   // tool-resolution, skills tool-dispatch, tools-effective-inventory) register
   // the continuation tools via stub callbacks (buildInventoryContinuationToolOpts)
   // so the catalog reflects the full surface AND the partial-registration warning
   // is satisfied HONESTLY (callbacks ARE supplied) rather than suppressed by a flag.
-  it("does NOT warn when continuation.enabled=true and stub inventory callbacks are supplied (karmaterminal/openclaw#923 — register honestly, not suppress)", () => {
+  it("does NOT warn when continuation.enabled=true and stub inventory callbacks are supplied (register honestly, not suppress)", () => {
     createOpenClawTools({
       agentSessionKey: "main",
       disablePluginTools: true,

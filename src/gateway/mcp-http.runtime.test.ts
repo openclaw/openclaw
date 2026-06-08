@@ -18,7 +18,7 @@ function loopbackParams(cfg: OpenClawConfig) {
   };
 }
 
-describe("resolveMcpLoopbackScopedTools — continuation exclusion (karmaterminal/openclaw#923)", () => {
+describe("resolveMcpLoopbackScopedTools — continuation exclusion", () => {
   it("excludes continue_work + request_compaction from the loopback (internal session-elected primitives, not external/CLI-invocable)", () => {
     const result = resolveMcpLoopbackScopedTools(
       loopbackParams({

@@ -200,7 +200,7 @@ export function resolveSkillDispatchTools(params: {
     // active-turn execution. Register continue_work + request_compaction via inert
     // stub callbacks so the catalog reflects the full continuation surface and the
     // openclaw-tools.ts partial-registration warning is satisfied honestly (not
-    // suppressed). See karmaterminal/openclaw#923.
+    // suppressed).
     ...buildInventoryContinuationToolOpts(
       params.cfg?.agents?.defaults?.continuation?.enabled === true,
     ),

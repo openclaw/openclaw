@@ -593,7 +593,7 @@ export function createOpenClawTools(
     // sets continuation.enabled=true but omits continueWorkOpts/requestCompactionOpts gets
     // continue_delegate alone, with no warning. The guard below surfaces that silent partial-
     // registration so misconfiguration is observable instead of hidden.
-    // Tracking: karmaterminal/openclaw#619.
+    // Tracking: continuation tool-registration guard.
     ...(options?.config?.agents?.defaults?.continuation?.enabled === true &&
     options?.continueWorkOpts
       ? [
@@ -635,8 +635,7 @@ export function createOpenClawTools(
         "must supply both callbacks for the full continuation tool set (likely a config/wiring " +
         "gap). If this is an inventory/catalog/dispatch build, register the tools via stub " +
         "callbacks (buildInventoryContinuationToolOpts) so the catalog reflects the full surface " +
-        "and this warning is satisfied honestly rather than suppressed — see " +
-        "karmaterminal/openclaw#923.",
+        "and this warning is satisfied honestly rather than suppressed.",
       {
         agentSessionKey: options?.agentSessionKey,
         runSessionKey: options?.runSessionKey,

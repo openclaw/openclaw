@@ -1,8 +1,8 @@
 /**
- * Spiderweb T-3 — nonexistent-target-session-delivery race contract.
+ * Nonexistent-target-session-delivery race contract.
  *
  * Pins the continue_delegate return-delivery substrate against the P0 contract
- * in karmaterminal/openclaw#696:
+ * for deleted/nonexistent target sessions:
  *
  *   When continue_delegate is invoked with `targetSessionKey` pointing at a
  *   session that has been deleted, never existed, or was deleted mid-dispatch,

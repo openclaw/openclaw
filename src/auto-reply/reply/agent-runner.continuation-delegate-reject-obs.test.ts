@@ -325,7 +325,7 @@ describe("runReplyAgent :: continuation-delegate rejection observability (PR #88
   // Without this contract pinned, a regression that reverts the cure would
   // re-introduce the opaque `DELEGATE spawn rejected (forbidden) for session
   // <key>` log line + the hard-coded `delegation was not accepted.`
-  // system-event text — leaving the cohort unable to disambiguate which
+  // system-event text — leaving observers unable to disambiguate which
   // forbidden-shape fired (cap, depth, agent-id policy, sandbox policy,
   // allowAgents target-policy, cwd policy, capability gate, etc).
 

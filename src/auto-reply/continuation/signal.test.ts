@@ -107,7 +107,7 @@ describe("extractContinuationSignal", () => {
     }
   });
 
-  // Regression test for karmaterminal/openclaw#622: previously the scan stopped
+  // Regression test: previously the scan stopped
   // at the LAST payload with text and missed markers on earlier payloads when
   // a later non-marker text payload (e.g. a warning/error block) followed the
   // model's continuation-signaling text. The fix scans all payloads for the

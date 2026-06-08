@@ -77,7 +77,7 @@ export function extractContinuationSignal(params: {
   // and the model may emit multiple text fragments per turn; the marker can
   // legitimately live on any of them. Critical for subagent chain-hops where
   // the bracket is the ONLY continuation path (tool is denied for leaf subagents).
-  // Per karmaterminal/openclaw#622: previous "stop at last text payload" shape
+  // previous "stop at last text payload" shape
   // silently dropped markers on earlier payloads when later text existed.
   let bracketSignal: ContinuationSignal | null = null;
   let bracketPayloadIdx = -1;
@@ -101,7 +101,7 @@ export function extractContinuationSignal(params: {
 
     // Trace the structural shape of the scan (presence map only, no content)
     // for diagnosis without leaking reply text into operational logs.
-    // Per karmaterminal/openclaw#623: prior shape included `text.slice(-60)`
+    // prior shape included `text.slice(-60)`
     // of every payload via log.info, leaking PII / model output into normal-
     // info logs and creating high-volume log bloat.
     const presenceMap = payloads.map((p, i) => `[${i}]text=${Boolean(p.text)}`).join(" ");
