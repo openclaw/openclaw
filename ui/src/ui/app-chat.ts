@@ -243,6 +243,11 @@ export function isChatStopCommand(text: string) {
   );
 }
 
+function isChatResetSoftCommand(text: string) {
+  const normalized = normalizeLowercaseStringOrEmpty(text.trim());
+  return normalized === "/reset soft" || normalized.startsWith("/reset soft ");
+}
+
 function isChatResetCommand(text: string) {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -251,6 +256,12 @@ function isChatResetCommand(text: string) {
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "/new" || normalized === "/reset") {
     return true;
+  }
+  // `/reset soft [message]` is a non-destructive in-place reset handled by
+  // the gateway; it must not trigger the destructive-reset confirmation
+  // dialog or the session-list refresh path. See issue #91316.
+  if (isChatResetSoftCommand(trimmed)) {
+    return false;
   }
   return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
 }
@@ -1873,13 +1884,21 @@ async function dispatchSlashCommand(
       }
       await host.onSlashAction("new-session");
       return;
-    case "reset":
-      await sendChatMessageNow(host, "/reset", {
-        refreshSessions: true,
+    case "reset": {
+      // Forward the full reset command (including any `soft [message]`
+      // tail) so the gateway-side parser in commands-reset-mode.ts can
+      // pick the correct reset mode. Hardcoding "/reset" used to drop
+      // the `soft` token and silently fall through to a destructive hard
+      // reset that archived the transcript. See issue #91316.
+      const tail = args.trim();
+      const command = tail ? `/reset ${tail}` : "/reset";
+      await sendChatMessageNow(host, command, {
+        refreshSessions: !isChatResetSoftCommand(command),
         previousDraft: sendOpts?.previousDraft,
         restoreDraft: sendOpts?.restoreDraft,
       });
       return;
+    }
     case "clear":
       await clearChatHistory(host);
       return;

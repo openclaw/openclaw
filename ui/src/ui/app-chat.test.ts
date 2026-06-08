@@ -1334,6 +1334,105 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it.each([
+    {
+      label: "/reset soft",
+      input: "/reset soft",
+      expected: "/reset soft",
+    },
+    {
+      label: "/reset soft <message>",
+      input: "/reset soft please reload system prompt",
+      expected: "/reset soft please reload system prompt",
+    },
+    {
+      label: "/reset soft with trailing whitespace",
+      input: "/reset soft   keep transcript   ",
+      expected: "/reset soft   keep transcript",
+    },
+    {
+      // parseSlashCommand lowercases the command name, so the dispatcher
+      // canonicalizes the leading token to "/reset" while preserving the
+      // user-supplied tail verbatim. The gateway-side parser normalizes
+      // the tail again when matching the soft modifier.
+      label: "/RESET SOFT (case-insensitive)",
+      input: "/RESET SOFT review tone",
+      expected: "/reset SOFT review tone",
+    },
+  ])("forwards $label args to the gateway without confirmation", async ({ input, expected }) => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: input,
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(confirm).not.toHaveBeenCalled();
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    expect(payload.sessionKey).toBe("agent:main");
+    expect(payload.message).toBe(expected);
+    expect(host.chatMessage).toBe("");
+  });
+
+  it("treats button-triggered /reset soft as non-destructive (no confirm dialog)", async () => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host, "/reset soft please reload", {
+      confirmReset: true,
+      restoreDraft: true,
+    });
+
+    expect(confirm).not.toHaveBeenCalled();
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    expect(payload.message).toBe("/reset soft please reload");
+  });
+
+  it("still confirms button-triggered hard /reset (no `soft` modifier)", async () => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    const request = vi.fn();
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host, "/reset", {
+      confirmReset: true,
+      restoreDraft: true,
+    });
+
+    expect(confirm).toHaveBeenCalledWith("Start a new session? This will reset the current chat.");
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("records visible send timing phases for a normal chat send", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
