@@ -18,6 +18,23 @@ describe("prompt cache observability", () => {
     ).toEqual(["read", "write"]);
   });
 
+  it("skips unreadable prompt cache tool names", () => {
+    const unreadableTool = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("prompt cache tool name exploded");
+      },
+    });
+
+    expect(
+      collectPromptCacheToolNames([
+        { name: "read" },
+        unreadableTool as { name?: string },
+        { name: 42 } as { name?: string },
+        { name: " write " },
+      ]),
+    ).toEqual(["read", "write"]);
+  });
+
   it("tracks cache-relevant changes and reports a real cache-read drop", () => {
     // Observability only emits when a material cache-read drop follows a tracked
     // cache-affecting change.

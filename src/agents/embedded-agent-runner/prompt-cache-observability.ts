@@ -140,8 +140,22 @@ function diffSnapshots(
   return changes.length > 0 ? changes : null;
 }
 
+function readPromptCacheToolName(tool: { name?: unknown }): string | undefined {
+  try {
+    const name = tool.name;
+    if (typeof name !== "string") {
+      return undefined;
+    }
+    return name.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function collectPromptCacheToolNames(tools: Array<{ name?: string }>): string[] {
-  return tools.map((tool) => tool.name?.trim()).filter((name): name is string => Boolean(name));
+  return tools
+    .map((tool) => readPromptCacheToolName(tool))
+    .filter((name): name is string => Boolean(name));
 }
 
 export function beginPromptCacheObservation(params: {
