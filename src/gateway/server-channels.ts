@@ -825,7 +825,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             abortSignal: abort?.signal ?? new AbortController().signal,
             log,
             getStatus: () => getRuntime(channelId, id),
-            setStatus: (next) => setRuntimeFromTaskStatus(channelId, id, next, abort?.signal),
+            setStatus: (next) => setRuntime(channelId, id, next),
           });
         }
         const stoppedCleanly = await waitForChannelStopGracefully(
