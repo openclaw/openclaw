@@ -72,7 +72,10 @@ function resolveGoogleVideoRestBaseUrl(
 }
 
 function resolveGoogleVideoRestModelPath(model: string, isVertex: boolean): string {
-  const trimmed = normalizeOptionalString(model) || DEFAULT_GOOGLE_VIDEO_MODEL;
+  let trimmed = normalizeOptionalString(model) || DEFAULT_GOOGLE_VIDEO_MODEL;
+  if (isVertex && trimmed.startsWith("google-vertex/")) {
+    trimmed = trimmed.slice("google-vertex/".length);
+  }
   if (isVertex) {
     if (trimmed.startsWith("models/")) {
       return trimmed;
