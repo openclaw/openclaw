@@ -4,7 +4,8 @@ import type { FeedCounter } from "./feed-counter.js";
 import type { HistoryManager } from "./history-manager.js";
 import { MercurePusher, StreamingMercurePusher } from "./mercure-pusher.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
-import { detectReportRequest, type ReportPeriod } from "./report-trigger.js";
+import { computeDateScope, detectReportRequest, type ReportPeriod } from "./report-trigger.js";
+import type { ReportTemplateLookup } from "./report-template-lookup.js";
 import { ToolActivityNarrator } from "./tool-activity.js";
 import type { TopicResolver } from "./topic-resolver.js";
 import type { ChatMessage, MercureConfig } from "./types.js";
@@ -26,6 +27,32 @@ function extractAssistantDelta(data: Record<string, unknown>): string {
 }
 
 /**
+ * Resolve the user's report topic (entity_auth: uid -> masterId/slaveId).
+ * Shared by the explicit-template and keyword report paths so both agree on
+ * which feed_topic the report covers. Returns zeros when no resolver/mapping.
+ */
+async function resolveReportTopic(
+  userId: string,
+  topicResolver: TopicResolver | undefined,
+  logger: PluginLogger,
+): Promise<{ topicId: number; useSlaveTopic: boolean; masterId: number }> {
+  if (!topicResolver) {
+    return { topicId: 0, useSlaveTopic: false, masterId: 0 };
+  }
+  const resolution = await topicResolver.getTopicIdsByUser(userId);
+  const topicId = resolution.topicId ?? 0;
+  logger.info(
+    `[CHAT_PIPELINE] Resolved topicId=${topicId}, useSlaveTopic=${resolution.useSlaveTopic}, ` +
+      `masterId=${resolution.masterId} for userId=${userId}`,
+  );
+  return {
+    topicId,
+    useSlaveTopic: resolution.useSlaveTopic,
+    masterId: resolution.masterId,
+  };
+}
+
+/**
  * Pre-count feed data, then queue a report task and reply (or report "no data").
  * Always emits a Mercure `done` so the frontend unlocks.
  */
@@ -37,6 +64,8 @@ async function createReportTaskAndRespond(args: {
   useSlaveTopic: boolean;
   /** Master topic id from entity_auth; stored as download.topicId in slave mode. */
   masterId: number;
+  /** report_template.id the user picked explicitly (undefined for keyword reports). */
+  templateId: number | undefined;
   chatMsg: ChatMessage;
   mercure: MercurePusher;
   mercureTopic: string;
@@ -53,6 +82,7 @@ async function createReportTaskAndRespond(args: {
     topicId,
     useSlaveTopic,
     masterId,
+    templateId,
     chatMsg,
     mercure,
     mercureTopic,
@@ -103,6 +133,7 @@ async function createReportTaskAndRespond(args: {
     useSlaveTopic,
     masterId,
     mercureTopic,
+    templateId,
     // Same per-user agent the chat runs under, so the report subagent
     // inherits its workspace, DB skills, and schema knowledge.
     agentId: `rabbitmq-${chatMsg.userId}`,
@@ -159,6 +190,7 @@ export async function processChatMessage(
   topicResolver?: TopicResolver,
   feedCounter?: FeedCounter,
   reportTaskPublisher?: ReportTaskPublisher,
+  templateLookup?: ReportTemplateLookup,
 ): Promise<string> {
   const mercure = new MercurePusher(mercureConfig);
 
@@ -195,36 +227,59 @@ export async function processChatMessage(
       return "Error: Empty message";
     }
 
-    // Step 2.5: Check if this is a report generation request
+    // Step 2.4: Explicit template-driven report request. The frontend's report
+    // template panel sends the picked report_template.id; that template's own
+    // period drives the date scope and the report-generator loads this exact
+    // template. Takes precedence over keyword detection. An unresolvable id
+    // (deleted, disabled, another user's) falls through to ordinary handling.
+    if (chatMsg.templateId && downloadManager && templateLookup) {
+      const tpl = await templateLookup.resolve(chatMsg.templateId, userId, logger);
+      if (tpl) {
+        logger.info(
+          `[CHAT_PIPELINE] Explicit template #${tpl.id} ("${tpl.name}") -> ${tpl.period} report`,
+        );
+        const topic = await resolveReportTopic(userId, topicResolver, logger);
+        return await createReportTaskAndRespond({
+          period: tpl.period,
+          // The user's typed text becomes the requirement; it may just be the
+          // template name when they only clicked the template without editing.
+          requirement: userMessage,
+          dateScope: computeDateScope(tpl.period),
+          topicId: topic.topicId,
+          useSlaveTopic: topic.useSlaveTopic,
+          masterId: topic.masterId,
+          templateId: tpl.id,
+          chatMsg,
+          mercure,
+          mercureTopic,
+          historyManager,
+          downloadManager,
+          feedCounter,
+          reportTaskPublisher,
+          logger,
+        });
+      }
+      logger.warn(
+        `[CHAT_PIPELINE] templateId=${chatMsg.templateId} did not resolve; ` +
+          `falling back to normal handling`,
+      );
+    }
+
+    // Step 2.5: Check if this is a report generation request (keyword path)
     const triggerResult = detectReportRequest(userMessage, logger);
     if (triggerResult.isReportRequest && downloadManager) {
       logger.info(`[CHAT_PIPELINE] Report request detected: ${triggerResult.period}`);
 
-      // Resolve topicId from userId via entity_auth (uid -> masterId/slaveId)
-      let resolvedTopicId = 0;
-      let useSlaveTopic = false;
-      let masterId = 0;
-      if (topicResolver) {
-        // Use the fallback-resolved userId (chatMsg.userId || record.userId),
-        // same as the chat-path injection below.
-        const resolution = await topicResolver.getTopicIdsByUser(userId);
-
-        resolvedTopicId = resolution.topicId ?? 0;
-        useSlaveTopic = resolution.useSlaveTopic;
-        masterId = resolution.masterId;
-        logger.info(
-          `[CHAT_PIPELINE] Resolved topicId=${resolvedTopicId}, useSlaveTopic=${useSlaveTopic}, ` +
-            `masterId=${masterId} for userId=${userId}`,
-        );
-      }
+      const topic = await resolveReportTopic(userId, topicResolver, logger);
 
       return await createReportTaskAndRespond({
         period: triggerResult.period!,
         requirement: triggerResult.requirement,
         dateScope: triggerResult.dateScope!,
-        topicId: resolvedTopicId,
-        useSlaveTopic,
-        masterId,
+        topicId: topic.topicId,
+        useSlaveTopic: topic.useSlaveTopic,
+        masterId: topic.masterId,
+        templateId: undefined,
         chatMsg,
         mercure,
         mercureTopic,

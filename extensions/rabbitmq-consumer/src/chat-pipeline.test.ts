@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginLogger, PluginRuntime } from "../api.js";
 import { processChatMessage } from "./chat-pipeline.js";
+import type { DownloadManager } from "./download-manager.js";
 import type { HistoryManager } from "./history-manager.js";
+import type { ReportTemplateLookup } from "./report-template-lookup.js";
 import type { TopicResolver } from "./topic-resolver.js";
 import type { ChatMessage, MercureConfig } from "./types.js";
 
@@ -512,5 +514,98 @@ describe("processChatMessage", () => {
     );
 
     expect(capturedMessage).toBe(`[userId:${USER_ID}] hi there`);
+  });
+
+  it("queues an explicit template-driven report and bypasses the chat subagent", async () => {
+    // The frontend's template panel sends a report_template.id. Its own period
+    // (not message keywords) drives the report, and the chat subagent is never
+    // run for this turn.
+    const createReportTask = vi.fn(async (_args: Record<string, unknown>) => 123);
+    const downloadManager = { createReportTask } as unknown as DownloadManager;
+    const resolve = vi.fn(async () => ({ id: 7, period: "周报" as const, name: "我的周报" }));
+    const templateLookup = { resolve } as unknown as ReportTemplateLookup;
+
+    let ranSubagent = false;
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {
+        ranSubagent = true;
+      },
+      sessionMessages: [{ role: "assistant", content: "should not be used" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    const topicResolver = {
+      getTopicIdsByUser: async () => ({
+        topicId: 585,
+        useSlaveTopic: false,
+        masterId: 585,
+        topicName: "专题E",
+        topics: [{ topicId: 585, useSlaveTopic: false, masterId: 585, topicName: "专题E" }],
+      }),
+    } as unknown as TopicResolver;
+
+    const chatMsg: ChatMessage = { ...createChatMessage(), message: "重点关注负面", templateId: 7 };
+    const result = await processChatMessage(
+      chatMsg,
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      downloadManager,
+      topicResolver,
+      undefined,
+      undefined,
+      templateLookup,
+    );
+
+    expect(resolve).toHaveBeenCalledWith(7, USER_ID, logger);
+    expect(createReportTask).toHaveBeenCalledTimes(1);
+    const taskArg = createReportTask.mock.calls[0][0] as unknown as {
+      period: string;
+      templateId?: number;
+      topicId: number;
+      requirement: string;
+    };
+    expect(taskArg.period).toBe("周报");
+    expect(taskArg.templateId).toBe(7);
+    expect(taskArg.topicId).toBe(585);
+    expect(taskArg.requirement).toBe("重点关注负面");
+    expect(result).toContain("周报报告已创建");
+    // Report path returns before the chat subagent runs.
+    expect(ranSubagent).toBe(false);
+  });
+
+  it("falls through to normal chat when the templateId does not resolve", async () => {
+    // A deleted / disabled / foreign templateId must not silently drop the
+    // turn: it degrades to ordinary chat handling.
+    const createReportTask = vi.fn(async () => 1);
+    const downloadManager = { createReportTask } as unknown as DownloadManager;
+    const templateLookup = {
+      resolve: vi.fn(async () => null),
+    } as unknown as ReportTemplateLookup;
+
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      sessionMessages: [{ role: "assistant", content: "normal answer" }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    const chatMsg: ChatMessage = { ...createChatMessage(), message: "hi there", templateId: 999 };
+    const result = await processChatMessage(
+      chatMsg,
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      downloadManager,
+      undefined,
+      undefined,
+      undefined,
+      templateLookup,
+    );
+
+    expect(createReportTask).not.toHaveBeenCalled();
+    expect(result).toBe("normal answer");
   });
 });

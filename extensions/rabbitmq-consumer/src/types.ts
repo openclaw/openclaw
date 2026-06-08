@@ -52,6 +52,13 @@ export interface ChatMessage {
   temperature?: number;
   maxTokens?: number;
   topic?: string;
+  /**
+   * report_template.id picked in the frontend's "report template" panel. When
+   * present, the message is an explicit report request: the template's own
+   * period drives the date scope and the report-generator loads this exact
+   * template instead of waterfall-resolving one. Absent for ordinary chat.
+   */
+  templateId?: number;
 }
 
 /** History record from MySQL */

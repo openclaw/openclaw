@@ -5,6 +5,19 @@ import type { ChatMessage } from "./types.js";
  * Zod schema for validating incoming RabbitMQ messages.
  * Supports both old format (with `body` field) and new flat format.
  */
+// template_id may arrive as a number or a numeric string (PHP/JSON producers
+// vary); coerce to a positive int and drop anything else (0/"" => undefined).
+const templateIdSchema = z
+  .union([z.number(), z.string()])
+  .optional()
+  .transform((value) => {
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+    const n = typeof value === "number" ? value : parseInt(value, 10);
+    return Number.isInteger(n) && n > 0 ? n : undefined;
+  });
+
 const rabbitMqMessageSchema = z.object({
   id: z.number().int().positive(),
   body: z
@@ -15,6 +28,7 @@ const rabbitMqMessageSchema = z.object({
       use_memory: z.boolean().optional().default(true),
       use_websearch: z.boolean().optional().default(false),
       topic: z.string().optional(),
+      template_id: templateIdSchema,
     })
     .optional(),
   message: z.string().optional(),
@@ -26,6 +40,7 @@ const rabbitMqMessageSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
   max_tokens: z.number().int().positive().optional(),
   topic: z.string().optional(),
+  template_id: templateIdSchema,
 });
 
 /**
@@ -57,6 +72,9 @@ export function parseMessage(rawBody: Buffer): ChatMessage | null {
       useMemory: msg.body.use_memory,
       useWebsearch: msg.body.use_websearch,
       topic: msg.body.topic,
+      // Accept template_id from either the nested body or the top level so the
+      // producer can put it wherever the rest of its fields live.
+      templateId: msg.body.template_id ?? msg.template_id,
     };
   }
 
@@ -72,5 +90,6 @@ export function parseMessage(rawBody: Buffer): ChatMessage | null {
     temperature: msg.temperature,
     maxTokens: msg.max_tokens,
     topic: msg.topic,
+    templateId: msg.template_id,
   };
 }

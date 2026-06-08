@@ -74,6 +74,12 @@ export class DownloadManager {
     mercureTopic?: string;
     /** Agent id whose workspace/skills the report subagent should run under. */
     agentId?: string;
+    /**
+     * report_template.id the user explicitly picked. Stored so the
+     * report-generator loads that exact template instead of waterfall-resolving
+     * one. Omitted for keyword-triggered reports (no explicit template).
+     */
+    templateId?: number;
   }): Promise<number> {
     const pool = await this.getPool();
     const now = new Date();
@@ -116,6 +122,7 @@ export class DownloadManager {
       useSlaveTopic: params.useSlaveTopic ?? false,
       ...(params.mercureTopic ? { mercureTopic: params.mercureTopic } : {}),
       ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.templateId ? { templateId: params.templateId } : {}),
     });
     const ip = "";
     const status = "Pending";

@@ -6,6 +6,7 @@ import { HistoryManager } from "./src/history-manager.js";
 import { parseMessage } from "./src/message-handler.js";
 import { RabbitMqClient } from "./src/rabbitmq-client.js";
 import { ReportTaskPublisher } from "./src/report-task-publisher.js";
+import { ReportTemplateLookup } from "./src/report-template-lookup.js";
 import { TopicResolver } from "./src/topic-resolver.js";
 import type { RabbitMqPluginConfig, WriterDbConfig } from "./src/types.js";
 
@@ -81,6 +82,7 @@ let downloadRef: DownloadManager | undefined;
 let topicResolverRef: TopicResolver | undefined;
 let feedCounterRef: FeedCounter | undefined;
 let reportPublisherRef: ReportTaskPublisher | undefined;
+let templateLookupRef: ReportTemplateLookup | undefined;
 
 export default definePluginEntry({
   id: "rabbitmq-consumer",
@@ -112,6 +114,7 @@ export default definePluginEntry({
         downloadRef = new DownloadManager(pluginConfig.historyDb, writerConfig);
         topicResolverRef = new TopicResolver(pluginConfig.historyDb);
         feedCounterRef = new FeedCounter(pluginConfig.historyDb);
+        templateLookupRef = new ReportTemplateLookup(pluginConfig.historyDb);
         reportPublisherRef = new ReportTaskPublisher(
           {
             host: pluginConfig.rabbitmq.host,
@@ -145,6 +148,7 @@ export default definePluginEntry({
             topicResolverRef,
             feedCounterRef,
             reportPublisherRef,
+            templateLookupRef,
           );
         });
 
@@ -179,6 +183,10 @@ export default definePluginEntry({
         if (reportPublisherRef) {
           await reportPublisherRef.close();
           reportPublisherRef = undefined;
+        }
+        if (templateLookupRef) {
+          await templateLookupRef.close();
+          templateLookupRef = undefined;
         }
         ctx.logger.info("[RABBITMQ_CONSUMER] Service stopped");
       },
