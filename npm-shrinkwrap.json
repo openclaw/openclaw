@@ -25,6 +25,7 @@
         "@mozilla/readability": "0.6.0",
         "@openclaw/fs-safe": "0.3.0",
         "@openclaw/proxyline": "0.3.3",
+        "@smithy/types": "4.14.3",
         "chalk": "5.6.2",
         "chokidar": "5.0.0",
         "clawpdf": "0.3.0",
@@ -447,6 +448,18 @@
       "resolved": "https://registry.npmjs.org/@silvia-odwyer/photon-node/-/photon-node-0.3.4.tgz",
       "integrity": "sha512-bnly4BKB3KDTFxrUIcgCLbaeVVS8lrAkri1pEzskpmxu9MdfGQTy8b8EgcD83ywD3RPMsIulY8xJH5Awa+t9fA==",
       "license": "Apache-2.0"
+    },
+    "node_modules/@smithy/types": {
+      "version": "4.14.3",
+      "resolved": "https://registry.npmjs.org/@smithy/types/-/types-4.14.3.tgz",
+      "integrity": "sha512-YupL0ZWmFtJexUN2cHzkvvF/b9pKrtAIfT1o7/oY/Ppu8IYeZ+lDPM5vZdQJaSeA132dJCqojjGC9NhXeF71VQ==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=18.0.0"
+      }
     },
     "node_modules/@stablelib/base64": {
       "version": "1.0.1",
@@ -1456,9 +1469,9 @@
       }
     },
     "node_modules/gaxios": {
-      "version": "7.1.4",
-      "resolved": "https://registry.npmjs.org/gaxios/-/gaxios-7.1.4.tgz",
-      "integrity": "sha512-bTIgTsM2bWn3XklZISBTQX7ZSddGW+IO3bMdGaemHZ3tbqExMENHLx6kKZ/KlejgrMtj8q7wBItt51yegqalrA==",
+      "version": "7.1.5",
+      "resolved": "https://registry.npmjs.org/gaxios/-/gaxios-7.1.5.tgz",
+      "integrity": "sha512-5FZy72Rh8LhtjmvDrKkI+lVhrsQrVKVsItxMoDm5mNQE+xR0WVIIs+jzPSJgBvKVsLi24fZhXJIsNI0bihDzFg==",
       "license": "Apache-2.0",
       "dependencies": {
         "extend": "^3.0.2",
@@ -1559,9 +1572,9 @@
       }
     },
     "node_modules/google-auth-library": {
-      "version": "10.6.2",
-      "resolved": "https://registry.npmjs.org/google-auth-library/-/google-auth-library-10.6.2.tgz",
-      "integrity": "sha512-e27Z6EThmVNNvtYASwQxose/G57rkRuaRbQyxM2bvYLLX/GqWZ5chWq2EBoUchJbCc57eC9ArzO5wMsEmWftCw==",
+      "version": "10.7.0",
+      "resolved": "https://registry.npmjs.org/google-auth-library/-/google-auth-library-10.7.0.tgz",
+      "integrity": "sha512-QpTAbNJ36TliZLx3TTtahR8HG0hN9RllL1e3FymOvQSIKK8JmgV58H924ub2wa2DsS3ANjjP1Aw1N+Ramc8hqQ==",
       "license": "Apache-2.0",
       "dependencies": {
         "base64-js": "^1.3.0",
