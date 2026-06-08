@@ -109,6 +109,8 @@ export function createOpenClawTools(
     config?: OpenClawConfig;
     pluginToolAllowlist?: string[];
     pluginToolDenylist?: string[];
+    /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
+    cronCreatorToolAllowlist?: string[];
     /** Current channel ID for auto-threading. */
     currentChannelId?: string;
     /** Routable target for the current conversation when it differs from the native channel ID. */
@@ -426,6 +428,7 @@ export function createOpenClawTools(
               accountId: options?.agentAccountId,
               threadId: options?.currentThreadTs ?? options?.agentThreadId,
             },
+            creatorToolAllowlist: options?.cronCreatorToolAllowlist,
             ...(options?.cronSelfRemoveOnlyJobId
               ? { selfRemoveOnlyJobId: options.cronSelfRemoveOnlyJobId }
               : {}),

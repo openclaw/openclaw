@@ -24,6 +24,7 @@ import {
   stringEnum,
 } from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
+import { expandToolGroups, normalizeToolName } from "../tool-policy.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import {
   type AnyAgentTool,
@@ -332,6 +333,12 @@ export const CronToolSchema = createCronToolSchema();
 type CronToolOptions = {
   agentSessionKey?: string;
   currentDeliveryContext?: DeliveryContext;
+  /**
+   * Effective tool names visible to the caller that created or edited a cron job.
+   * Isolated cron runs use a fresh session, so agent-origin jobs need this cap
+   * persisted on agentTurn payloads before the original session policy is lost.
+   */
+  creatorToolAllowlist?: string[];
   selfRemoveOnlyJobId?: string;
 };
 
@@ -364,6 +371,56 @@ function assertNoCronCommandPayload(value: unknown): void {
       "cron command payloads cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
     );
   }
+}
+
+function normalizeCronToolsAllow(values: readonly string[]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of expandToolGroups([...values])) {
+    const toolName = normalizeToolName(entry);
+    if (!toolName || seen.has(toolName)) {
+      continue;
+    }
+    seen.add(toolName);
+    normalized.push(toolName);
+  }
+  return normalized;
+}
+
+function capCronAgentTurnToolsAllow(params: {
+  payload: Record<string, unknown>;
+  creatorToolAllowlist: string[];
+}): void {
+  if (params.payload.kind !== "agentTurn") {
+    return;
+  }
+  const creatorToolsAllow = normalizeCronToolsAllow(params.creatorToolAllowlist);
+  const requestedRaw = params.payload.toolsAllow;
+  if (!Array.isArray(requestedRaw)) {
+    params.payload.toolsAllow = creatorToolsAllow;
+    return;
+  }
+  const requestedToolsAllow = normalizeCronToolsAllow(
+    requestedRaw.filter((entry): entry is string => typeof entry === "string"),
+  );
+  if (requestedToolsAllow.includes("*")) {
+    params.payload.toolsAllow = creatorToolsAllow;
+    return;
+  }
+  const creatorAllowSet = new Set(creatorToolsAllow);
+  params.payload.toolsAllow = requestedToolsAllow.filter((toolName) =>
+    creatorAllowSet.has(toolName),
+  );
+}
+
+function capCronAgentTurnJobToolsAllow(
+  value: unknown,
+  creatorToolAllowlist: string[] | undefined,
+): void {
+  if (!creatorToolAllowlist || !isRecord(value) || !isRecord(value.payload)) {
+    return;
+  }
+  capCronAgentTurnToolsAllow({ payload: value.payload, creatorToolAllowlist });
 }
 
 function truncateText(input: string, maxLen: number) {
@@ -730,6 +787,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             normalizeCronJobCreate(canonicalJob, {
               sessionContext: { sessionKey: opts?.agentSessionKey },
             }) ?? canonicalJob;
+          capCronAgentTurnJobToolsAllow(job, opts?.creatorToolAllowlist);
           const cfg = getRuntimeConfig();
           if (job && typeof job === "object") {
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
@@ -845,6 +903,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           assertNoCronCommandPayload(canonicalPatch);
           assertCronDeliveryInputNonBlankFields(canonicalPatch.delivery);
           const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
+          capCronAgentTurnJobToolsAllow(patch, opts?.creatorToolAllowlist);
           if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
             throw new Error("patch required");
           }

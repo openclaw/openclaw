@@ -120,6 +120,10 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
+function hasExplicitDenyPolicy(policy?: { deny?: string[] }): boolean {
+  return Array.isArray(policy?.deny) && policy.deny.some((entry) => entry.trim());
+}
+
 type GuardContainerMount = {
   containerRoot: string;
   hostRoot: string;
@@ -922,7 +926,7 @@ export function createOpenClawCodingTools(options?: {
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
-  const shouldInheritEffectiveToolAllowlist = [
+  const toolPolicyInheritanceSources = [
     profilePolicy,
     providerProfilePolicy,
     globalPolicy,
@@ -935,7 +939,13 @@ export function createOpenClawCodingTools(options?: {
     subagentPolicy,
     inheritedToolPolicy,
     options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
-  ].some(hasRestrictiveAllowPolicy);
+  ];
+  const shouldInheritEffectiveToolAllowlist =
+    toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
+  const cronCreatorToolAllowlist: string[] = [];
+  const shouldCaptureCronCreatorToolAllowlist = toolPolicyInheritanceSources.some(
+    (policy) => hasRestrictiveAllowPolicy(policy) || hasExplicitDenyPolicy(policy),
+  );
   const pluginToolsOnly =
     includeOpenClawTools || !includePluginTools
       ? []
@@ -1045,6 +1055,9 @@ export function createOpenClawCodingTools(options?: {
           config: options?.config,
           pluginToolAllowlist,
           pluginToolDenylist,
+          cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
+            ? cronCreatorToolAllowlist
+            : undefined,
           currentChannelId: options?.currentChannelId,
           currentMessagingTarget: options?.currentMessagingTarget,
           currentThreadTs: options?.currentThreadTs,
@@ -1164,6 +1177,9 @@ export function createOpenClawCodingTools(options?: {
   });
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered);
+  }
+  if (shouldCaptureCronCreatorToolAllowlist) {
+    replaceWithEffectiveToolAllowlist(cronCreatorToolAllowlist, subagentFiltered);
   }
   options?.recordToolPrepStage?.("authorization-policy");
   // Always normalize tool JSON Schemas before handing them to OpenClaw model runtime.
