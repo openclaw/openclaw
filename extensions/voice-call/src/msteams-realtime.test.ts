@@ -11,6 +11,7 @@ import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps } from "./core-bridge.js";
 import type { MsteamsSession } from "./msteams-media-stream.js";
 import { createMsteamsRealtimeCall, type MsteamsRealtimeDeps } from "./msteams-realtime.js";
+import { VisionBudget } from "./vision-budget.js";
 
 // Capture the transcript handed to the consult agent, while keeping the rest of
 // the realtime-voice SDK (createRealtimeVoiceBridgeSession, etc.) real.
@@ -60,15 +61,18 @@ function createMockProvider(): {
   getRequest: () => RealtimeVoiceBridgeCreateRequest;
   submitToolResult: ReturnType<typeof vi.fn>;
   sendAudio: ReturnType<typeof vi.fn>;
+  sendImage: ReturnType<typeof vi.fn>;
 } {
   let request: RealtimeVoiceBridgeCreateRequest | undefined;
   const submitToolResult = vi.fn();
   const sendAudio = vi.fn();
+  const sendImage = vi.fn();
 
   const bridge: RealtimeVoiceBridge = {
     supportsToolResultContinuation: true,
     connect: async () => {},
     sendAudio,
+    sendImage,
     setMediaTimestamp: () => {},
     submitToolResult,
     acknowledgeMark: () => {},
@@ -96,6 +100,7 @@ function createMockProvider(): {
     },
     submitToolResult,
     sendAudio,
+    sendImage,
   };
 }
 
@@ -573,5 +578,73 @@ describe("createMsteamsRealtimeCall", () => {
     const passedTranscript = JSON.stringify(consultSpy.mock.calls.at(-1)?.[0]?.transcript ?? []);
     expect(passedTranscript).not.toContain("pre recording secret");
     expect(passedTranscript).toContain("after recording question");
+  });
+
+  it("cues an expression early on the assistant transcript, deduped and self-correcting", () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: { provider: mock.provider, providerConfig: {} },
+    });
+    const req = mock.getRequest();
+
+    const expressions = () =>
+      ctx.sent.filter(
+        (m): m is { type: string; emotion: string } =>
+          typeof m === "object" && m !== null && (m as { type?: unknown }).type === "expression",
+      );
+
+    // Partial (non-final) assistant chunk already cues — no waiting for the final.
+    req.onTranscript?.("assistant", "Sorry,", false);
+    expect(expressions().at(-1)?.emotion).toBe("sad");
+    // Same emotion again → no duplicate cue.
+    req.onTranscript?.("assistant", "Sorry, I", false);
+    expect(expressions()).toHaveLength(1);
+    // Emotion shifts as more text arrives (a surprise marker overrides the earlier "sorry") → corrected cue.
+    req.onTranscript?.("assistant", "Sorry, wow — this is incredible!", true);
+    expect(expressions().at(-1)?.emotion).toBe("surprised");
+    // User turns never cue expression.
+    req.onTranscript?.("user", "wow really", true);
+    expect(expressions().filter((e) => e.emotion === "surprised")).toHaveLength(1);
+  });
+
+  it("ambient vision pushes the latest changed frame, deduped", () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createMockSession();
+      const mock = createMockProvider();
+      let frameData = "AAAA";
+      createMsteamsRealtimeCall({
+        session: ctx.session,
+        deps: {
+          provider: mock.provider,
+          providerConfig: {},
+          getLatestFrame: () => ({
+            source: "screenshare",
+            dataBase64: frameData,
+            mime: "image/jpeg",
+            width: 1,
+            height: 1,
+            ts: 0,
+          }),
+          visionBudget: new VisionBudget(0), // unlimited
+        },
+      });
+
+      vi.advanceTimersByTime(6000);
+      expect(mock.sendImage).toHaveBeenCalledTimes(1); // first frame pushed
+      vi.advanceTimersByTime(6000);
+      expect(mock.sendImage).toHaveBeenCalledTimes(1); // unchanged → skipped
+      frameData = "BBBB";
+      vi.advanceTimersByTime(6000);
+      expect(mock.sendImage).toHaveBeenCalledTimes(2); // changed → pushed
+      expect(mock.sendImage.mock.calls.at(-1)?.[0]).toMatchObject({
+        dataBase64: "BBBB",
+        mime: "image/jpeg",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
