@@ -1385,6 +1385,9 @@ export async function loadWorkboard(params: {
           }
         }
       }
+      if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
+        return false;
+      }
       state.loaded = true;
       return true;
     } catch (error) {

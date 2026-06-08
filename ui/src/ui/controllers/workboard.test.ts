@@ -462,6 +462,54 @@ describe("workboard controller", () => {
     expect(state.loaded).toBe(true);
   });
 
+  it("does not mark a load successful when task enrichment is invalidated by a write", async () => {
+    const host = {};
+    const taskList = createDeferred<unknown>();
+    const movedCard = { ...sampleCard, title: "Moved during task enrichment" };
+    const reloadedCard = { ...sampleCard, title: "Reloaded after task invalidation" };
+    let listCalls = 0;
+    let taskCalls = 0;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        listCalls += 1;
+        return listCalls === 1
+          ? { cards: [sampleCard], statuses: ["todo", "done"] }
+          : { cards: [reloadedCard], statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        taskCalls += 1;
+        return taskCalls === 1 ? taskList.promise : { tasks: [] };
+      }
+      if (method === "workboard.cards.move") {
+        return { card: movedCard };
+      }
+      return {};
+    });
+
+    const initialLoad = loadWorkboard({ host, client: client as never });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+
+    await moveWorkboardCard({
+      host,
+      client: client as never,
+      cardId: sampleCard.id,
+      status: "review",
+      position: 2000,
+    });
+    taskList.resolve({ tasks: [sampleTask] });
+    await expect(initialLoad).resolves.toBe(false);
+
+    const state = getWorkboardState(host);
+    expect(state.loaded).toBe(false);
+    expect(state.loadAttempted).toBe(false);
+
+    await loadWorkboard({ host, client: client as never });
+    expect(state.cards).toMatchObject([{ title: "Reloaded after task invalidation" }]);
+    expect(state.loaded).toBe(true);
+  });
+
   it("links cards from paginated Gateway task results", async () => {
     const host = {};
     const linked = {
