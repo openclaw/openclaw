@@ -519,6 +519,7 @@ async function capCronAgentTurnUpdatePatchToolsAllow(params: {
   }
   const payload = isRecord(params.patch.payload) ? params.patch.payload : undefined;
   const patchPayloadKind = readCronPayloadKind(payload);
+  const patchRequestsAgentTurn = patchPayloadKind === "agentTurn";
   if (patchPayloadKind === "agentTurn" && payload && Object.hasOwn(payload, "toolsAllow")) {
     capCronAgentTurnToolsAllow({
       payload,
@@ -536,7 +537,8 @@ async function capCronAgentTurnUpdatePatchToolsAllow(params: {
 
   const existing = await params.callGateway("cron.get", params.gatewayOpts, { id: params.id });
   const existingPayload = isRecord(existing) ? existing.payload : undefined;
-  if (readCronPayloadKind(existingPayload) !== "agentTurn") {
+  const existingPayloadKind = readCronPayloadKind(existingPayload);
+  if (!patchRequestsAgentTurn && existingPayloadKind !== "agentTurn") {
     return;
   }
   const nextPayload: Record<string, unknown> = payload ?? {};
@@ -545,7 +547,10 @@ async function capCronAgentTurnUpdatePatchToolsAllow(params: {
   capCronAgentTurnToolsAllow({
     payload: nextPayload,
     creatorToolAllowlist: params.creatorToolAllowlist,
-    defaultToolsAllow: isRecord(existingPayload) ? existingPayload.toolsAllow : undefined,
+    defaultToolsAllow:
+      existingPayloadKind === "agentTurn" && isRecord(existingPayload)
+        ? existingPayload.toolsAllow
+        : undefined,
   });
 }
 
