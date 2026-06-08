@@ -244,12 +244,19 @@ def render_taxonomy(data: dict[str, Any], taxonomy_path: Path) -> str:
                     f"- Inventory dir: `{inventory_dir(surface)}`",
                     f"- Report: [Report]({report})",
                     f"- Score source: {score_source_text}",
-                    f"- Completeness instructions: `{display_path(skill_relative_path(surface['completeness_instructions']))}`",
                     f"- Last score run: `{last_run_text(surface)}`",
                     f"- Rationale: {surface['rationale']}",
                     "",
                 ]
             )
+            completeness_instructions = surface.get("completeness_instructions")
+            if completeness_instructions:
+                lines.extend(
+                    [
+                        f"- Completeness instructions: `{display_path(skill_relative_path(completeness_instructions))}`",
+                        "",
+                    ]
+                )
 
             additional_validation = surface.get("additional_validation") or []
             if additional_validation:

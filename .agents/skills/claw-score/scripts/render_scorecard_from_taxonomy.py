@@ -242,7 +242,6 @@ def validate_taxonomy(
             "family",
             "level",
             "rationale",
-            "completeness_instructions",
         ):
             value = surface.get(key)
             if not isinstance(value, str) or not value.strip():
@@ -255,12 +254,18 @@ def validate_taxonomy(
             raise ValueError(
                 f"{path}: {surface_id}: unknown level {surface['level']!r}"
             )
-        completeness_path = skill_relative_path(surface["completeness_instructions"])
-        if not completeness_path.is_file():
-            raise ValueError(
-                f"{path}: {surface_id}: missing completeness instructions "
-                f"{surface['completeness_instructions']!r}"
-            )
+        completeness_instructions = surface.get("completeness_instructions")
+        if completeness_instructions is not None:
+            if not isinstance(completeness_instructions, str) or not completeness_instructions.strip():
+                raise ValueError(
+                    f"{path}: {surface_id}: completeness_instructions must be a non-empty string when present"
+                )
+            completeness_path = skill_relative_path(completeness_instructions)
+            if not completeness_path.is_file():
+                raise ValueError(
+                    f"{path}: {surface_id}: missing completeness instructions "
+                    f"{completeness_instructions!r}"
+                )
         categories = surface.get("categories")
         if not isinstance(categories, list):
             raise ValueError(f"{path}: {surface_id}: missing categories list")

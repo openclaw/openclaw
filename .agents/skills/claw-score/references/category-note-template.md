@@ -88,8 +88,9 @@ Completeness labels:
 At shared boundaries, choose the higher maturity label.
 
 Completeness measures how fully this category delivers the intended
-surface-specific capability set. The exact rubric comes from the scoring
-surface's taxonomy `completeness_instructions` file.
+surface-specific capability set. If the scoring surface declares taxonomy
+`completeness_instructions`, use that rubric; otherwise score against the
+taxonomy feature set and any explicit capability gaps found in evidence.
 
 ## Known Gaps
 

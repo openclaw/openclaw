@@ -38,7 +38,7 @@ Optional:
    - Treat `.agents/skills/claw-score/taxonomy.yaml` as the only hand-edited
      source of truth for the active in-repo surfaces, levels, rationale,
      categories, `human_lts_override`, archival state,
-     `completeness_instructions`, and `last_score_run`.
+     optional `completeness_instructions`, and `last_score_run`.
    - Treat `/Users/kevinlin/tmp/maturity/taxonomy.yaml` as the archive taxonomy
      for the other surfaces when the active in-repo taxonomy is intentionally
      narrowed.
@@ -48,13 +48,12 @@ Optional:
 
 2. Preserve surface and category contract.
    - Every surface must include `id`, `name`, `family`, `level`, `rationale`,
-     `completeness_instructions`, `categories`, and `last_score_run`.
-   - `completeness_instructions` must point to a file under
-     `.agents/skills/claw-score/` using a skill-relative path such as
-     `references/completeness/gateway-runtime.md`.
-   - When adding or changing a surface, update the referenced completeness
-     instructions in the same change. Completeness is surface-specific and
-     should not be inferred from generic scoring rules alone.
+     `categories`, and `last_score_run`.
+   - `completeness_instructions` is optional. When present it must point to a
+     file under `.agents/skills/claw-score/` using a skill-relative path.
+   - If a surface omits `completeness_instructions`, score completeness from
+     the taxonomy feature set, linked docs, and evidence-backed capability
+     gaps until a surface-specific rubric is added later.
    - Define a surface as the smallest durable product or operating area that a
      reviewer would expect to see as one scorecard row.
    - Surface names should usually be short noun phrases, ideally 1-4 words.

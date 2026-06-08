@@ -56,9 +56,9 @@ Expected active outputs:
      source, tests, and runtime evidence that support it.
    - If evidence shows the category split is wrong, stop and update taxonomy
      first with `./update-taxonomy-workflow.md`.
-   - Read the surface's `completeness_instructions` file before assigning any
-     Completeness scores. This file is taxonomy-owned and uses a path relative
-     to `.agents/skills/claw-score/`.
+   - If the surface declares `completeness_instructions`, read that file
+     before assigning any Completeness scores. The file is taxonomy-owned and
+     uses a path relative to `.agents/skills/claw-score/`.
 
 3. Check archive freshness before scoring.
    - Always run `gitcrawl doctor --json`.
@@ -91,9 +91,10 @@ Expected active outputs:
    - Quality measures implementation robustness, operator clarity, security
      posture, docs/source alignment, and lived bug/regression/confusion record.
    - Completeness measures how fully the category delivers the intended
-     surface-specific capability set. Use the surface's
-     `completeness_instructions` file to determine what "complete" means for
-     that surface.
+     surface-specific capability set. When the surface declares
+     `completeness_instructions`, use that file to determine what "complete"
+     means for that surface. Otherwise derive completeness from the taxonomy
+     feature set, linked docs, and explicit capability gaps found in evidence.
    - Test coverage never raises or lowers Quality.
    - LTS is derived later from `(quality > 80 and coverage > 90) OR
      human_lts_override`.

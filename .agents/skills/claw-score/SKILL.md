@@ -127,9 +127,10 @@ Command working directory:
   one category and keep the specific concepts as features. Never use `binding`
   as a category-name word; use operator-facing terms such as `routing`,
   `delivery`, `session routing`, or `thread handling` instead.
-- `completeness_instructions`: a taxonomy surface field whose value is a path
-  relative to the skill root `.agents/skills/claw-score/`. The referenced file
-  defines how to score the Completeness metric for that surface.
+- `completeness_instructions`: an optional taxonomy surface field whose value
+  is a path relative to the skill root `.agents/skills/claw-score/`. When
+  present, the referenced file defines how to score the Completeness metric
+  for that surface.
 - `feature`: a user-invokable capability within one surface and one category.
   A good feature names something an OpenClaw user or operator can actually do
   on that surface, not an internal protocol step or implementation mechanism.
@@ -201,8 +202,9 @@ Other YAML files used by this skill live in two places:
 
 - `.agents/skills/claw-score/taxonomy.yaml`: skill-owned top-level source of
   truth for the active in-repo surfaces, scorecard metadata, optional
-  surface-specific `additional_validation` commands, surface ids, category
-  inventory, archival state, `completeness_instructions`, and `last_score_run`.
+  surface-specific `additional_validation` commands, optional
+  `completeness_instructions`, surface ids, category inventory, archival
+  state, and `last_score_run`.
 - `/Users/kevinlin/tmp/maturity/taxonomy.yaml`: archive copy for the other
   surfaces that are temporarily out of the active in-repo taxonomy scope.
 - `docs/kevinslin/maturity-scorecard/taxonomy.md`: rendered Markdown reference
@@ -214,7 +216,7 @@ Other YAML files used by this skill live in two places:
   rendered per-surface score source for category Coverage, Quality,
   Completeness, and row identity (`name` and `category_note`). It does not
   duplicate taxonomy-owned `features`, `docs`, `search_anchors`,
-  `human_lts_override`, or surface-level `completeness_instructions`.
+  `human_lts_override`, or optional surface-level `completeness_instructions`.
 
 Archived surfaces note:
 

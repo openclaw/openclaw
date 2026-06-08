@@ -43,7 +43,6 @@ surfaces:
     level: stable
     level_code: M4
     rationale: Core architecture, auth, pairing, protocol docs, daemon docs, and CLI runbooks are broad and current.
-    completeness_instructions: references/completeness/gateway-runtime.md
     categories:
       - name: Approvals and Remote Execution
         features:
@@ -409,7 +408,6 @@ surfaces:
     level: stable
     level_code: M4
     rationale: Normal setup and repair paths are documented across install, CLI, and gateway docs. Platform-specific Windows paths are tracked in the Windows via WSL2 and Native Windows rows.
-    completeness_instructions: references/completeness/cli-install-update-onboard-doctor.md
     categories:
       - name: CLI Setup
         features:
@@ -589,7 +587,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Broad docs and strong internal runtime evidence exist across manifests, discovery, loading, provider/tool architecture, and approval boundaries. Keep the row at beta until public SDK API/subpaths and external distribution proof are stronger.
-    completeness_instructions: references/completeness/plugin-sdk-and-bundled-plugin-architecture.md
     additional_validation:
       - name: Plugin SDK exports sync
         command: pnpm plugin-sdk:check-exports
@@ -851,7 +848,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Main loop, models, provider routing, and tool streaming are first-class, but provider behavior shifts weekly and needs scenario proof per release.
-    completeness_instructions: references/completeness/agent-runtime-and-provider-execution.md
     categories:
       - name: Agent Turn Execution
         features:
@@ -1062,7 +1058,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Strong docs and active implementation. Maturity depends on transcript durability, compaction quality, and cross-client parity.
-    completeness_instructions: references/completeness/session-memory-and-context-engine.md
     categories:
       - name: CLI Session and Transcript Management
         features:
@@ -1248,7 +1243,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Many channels share Gateway delivery and routing contracts, but channel behavior varies by upstream API and account-policy constraints.
-    completeness_instructions: references/completeness/channel-framework.md
     categories:
       - name: Channel Actions Commands and Approvals
         features:
@@ -1460,7 +1454,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Good docs and hardening surfaces exist. Promote after regular upgrade/security scenario runs prove no setup regressions.
-    completeness_instructions: references/completeness/security-auth-pairing-and-secrets.md
     categories:
       - name: Approval Policy and Tool Safeguards
         features:
@@ -1641,7 +1634,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: OTel, Prometheus, logging, and diagnostics docs exist. Needs a public "what operators should look at first" maturity pass.
-    completeness_instructions: references/completeness/telemetry-diagnostics-and-observability.md
     categories:
       - name: Health and Repair
         features:
@@ -1824,7 +1816,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Documented and usable, but scenario proof should cover unattended delivery, retries, and failure visibility.
-    completeness_instructions: references/completeness/automation-cron-hooks-tasks-polling.md
     categories:
       - name: Cron Jobs
         features:
@@ -2106,7 +2097,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Broad capability surface exists, but provider variance, file limits, and node/app parity make this not stable yet.
-    completeness_instructions: references/completeness/media-understanding-and-media-generation.md
     categories:
       - name: Media Intake and Access
         features:
@@ -2334,7 +2324,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Multiple implementations exist across Control UI, apps, and providers. Needs latency, failure-mode, and setup scorecards before beta.
-    completeness_instructions: references/completeness/voice-and-realtime-talk.md
     categories:
       - name: Talk Providers
         features:
@@ -2501,7 +2490,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Web UI is documented with pairing, chat, PWA, Talk, push, and remote Gateway flows. Promote after cross-browser and mobile-PWA scorecards.
-    completeness_instructions: references/completeness/browser-control-ui-and-webchat.md
     categories:
       - name: Browser Realtime Talk
         features:
@@ -2742,7 +2730,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Present in docs and source, but less visible as a primary user workflow. Needs explicit scenario definition.
-    completeness_instructions: references/completeness/tui-and-terminal-ux.md
     categories:
       - name: Runtime Modes
         features:
@@ -2915,7 +2902,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Public docs and ecosystem concept exist. Needs install, trust, update, rollback, and compatibility scorecards.
-    completeness_instructions: references/completeness/clawhub-and-external-plugin-distribution.md
     categories:
       - name: Publishing
         features:
@@ -3108,7 +3094,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: OpenClaw App SDK is a distinct external app contract separate from Gateway runtime and Plugin SDK. Current scoring shows a real `@openclaw/sdk` path with gaps around public packaging, auto-discovery, approvals, helpers, and compatibility.
-    completeness_instructions: references/completeness/openclaw-app-sdk.md
     categories:
       - name: Client API
         features:
@@ -3270,7 +3255,6 @@ surfaces:
     level: stable
     level_code: M4
     rationale: LaunchAgent service path, local/remote Gateway modes, CLI install, and app integration are documented.
-    completeness_instructions: references/completeness/macos-gateway-host.md
     categories:
       - name: CLI Setup
         features:
@@ -3457,7 +3441,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Rich menu bar app, permissions, node mode, Canvas, voice wake, WebChat, and remote mode exist. Still fast-moving enough to avoid Stable.
-    completeness_instructions: references/completeness/macos-companion-app.md
     categories:
       - name: Canvas
         features:
@@ -3647,7 +3630,6 @@ surfaces:
     level: stable
     level_code: M4
     rationale: Node runtime is recommended, systemd user service is documented, and VPS/container guidance is broad.
-    completeness_instructions: references/completeness/linux-gateway-host.md
     categories:
       - name: Host Setup and Updates
         features:
@@ -3797,7 +3779,6 @@ surfaces:
     level: planned
     level_code: M0
     rationale: Docs say native Linux companion apps are planned; Gateway is the supported Linux path today.
-    completeness_instructions: references/completeness/linux-companion-app.md
     categories:
       - name: App Distribution
         features:
@@ -3937,7 +3918,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Recommended Windows path with systemd/user-service guidance and boot-chain docs. Promote after repeated install/update scorecards.
-    completeness_instructions: references/completeness/windows-via-wsl2.md
     categories:
       - name: WSL Setup
         features:
@@ -4135,7 +4115,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Core CLI/Gateway flows work, but docs still recommend WSL2 for the full experience and list native caveats.
-    completeness_instructions: references/completeness/native-windows-cli-and-gateway.md
     categories:
       - name: CLI
         features:
@@ -4267,7 +4246,6 @@ surfaces:
     level: planned
     level_code: M0
     rationale: Planned only.
-    completeness_instructions: references/completeness/native-windows-companion-app.md
     categories:
       - name: Installation and Updates
         features:
@@ -4397,7 +4375,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Public Google Play path exists, but app docs still describe the rebuild as extremely alpha and call out release hardening work.
-    completeness_instructions: references/completeness/android-app.md
     categories:
       - name: Media Capture
         features:
@@ -4510,7 +4487,6 @@ surfaces:
     level: experimental
     level_code: M1
     rationale: Internal preview / super-alpha. TestFlight and relay-backed push flows exist, but no public distribution yet.
-    completeness_instructions: references/completeness/ios-app.md
     categories:
       - name: Media and Sharing
         features:
@@ -4654,7 +4630,6 @@ surfaces:
     level: experimental
     level_code: M1
     rationale: Source has Watch app/extension surfaces; public docs do not yet present this as a user feature.
-    completeness_instructions: references/completeness/watchos-companion-surfaces.md
     categories:
       - name: Delivery and Recovery
         features:
@@ -4772,7 +4747,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Platform docs exist and Gateway path is Linux-based. Needs hardware-specific release smoke proof to move higher.
-    completeness_instructions: references/completeness/raspberry-pi-small-linux-devices.md
     categories:
       - name: Setup and Compatibility
         features:
@@ -4955,7 +4929,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Install docs exist and are common deployment paths. Promote after recurring release smoke captures upgrade and volume behavior.
-    completeness_instructions: references/completeness/docker-podman-hosting.md
     categories:
       - name: Container Setup
         features:
@@ -5073,7 +5046,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Kubernetes hosting is a distinct Kustomize-based cluster deployment path. Current scoring shows a real minimal deployment path with gaps around Kubernetes-specific CI, ingress/TLS/NetworkPolicy packaging, backup/restore, and production exposure hardening.
-    completeness_instructions: references/completeness/kubernetes-hosting.md
     categories:
       - name: Deployment Setup
         features:
@@ -5187,7 +5159,6 @@ surfaces:
     level: experimental
     level_code: M1
     rationale: Optional install flow. Needs clearer support promise before alpha/beta promotion.
-    completeness_instructions: references/completeness/nix-install-path.md
     categories:
       - name: Install Handoff
         features:
@@ -5335,7 +5306,6 @@ surfaces:
     level: stable
     level_code: M4
     rationale: Deep docs and broad feature coverage. Voice/delegation paths should stay separately scored as beta/alpha.
-    completeness_instructions: references/completeness/discord.md
     categories:
       - name: Channel Setup and Operations
         features:
@@ -5525,7 +5495,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Core channel is mature enough for regular use, but high-variance UX and media edge cases need recurring scenario proof.
-    completeness_instructions: references/completeness/telegram.md
     categories:
       - name: Channel Setup and Operations
         features:
@@ -5663,7 +5632,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Core path is important and documented; upstream Baileys/session volatility keeps it below Stable.
-    completeness_instructions: references/completeness/whatsapp.md
     categories:
       - name: Channel Setup and Operations
         features:
@@ -5776,7 +5744,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: First-class channel docs and routing surface. Needs workspace install/admin scenario scorecards.
-    completeness_instructions: references/completeness/slack.md
     categories:
       - name: Channel Setup and Operations
         features:
@@ -5930,7 +5897,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Supported iMessage runs through imsg on a signed-in macOS Messages host; legacy BlueBubbles configs require migration. Keep macOS permissions, SSH wrapper, SIP/private API, and migration caveats visible.
-    completeness_instructions: references/completeness/imessage-bluebubbles.md
     categories:
       - name: Channel Setup and Operations
         features:
@@ -6090,7 +6056,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Supported channel docs exist; needs stronger install and reconnect proof.
-    completeness_instructions: references/completeness/signal.md
     categories:
       - name: Channel Setup and Operations
         features:
@@ -6233,7 +6198,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Documented channel, but enterprise/admin setup raises maturity risk.
-    completeness_instructions: references/completeness/google-chat.md
     categories:
       - name: Channel Setup and Operations
         features:
@@ -6455,7 +6419,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Supported via bundled plugin. Needs bridge, auth, and room lifecycle scorecards.
-    completeness_instructions: references/completeness/matrix.md
     categories:
       - name: Channel Setup and Operations
         features:
@@ -6579,7 +6542,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Enterprise auth/admin flows need explicit scenario proof.
-    completeness_instructions: references/completeness/microsoft-teams.md
     categories:
       - name: Channel Setup and Operations
         features:
@@ -6749,7 +6711,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Supported surfaces exist, but maturity likely varies by upstream and maintainer coverage. Score individually later.
-    completeness_instructions: references/completeness/mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat.md
     categories:
       - name: Channel Setup and Operations
         features:
@@ -6803,7 +6764,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Important regional coverage, but public support level should be calibrated per account type, upstream approval, and maintainer proof.
-    completeness_instructions: references/completeness/feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels.md
     categories:
       - name: Channel Setup and Operations
         features:
@@ -6871,7 +6831,6 @@ surfaces:
     level: experimental
     level_code: M1
     rationale: Optional/plugin path with complex realtime behavior. Needs scenario scorecard before public beta.
-    completeness_instructions: references/completeness/voice-call-channel.md
     categories:
       - name: Channel Setup and Operations
         features:
@@ -6956,7 +6915,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Deep docs, OAuth/subscription path, realtime voice, image, and compatibility behavior. Provider churn keeps this from Stable without release-scorecard proof.
-    completeness_instructions: references/completeness/openai-codex-provider-path.md
     categories:
       - name: Model and Auth
         features:
@@ -7084,7 +7042,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: First-class model provider. Needs recurring auth/catalog/tool-call scenario proof.
-    completeness_instructions: references/completeness/anthropic-provider-path.md
     categories:
       - name: Provider Auth and Recovery
         features:
@@ -7262,7 +7219,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: First-class provider with model and realtime surfaces. Needs separate Live/Talk scoring.
-    completeness_instructions: references/completeness/google-provider-path.md
     categories:
       - name: Provider Setup and Credentials
         features:
@@ -7456,7 +7412,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Unified provider path is documented and valuable, but model-specific behavior varies.
-    completeness_instructions: references/completeness/openrouter-provider-path.md
     categories:
       - name: Provider Setup and Auth
         features:
@@ -7636,7 +7591,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Useful and documented, but environment variance is high.
-    completeness_instructions: references/completeness/local-model-providers-ollama-vllm-sglang-lm-studio.md
     categories:
       - name: Provider Setup, Lifecycle, and Diagnostics
         features:
@@ -7816,7 +7770,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Many docs/reference pages exist; score should be generated from provider metadata plus live smoke coverage.
-    completeness_instructions: references/completeness/long-tail-hosted-providers.md
     categories:
       - name: Hosted LLM Providers
         features:
@@ -7956,7 +7909,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Multiple providers and docs exist. Needs quota/error/SSRF proof per provider family.
-    completeness_instructions: references/completeness/web-search-tools.md
     categories:
       - name: Search Providers
         features:
@@ -8157,7 +8109,6 @@ surfaces:
     level: beta
     level_code: M3
     rationale: Core tools are documented, but host security and permission UX should stay under active scorecard review.
-    completeness_instructions: references/completeness/browser-automation-and-exec-sandbox-tools.md
     categories:
       - name: Browser Automation
         features:
@@ -8285,7 +8236,6 @@ surfaces:
     level: alpha
     level_code: M2
     rationale: Capability exists across providers, but quality, latency, and parameter compatibility vary too much for beta without per-provider proof.
-    completeness_instructions: references/completeness/image-video-music-generation-tools.md
     categories:
       - name: Media Routing and Discovery
         features:
