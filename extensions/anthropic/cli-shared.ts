@@ -2,12 +2,17 @@
  * Shared Claude CLI backend normalization. It sanitizes command args, maps
  * thinking levels, and keeps OpenClaw-managed CLI runs isolated from shell env.
  */
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import type {
   CliBackendConfig,
   CliBackendNormalizeConfigContext,
+  CliBackendResolvedExecutionArgs,
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 export {
   CLAUDE_CLI_BACKEND_ID,
@@ -227,70 +232,190 @@ function stripClaudeEffortArgs(args: readonly string[]): string[] {
   return normalized;
 }
 
-/** Merge a settings object into an existing inline `--settings` JSON, patch wins. */
-function mergeClaudeSettingsJson(existing: string, patch: Record<string, unknown>): string {
+type ClaudeSettingsInjectionOptions = {
+  cwd?: string;
+};
+
+type ClaudeSettingsMergeResult = {
+  value: string;
+  cleanup?: () => void;
+};
+
+type ClaudeSettingsInjectionResult = {
+  args: string[];
+  cleanup?: () => void;
+};
+
+function composeCleanup(cleanups: Array<(() => void) | undefined>): (() => void) | undefined {
+  const active = cleanups.filter((cleanup): cleanup is () => void => cleanup !== undefined);
+  if (active.length === 0) {
+    return undefined;
+  }
+  return () => {
+    for (const cleanup of active.toReversed()) {
+      cleanup();
+    }
+  };
+}
+
+function writePrivateClaudeSettingsFile(
+  settings: Record<string, unknown>,
+): ClaudeSettingsMergeResult {
+  const settingsJson = JSON.stringify(settings);
+  const settingsHash = crypto.createHash("sha256").update(settingsJson).digest("hex");
+  const dir = fs.mkdtempSync(
+    path.join(resolvePreferredOpenClawTmpDir(), `openclaw-claude-settings-${settingsHash}-`),
+  );
+  try {
+    fs.chmodSync(dir, 0o700);
+    const filePath = path.join(dir, "settings.json");
+    fs.writeFileSync(filePath, settingsJson, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    fs.chmodSync(filePath, 0o600);
+    return {
+      value: filePath,
+      cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/** Merge a settings object into an existing `--settings` value, patch wins. */
+function mergeClaudeSettingsJson(
+  existing: string,
+  patch: Record<string, unknown>,
+  options: ClaudeSettingsInjectionOptions = {},
+): ClaudeSettingsMergeResult | null {
+  const trimmed = existing.trim();
+  const inlineJson = trimmed.startsWith("{") && trimmed.endsWith("}");
+  if (!inlineJson && !options.cwd) {
+    return null;
+  }
   let base: Record<string, unknown> = {};
   try {
-    const parsed = JSON.parse(existing);
+    const payload = inlineJson
+      ? trimmed
+      : fs.readFileSync(
+          path.isAbsolute(trimmed) ? trimmed : path.resolve(options.cwd ?? "", trimmed),
+          "utf8",
+        );
+    const parsed = JSON.parse(payload);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       base = parsed as Record<string, unknown>;
+    } else if (!inlineJson) {
+      throw new Error("settings file must contain a JSON object");
     }
-  } catch {
+  } catch (error) {
+    if (!inlineJson) {
+      throw new Error(`Failed to merge Claude settings file ${existing}: ${String(error)}`, {
+        cause: error,
+      });
+    }
     // Unparseable inline settings: drop the malformed blob and forward the patch
     // alone so ultracode still engages rather than passing invalid JSON through.
   }
-  return JSON.stringify({ ...base, ...patch });
+  const merged = { ...base, ...patch };
+  return inlineJson ? { value: JSON.stringify(merged) } : writePrivateClaudeSettingsFile(merged);
 }
 
 /**
  * Idempotently inject a Claude CLI `--settings` JSON patch.
  *
- * Claude Code accepts `--settings` as a JSON string; a single inline object is
- * shallow-merged (patch wins) so we never emit conflicting duplicate flags. When
- * no inline settings exist (the common case) the patch is appended as a fresh arg.
+ * Claude Code accepts `--settings` as a file path or an inline JSON string.
+ * Inline objects are shallow-merged (patch wins). File paths are read relative
+ * to the child cwd, merged, and replaced with a private temp settings file.
  */
-export function injectClaudeSettings(
+function resolveClaudeSettingsInjection(
   args: readonly string[],
   patch: Record<string, unknown>,
-): string[] {
+  options: ClaudeSettingsInjectionOptions = {},
+): ClaudeSettingsInjectionResult {
   const normalized: string[] = [];
   let merged = false;
+  let preservedUnmergedSettings = false;
+  const cleanups: Array<(() => void) | undefined> = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i] ?? "";
     if (arg === CLAUDE_SETTINGS_ARG) {
       const maybeValue = args[i + 1];
-      if (typeof maybeValue === "string" && maybeValue.trim().length > 0) {
-        normalized.push(arg, mergeClaudeSettingsJson(maybeValue, patch));
-        merged = true;
+      if (
+        typeof maybeValue === "string" &&
+        maybeValue.trim().length > 0 &&
+        !maybeValue.startsWith("-")
+      ) {
+        const mergedValue = mergeClaudeSettingsJson(maybeValue, patch, options);
+        if (mergedValue !== null) {
+          normalized.push(arg, mergedValue.value);
+          cleanups.push(mergedValue.cleanup);
+          merged = true;
+        } else {
+          normalized.push(arg, maybeValue);
+          preservedUnmergedSettings = true;
+        }
         i += 1;
         continue;
       }
-      normalized.push(arg);
       continue;
     }
     if (arg.startsWith(`${CLAUDE_SETTINGS_ARG}=`)) {
       const value = arg.slice(`${CLAUDE_SETTINGS_ARG}=`.length);
-      normalized.push(`${CLAUDE_SETTINGS_ARG}=${mergeClaudeSettingsJson(value, patch)}`);
-      merged = true;
+      const mergedValue = mergeClaudeSettingsJson(value, patch, options);
+      if (mergedValue !== null) {
+        normalized.push(`${CLAUDE_SETTINGS_ARG}=${mergedValue.value}`);
+        cleanups.push(mergedValue.cleanup);
+        merged = true;
+      } else if (value.trim().length > 0) {
+        normalized.push(arg);
+        preservedUnmergedSettings = true;
+      }
       continue;
     }
     normalized.push(arg);
   }
-  if (!merged) {
+  if (!merged && !preservedUnmergedSettings) {
     normalized.push(CLAUDE_SETTINGS_ARG, JSON.stringify(patch));
   }
-  return normalized;
+  return {
+    args: normalized,
+    cleanup: composeCleanup(cleanups),
+  };
+}
+
+export function injectClaudeSettings(
+  args: readonly string[],
+  patch: Record<string, unknown>,
+  options: ClaudeSettingsInjectionOptions = {},
+): string[] {
+  return resolveClaudeSettingsInjection(args, patch, options).args;
 }
 
 /** Resolve final Claude CLI execution args for one backend invocation. */
 export function resolveClaudeCliExecutionArgs(
   context: CliBackendResolveExecutionArgsContext,
-): string[] {
+): string[] | CliBackendResolvedExecutionArgs {
+  const settingsInjection =
+    context.backendConfig?.ultracode === true
+      ? resolveClaudeSettingsInjection(
+          context.baseArgs,
+          { ultracode: true },
+          {
+            cwd: context.cwd ?? context.workspaceDir,
+          },
+        )
+      : undefined;
+  const baseArgs = settingsInjection?.args ?? [...context.baseArgs];
   const effort = mapClaudeCliThinkingLevelToEffort(context.thinkingLevel);
   if (!effort) {
-    return [...context.baseArgs];
+    return settingsInjection?.cleanup
+      ? { args: baseArgs, cleanup: settingsInjection.cleanup }
+      : baseArgs;
   }
-  return [...stripClaudeEffortArgs(context.baseArgs), CLAUDE_EFFORT_ARG, effort];
+  const args = [...stripClaudeEffortArgs(baseArgs), CLAUDE_EFFORT_ARG, effort];
+  return settingsInjection?.cleanup ? { args, cleanup: settingsInjection.cleanup } : args;
 }
 
 /** Normalize Claude CLI backend config before registration or execution. */
@@ -301,24 +426,12 @@ export function normalizeClaudeBackendConfig(
   const output = config.output ?? "jsonl";
   const input = config.input ?? "stdin";
   const permission = resolveClaudePermissionMode(context);
-  // ultracode (xhigh effort + standing dynamic-workflow orchestration) is opt-in
-  // per claude-cli backend config and reachable only via the `ultracode` session
-  // settings key, so inject `--settings '{"ultracode":true}'`. Keep `undefined`
-  // intact so an unset resumeArgs still falls back to args at spawn time.
-  const applyUltracode = (args?: string[]): string[] | undefined =>
-    config.ultracode === true && args !== undefined
-      ? injectClaudeSettings(args, { ultracode: true })
-      : args;
   return {
     ...config,
-    args: applyUltracode(
-      normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(config.args), permission),
-    ),
-    resumeArgs: applyUltracode(
-      normalizeClaudePermissionArgs(
-        normalizeClaudeSettingSourcesArgs(config.resumeArgs),
-        permission,
-      ),
+    args: normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(config.args), permission),
+    resumeArgs: normalizeClaudePermissionArgs(
+      normalizeClaudeSettingSourcesArgs(config.resumeArgs),
+      permission,
     ),
     output,
     liveSession:

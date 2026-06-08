@@ -195,6 +195,7 @@ export type {
   CliBackendNativeToolMode,
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,
+  CliBackendResolvedExecutionArgs,
   CliBackendResolveExecutionArgs,
   CliBackendResolveExecutionArgsContext,
   CliBackendThinkingLevel,

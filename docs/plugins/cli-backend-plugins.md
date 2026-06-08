@@ -189,6 +189,7 @@ register runtime behavior. Runtime behavior starts when the plugin entry calls
 | `imageArg` / `imageMode`                  | Image path support                                          |
 | `serialize`                               | Keep same-backend runs ordered                              |
 | `reliability.watchdog`                    | No-output timeout tuning                                    |
+| `ultracode`                               | Claude CLI-only dynamic workflow opt-in                     |
 
 Prefer the smallest static config that matches the CLI. Add plugin callbacks
 only for behavior that really belongs to the backend.
@@ -200,7 +201,7 @@ only for behavior that really belongs to the backend.
 | Hook                               | Use                                                    |
 | ---------------------------------- | ------------------------------------------------------ |
 | `normalizeConfig(config, context)` | Rewrite legacy user config after merge                 |
-| `resolveExecutionArgs(ctx)`        | Add request-scoped flags such as thinking effort       |
+| `resolveExecutionArgs(ctx)`        | Add request/cwd/config flags, with optional cleanup    |
 | `prepareExecution(ctx)`            | Create temporary auth or config bridges before launch  |
 | `transformSystemPrompt(ctx)`       | Apply a final CLI-specific system prompt transform     |
 | `textTransforms`                   | Bidirectional prompt/output replacements               |

@@ -2,6 +2,7 @@
  * Manages reusable Claude CLI stdio sessions for CLI-backed agent turns.
  */
 import crypto from "node:crypto";
+import fs from "node:fs";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import {
@@ -309,8 +310,25 @@ function buildClaudeLiveFingerprint(params: {
     ].filter((entry): entry is string => typeof entry === "string" && entry.length > 0),
   );
   const stableArgv: string[] = [];
+  const normalizeSettingsValue = (value: string): string => {
+    try {
+      const payload = fs.readFileSync(value, "utf8");
+      return `<settings:${sha256(payload)}>`;
+    } catch {
+      return `<settings:${sha256(value)}>`;
+    }
+  };
   for (let i = 0; i < params.argv.length; i += 1) {
     const entry = params.argv[i] ?? "";
+    if (entry === "--settings") {
+      stableArgv.push(entry, normalizeSettingsValue(params.argv[i + 1] ?? ""));
+      i += 1;
+      continue;
+    }
+    if (entry.startsWith("--settings=")) {
+      stableArgv.push(`--settings=${normalizeSettingsValue(entry.slice("--settings=".length))}`);
+      continue;
+    }
     if (omittedValueFlags.has(entry)) {
       i += 1;
       continue;

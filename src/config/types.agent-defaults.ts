@@ -140,8 +140,9 @@ export type CliBackendConfig = {
   liveSession?: "claude-stdio";
   /**
    * Opt this Claude CLI backend into ultracode (xhigh effort plus standing
-   * dynamic-workflow orchestration). When true, the backend injects
-   * `--settings '{"ultracode":true}'`. Claude-CLI only; ignored by other backends.
+   * dynamic-workflow orchestration). When true, the backend injects and merges
+   * the `--settings '{"ultracode":true}'` override at execution time.
+   * Claude-CLI only; ignored by other backends.
    */
   ultracode?: boolean;
   /** Prompt input mode (default: arg). */
