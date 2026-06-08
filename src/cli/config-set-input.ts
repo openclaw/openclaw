@@ -1,9 +1,10 @@
+// Input-mode parsing helpers for `openclaw config set` values, refs, providers, and batches.
 import fs from "node:fs";
-import JSON5 from "json5";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import JSON5 from "json5";
 
 export type ConfigSetOptions = {
   strictJson?: boolean;
@@ -97,9 +98,9 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
     if (!path) {
       throw new Error(`${sourceLabel}[${index}].path is required.`);
     }
-    const hasValue = Object.prototype.hasOwnProperty.call(typed, "value");
-    const hasRef = Object.prototype.hasOwnProperty.call(typed, "ref");
-    const hasProvider = Object.prototype.hasOwnProperty.call(typed, "provider");
+    const hasValue = Object.hasOwn(typed, "value");
+    const hasRef = Object.hasOwn(typed, "ref");
+    const hasProvider = Object.hasOwn(typed, "provider");
     const modeCount = Number(hasValue) + Number(hasRef) + Number(hasProvider);
     if (modeCount !== 1) {
       throw new Error(
@@ -117,6 +118,7 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
 }
 
 export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] | null {
+  // Batch mode is exclusive because each entry carries its own value/ref/provider mode.
   const batchJson = normalizeOptionalString(opts.batchJson);
   const batchFile = normalizeOptionalString(opts.batchFile);
   const hasInline = Boolean(batchJson);

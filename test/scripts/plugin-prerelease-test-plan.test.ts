@@ -1,3 +1,4 @@
+// Plugin Prerelease Test Plan tests cover plugin prerelease test plan script behavior.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -160,7 +161,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
       "X-ClawHub-Artifact-Sha256",
     );
-    expect(script).toContain("docker_e2e_docker_cmd stats --no-stream");
+    expect(script).toContain("docker_e2e_sample_stats_until_exit");
+    expect(script).toContain("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs");
     expect(sweepScript).toContain("scan_logs_for_unexpected_errors");
   });
 
@@ -182,7 +184,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       weight: 3,
     });
     expect(script).toContain("OPENCLAW_ENTRY=/app/openclaw.mjs");
-    expect(script).toContain("docker_e2e_docker_cmd stats --no-stream");
+    expect(script).toContain("OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB");
+    expect(script).toContain("docker_e2e_sample_stats_until_exit");
+    expect(script).toContain("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs");
     expect(script).toContain("node scripts/e2e/kitchen-sink-rpc-walk.mjs");
     expect(script).not.toContain("--import tsx");
     expect(walkScript).toContain("commands.list");
@@ -350,7 +354,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(manifestEnv).not.toHaveProperty("OPENCLAW_CI_FULL_RELEASE_VALIDATION");
     expect(manifestScript).toContain("includeReleaseOnlyPluginShards: false");
     expect(manifestScript).not.toContain("plugin-prerelease-test-plan.mjs");
-    expect(workflow.jobs["check-shard"].strategy.matrix.include[3]).toEqual({
+    expect(
+      workflow.jobs["check-shard"].strategy.matrix.include.find(
+        (entry) => entry.check_name === "check-dependencies",
+      ),
+    ).toEqual({
       check_name: "check-dependencies",
       task: "dependencies",
       runner: "blacksmith-8vcpu-ubuntu-2404",
@@ -539,21 +547,34 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.if).toBe(
       "inputs.rerun_group == 'all'",
     );
+    expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight["timeout-minutes"]).toBe(20);
     const dockerPreflightStep = fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(
-      (step) => step.name === "Build and smoke test final Docker runtime image",
+      (step) => step.name === "Verify Docker runtime-assets prune path",
     );
     expect(dockerPreflightStep).toBeDefined();
     expect(dockerPreflightStep?.run).toContain("docker build");
-    expect(dockerPreflightStep?.run).toContain("node /app/openclaw.mjs agent");
+    expect(dockerPreflightStep?.run).toContain("--target runtime-assets");
+    expect(dockerPreflightStep?.run).toContain("timeout --kill-after=30s 15m docker build");
     expect(dockerPreflightStep?.run).toContain(
       '--build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex"',
     );
-    expect(dockerPreflightStep?.run).toContain("/app/src/agents/templates/HEARTBEAT.md");
+    expect(
+      fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.some(
+        (step) => step.name === "Build and smoke test final Docker runtime image",
+      ),
+    ).toBe(false);
     expect(fullReleaseWorkflow.jobs.plugin_prerelease["timeout-minutes"]).toBe(
       "${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}",
     );
     expect(fullReleaseWorkflow.jobs.release_checks["timeout-minutes"]).toBe(
       "${{ inputs.release_profile != 'minimum' && 240 || 60 }}",
+    );
+    const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
+    expect(
+      fullReleaseSource.match(/has failed child jobs before the workflow completed/gu)?.length,
+    ).toBeGreaterThanOrEqual(3);
+    expect(fullReleaseSource).toContain(
+      "npm-telegram-beta-e2e.yml has failed child jobs before the workflow completed; cancelling the remaining run.",
     );
   });
 

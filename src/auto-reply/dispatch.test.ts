@@ -1,3 +1,4 @@
+/** Tests inbound dispatch hook composition, diagnostics, and dispatcher integration. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
@@ -141,10 +142,12 @@ describe("withReplyDispatcher", () => {
         order.push("waitForIdle");
       },
     } satisfies ReplyDispatcher;
-    hoisted.dispatchReplyFromConfigMock.mockImplementationOnce(async ({ dispatcher }) => {
-      dispatcher.sendFinalReply({ text: "ok" });
-      return { text: "ok" };
-    });
+    hoisted.dispatchReplyFromConfigMock.mockImplementationOnce(
+      async ({ dispatcher: dispatcherLocal }) => {
+        dispatcherLocal.sendFinalReply({ text: "ok" });
+        return { text: "ok" };
+      },
+    );
 
     await dispatchInboundMessage({
       ctx: buildTestCtx(),
@@ -265,6 +268,31 @@ describe("withReplyDispatcher", () => {
 
     expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
     expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes runtime toolsAllow from buffered dispatch into reply resolution", async () => {
+    hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
+      dispatcher: createDispatcher([]),
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    });
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    await dispatchInboundMessageWithBufferedDispatcher({
+      ctx: buildTestCtx(),
+      cfg: {} as OpenClawConfig,
+      toolsAllow: ["message"],
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+    });
+
+    const params = hoisted.dispatchReplyFromConfigMock.mock.calls[0]?.[0];
+    expect(params?.replyOptions?.toolsAllow).toEqual(["message"]);
   });
 
   it("runs message_sending hooks before inbound dispatcher delivery", async () => {

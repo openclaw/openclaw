@@ -1,3 +1,4 @@
+// Memory Core plugin module implements concept vocabulary behavior.
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -231,7 +232,7 @@ const LANGUAGE_STOP_WORDS = {
 
 const CONCEPT_STOP_WORDS = new Set(
   Object.values(LANGUAGE_STOP_WORDS)
-    .flatMap((words) => words)
+    .flat()
     .map((word) => normalizeLowercaseStringOrEmpty(word)),
 );
 

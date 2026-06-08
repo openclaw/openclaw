@@ -1,3 +1,4 @@
+// Channels capabilities tests cover capability reporting, account selection, probes, and installable plugins.
 process.env.NO_COLOR = "1";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -182,6 +183,13 @@ describe("channelsCapabilitiesCommand", () => {
         "User scopes (auth.scopes): users:read",
       ].join("\n"),
     ]);
+  });
+
+  it("prints an empty all-channel report when no channels are configured", async () => {
+    await channelsCapabilitiesCommand({ json: true }, runtime);
+
+    expect(errors).toStrictEqual([]);
+    expect(logs).toStrictEqual([JSON.stringify({ channels: [] }, null, 2)]);
   });
 
   it("rejects malformed timeouts before capability probes", async () => {

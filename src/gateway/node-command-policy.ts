@@ -1,3 +1,7 @@
+// Gateway node command policy.
+// Computes per-platform allowlists from built-in, plugin, runtime, and config inputs.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
@@ -5,8 +9,6 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import type { NodeSession } from "./node-registry.js";
 
@@ -21,7 +23,12 @@ const NOTIFICATION_COMMANDS = ["notifications.list"];
 const ANDROID_NOTIFICATION_COMMANDS = [...NOTIFICATION_COMMANDS, "notifications.actions"];
 
 const DEVICE_COMMANDS = ["device.info", "device.status"];
-const ANDROID_DEVICE_COMMANDS = [...DEVICE_COMMANDS, "device.permissions", "device.health"];
+const ANDROID_DEVICE_COMMANDS = [
+  ...DEVICE_COMMANDS,
+  "device.permissions",
+  "device.health",
+  "device.apps",
+];
 
 const CONTACTS_COMMANDS = ["contacts.search"];
 const CONTACTS_DANGEROUS_COMMANDS = ["contacts.add"];
@@ -287,6 +294,8 @@ function filterApprovedRuntimeCommands(params: {
   if (!isDesktopPlatformId(params.platformId)) {
     return [];
   }
+  // Desktop host commands are not default-enabled for normal node sessions.
+  // A live node can still expose approved commands from its runtime handshake.
   return params.commands.filter((command) => DESKTOP_HOST_COMMANDS.has(command.trim()));
 }
 
@@ -333,6 +342,8 @@ function resolveNodeCommandAllowlistInternal(
   const extra = cfg.gateway?.nodes?.allowCommands ?? [];
   const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
   const dangerousPluginCommands = new Set(listDangerousPluginNodeCommands());
+  // Dangerous plugin commands are excluded from plugin defaults. Explicit
+  // gateway.nodes.allowCommands below can still opt them in for operators.
   const allow = new Set(
     [...base, ...talkCommands, ...pluginDefaults, ...approved, ...extra]
       .map((cmd) => cmd.trim())

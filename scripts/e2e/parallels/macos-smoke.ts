@@ -1,10 +1,13 @@
 #!/usr/bin/env -S pnpm tsx
+// Macos Smoke script supports OpenClaw repository automation.
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
   ensureValue,
+  extractLastOpenClawVersionFromLog,
   makeTempDir,
   packageBuildCommitFromTgz,
   packageVersionFromTgz,
@@ -26,6 +29,7 @@ import {
   shellQuote,
   startHostServer,
   warn,
+  withProgressOnStderr,
   writeJson,
   writeSummaryMarkdown,
   type HostServer,
@@ -153,61 +157,62 @@ Options:
 `;
 }
 
-function parseArgs(argv: string[]): MacosOptions {
+export function parseArgs(argv: string[]): MacosOptions {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = defaultOptions();
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  parseArgv: for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--vm":
-        options.vmName = ensureValue(argv, i, arg);
+        options.vmName = ensureValue(args, i, arg);
         i++;
         break;
       case "--snapshot-hint":
-        options.snapshotHint = ensureValue(argv, i, arg);
+        options.snapshotHint = ensureValue(args, i, arg);
         i++;
         break;
       case "--mode":
-        options.mode = parseMode(ensureValue(argv, i, arg));
+        options.mode = parseMode(ensureValue(args, i, arg));
         i++;
         break;
       case "--provider":
-        options.provider = parseProvider(ensureValue(argv, i, arg));
+        options.provider = parseProvider(ensureValue(args, i, arg));
         i++;
         break;
       case "--model":
-        options.modelId = ensureValue(argv, i, arg);
+        options.modelId = ensureValue(args, i, arg);
         i++;
         break;
       case "--api-key-env":
       case "--openai-api-key-env":
-        options.apiKeyEnv = ensureValue(argv, i, arg);
+        options.apiKeyEnv = ensureValue(args, i, arg);
         i++;
         break;
       case "--install-url":
-        options.installUrl = ensureValue(argv, i, arg);
+        options.installUrl = ensureValue(args, i, arg);
         i++;
         break;
       case "--host-port":
-        options.hostPort = parsePositiveInt(ensureValue(argv, i, arg), arg);
+        options.hostPort = parsePositiveInt(ensureValue(args, i, arg), arg);
         options.hostPortExplicit = true;
         i++;
         break;
       case "--host-ip":
-        options.hostIp = ensureValue(argv, i, arg);
+        options.hostIp = ensureValue(args, i, arg);
         i++;
         break;
       case "--latest-version":
-        options.latestVersion = ensureValue(argv, i, arg);
+        options.latestVersion = ensureValue(args, i, arg);
         i++;
         break;
       case "--install-version":
-        options.installVersion = ensureValue(argv, i, arg);
+        options.installVersion = ensureValue(args, i, arg);
         i++;
         break;
       case "--target-package-spec":
-        options.targetPackageSpec = ensureValue(argv, i, arg);
+        options.targetPackageSpec = ensureValue(args, i, arg);
         i++;
         break;
       case "--skip-latest-ref-check":
@@ -217,15 +222,15 @@ function parseArgs(argv: string[]): MacosOptions {
         options.keepServer = true;
         break;
       case "--discord-token-env":
-        options.discordTokenEnv = ensureValue(argv, i, arg);
+        options.discordTokenEnv = ensureValue(args, i, arg);
         i++;
         break;
       case "--discord-guild-id":
-        options.discordGuildId = ensureValue(argv, i, arg);
+        options.discordGuildId = ensureValue(args, i, arg);
         i++;
         break;
       case "--discord-channel-id":
-        options.discordChannelId = ensureValue(argv, i, arg);
+        options.discordChannelId = ensureValue(args, i, arg);
         i++;
         break;
       case "--json":
@@ -240,6 +245,10 @@ function parseArgs(argv: string[]): MacosOptions {
     }
   }
   return options;
+}
+
+function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
 }
 
 class MacosSmoke {
@@ -491,6 +500,7 @@ class MacosSmoke {
     if (this.discordEnabled()) {
       this.status.freshDiscord = "fail";
       await this.phase("fresh.discord-config", 600, () => this.configureDiscord());
+      await this.phase("fresh.discord-gateway-ready", 180, () => this.ensureDiscordGatewayReady());
       await this.phase("fresh.discord-roundtrip", 180, () => this.runDiscordRoundtrip("fresh"));
       this.status.freshDiscord = "pass";
     }
@@ -542,6 +552,9 @@ class MacosSmoke {
     if (this.discordEnabled()) {
       this.status.upgradeDiscord = "fail";
       await this.phase("upgrade.discord-config", 600, () => this.configureDiscord());
+      await this.phase("upgrade.discord-gateway-ready", 180, () =>
+        this.ensureDiscordGatewayReady(),
+      );
       await this.phase("upgrade.discord-roundtrip", 180, () => this.runDiscordRoundtrip("upgrade"));
       this.status.upgradeDiscord = "pass";
     }
@@ -555,8 +568,8 @@ class MacosSmoke {
     await this.phases.phase(name, timeoutSeconds, fn);
   }
 
-  private remainingPhaseTimeoutMs(): number | undefined {
-    return this.phases.remainingTimeoutMs();
+  private remainingPhaseTimeoutMs(fallbackMs?: number): number | undefined {
+    return this.phases.remainingTimeoutMs(fallbackMs);
   }
 
   private async phaseReturns(
@@ -643,6 +656,7 @@ exec node "$entry" ${argv}`,
       run("prlctl", ["exec", this.options.vmName, "/usr/bin/stat", "-f", "%Su", "/dev/console"], {
         check: false,
         quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(30_000),
       })
         .stdout.trim()
         .replaceAll("\r", "")
@@ -661,6 +675,7 @@ exec node "$entry" ${argv}`,
       {
         check: false,
         quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(30_000),
       },
     ).stdout.replaceAll("\r", "");
     for (const line of users.split("\n")) {
@@ -690,7 +705,7 @@ exec node "$entry" ${argv}`,
         `/Users/${user}`,
         "NFSHomeDirectory",
       ],
-      { check: false, quiet: true },
+      { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(30_000) },
     ).stdout.replaceAll("\r", "");
     const match = /^NFSHomeDirectory:\s+(.+)$/m.exec(output);
     return match?.[1]?.trim() || `/Users/${user}`;
@@ -703,7 +718,7 @@ exec node "$entry" ${argv}`,
       const result = run(
         "prlctl",
         ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id, "--skip-resume"],
-        { check: false, quiet: true, timeoutMs: 360_000 },
+        { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(360_000) },
       );
       this.log(result.stdout);
       this.log(result.stderr);
@@ -715,10 +730,17 @@ exec node "$entry" ${argv}`,
       const status = run("prlctl", ["status", this.options.vmName], {
         check: false,
         quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(60_000),
       }).stdout;
       if (status.includes(" running") || status.includes(" suspended")) {
-        run("prlctl", ["stop", this.options.vmName, "--kill"], { check: false, quiet: true });
-        waitForVmStatus(this.options.vmName, "stopped", 360);
+        run("prlctl", ["stop", this.options.vmName, "--kill"], {
+          check: false,
+          quiet: true,
+          timeoutMs: this.remainingPhaseTimeoutMs(120_000),
+        });
+        waitForVmStatus(this.options.vmName, "stopped", 360, {
+          probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+        });
       }
       run("sleep", ["3"], { quiet: true });
     }
@@ -728,15 +750,23 @@ exec node "$entry" ${argv}`,
     const status = run("prlctl", ["status", this.options.vmName], {
       check: false,
       quiet: true,
-      timeoutMs: 60_000,
+      timeoutMs: this.remainingPhaseTimeoutMs(60_000),
     }).stdout;
     if (this.snapshot.state === "poweroff" || status.includes(" stopped")) {
-      waitForVmStatus(this.options.vmName, "stopped", 360);
+      waitForVmStatus(this.options.vmName, "stopped", 360, {
+        probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+      });
       say(`Start restored poweroff snapshot ${this.snapshot.name}`);
-      run("prlctl", ["start", this.options.vmName], { quiet: true });
+      run("prlctl", ["start", this.options.vmName], {
+        quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
+      });
     } else if (status.includes(" suspended")) {
       say(`Resume restored snapshot ${this.snapshot.name}`);
-      run("prlctl", ["start", this.options.vmName], { quiet: true });
+      run("prlctl", ["start", this.options.vmName], {
+        quiet: true,
+        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
+      });
     }
     this.waitForCurrentUser();
   }
@@ -983,9 +1013,31 @@ sleep 1`,
 deadline=$((SECONDS + 120))
 while [ $SECONDS -lt $deadline ]; do
   if curl -fsSL --connect-timeout 2 --max-time 5 http://127.0.0.1:18789/ >/tmp/openclaw-dashboard-smoke.html 2>/dev/null; then
-    grep -F '<title>OpenClaw Control</title>' /tmp/openclaw-dashboard-smoke.html >/dev/null &&
-      grep -F '<openclaw-app></openclaw-app>' /tmp/openclaw-dashboard-smoke.html >/dev/null &&
-      exit 0
+    if grep -F '<title>OpenClaw Control</title>' /tmp/openclaw-dashboard-smoke.html >/dev/null &&
+      grep -F '<openclaw-app></openclaw-app>' /tmp/openclaw-dashboard-smoke.html >/dev/null; then
+      asset_paths="$(
+        sed -nE 's/.*<(script|link)[^>]*(src|href)=["'"'"']([^"'"'"']+)["'"'"'].*/\3/p' /tmp/openclaw-dashboard-smoke.html |
+          grep -E '(^|/)assets/' |
+          grep -Ev '^(https?:)?//' |
+          sort -u
+      )"
+      if [ -n "$asset_paths" ]; then
+        assets_ok=1
+        while IFS= read -r asset_path; do
+          [ -n "$asset_path" ] || continue
+          case "$asset_path" in
+            http://127.0.0.1:18789/*) asset_url="$asset_path" ;;
+            /*) asset_url="http://127.0.0.1:18789$asset_path" ;;
+            *) asset_url="http://127.0.0.1:18789/$asset_path" ;;
+          esac
+          curl -fsSL --connect-timeout 2 --max-time 5 "$asset_url" >/dev/null 2>/dev/null ||
+            assets_ok=0
+        done <<EOF
+$asset_paths
+EOF
+        [ "$assets_ok" -eq 1 ] && exit 0
+      fi
+    fi
   fi
   sleep 1
 done
@@ -1069,6 +1121,15 @@ fi`,
     this.discord?.configure();
   }
 
+  private ensureDiscordGatewayReady(): void {
+    this.startManualGatewayIfNeeded();
+    this.verifyGateway();
+    const status = this.guestOpenClawEntryExec(["channels", "status", "--probe", "--json"]);
+    if (!status.includes('"discord"')) {
+      throw new Error("Discord channel unavailable after gateway restart");
+    }
+  }
+
   private async runDiscordRoundtrip(phase: "fresh" | "upgrade"): Promise<void> {
     if (!this.discord) {
       throw new Error("Discord smoke is not configured");
@@ -1094,9 +1155,7 @@ fi`,
   }
 
   private async extractLastVersion(phaseName: string): Promise<string> {
-    const log = await readFile(path.join(this.runDir, `${phaseName}.log`), "utf8").catch(() => "");
-    const matches = [...log.matchAll(/OpenClaw\s+([0-9][^\s]*)/gi)];
-    return matches.at(-1)?.[1] ?? "";
+    return await extractLastOpenClawVersionFromLog(path.join(this.runDir, `${phaseName}.log`));
   }
 
   private upgradeSummaryLabel(): string {
@@ -1176,6 +1235,11 @@ fi`,
   }
 }
 
-await new MacosSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
-  die(error instanceof Error ? error.message : String(error));
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  const options = parseArgs(process.argv.slice(2));
+  const runSmoke = () => new MacosSmoke(options).run();
+  const runPromise = options.json ? withProgressOnStderr(runSmoke) : runSmoke();
+  await runPromise.catch((error: unknown) => {
+    die(error instanceof Error ? error.message : String(error));
+  });
+}

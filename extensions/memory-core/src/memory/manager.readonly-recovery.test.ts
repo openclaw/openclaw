@@ -1,12 +1,11 @@
+// Memory Core tests cover manager.readonly recovery plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openMemoryDatabaseAtPath } from "./manager-db.js";
 import {
-  createMemorySyncControlConfigForTests,
   enqueueMemoryTargetedSessionSync,
   runMemorySyncWithReadonlyRecovery,
   type MemoryReadonlyRecoveryState,
@@ -53,11 +52,6 @@ describe("memory manager readonly recovery", () => {
       },
     };
   }
-
-  function createMemoryConfigForTests(): OpenClawConfig {
-    return createMemorySyncControlConfigForTests(workspaceDir, indexPath);
-  }
-
   function createReadonlyRecoveryHarness() {
     const reopenedClose = vi.fn();
     const initialClose = vi.fn();

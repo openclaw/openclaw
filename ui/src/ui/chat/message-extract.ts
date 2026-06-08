@@ -1,3 +1,4 @@
+// Control UI chat module implements message extract behavior.
 import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
@@ -70,7 +71,7 @@ export function extractThinking(message: unknown): string | null {
   const matches = [
     ...rawText.matchAll(/<\s*think(?:ing)?\s*>([\s\S]*?)<\s*\/\s*think(?:ing)?\s*>/gi),
   ];
-  const extracted = normalizeStringEntries(matches.map((m) => m[1] ?? ""));
+  const extracted = normalizeStringEntries(matches.map((mLocal) => mLocal[1] ?? ""));
   return extracted.length > 0 ? extracted.join("\n") : null;
 }
 

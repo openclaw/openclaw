@@ -1,4 +1,8 @@
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
+// Msteams plugin module implements outbound behavior.
+import {
+  resolveOutboundSendDep,
+  type OutboundSendDeps,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
@@ -13,7 +17,7 @@ import {
   normalizeStringEntries,
   type ChannelOutboundAdapter,
 } from "../runtime-api.js";
-import { createMSTeamsPollStoreFs } from "./polls.js";
+import { createMSTeamsPollStoreState } from "./polls.js";
 import { buildMSTeamsPresentationCard, MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
@@ -24,6 +28,48 @@ function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 const MSTEAMS_TEXT_CHUNK_LIMIT = 4000;
+
+type MSTeamsSendConfig = Parameters<typeof sendMessageMSTeams>[0]["cfg"];
+type MSTeamsSendResult = { messageId: string; conversationId: string };
+type MSTeamsMediaSendOptions = {
+  mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+};
+type MSTeamsTextSendFn = (to: string, text: string) => Promise<MSTeamsSendResult>;
+type MSTeamsMediaSendFn = (
+  to: string,
+  text: string,
+  opts?: MSTeamsMediaSendOptions,
+) => Promise<MSTeamsSendResult>;
+
+function resolveMSTeamsTextSend(params: {
+  cfg: MSTeamsSendConfig;
+  deps?: OutboundSendDeps;
+}): MSTeamsTextSendFn {
+  return (
+    resolveOutboundSendDep<MSTeamsTextSendFn>(params.deps, "msteams") ??
+    ((to, text) => sendMessageMSTeams({ cfg: params.cfg, to, text }))
+  );
+}
+
+function resolveMSTeamsMediaSend(params: {
+  cfg: MSTeamsSendConfig;
+  deps?: OutboundSendDeps;
+}): MSTeamsMediaSendFn {
+  return (
+    resolveOutboundSendDep<MSTeamsMediaSendFn>(params.deps, "msteams") ??
+    ((to, text, opts) =>
+      sendMessageMSTeams({
+        cfg: params.cfg,
+        to,
+        text,
+        mediaUrl: opts?.mediaUrl,
+        mediaLocalRoots: opts?.mediaLocalRoots,
+        mediaReadFile: opts?.mediaReadFile,
+      }))
+  );
+}
 
 export const msteamsOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -91,49 +137,24 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       }),
     );
     if (mediaUrls.length > 0) {
-      type SendFn = (
-        to: string,
-        text: string,
-        opts?: {
-          mediaUrl?: string;
-          mediaLocalRoots?: readonly string[];
-          mediaReadFile?: (filePath: string) => Promise<Buffer>;
-        },
-      ) => Promise<{ messageId: string; conversationId: string }>;
-      const send =
-        resolveOutboundSendDep<SendFn>(deps, "msteams") ??
-        ((to, text, opts) =>
-          sendMessageMSTeams({
-            cfg,
-            to,
-            text,
-            mediaUrl: opts?.mediaUrl,
-            mediaLocalRoots: opts?.mediaLocalRoots,
-            mediaReadFile: opts?.mediaReadFile,
-          }));
+      const send = resolveMSTeamsMediaSend({ cfg, deps });
       const result = await sendPayloadMediaSequence({
         text,
         mediaUrls,
-        send: async ({ text, mediaUrl }) =>
-          await send(to, text, { mediaUrl, mediaLocalRoots, mediaReadFile }),
+        send: async ({ text: textLocal, mediaUrl: mediaUrlLocal }) =>
+          await send(to, textLocal, { mediaUrl: mediaUrlLocal, mediaLocalRoots, mediaReadFile }),
       });
       if (result) {
         return attachChannelToResult("msteams", result);
       }
     }
     if (text.trim()) {
-      type SendFn = (
-        to: string,
-        text: string,
-      ) => Promise<{ messageId: string; conversationId: string }>;
-      const send =
-        resolveOutboundSendDep<SendFn>(deps, "msteams") ??
-        ((to, text) => sendMessageMSTeams({ cfg, to, text }));
+      const send = resolveMSTeamsTextSend({ cfg, deps });
       const chunks = resolveTextChunksWithFallback(
         text,
         chunkTextForOutbound(text, MSTEAMS_TEXT_CHUNK_LIMIT),
       );
-      let result: Awaited<ReturnType<SendFn>>;
+      let result: Awaited<ReturnType<MSTeamsTextSendFn>>;
       for (const chunk of chunks) {
         result = await send(to, chunk);
       }
@@ -144,36 +165,11 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
   ...createAttachedChannelResultAdapter({
     channel: "msteams",
     sendText: async ({ cfg, to, text, deps }) => {
-      type SendFn = (
-        to: string,
-        text: string,
-      ) => Promise<{ messageId: string; conversationId: string }>;
-      const send =
-        resolveOutboundSendDep<SendFn>(deps, "msteams") ??
-        ((to, text) => sendMessageMSTeams({ cfg, to, text }));
+      const send = resolveMSTeamsTextSend({ cfg, deps });
       return await send(to, text);
     },
     sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, mediaReadFile, deps }) => {
-      type SendFn = (
-        to: string,
-        text: string,
-        opts?: {
-          mediaUrl?: string;
-          mediaLocalRoots?: readonly string[];
-          mediaReadFile?: (filePath: string) => Promise<Buffer>;
-        },
-      ) => Promise<{ messageId: string; conversationId: string }>;
-      const send =
-        resolveOutboundSendDep<SendFn>(deps, "msteams") ??
-        ((to, text, opts) =>
-          sendMessageMSTeams({
-            cfg,
-            to,
-            text,
-            mediaUrl: opts?.mediaUrl,
-            mediaLocalRoots: opts?.mediaLocalRoots,
-            mediaReadFile: opts?.mediaReadFile,
-          }));
+      const send = resolveMSTeamsMediaSend({ cfg, deps });
       return await send(to, text, { mediaUrl, mediaLocalRoots, mediaReadFile });
     },
     sendPoll: async ({ cfg, to, poll }) => {
@@ -185,7 +181,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         options: poll.options,
         maxSelections,
       });
-      const pollStore = createMSTeamsPollStoreFs();
+      const pollStore = createMSTeamsPollStoreState();
       await pollStore.createPoll({
         id: result.pollId,
         question: poll.question,

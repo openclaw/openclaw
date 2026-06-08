@@ -1,3 +1,4 @@
+// Transcript tests cover session transcript persistence and formatting.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -134,6 +135,91 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.role).toBe("assistant");
       expect(messageLine.message.content[0].type).toBe("text");
       expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
+    }
+  });
+
+  it("advances the session registry marker after managed transcript appends", async () => {
+    const updatedAt = Date.parse("2026-05-18T09:00:00.000Z");
+    const appendedAt = Date.parse("2026-05-18T09:05:00.000Z");
+    const sessionFile = "managed-marker.jsonl";
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          sessionFile,
+          updatedAt,
+          status: "done",
+        },
+      }),
+      "utf-8",
+    );
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(appendedAt);
+    try {
+      const result = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "Hello with registry marker",
+        storePath: fixture.storePath(),
+      });
+
+      expect(result.ok).toBe(true);
+      const store = JSON.parse(fs.readFileSync(fixture.storePath(), "utf-8")) as Record<
+        string,
+        { updatedAt?: number; status?: string }
+      >;
+      expect(store[sessionKey]?.updatedAt).toBe(appendedAt);
+      expect(store[sessionKey]?.status).toBe("done");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not advance the registry marker for duplicate delivery mirror replays", async () => {
+    const updatedAt = Date.parse("2026-05-18T10:00:00.000Z");
+    const firstAppendAt = Date.parse("2026-05-18T10:05:00.000Z");
+    const duplicateReplayAt = Date.parse("2026-05-18T10:10:00.000Z");
+    const sessionFile = "duplicate-marker.jsonl";
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          sessionFile,
+          updatedAt,
+          status: "done",
+        },
+      }),
+      "utf-8",
+    );
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(firstAppendAt);
+      const first = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "Replay-safe marker",
+        storePath: fixture.storePath(),
+      });
+      expect(first.ok).toBe(true);
+
+      vi.setSystemTime(duplicateReplayAt);
+      const duplicate = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "Replay-safe marker",
+        storePath: fixture.storePath(),
+      });
+      expect(duplicate.ok).toBe(true);
+
+      const store = JSON.parse(fs.readFileSync(fixture.storePath(), "utf-8")) as Record<
+        string,
+        { updatedAt?: number }
+      >;
+      expect(store[sessionKey]?.updatedAt).toBe(firstAppendAt);
+      if (first.ok && duplicate.ok) {
+        expect(duplicate.messageId).toBe(first.messageId);
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -392,7 +478,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     await appendSessionTranscriptMessage({
       transcriptPath: sessionFile,
-      message: { role: "user", content: "x".repeat(5 * 1024 * 1024) },
+      message: { role: "user", content: "x".repeat(128 * 1024) },
     });
 
     const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(sessionFile);
@@ -935,6 +1021,39 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(checkedSecondAppend.appended).toBe(false);
     expect(checkedSecondAppend.messageId).toBe(checkedFirstAppend.messageId);
     expect(countMessages(checkedSessionFile)).toBe(1);
+  });
+
+  it("falls back instead of throwing for out-of-range append timestamps", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "invalid-now-transcript-session",
+      fixture.sessionsDir(),
+    );
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T12:00:00Z"));
+
+    try {
+      await appendSessionTranscriptMessage({
+        transcriptPath: sessionFile,
+        message: { role: "user", content: "bad clock append" },
+        now: 8_640_000_000_000_001,
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+
+    const message = fs
+      .readFileSync(sessionFile, "utf-8")
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type?: string;
+            timestamp?: string;
+          },
+      )
+      .find((record) => record.type === "message");
+
+    expect(message?.timestamp).toBe("2026-05-30T12:00:00.000Z");
   });
 
   it("redacts structured message content before transcript persistence", async () => {

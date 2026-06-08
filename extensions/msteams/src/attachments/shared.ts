@@ -1,3 +1,4 @@
+// Msteams plugin module implements shared behavior.
 import { Buffer } from "node:buffer";
 import { lookup } from "node:dns/promises";
 import {
@@ -472,9 +473,7 @@ export type MSTeamsAttachmentResolveFn = (hostname: string) => Promise<{ address
 
 function isMockFetchFn(fetchFn: typeof fetch): boolean {
   const candidate = fetchFn as unknown as { mock?: unknown };
-  return Boolean(
-    candidate.mock || Object.prototype.hasOwnProperty.call(candidate, "_isMockFunction"),
-  );
+  return Boolean(candidate.mock || Object.hasOwn(candidate, "_isMockFunction"));
 }
 
 function resolveGuardedFetchImpl(params: {

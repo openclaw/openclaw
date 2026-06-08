@@ -1,19 +1,19 @@
+/**
+ * Built-in bash session tool.
+ *
+ * Executes local shell commands with streaming output accumulation and TUI renderers.
+ */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
 import { theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { getBashShellConfig, getShellEnv, killProcessTree } from "../../shell-utils.js";
 import { waitForChildProcess } from "../../utils/child-process.js";
-import {
-  getShellConfig,
-  getShellEnv,
-  killProcessTree,
-  trackDetachedChildPid,
-  untrackDetachedChildPid,
-} from "../../utils/shell.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import type { BashOperations } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
@@ -32,6 +32,17 @@ export type { BashToolDetails, BashToolInput } from "./tool-contracts.js";
 
 export type { BashOperations } from "./bash-operations.js";
 
+export function resolveBashTimeoutMs(timeoutSeconds: unknown): number | undefined {
+  if (
+    typeof timeoutSeconds !== "number" ||
+    !Number.isFinite(timeoutSeconds) ||
+    timeoutSeconds <= 0
+  ) {
+    return undefined;
+  }
+  return resolveTimerTimeoutMs(timeoutSeconds * 1000, 1);
+}
+
 /**
  * Create bash operations using OpenClaw runtime's built-in local shell execution backend.
  *
@@ -42,7 +53,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
   return {
     exec: (command, cwd, { onData, signal, timeout, env }) => {
       return new Promise((resolve, reject) => {
-        const { shell, args } = getShellConfig(options?.shellPath);
+        const { shell, args } = getBashShellConfig(options?.shellPath);
         if (!existsSync(cwd)) {
           reject(
             new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`),
@@ -56,19 +67,16 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,
         });
-        if (child.pid) {
-          trackDetachedChildPid(child.pid);
-        }
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;
-        // Set timeout if provided.
-        if (timeout !== undefined && timeout > 0) {
+        const timeoutMs = resolveBashTimeoutMs(timeout);
+        if (timeoutMs !== undefined) {
           timeoutHandle = setTimeout(() => {
             timedOut = true;
             if (child.pid) {
               killProcessTree(child.pid);
             }
-          }, timeout * 1000);
+          }, timeoutMs);
         }
         // Stream stdout and stderr.
         child.stdout?.on("data", onData);
@@ -90,9 +98,6 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
         // on inherited stdio handles held by detached descendants.
         waitForChildProcess(child)
           .then((code) => {
-            if (child.pid) {
-              untrackDetachedChildPid(child.pid);
-            }
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
             }
@@ -109,17 +114,14 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
             }
             resolve({ exitCode: code });
           })
-          .catch((err) => {
-            if (child.pid) {
-              untrackDetachedChildPid(child.pid);
-            }
+          .catch((err: unknown) => {
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
             }
             if (signal) {
               signal.removeEventListener("abort", onAbort);
             }
-            reject(err);
+            reject(toLintErrorObject(err, "Non-Error rejection"));
           });
       });
     },
@@ -424,8 +426,8 @@ export function createBashToolDefinition(
         clearUpdateTimer();
       }
     },
-    renderCall(args, theme, context) {
-      void theme;
+    renderCall(args, themeValue, context) {
+      void themeValue;
       const state = context.state;
       if (context.executionStarted && state.startedAt === undefined) {
         state.startedAt = Date.now();
@@ -435,13 +437,13 @@ export function createBashToolDefinition(
       text.setText(formatBashCall(args));
       return text;
     },
-    renderResult(result, options, theme, context) {
-      void theme;
+    renderResult(result, optionsLocal, themeLocal, context) {
+      void themeLocal;
       const state = context.state;
-      if (state.startedAt !== undefined && options.isPartial && !state.interval) {
+      if (state.startedAt !== undefined && optionsLocal.isPartial && !state.interval) {
         state.interval = setInterval(() => context.invalidate(), 1000);
       }
-      if (!options.isPartial || context.isError) {
+      if (!optionsLocal.isPartial || context.isError) {
         state.endedAt ??= Date.now();
         if (state.interval) {
           clearInterval(state.interval);
@@ -454,7 +456,7 @@ export function createBashToolDefinition(
       rebuildBashResultRenderComponent(
         component,
         result,
-        options,
+        optionsLocal,
         context.showImages,
         state.startedAt,
         state.endedAt,
@@ -470,4 +472,18 @@ export function createBashTool(
   options?: BashToolOptions,
 ): AgentTool<typeof bashSchema> {
   return wrapToolDefinition(createBashToolDefinition(cwd, options));
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

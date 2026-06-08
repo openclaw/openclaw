@@ -1,10 +1,11 @@
+// Resolves trusted directories for safe-bin allowlist policy.
 import fs from "node:fs";
 import path from "node:path";
 import {
   normalizeSortedUniqueStringEntries,
   sortUniqueStrings,
   uniqueStrings,
-} from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-normalization";
 
 // Keep defaults to OS-managed immutable bins only.
 // User/package-manager bins must be opted in via tools.exec.safeBinTrustedDirs.

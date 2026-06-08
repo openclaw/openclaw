@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements suite runtime gateway behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -5,6 +6,7 @@ import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-run
 import { applyQaMergePatch } from "./suite-merge-patch.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaConfigSnapshot, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
 
 type QaGatewayMutationEnv = Pick<
   QaSuiteRuntimeEnv,
@@ -201,6 +203,16 @@ function isConfigPatchNoopForSnapshot(config: Record<string, unknown>, raw: stri
   return areJsonValuesEqual(applyQaMergePatch(config, patch), config);
 }
 
+function isConfigMutationNoopForSnapshot(
+  action: "config.patch" | "config.apply",
+  config: Record<string, unknown>,
+  raw: string,
+) {
+  return action === "config.patch"
+    ? isConfigPatchNoopForSnapshot(config, raw)
+    : isConfigApplyNoopForSnapshot(config, raw);
+}
+
 async function readConfigSnapshot(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
   const snapshot = (await env.gateway.call(
     "config.get",
@@ -235,19 +247,10 @@ async function runConfigMutation(params: {
   let lastConflict: unknown = null;
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const snapshot = await readConfigSnapshot(params.env);
-    if (
-      params.action === "config.patch" &&
-      isConfigPatchNoopForSnapshot(snapshot.config, params.raw)
-    ) {
+    if (isConfigMutationNoopForSnapshot(params.action, snapshot.config, params.raw)) {
       // QA scenarios do best-effort cleanup in finally blocks. Skipping
       // client-known no-op patches keeps that cleanup from burning the
       // control-plane write budget and making later capability checks flaky.
-      return { ok: true, noop: true };
-    }
-    if (
-      params.action === "config.apply" &&
-      isConfigApplyNoopForSnapshot(snapshot.config, params.raw)
-    ) {
       return { ok: true, noop: true };
     }
     try {
@@ -275,7 +278,7 @@ async function runConfigMutation(params: {
       }
       const retryAfterMs = getGatewayRetryAfterMs(error);
       if (retryAfterMs && attempt < 8) {
-        await sleep(retryAfterMs + 500);
+        await sleep(resolveQaGatewayTimeoutWithGraceMs(retryAfterMs, 500));
         await waitForGatewayHealthy(params.env, Math.max(15_000, restartDelayMs + 10_000)).catch(
           () => undefined,
         );
@@ -285,10 +288,20 @@ async function runConfigMutation(params: {
         throw error;
       }
       await waitForConfigRestartSettle(params.env, restartDelayMs, timeoutMs);
-      return { ok: true, restarted: true };
+      const postRestartSnapshot = await readConfigSnapshot(params.env);
+      if (isConfigMutationNoopForSnapshot(params.action, postRestartSnapshot.config, params.raw)) {
+        return { ok: true, restarted: true };
+      }
+      lastConflict = new Error(
+        `${params.action} restart race settled before the config mutation was visible`,
+      );
+      continue;
     }
   }
-  throw lastConflict ?? new Error(`${params.action} failed after retrying config hash conflicts`);
+  throw toLintErrorObject(
+    lastConflict ?? new Error(`${params.action} failed after retrying config hash conflicts`),
+    "Non-Error thrown",
+  );
 }
 
 async function patchConfig(params: {
@@ -353,3 +366,17 @@ export {
   waitForQaChannelReady,
   waitForTransportReady,
 };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

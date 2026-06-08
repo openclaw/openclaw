@@ -1,3 +1,4 @@
+// Register setup tests cover setup command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSetupCommand } from "./register.setup.js";
@@ -69,11 +70,12 @@ describe("registerSetupCommand", () => {
   });
 
   it("runs setup wizard command when wizard-only flags are passed explicitly", async () => {
-    await runCli(["setup", "--mode", "remote", "--non-interactive"]);
+    await runCli(["setup", "--mode", "remote", "--non-interactive", "--accept-risk"]);
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
     expect(lastWizardOptions()?.mode).toBe("remote");
     expect(lastWizardOptions()?.nonInteractive).toBe(true);
+    expect(lastWizardOptions()?.acceptRisk).toBe(true);
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 

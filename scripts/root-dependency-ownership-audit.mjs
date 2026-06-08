@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+// Audits root package runtime dependencies against source imports and bundled
+// plugin ownership so extension-owned deps can move out of root.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -19,6 +21,9 @@ const DYNAMIC_CONSTANT_IMPORT_PATTERNS = [
   /\brequire\s*\(\s*([_$A-Za-z][\w$]*)\s*\)/g,
   /\b(?:require|[_$A-Za-z][\w$]*require[\w$]*)\.resolve\s*\(\s*([_$A-Za-z][\w$]*)\s*\)/gi,
 ];
+const PACKAGE_FILE_LOOKUP_PATTERNS = [
+  /\bresolvePackageFileForCommandExplanation\s*\(\s*["']([^"']+)["']/g,
+];
 const ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES = new Map([
   [
     "@homebridge/ciao",
@@ -27,10 +32,6 @@ const ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES = new Map([
   [
     "playwright-core",
     "keep at root; the internal browser runtime is shipped with core even though downloadable browser-adjacent plugins also declare it",
-  ],
-  [
-    "@silvia-odwyer/photon-node",
-    "keep at root; the internal media understanding runtime is shipped with packaged image-processing surfaces even though the bundled plugin also declares it",
   ],
 ]);
 
@@ -80,9 +81,19 @@ function sectionFor(relativePath) {
   return section;
 }
 
+/**
+ * Collects static and simple constant-backed package specifiers from source text.
+ */
 export function collectModuleSpecifiers(source) {
   const specifiers = new Set();
   for (const pattern of IMPORT_PATTERNS) {
+    for (const match of source.matchAll(pattern)) {
+      if (match[1]) {
+        specifiers.add(match[1]);
+      }
+    }
+  }
+  for (const pattern of PACKAGE_FILE_LOOKUP_PATTERNS) {
     for (const match of source.matchAll(pattern)) {
       if (match[1]) {
         specifiers.add(match[1]);
@@ -204,6 +215,9 @@ function sectionSetIsSubsetOf(sectionSet, allowed) {
   return sectionSet.size > 0;
 }
 
+/**
+ * Classifies whether a root dependency is core-owned, shared, or extension-local.
+ */
 export function classifyRootDependencyOwnership(record) {
   const sections = new Set(record.sections);
 
@@ -270,6 +284,9 @@ export function classifyRootDependencyOwnership(record) {
   };
 }
 
+/**
+ * Builds dependency ownership records from root package.json and scanned imports.
+ */
 export function collectRootDependencyOwnershipAudit(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const rootPackageJson = readJson(path.join(repoRoot, "package.json"));
@@ -346,6 +363,9 @@ export function collectRootDependencyOwnershipAudit(params = {}) {
     .toSorted((left, right) => left.depName.localeCompare(right.depName));
 }
 
+/**
+ * Returns actionable errors for dependencies that should not remain root-owned.
+ */
 export function collectRootDependencyOwnershipCheckErrors(records) {
   return records
     .filter((record) => record.category === "extension_only_localizable")

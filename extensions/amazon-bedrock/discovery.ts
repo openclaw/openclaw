@@ -1,10 +1,18 @@
-import {
-  type BedrockClient,
-  type ListFoundationModelsCommandOutput,
-  type ListInferenceProfilesCommandOutput,
+/**
+ * Amazon Bedrock model discovery and implicit provider construction. It merges
+ * foundation models with inference profiles and caches catalog results.
+ */
+import type {
+  BedrockClient,
+  ListFoundationModelsCommandOutput,
+  ListInferenceProfilesCommandOutput,
 } from "@aws-sdk/client-bedrock";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "openclaw/plugin-sdk/number-runtime";
 import type {
   BedrockDiscoveryConfig,
   ModelDefinitionConfig,
@@ -474,11 +482,13 @@ function resolveInferenceProfiles(
 // Public API
 // ---------------------------------------------------------------------------
 
+/** Reset Bedrock discovery cache for tests. */
 export function resetBedrockDiscoveryCacheForTest(): void {
   discoveryCache.clear();
   hasLoggedBedrockError = false;
 }
 
+/** Discover Bedrock models and inference profiles for one region/config. */
 export async function discoverBedrockModels(params: {
   region: string;
   config?: BedrockDiscoveryConfig;
@@ -503,11 +513,16 @@ export async function discoverBedrockModels(params: {
 
   if (refreshIntervalSeconds > 0) {
     const cached = discoveryCache.get(cacheKey);
-    if (cached?.value && cached.expiresAt > now) {
-      return cached.value;
+    if (cached && isFutureDateTimestampMs(cached.expiresAt, { nowMs: now })) {
+      if (cached.value) {
+        return cached.value;
+      }
+      if (cached.inFlight) {
+        return cached.inFlight;
+      }
     }
-    if (cached?.inFlight) {
-      return cached.inFlight;
+    if (cached) {
+      discoveryCache.delete(cacheKey);
     }
   }
 
@@ -581,19 +596,27 @@ export async function discoverBedrockModels(params: {
   })();
 
   if (refreshIntervalSeconds > 0) {
-    discoveryCache.set(cacheKey, {
-      expiresAt: now + refreshIntervalSeconds * 1000,
-      inFlight: discoveryPromise,
-    });
+    const expiresAt = resolveExpiresAtMsFromDurationSeconds(refreshIntervalSeconds, { nowMs: now });
+    if (expiresAt !== undefined) {
+      discoveryCache.set(cacheKey, {
+        expiresAt,
+        inFlight: discoveryPromise,
+      });
+    }
   }
 
   try {
     const value = await discoveryPromise;
     if (refreshIntervalSeconds > 0) {
-      discoveryCache.set(cacheKey, {
-        expiresAt: now + refreshIntervalSeconds * 1000,
-        value,
+      const expiresAt = resolveExpiresAtMsFromDurationSeconds(refreshIntervalSeconds, {
+        nowMs: now,
       });
+      if (expiresAt !== undefined) {
+        discoveryCache.set(cacheKey, {
+          expiresAt,
+          value,
+        });
+      }
     }
     return value;
   } catch (error) {
@@ -610,6 +633,7 @@ export async function discoverBedrockModels(params: {
   }
 }
 
+/** Resolve the implicit Bedrock provider config from env, plugin config, and discovery. */
 export async function resolveImplicitBedrockProvider(params: {
   pluginConfig?: { discovery?: BedrockDiscoveryConfig };
   env?: NodeJS.ProcessEnv;

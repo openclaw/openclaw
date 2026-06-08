@@ -1,3 +1,4 @@
+// Covers plugin CLI command behavior and output paths.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -1291,7 +1292,7 @@ describe("registerPluginCommand", () => {
       senderId: "U123",
       isAuthorizedSender: true,
       sessionKey: "agent:main:telegram:direct:runtimecheck",
-      authProfileId: "openai-codex:claude@example.com",
+      authProfileId: "openai:claude@example.com",
       commandBody: "/runtimecheck",
       config: {} as never,
     });
@@ -1378,7 +1379,7 @@ describe("registerPluginCommand", () => {
       isAuthorizedSender: true,
       agentId: "codex",
       sessionKey: "plugin-binding:openclaw-codex-app-server:dm",
-      authProfileId: "openai-codex:owner@example.com",
+      authProfileId: "openai:owner@example.com",
       commandBody: "/runtimecheck",
       config: {} as never,
     });
@@ -1386,7 +1387,7 @@ describe("registerPluginCommand", () => {
     expect(completionMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "codex",
-        preferredProfile: "openai-codex:owner@example.com",
+        preferredProfile: "openai:owner@example.com",
       }),
     );
   });

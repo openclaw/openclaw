@@ -1,7 +1,10 @@
-import { asFiniteNumber } from "../shared/number-coercion.js";
+// Provides generic retry timing and sleep helpers.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
 import { generateSecureFraction } from "./secure-random.js";
 
+/** Retry timing knobs shared by generic retry runners and channel retry policies. */
 export type RetryConfig = {
   attempts?: number;
   minDelayMs?: number;
@@ -9,6 +12,7 @@ export type RetryConfig = {
   jitter?: number;
 };
 
+/** Metadata emitted before a retry attempt sleeps and reruns the operation. */
 export type RetryInfo = {
   attempt: number;
   maxAttempts: number;
@@ -17,6 +21,7 @@ export type RetryInfo = {
   label?: string;
 };
 
+/** Retry execution options, including predicates, Retry-After hooks, and retry callbacks. */
 export type RetryOptions = RetryConfig & {
   label?: string;
   shouldRetry?: (err: unknown, attempt: number) => boolean;
@@ -41,18 +46,33 @@ const clampNumber = (value: unknown, fallback: number, min?: number, max?: numbe
   return Math.min(Math.max(next, floor), ceiling);
 };
 
+function resolveAttemptCount(value: unknown, fallback: number): number {
+  const candidate = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.max(1, Math.round(candidate));
+}
+
+function resolveRetryDelayMs(value: number): number {
+  if (value === Number.POSITIVE_INFINITY) {
+    return MAX_TIMER_TIMEOUT_MS;
+  }
+  return resolveTimerTimeoutMs(value, 0, 0);
+}
+
+/** Resolves retry config overrides into clamped timer-safe settings. */
 export function resolveRetryConfig(
   defaults: Required<RetryConfig> = DEFAULT_RETRY_CONFIG,
   overrides?: RetryConfig,
 ): Required<RetryConfig> {
-  const attempts = Math.max(1, Math.round(clampNumber(overrides?.attempts, defaults.attempts, 1)));
-  const minDelayMs = Math.max(
-    0,
+  const attempts = resolveAttemptCount(
+    clampNumber(overrides?.attempts, defaults.attempts, 1),
+    defaults.attempts,
+  );
+  const minDelayMs = resolveRetryDelayMs(
     Math.round(clampNumber(overrides?.minDelayMs, defaults.minDelayMs, 0)),
   );
   const maxDelayMs = Math.max(
     minDelayMs,
-    Math.round(clampNumber(overrides?.maxDelayMs, defaults.maxDelayMs, 0)),
+    resolveRetryDelayMs(Math.round(clampNumber(overrides?.maxDelayMs, defaults.maxDelayMs, 0))),
   );
   const jitter = clampNumber(overrides?.jitter, defaults.jitter, 0, 1);
   return { attempts, minDelayMs, maxDelayMs, jitter };
@@ -82,13 +102,14 @@ function applyJitter(delayMs: number, jitter: number, mode: JitterMode = "symmet
   return Math.max(0, mode === "positive" ? Math.ceil(raw) : Math.round(raw));
 }
 
+/** Runs an async operation until it succeeds, retry policy stops, or attempts are exhausted. */
 export async function retryAsync<T>(
   fn: () => Promise<T>,
   attemptsOrOptions: number | RetryOptions = 3,
   initialDelayMs = 300,
 ): Promise<T> {
   if (typeof attemptsOrOptions === "number") {
-    const attempts = Math.max(1, Math.round(attemptsOrOptions));
+    const attempts = resolveAttemptCount(attemptsOrOptions, DEFAULT_RETRY_CONFIG.attempts);
     let lastErr: unknown;
     for (let i = 0; i < attempts; i += 1) {
       try {
@@ -98,11 +119,11 @@ export async function retryAsync<T>(
         if (i === attempts - 1) {
           break;
         }
-        const delay = initialDelayMs * 2 ** i;
+        const delay = resolveRetryDelayMs(initialDelayMs * 2 ** i);
         await sleep(delay);
       }
     }
-    throw lastErr ?? new Error("Retry failed");
+    throw toLintErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
   }
 
   const options = attemptsOrOptions;
@@ -176,5 +197,19 @@ export async function retryAsync<T>(
     }
   }
 
-  throw lastErr ?? new Error("Retry failed");
+  throw toLintErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

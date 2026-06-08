@@ -1,3 +1,6 @@
+/**
+ * Applies final effective tool policy to embedded-agent runtime settings.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
 import {
@@ -54,6 +57,7 @@ type FinalEffectiveToolPolicyParams = {
   senderUsername?: string | null;
   senderE164?: string | null;
   warn: (message: string) => void;
+  toolPolicyAuditLogLevel?: "info" | "debug";
 };
 
 export function applyFinalEffectiveToolPolicy(
@@ -173,5 +177,6 @@ export function applyFinalEffectiveToolPolicy(
     toolMeta: (tool) => getPluginToolMeta(tool),
     warn: params.warn,
     steps: pipelineSteps,
+    auditLogLevel: params.toolPolicyAuditLogLevel,
   });
 }

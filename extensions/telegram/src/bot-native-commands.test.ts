@@ -1,3 +1,4 @@
+// Telegram tests cover bot native commands plugin behavior.
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -593,8 +594,8 @@ describe("registerTelegramNativeCommands", () => {
     const presentation = {
       blocks: [
         {
-          kind: "actions",
-          buttons: [{ label: "Approve", action: { type: "command", value: "/approve yes" } }],
+          type: "buttons",
+          buttons: [{ label: "Approve", action: { type: "callback", value: "/approve yes" } }],
         },
       ],
     };

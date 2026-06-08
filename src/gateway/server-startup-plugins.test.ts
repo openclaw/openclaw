@@ -1,3 +1,6 @@
+/**
+ * Gateway startup plugin bootstrap tests.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -174,6 +177,65 @@ function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value:
   return call[0] as T;
 }
 
+function mockDeferredSlackStartupPlugins(): void {
+  loadPluginLookUpTable.mockReturnValueOnce({
+    manifestRegistry: pluginManifestRegistry,
+    startup: {
+      configuredDeferredChannelPluginIds: ["slack"] as string[],
+      pluginIds: ["slack", "memory-core"] as string[],
+    },
+    metrics: {
+      ...pluginLookUpTableMetrics,
+      startupPluginCount: 2,
+      deferredChannelPluginCount: 1,
+    },
+  });
+}
+
+function slackConfig(): OpenClawConfig {
+  return {
+    channels: {
+      slack: { enabled: true, token: "token" },
+    },
+  } as OpenClawConfig;
+}
+
+async function prepareBootstrapWithRuntimeConfig(
+  cfg: OpenClawConfig,
+  options: {
+    loadRuntimePlugins?: boolean;
+    loadSetupRuntimePlugins?: boolean;
+  } = {},
+) {
+  const log = createLog();
+  const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+  return await prepareGatewayPluginBootstrap({
+    cfgAtStart: cfg,
+    startupRuntimeConfig: cfg,
+    minimalTestGateway: false,
+    log,
+    ...options,
+  });
+}
+
+function expectStartupPluginLoad(params: {
+  pluginIds: string[];
+  preferSetupRuntimeForChannelPlugins: boolean;
+  suppressPluginInfoLogs: boolean;
+}): void {
+  const startupInput = firstCallArg<{
+    pluginIds?: string[];
+    preferSetupRuntimeForChannelPlugins?: boolean;
+    suppressPluginInfoLogs?: boolean;
+  }>(loadGatewayStartupPlugins);
+  expect(startupInput.pluginIds).toEqual(params.pluginIds);
+  expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(
+    params.preferSetupRuntimeForChannelPlugins,
+  );
+  expect(startupInput.suppressPluginInfoLogs).toBe(params.suppressPluginInfoLogs);
+}
+
 describe("prepareGatewayPluginBootstrap startup plugins", () => {
   beforeEach(() => {
     applyPluginAutoEnable.mockClear();
@@ -308,83 +370,32 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
   });
 
   it("loads only deferred setup-runtime plugins during pre-bind bootstrap", async () => {
-    loadPluginLookUpTable.mockReturnValueOnce({
-      manifestRegistry: pluginManifestRegistry,
-      startup: {
-        configuredDeferredChannelPluginIds: ["slack"] as string[],
-        pluginIds: ["slack", "memory-core"] as string[],
-      },
-      metrics: {
-        ...pluginLookUpTableMetrics,
-        startupPluginCount: 2,
-        deferredChannelPluginCount: 1,
-      },
-    });
-    const cfg = {
-      channels: {
-        slack: { enabled: true, token: "token" },
-      },
-    } as OpenClawConfig;
-    const log = createLog();
-    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+    mockDeferredSlackStartupPlugins();
 
-    const result = await prepareGatewayPluginBootstrap({
-      cfgAtStart: cfg,
-      startupRuntimeConfig: cfg,
-      minimalTestGateway: false,
-      log,
+    const result = await prepareBootstrapWithRuntimeConfig(slackConfig(), {
       loadRuntimePlugins: false,
       loadSetupRuntimePlugins: true,
     });
 
     expect(result.runtimePluginsLoaded).toBe(false);
-    const startupInput = firstCallArg<{
-      pluginIds?: string[];
-      preferSetupRuntimeForChannelPlugins?: boolean;
-      suppressPluginInfoLogs?: boolean;
-    }>(loadGatewayStartupPlugins);
-    expect(startupInput.pluginIds).toEqual(["slack"]);
-    expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(true);
-    expect(startupInput.suppressPluginInfoLogs).toBe(true);
+    expectStartupPluginLoad({
+      pluginIds: ["slack"],
+      preferSetupRuntimeForChannelPlugins: true,
+      suppressPluginInfoLogs: true,
+    });
   });
 
   it("does not use setup-runtime preference for full bootstrap loads", async () => {
-    loadPluginLookUpTable.mockReturnValueOnce({
-      manifestRegistry: pluginManifestRegistry,
-      startup: {
-        configuredDeferredChannelPluginIds: ["slack"] as string[],
-        pluginIds: ["slack", "memory-core"] as string[],
-      },
-      metrics: {
-        ...pluginLookUpTableMetrics,
-        startupPluginCount: 2,
-        deferredChannelPluginCount: 1,
-      },
-    });
-    const cfg = {
-      channels: {
-        slack: { enabled: true, token: "token" },
-      },
-    } as OpenClawConfig;
-    const log = createLog();
-    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+    mockDeferredSlackStartupPlugins();
 
-    const result = await prepareGatewayPluginBootstrap({
-      cfgAtStart: cfg,
-      startupRuntimeConfig: cfg,
-      minimalTestGateway: false,
-      log,
-    });
+    const result = await prepareBootstrapWithRuntimeConfig(slackConfig());
 
     expect(result.runtimePluginsLoaded).toBe(true);
-    const startupInput = firstCallArg<{
-      pluginIds?: string[];
-      preferSetupRuntimeForChannelPlugins?: boolean;
-      suppressPluginInfoLogs?: boolean;
-    }>(loadGatewayStartupPlugins);
-    expect(startupInput.pluginIds).toEqual(["slack", "memory-core"]);
-    expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(false);
-    expect(startupInput.suppressPluginInfoLogs).toBe(false);
+    expectStartupPluginLoad({
+      pluginIds: ["slack", "memory-core"],
+      preferSetupRuntimeForChannelPlugins: false,
+      suppressPluginInfoLogs: false,
+    });
   });
 
   it("bypasses plugin lookup when plugins are globally disabled", async () => {
@@ -402,15 +413,8 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
         },
       },
     } as OpenClawConfig;
-    const log = createLog();
-    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
 
-    const result = await prepareGatewayPluginBootstrap({
-      cfgAtStart: cfg,
-      startupRuntimeConfig: cfg,
-      minimalTestGateway: false,
-      log,
-    });
+    const result = await prepareBootstrapWithRuntimeConfig(cfg);
     expect(result.startupPluginIds).toEqual([]);
     expect(result.deferredConfiguredChannelPluginIds).toEqual([]);
     expect(result.pluginLookUpTable).toBeUndefined();
@@ -429,5 +433,295 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     expect(startupInput.pluginLookUpTable).toBeUndefined();
     expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(false);
     expect(startupInput.suppressPluginInfoLogs).toBe(false);
+  });
+});
+
+describe("loadGatewayStartupPluginRuntime memory provider diagnostics", () => {
+  beforeEach(() => {
+    loadGatewayStartupPlugins.mockClear().mockReturnValue({
+      pluginRegistry: { diagnostics: [], gatewayHandlers: {}, plugins: [] },
+      gatewayMethods: ["ping"],
+    });
+  });
+
+  it("warns after a full startup runtime load when configured memory embedding providers stay unregistered", async () => {
+    const log = createLog();
+    const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
+
+    await loadGatewayStartupPluginRuntime({
+      cfg: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "voyage",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/workspace",
+      log,
+      baseMethods: ["ping"],
+      startupPluginIds: ["voyage"],
+    });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('memorySearch.provider="voyage"'),
+    );
+  });
+
+  it("does not warn during setup-runtime pre-bind loads", async () => {
+    const log = createLog();
+    const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
+
+    await loadGatewayStartupPluginRuntime({
+      cfg: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "voyage",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/workspace",
+      log,
+      baseMethods: ["ping"],
+      startupPluginIds: ["telegram"],
+      preferSetupRuntimeForChannelPlugins: true,
+    });
+
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
+  function registry(providerIds: string[], options: { embeddingProviderIds?: string[] } = {}) {
+    return {
+      memoryEmbeddingProviders: providerIds.map((id) => ({ provider: { id } })),
+      embeddingProviders: (options.embeddingProviderIds ?? []).map((id) => ({ provider: { id } })),
+    } as never;
+  }
+
+  it("warns when a configured memory embedding provider is not registered", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: {
+        agents: { defaults: { memorySearch: { provider: "openai" } } },
+      } as OpenClawConfig,
+      pluginRegistry: registry([]),
+      log,
+    });
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(String(log.warn.mock.calls[0]?.[0])).toContain('memorySearch.provider="openai"');
+  });
+
+  it("does not warn when the configured memory embedding provider is registered", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: {
+        agents: { defaults: { memorySearch: { provider: "openai" } } },
+      } as OpenClawConfig,
+      pluginRegistry: registry(["openai"]),
+      log,
+    });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("warns when a configured memory embedding fallback is not registered", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: {
+        agents: { defaults: { memorySearch: { provider: "openai", fallback: "ollama" } } },
+      } as OpenClawConfig,
+      pluginRegistry: registry(["openai"]),
+      log,
+    });
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(String(log.warn.mock.calls[0]?.[0])).toContain('memorySearch.fallback="ollama"');
+  });
+
+  it("does not warn when the configured memory embedding fallback is registered", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: {
+        agents: { defaults: { memorySearch: { provider: "openai", fallback: "ollama" } } },
+      } as OpenClawConfig,
+      pluginRegistry: registry(["openai", "ollama"]),
+      log,
+    });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when a generic embedding provider can serve configured memory search", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: {
+        agents: { defaults: { memorySearch: { provider: "generic-embed" } } },
+      } as OpenClawConfig,
+      pluginRegistry: registry([], { embeddingProviderIds: ["generic-embed"] }),
+      log,
+    });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for core generic memory embedding providers", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: {
+        agents: { defaults: { memorySearch: { provider: "openai-compatible" } } },
+      } as OpenClawConfig,
+      pluginRegistry: registry([]),
+      log,
+    });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for custom providers backed by core generic embeddings", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: {
+        agents: { defaults: { memorySearch: { provider: "tenant-embeddings" } } },
+        models: {
+          providers: {
+            "tenant-embeddings": {
+              api: "openai-responses",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      pluginRegistry: registry([]),
+      log,
+    });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for memory embedding fallbacks when primary provider is fts-only", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: {
+        agents: { defaults: { memorySearch: { provider: "none", fallback: "openai" } } },
+      } as OpenClawConfig,
+      pluginRegistry: registry([]),
+      log,
+    });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for memory embedding providers when the memory slot is disabled", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: {
+        agents: { defaults: { memorySearch: { provider: "openai", fallback: "ollama" } } },
+        plugins: { slots: { memory: "none" } },
+      } as OpenClawConfig,
+      pluginRegistry: registry([]),
+      log,
+    });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  function customOllamaConfig(source: "provider" | "fallback" = "provider"): OpenClawConfig {
+    const memorySearch =
+      source === "provider"
+        ? { provider: "ollama-5080" }
+        : { provider: "openai", fallback: "ollama-5080" };
+    return {
+      agents: { defaults: { memorySearch } },
+      models: {
+        providers: {
+          "ollama-5080": {
+            api: "ollama",
+            baseUrl: "http://gpu-box.local:11435",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+  }
+
+  it.each([
+    ["provider", "memorySearch.provider"] as const,
+    ["fallback", "memorySearch.fallback"] as const,
+  ])(
+    "does not warn for custom %s entries whose api-owner plugin is registered",
+    async (source, _path) => {
+      const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+        await import("./server-startup-plugins.js");
+      const log = createLog();
+      warnUnregisteredConfiguredMemoryEmbeddingProviders({
+        config: customOllamaConfig(source),
+        pluginRegistry: registry(["openai", "ollama"]),
+        log,
+      });
+      expect(log.warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("warns for custom providers whose api-owner plugin is not registered", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: customOllamaConfig(),
+      pluginRegistry: registry([]),
+      log,
+    });
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(String(log.warn.mock.calls[0]?.[0])).toContain('memorySearch.provider="ollama-5080"');
+  });
+
+  it("warns for custom fallbacks whose api-owner plugin is not registered", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: customOllamaConfig("fallback"),
+      pluginRegistry: registry(["openai"]),
+      log,
+    });
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(String(log.warn.mock.calls[0]?.[0])).toContain('memorySearch.fallback="ollama-5080"');
+  });
+
+  it("does not warn for sentinel or disabled memory search providers", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: {
+        agents: {
+          defaults: { memorySearch: { provider: "local", fallback: "auto" } },
+          list: [
+            {
+              id: "muted",
+              memorySearch: { enabled: false, provider: "openai", fallback: "ollama" },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      pluginRegistry: registry([]),
+      log,
+    });
+    expect(log.warn).not.toHaveBeenCalled();
   });
 });

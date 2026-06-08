@@ -1,3 +1,4 @@
+// Verifies provider usage telemetry preserves plugin auth context.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -276,7 +277,8 @@ describe("resolveProviderAuths plugin boundary", () => {
     expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
   });
 
-  it("skips plugin usage auth per provider when only another provider has direct credentials", async () => {
+  it("does not fall back to standard Anthropic API keys for usage auth", async () => {
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({ handled: true });
     await withTempHome(async (homeDir) => {
       await expect(
         resolveProviderAuthsForTest({
@@ -284,15 +286,10 @@ describe("resolveProviderAuths plugin boundary", () => {
           skipPluginAuthWithoutCredentialSource: true,
           env: {
             HOME: homeDir,
-            ANTHROPIC_API_KEY: "sk-ant",
+            ANTHROPIC_API_KEY: "sk-ant-api03-status-key", // pragma: allowlist secret
           },
         }),
-      ).resolves.toEqual([
-        {
-          provider: "anthropic",
-          token: "sk-ant",
-        },
-      ]);
+      ).resolves.toEqual([]);
     });
 
     expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledTimes(1);

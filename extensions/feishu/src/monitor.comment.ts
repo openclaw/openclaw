@@ -1,3 +1,4 @@
+// Feishu plugin module implements monitor.comment behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { asBoolean as readBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -331,7 +332,7 @@ async function resolveParsedCommentContent(params: {
               resolvedObjToken: objToken,
             };
           })
-          .catch((error) => {
+          .catch((error: unknown) => {
             params.logger?.(
               `feishu[${params.accountId}]: wiki link resolution threw token=${link.wikiNodeToken} error=${formatErrorMessage(error)}`,
             );
@@ -361,7 +362,9 @@ async function resolveParsedCommentContent(params: {
 }
 
 async function delayMs(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function buildDriveCommentTargetUrl(params: {
@@ -483,7 +486,7 @@ async function requestFeishuOpenApi<T>(params: {
     { timeoutMs: params.timeoutMs },
   )
     .then((resolved) => (resolved.status === "resolved" ? resolved.value : null))
-    .catch((error) => {
+    .catch((error: unknown) => {
       params.logger?.(`${params.errorLabel}: ${formatErrorDetails(error)}`);
       return null;
     });

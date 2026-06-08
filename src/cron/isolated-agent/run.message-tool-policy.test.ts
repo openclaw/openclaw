@@ -1,6 +1,7 @@
+// Message tool policy tests cover message tool availability during cron runs.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { SkillSnapshot } from "../../agents/skills.js";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import type { CronDeliveryMode } from "../types.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import {

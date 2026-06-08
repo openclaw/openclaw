@@ -1,3 +1,8 @@
+/**
+ * Tests effective OAuth credential selection.
+ * Ensures external CLI bootstrap credentials are used only when local OAuth
+ * state is unusable and identity-safe.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveEffectiveOAuthCredential } from "./effective-oauth.js";
 import type { OAuthCredential } from "./types.js";
@@ -13,7 +18,7 @@ vi.mock("./external-cli-sync.js", () => ({
 function makeCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
   return {
     type: "oauth",
-    provider: "openai-codex",
+    provider: "openai",
     access: "local-access-token",
     refresh: "local-refresh-token",
     expires: Date.now() - 60_000,
@@ -36,7 +41,7 @@ describe("resolveEffectiveOAuthCredential", () => {
 
     expect(
       resolveEffectiveOAuthCredential({
-        profileId: "openai-codex:default",
+        profileId: "openai:default",
         credential: makeCredential(),
       }),
     ).toBe(imported);
@@ -57,7 +62,7 @@ describe("resolveEffectiveOAuthCredential", () => {
 
     expect(
       resolveEffectiveOAuthCredential({
-        profileId: "openai-codex:default",
+        profileId: "openai:default",
         credential: local,
       }),
     ).toBe(local);
@@ -74,7 +79,7 @@ describe("resolveEffectiveOAuthCredential", () => {
 
     expect(
       resolveEffectiveOAuthCredential({
-        profileId: "openai-codex:default",
+        profileId: "openai:default",
         credential: local,
       }),
     ).toBe(local);

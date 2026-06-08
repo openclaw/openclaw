@@ -1,3 +1,4 @@
+// Summarizes extra security audit findings for user-facing output.
 import { resolveProviderToolPolicy } from "../agents/agent-tools.policy.js";
 import { parseModelRef } from "../agents/model-selection-normalize.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
@@ -13,6 +14,7 @@ import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 
+/** Lightweight audit finding shape used by summary-only audit helpers. */
 export type SecurityAuditFinding = {
   checkId: string;
   severity: "info" | "warn" | "critical";
@@ -138,6 +140,7 @@ function isBrowserEnabled(cfg: OpenClawConfig): boolean {
   return cfg.browser?.enabled !== false;
 }
 
+/** Produce a concise inventory of major security-relevant surfaces. */
 export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
@@ -168,6 +171,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
   ];
 }
 
+/** Flag small-parameter models when they retain web/browser tool exposure. */
 export function collectSmallModelRiskFindings(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -180,15 +184,13 @@ export function collectSmallModelRiskFindings(params: {
     return findings;
   }
 
-  const smallModels = models
-    .map((entry) => {
-      const paramB = inferParamBFromIdOrName(entry.id);
-      if (!paramB || paramB > SMALL_MODEL_PARAM_B_MAX) {
-        return null;
-      }
-      return { ...entry, paramB };
-    })
-    .filter((entry): entry is { id: string; source: string; paramB: number } => Boolean(entry));
+  const smallModels: Array<{ id: string; source: string; paramB: number }> = [];
+  for (const entry of models) {
+    const paramB = inferParamBFromIdOrName(entry.id);
+    if (paramB && paramB <= SMALL_MODEL_PARAM_B_MAX) {
+      smallModels.push({ id: entry.id, source: entry.source, paramB });
+    }
+  }
 
   if (smallModels.length === 0) {
     return findings;
@@ -199,6 +201,8 @@ export function collectSmallModelRiskFindings(params: {
   const exposureSet = new Set<string>();
   for (const entry of smallModels) {
     const agentId = extractAgentIdFromSource(entry.source);
+    // Evaluate each model in its agent context because sandbox/tool policy can
+    // differ per agent and provider override.
     const modelRef = parseModelRef(entry.id, "openai", {
       allowPluginNormalization: false,
     });

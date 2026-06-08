@@ -1,3 +1,4 @@
+// Clickclack tests cover gateway plugin behavior.
 import { EventEmitter } from "node:events";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -121,7 +122,9 @@ describe("ClickClack gateway", () => {
     await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
 
     socket.emit("message", Buffer.from("{not json"));
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(runError).toBeUndefined();
     expect(ctx.log?.warn).toHaveBeenCalledWith(
       "[default] skipped malformed ClickClack websocket event",

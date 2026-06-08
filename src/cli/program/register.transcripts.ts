@@ -1,3 +1,4 @@
+// `openclaw transcripts`: local state inspector for stored transcript metadata and summaries.
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -44,8 +45,9 @@ function sessionDir(date: string, sessionId: string): string {
   return path.join(stateRootDir(), date, safeSegment(sessionId));
 }
 
-function readDateFromSessionDir(sessionDir: string): string {
-  const candidate = path.basename(path.dirname(sessionDir));
+// Selectors are date-qualified when duplicate session ids can exist across transcript days.
+function readDateFromSessionDir(sessionDirValue: string): string {
+  const candidate = path.basename(path.dirname(sessionDirValue));
   if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate)) {
     throw new Error(`invalid transcripts date directory: ${candidate}`);
   }
@@ -97,17 +99,17 @@ function formatErrorMessage(err: unknown): string {
 }
 
 async function readStoredSession(
-  sessionDir: string,
+  sessionDirLocal: string,
   options: { ignoreInvalid?: boolean } = {},
 ): Promise<StoredTranscriptsSession | null> {
-  const metadataPath = path.join(sessionDir, "metadata.json");
+  const metadataPath = path.join(sessionDirLocal, "metadata.json");
   try {
     const session = await readJsonFile<TranscriptSessionDescriptor>(metadataPath);
-    const summaryPath = path.join(sessionDir, "summary.md");
+    const summaryPath = path.join(sessionDirLocal, "summary.md");
     return {
       session,
-      sessionDir,
-      date: readDateFromSessionDir(sessionDir),
+      sessionDir: sessionDirLocal,
+      date: readDateFromSessionDir(sessionDirLocal),
       summaryPath,
       hasSummary: await pathExists(summaryPath),
     };
@@ -286,6 +288,7 @@ async function pathCommand(selector: string, options: TranscriptsPathOptions): P
   writeLine(selectedPath);
 }
 
+/** Register transcript list/show/path inspection commands. */
 export function registerTranscriptsCli(program: Command): void {
   const transcripts = program.command("transcripts").description("Inspect stored transcripts");
 

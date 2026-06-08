@@ -1,3 +1,4 @@
+// Coverage for OpenRouter Anthropic cache_control payload rewriting.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { createOpenRouterSystemCacheWrapper } from "../../llm/providers/stream-wrappers/proxy.js";
@@ -9,7 +10,13 @@ type StreamPayload = {
   }>;
 };
 
-function runOpenRouterPayload(payload: StreamPayload, modelId: string) {
+function runOpenRouterPayload(
+  payload: StreamPayload,
+  modelId: string,
+  streamOptions: Parameters<StreamFn>[2] = {},
+) {
+  // The wrapper mutates provider payloads via onPayload; capture the final body
+  // directly so assertions match transport-facing JSON.
   const baseStreamFn: StreamFn = (model, _context, options) => {
     options?.onPayload?.(payload, model);
     return {} as ReturnType<StreamFn>;
@@ -22,7 +29,7 @@ function runOpenRouterPayload(payload: StreamPayload, modelId: string) {
       id: modelId,
     } as never,
     { messages: [] } as never,
-    {},
+    streamOptions,
   );
 }
 
@@ -65,6 +72,53 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
       text: "Part 2",
       cache_control: { type: "ephemeral" },
     });
+  });
+
+  it("uses long cache retention for OpenRouter Anthropic cache markers", () => {
+    const payload = {
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: "Hello" },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6", { cacheRetention: "long" });
+
+    expect(payload.messages[0].content).toEqual([
+      {
+        type: "text",
+        text: "You are a helpful assistant.",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+    ]);
+  });
+
+  it("skips new cache markers when OpenRouter Anthropic cache retention is none", () => {
+    // Disabling retention must remove stale thinking-block cache markers too;
+    // OpenRouter rejects those markers on reasoning content.
+    const payload = {
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal",
+              thinkingSignature: "sig_1",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6", { cacheRetention: "none" });
+
+    expect(payload.messages[0].content).toBe("You are a helpful assistant.");
+    expect(payload.messages[1].content).toEqual([
+      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+    ]);
   });
 
   it("does not inject cache_control for OpenRouter non-Anthropic models", () => {

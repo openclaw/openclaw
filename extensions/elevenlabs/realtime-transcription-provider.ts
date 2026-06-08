@@ -1,3 +1,4 @@
+// Elevenlabs provider module implements model/runtime integration.
 import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionProviderConfig,
@@ -224,7 +225,6 @@ function createElevenLabsRealtimeTranscriptionSession(
         if (event.message_type?.includes("error")) {
           config.onError?.(new Error(readErrorDetail(event)));
         }
-        return;
     }
   };
 

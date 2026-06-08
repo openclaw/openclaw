@@ -1,4 +1,7 @@
+// Imessage provider module implements model/runtime integration.
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
@@ -22,12 +25,12 @@ import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { getRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveOpenProviderRuntimeGroupPolicy,
@@ -35,7 +38,12 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntry,
+  readSessionUpdatedAt,
+  resolveSendPolicy,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
@@ -58,7 +66,11 @@ import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
 import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
-import { combineIMessagePayloads } from "./coalesce.js";
+import {
+  combineIMessagePayloads,
+  hasIMessageBalloonMetadata,
+  shouldCombineIMessagePayloadBucket,
+} from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
@@ -85,6 +97,13 @@ const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
 const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
 const APPROVAL_REACTION_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_REACTION_DISCOVERY_INTERVAL_MS = 60_000;
+const IMESSAGE_TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
+const IMESSAGE_TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
+type IMessageTypingController = Parameters<NonNullable<GetReplyOptions["onTypingController"]>>[0];
+
+function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig) {
+  return cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
+}
 
 function isIMessagePluginPayloadAttachment(attachment: {
   original_path?: string | null;
@@ -123,6 +142,70 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
       );
     }
     return undefined;
+  }
+}
+
+function resolveLocalMessagesHomeDir(): string | undefined {
+  const home = process.env.HOME?.trim();
+  if (home) {
+    return home;
+  }
+  try {
+    return os.homedir().trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveLocalMessagesDbPath(dbPath: string): string {
+  if (!dbPath.startsWith("~")) {
+    return dbPath;
+  }
+  const home = resolveLocalMessagesHomeDir();
+  return home ? path.join(home, dbPath.slice(1).replace(/^\/+/, "")) : dbPath;
+}
+
+function resolveIMessageWatchSourceDbPath(params: {
+  catchupEnabled: boolean;
+  cliPath: string;
+  dbPath?: string;
+  remoteHost?: string;
+}): string | undefined {
+  if (params.catchupEnabled || params.remoteHost) {
+    return undefined;
+  }
+  const configured = params.dbPath?.trim();
+  if (configured) {
+    return configured;
+  }
+  const cliPath = params.cliPath.trim();
+  if (cliPath !== "imsg" && path.basename(cliPath) !== "imsg") {
+    return undefined;
+  }
+  const home = resolveLocalMessagesHomeDir();
+  return home ? path.join(home, "Library", "Messages", "chat.db") : undefined;
+}
+
+async function resolveIMessageStartupRowidWatermark(dbPath: string): Promise<number | null> {
+  const resolvedDbPath = resolveLocalMessagesDbPath(dbPath);
+  let database:
+    | {
+        close: () => void;
+        prepare: (sql: string) => { get: () => unknown };
+      }
+    | undefined;
+  try {
+    const { DatabaseSync } = await import("node:sqlite");
+    database = new DatabaseSync(resolvedDbPath, { readOnly: true });
+    const row = database.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get() as
+      | { maxRowid?: unknown }
+      | undefined;
+    return typeof row?.maxRowid === "number" && Number.isFinite(row.maxRowid) ? row.maxRowid : null;
+  } catch (err) {
+    logVerbose(`imessage: startup rowid watermark unavailable for db=${dbPath}: ${String(err)}`);
+    return null;
+  } finally {
+    database?.close();
   }
 }
 
@@ -257,6 +340,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose(`imessage: detected remoteHost=${remoteHost} from cliPath`);
     }
   }
+  const watchSourceDbPath = resolveIMessageWatchSourceDbPath({
+    catchupEnabled: catchupCfg.enabled,
+    cliPath,
+    dbPath,
+    remoteHost,
+  });
+  const watchStartupRowidWatermark = watchSourceDbPath
+    ? await resolveIMessageStartupRowidWatermark(watchSourceDbPath)
+    : null;
 
   // When `coalesceSameSenderDms` is enabled and the user has not set an
   // explicit inbound debounce for this channel, widen the window to 2500 ms.
@@ -270,6 +362,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     typeof inboundCfg?.byChannel?.imessage === "number";
   const debounceMsOverride =
     coalesceSameSenderDms && !hasExplicitInboundDebounce ? 2500 : undefined;
+
+  // Session capability latch: flips true once any inbound row from this imsg
+  // build carries balloon metadata. The coalesce flush gate needs a build-level
+  // (not per-bucket) signal because imsg omits `balloon_bundle_id` for plain
+  // rows, so a bucket of plain text looks identical on old and new builds.
+  let imsgEmitsBalloonMetadata = false;
 
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<{
     message: IMessagePayload;
@@ -288,12 +386,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           ? `chat:${msg.chat_id}`
           : (msg.chat_guid ?? msg.chat_identifier ?? "unknown");
 
-      // With coalesceSameSenderDms enabled, DMs key on chat:sender so two
-      // distinct user sends — `Dump` followed by a pasted URL that Apple
-      // delivers as a separate row — fall into the same bucket and merge
-      // into one agent turn. Group chats fall through to the legacy key so
-      // shouldDebounce can route them to the instant-dispatch path and
-      // preserve multi-user turn structure.
+      // With coalesceSameSenderDms enabled, DMs key on chat:sender so Apple's
+      // split text row and URL-balloon row land in the same bucket. The flush
+      // path still requires imsg's structural balloon metadata before merging.
+      // Group chats keep the legacy key to preserve multi-user turn structure.
       if (coalesceSameSenderDms && msg.is_group !== true) {
         return `imessage:${accountInfo.accountId}:dm:${conversationId}:${sender}`;
       }
@@ -310,11 +406,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         return false;
       }
 
-      // With coalesceSameSenderDms enabled, debounce DM messages aggressively
-      // (text, media, control commands) so split-sends — `Dump <URL>`,
-      // `Save 📎image caption`, and rapid floods — merge into one agent
-      // turn. Group chats keep instant dispatch so the bot stays responsive
-      // when multiple people are typing.
+      // Hold opt-in DMs long enough for a following URL-balloon row to arrive.
+      // The flush gate (shouldCombineIMessagePayloadBucket) decides merge vs.
+      // separate: it merges precisely on imsg's balloon marker, and falls back
+      // to a legacy merge only when the build emits no balloon metadata at all.
       if (coalesceSameSenderDms) {
         return msg.is_group !== true;
       }
@@ -337,7 +432,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         return;
       }
 
-      const combined = combineIMessagePayloads(entries.map((e) => e.message));
+      const messages = entries.map((e) => e.message);
+      if (!shouldCombineIMessagePayloadBucket(messages, imsgEmitsBalloonMetadata)) {
+        for (const message of messages) {
+          await handleMessageNow(message);
+        }
+        return;
+      }
+
+      const combined = combineIMessagePayloads(messages);
       if (shouldLogVerbose()) {
         const text = combined.text ?? "";
         const preview = text.slice(0, 50);
@@ -654,7 +757,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             logVerbose,
           })
         : undefined;
-    const { ctxPayload, chatTarget } = await buildIMessageInboundContext({
+    const { ctxPayload, chatTarget, imessageTo } = await buildIMessageInboundContext({
       cfg,
       decision,
       message,
@@ -671,7 +774,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
 
-    const updateTarget = chatTarget || decision.sender;
+    const updateTarget = chatTarget || imessageTo;
     const pinnedMainDmOwner = resolvePinnedMainDmOwnerFromAllowlist({
       dmScope: cfg.session?.dmScope,
       allowFrom,
@@ -735,6 +838,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                   client: getActiveClient(),
                 });
               },
+              // Keep the native typing bubble alive through long tool chains.
+              // The dispatcher idle path below still owns teardown on final,
+              // error, abort, or monitor shutdown.
+              keepaliveIntervalMs: IMESSAGE_TYPING_KEEPALIVE_INTERVAL_MS,
+              maxDurationMs: IMESSAGE_TYPING_KEEPALIVE_MAX_DURATION_MS,
               onStartError: (err) => {
                 logTypingFailure({
                   log: (msg) => logVerbose(msg),
@@ -809,6 +917,38 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));
       },
     });
+    let directTypingController: IMessageTypingController | undefined;
+    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg);
+    const sendPolicy = resolveSendPolicy({
+      cfg,
+      entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
+      sessionKey: decision.route.sessionKey,
+      channel: "imessage",
+      chatType: decision.isGroup ? "group" : "direct",
+    });
+    const shouldStartToolTyping =
+      !decision.isGroup &&
+      sendPolicy !== "deny" &&
+      (configuredTypingMode === undefined || configuredTypingMode === "instant");
+    const directToolTypingOptions = shouldStartToolTyping
+      ? ({
+          // iMessage's native typing bubble is channel-owned UI, not a
+          // visible tool-progress message. The suppress flag is what lets
+          // dispatch forward this callback even when verbose progress is off;
+          // allowProgress covers message_tool_only source delivery. Keep this on
+          // the direct instant/default path so configured typingMode values still
+          // decide when typing can begin.
+          suppressDefaultToolProgressMessages: true,
+          allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+          onTypingController: (typing: IMessageTypingController) => {
+            directTypingController = typing;
+            typingReplyOptions.onTypingController?.(typing);
+          },
+          onToolStart: async () => {
+            await directTypingController?.startTypingLoop();
+          },
+        } as const)
+      : {};
     const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
       route: decision.route,
       sessionKey: decision.route.sessionKey,
@@ -886,6 +1026,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                       ? !accountInfo.config.blockStreaming
                       : undefined,
                   onModelSelected,
+                  ...directToolTypingOptions,
                 },
               });
             } finally {
@@ -910,6 +1051,22 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
               .join(",")
           : typeof raw;
       runtime.error?.(`imessage: dropping malformed RPC message payload (keys=${shape})`);
+      return;
+    }
+    // Latch build capability from any row that carries balloon metadata so the
+    // coalesce flush gate can trust a missing URL marker on later plain buckets.
+    if (!imsgEmitsBalloonMetadata && hasIMessageBalloonMetadata(message)) {
+      imsgEmitsBalloonMetadata = true;
+    }
+    if (
+      watchStartupRowidWatermark !== null &&
+      typeof message.id === "number" &&
+      Number.isFinite(message.id) &&
+      message.id <= watchStartupRowidWatermark
+    ) {
+      logVerbose(
+        `imessage: dropping stale watch notification at or before startup rowid account=${accountInfo.accountId}`,
+      );
       return;
     }
     const repairedMessage = await repairMessageConversationAnchor(message);
@@ -950,7 +1107,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       runtime,
       onNotification: (msg) => {
         if (msg.method === "message") {
-          void handleMessage(msg.params).catch((err) => {
+          void handleMessage(msg.params).catch((err: unknown) => {
             runtime.error?.(`imessage: handler failed: ${String(err)}`);
           });
         } else if (msg.method === "error") {
@@ -990,6 +1147,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         {
           attachments: includeAttachments,
           include_reactions: true,
+          ...(watchStartupRowidWatermark !== null
+            ? { since_rowid: watchStartupRowidWatermark }
+            : {}),
         },
         { timeoutMs: probeTimeoutMs },
       );

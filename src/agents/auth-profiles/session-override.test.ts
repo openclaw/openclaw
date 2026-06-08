@@ -1,3 +1,8 @@
+/**
+ * Session auth-profile override rotation tests.
+ * Exercises provider compatibility, cooldown handling, and persisted override
+ * updates without loading the real auth store implementation.
+ */
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -142,8 +147,8 @@ function createAuthStoreWithProfiles(params: {
   };
 }
 
-const TEST_PRIMARY_PROFILE_ID = "openai-codex:primary@example.test";
-const TEST_SECONDARY_PROFILE_ID = "openai-codex:secondary@example.test";
+const TEST_PRIMARY_PROFILE_ID = "openai:primary@example.test";
+const TEST_SECONDARY_PROFILE_ID = "openai:secondary@example.test";
 
 describe("resolveSessionAuthProfileOverride", () => {
   afterEach(() => {
@@ -334,17 +339,17 @@ describe("resolveSessionAuthProfileOverride", () => {
         profiles: {
           [TEST_PRIMARY_PROFILE_ID]: {
             type: "api_key",
-            provider: "openai-codex",
+            provider: "openai",
             key: "sk-josh",
           },
           [TEST_SECONDARY_PROFILE_ID]: {
             type: "api_key",
-            provider: "openai-codex",
+            provider: "openai",
             key: "sk-claude",
           },
         },
         order: {
-          "openai-codex": [TEST_PRIMARY_PROFILE_ID],
+          openai: [TEST_PRIMARY_PROFILE_ID],
         },
       });
 
@@ -358,7 +363,7 @@ describe("resolveSessionAuthProfileOverride", () => {
 
       const resolved = await resolveSessionAuthProfileOverride({
         cfg: {} as OpenClawConfig,
-        provider: "openai-codex",
+        provider: "openai",
         agentDir,
         sessionEntry,
         sessionStore,
@@ -382,7 +387,7 @@ describe("resolveSessionAuthProfileOverride", () => {
         profiles: {
           [TEST_PRIMARY_PROFILE_ID]: {
             type: "api_key",
-            provider: "openai-codex",
+            provider: "openai",
             key: "sk-codex",
           },
         },
@@ -424,12 +429,12 @@ describe("resolveSessionAuthProfileOverride", () => {
         profiles: {
           [TEST_PRIMARY_PROFILE_ID]: {
             type: "api_key",
-            provider: "openai-codex",
+            provider: "openai",
             key: "sk-codex",
           },
         },
         order: {
-          "openai-codex": [TEST_PRIMARY_PROFILE_ID],
+          openai: [TEST_PRIMARY_PROFILE_ID],
         },
       });
 
@@ -444,7 +449,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       const resolved = await resolveSessionAuthProfileOverride({
         cfg: {} as OpenClawConfig,
         provider: "openai",
-        acceptedProviderIds: ["openai-codex"],
+        acceptedProviderIds: ["openai"],
         agentDir,
         sessionEntry,
         sessionStore,
@@ -472,12 +477,12 @@ describe("resolveSessionAuthProfileOverride", () => {
           },
           [TEST_PRIMARY_PROFILE_ID]: {
             type: "api_key",
-            provider: "openai-codex",
+            provider: "openai",
             key: "sk-codex",
           },
         },
         order: {
-          "openai-codex": [TEST_PRIMARY_PROFILE_ID],
+          openai: [TEST_PRIMARY_PROFILE_ID],
         },
       });
 
@@ -492,7 +497,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       const resolved = await resolveSessionAuthProfileOverride({
         cfg: {} as OpenClawConfig,
         provider: "openai",
-        acceptedProviderIds: ["openai-codex"],
+        acceptedProviderIds: ["openai"],
         agentDir,
         sessionEntry,
         sessionStore,
@@ -516,17 +521,17 @@ describe("resolveSessionAuthProfileOverride", () => {
         profiles: {
           [TEST_PRIMARY_PROFILE_ID]: {
             type: "api_key",
-            provider: "openai-codex",
+            provider: "openai",
             key: "sk-stale",
           },
           [TEST_SECONDARY_PROFILE_ID]: {
             type: "api_key",
-            provider: "openai-codex",
+            provider: "openai",
             key: "sk-healthy",
           },
         },
         order: {
-          "openai-codex": [TEST_SECONDARY_PROFILE_ID, TEST_PRIMARY_PROFILE_ID],
+          openai: [TEST_SECONDARY_PROFILE_ID, TEST_PRIMARY_PROFILE_ID],
         },
       });
       authStoreMocks.isProfileInCooldown.mockImplementation(
@@ -543,7 +548,7 @@ describe("resolveSessionAuthProfileOverride", () => {
 
       const resolved = await resolveSessionAuthProfileOverride({
         cfg: {} as OpenClawConfig,
-        provider: "openai-codex",
+        provider: "openai",
         agentDir,
         sessionEntry,
         sessionStore,

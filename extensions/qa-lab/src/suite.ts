@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements suite behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -1142,7 +1143,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
             generatedAt: partialFinishedAt.toISOString(),
           } satisfies QaLabLatestReport);
         })
-        .catch((error) => {
+        .catch((error: unknown) => {
           writeQaSuiteProgress(
             progressEnabled,
             `partial artifact write failed: ${sanitizeQaSuiteProgressValue(formatErrorMessage(error))}`,

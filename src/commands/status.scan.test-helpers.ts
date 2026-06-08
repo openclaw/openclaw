@@ -1,3 +1,4 @@
+// Status scan test helpers provide shared mocks and config fixtures for scan suites.
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
@@ -319,9 +320,7 @@ export function createStatusSummary(
       paths: [],
       defaults: {},
       recent: [],
-      ...(Object.prototype.hasOwnProperty.call(options, "byAgent")
-        ? { byAgent: options.byAgent ?? [] }
-        : {}),
+      ...(Object.hasOwn(options, "byAgent") ? { byAgent: options.byAgent ?? [] } : {}),
     },
   };
 }

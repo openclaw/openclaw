@@ -1,3 +1,4 @@
+// Doctor health contribution tests cover plugin-provided health checks.
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
@@ -27,11 +28,19 @@ const mocks = vi.hoisted(() => ({
     config: {},
     issues: [],
   }),
+  checkGatewayHealth: vi.fn(),
+  probeGatewayMemoryStatus: vi.fn(),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
+  isRecord: vi.fn(
+    (value: unknown): value is Record<string, unknown> =>
+      typeof value === "object" && value !== null && !Array.isArray(value),
+  ),
   shortenHomePath: vi.fn((p: string) => p),
   formatCliCommand: vi.fn((cmd: string) => cmd),
 }));
+
+const DOCTOR_GATEWAY_HEALTH_ID = "doctor:gateway-health";
 
 vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () => ({
   maybeRunConfiguredPluginInstallReleaseStep: mocks.maybeRunConfiguredPluginInstallReleaseStep,
@@ -59,7 +68,7 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
 
@@ -73,7 +82,8 @@ vi.mock("../agents/model-selection.js", () => ({
   resolveHooksGmailModel: mocks.resolveHooksGmailModel,
 }));
 
-vi.mock("../version.js", () => ({
+vi.mock("../version.js", async () => ({
+  ...(await vi.importActual<typeof import("../version.js")>("../version.js")),
   VERSION: "2026.5.2-test",
 }));
 
@@ -81,6 +91,11 @@ vi.mock("../config/config.js", () => ({
   CONFIG_PATH: "/tmp/fake-openclaw.json",
   replaceConfigFile: mocks.replaceConfigFile,
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+}));
+
+vi.mock("../commands/doctor-gateway-health.js", () => ({
+  checkGatewayHealth: mocks.checkGatewayHealth,
+  probeGatewayMemoryStatus: mocks.probeGatewayMemoryStatus,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -92,6 +107,7 @@ vi.mock("../config/logging.js", () => ({
 }));
 
 vi.mock("../utils.js", () => ({
+  isRecord: mocks.isRecord,
   shortenHomePath: mocks.shortenHomePath,
 }));
 
@@ -147,6 +163,7 @@ describe("doctor health contributions", () => {
     mocks.listHealthChecks.mockReset();
     mocks.listHealthChecks.mockReturnValue([
       { id: "core/doctor/shell-completion" },
+      { id: "core/doctor/ui-protocol-freshness" },
       { id: "core/doctor/unrelated" },
     ]);
     mocks.getHealthCheck.mockReset();
@@ -175,6 +192,8 @@ describe("doctor health contributions", () => {
       config: {},
       issues: [],
     });
+    mocks.checkGatewayHealth.mockReset();
+    mocks.probeGatewayMemoryStatus.mockReset();
   });
 
   afterEach(() => {
@@ -190,6 +209,32 @@ describe("doctor health contributions", () => {
       ids.indexOf("doctor:plugin-registry"),
     );
     expect(ids.indexOf("doctor:plugin-registry")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("skips read-scope gateway probes when gateway health only proved reachability", async () => {
+    mocks.checkGatewayHealth.mockResolvedValue({
+      authenticated: false,
+      healthOk: true,
+    });
+    const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(ctx.healthOk).toBe(true);
+    expect(ctx.gatewayHealthAuthenticated).toBe(false);
+    expect(ctx.gatewayMemoryProbe).toEqual({ checked: false, ready: false, skipped: true });
+    expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
   });
 
   it("keeps release configured plugin installs repair-only", async () => {
@@ -319,7 +364,7 @@ describe("doctor health contributions", () => {
     );
   });
 
-  it("keeps legacy positional shell completion out of the broad structured repair pass", async () => {
+  it("keeps legacy positional repairs out of the broad structured repair pass", async () => {
     const contribution = requireDoctorContribution("doctor:structured-health-repairs");
     const ctx = {
       cfg: {},
@@ -349,10 +394,10 @@ describe("doctor health contributions", () => {
           checkId: "core/doctor/runtime-tool-schemas",
           severity: "error",
           message:
-            "Tool dofbot_move_angles from plugin dofbot has an unsupported input schema for runtime projection.",
-          path: "plugins.entries.dofbot",
-          target: "dofbot_move_angles",
-          requirement: 'dofbot_move_angles.parameters.type must be "object"',
+            "Tool fuzzplugin_move_angles from plugin fuzzplugin has an unsupported input schema for runtime projection.",
+          path: "plugins.entries.fuzzplugin",
+          target: "fuzzplugin_move_angles",
+          requirement: 'fuzzplugin_move_angles.parameters.type must be "object"',
           fixHint:
             "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.",
         },
@@ -374,11 +419,54 @@ describe("doctor health contributions", () => {
 
     expect(ctx.healthOk).toBe(false);
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Tool dofbot_move_angles from plugin dofbot"),
+      expect.stringContaining("Tool fuzzplugin_move_angles from plugin fuzzplugin"),
       "Doctor warnings",
     );
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining('issue: dofbot_move_angles.parameters.type must be "object"'),
+      expect.stringContaining('issue: fuzzplugin_move_angles.parameters.type must be "object"'),
+      "Doctor warnings",
+    );
+  });
+
+  it("reports provider catalog projection blockers during normal doctor runs", async () => {
+    const contribution = requireDoctorContribution("doctor:provider-catalog-projection");
+    mocks.getHealthCheck.mockReturnValue({
+      id: "core/doctor/provider-catalog-projection",
+      detect: vi.fn(async () => [
+        {
+          checkId: "core/doctor/provider-catalog-projection",
+          severity: "error",
+          message:
+            "Provider catalog mockplugin cannot be projected into the unified text model catalog.",
+          path: "plugins.entries.mockplugin",
+          target: "mockplugin",
+          requirement: "provider catalog entry read failed",
+          fixHint:
+            "Fix the plugin provider catalog hook or disable the plugin, then rerun doctor before relying on model discovery.",
+        },
+      ]),
+    });
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(ctx.healthOk).toBe(false);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Provider catalog mockplugin cannot be projected"),
+      "Doctor warnings",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("issue: provider catalog entry read failed"),
       "Doctor warnings",
     );
   });

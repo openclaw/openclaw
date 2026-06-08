@@ -1,3 +1,4 @@
+// Covers core plugin auto-enable behavior and bundled plugin defaults.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -587,7 +588,7 @@ describe("applyPluginAutoEnable core", () => {
       },
       env,
       manifestRegistry: makeRegistry([
-        { id: "openai", channels: [], providers: ["openai", "openai-codex"] },
+        { id: "openai", channels: [], providers: ["openai", "openai"] },
         {
           id: "codex",
           channels: [],
@@ -607,13 +608,13 @@ describe("applyPluginAutoEnable core", () => {
       config: {
         agents: {
           defaults: {
-            model: "openai-codex/gpt-5.5",
+            model: "openai/gpt-5.5",
           },
         },
       },
       env,
       manifestRegistry: makeRegistry([
-        { id: "openai", channels: [], providers: ["openai", "openai-codex"] },
+        { id: "openai", channels: [], providers: ["openai", "openai"] },
         {
           id: "codex",
           channels: [],
@@ -626,7 +627,7 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.config.plugins?.entries?.openai?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
     expect(result.changes).toEqual([
-      "openai-codex/gpt-5.5 model configured, enabled automatically.",
+      "openai/gpt-5.5 model configured, enabled automatically.",
       "codex agent runtime configured, enabled automatically.",
     ]);
   });
@@ -649,7 +650,7 @@ describe("applyPluginAutoEnable core", () => {
       },
       env,
       manifestRegistry: makeRegistry([
-        { id: "openai", channels: [], providers: ["openai", "openai-codex"] },
+        { id: "openai", channels: [], providers: ["openai", "openai"] },
         {
           id: "codex",
           channels: [],
@@ -678,7 +679,7 @@ describe("applyPluginAutoEnable core", () => {
       },
       env,
       manifestRegistry: makeRegistry([
-        { id: "openai", channels: [], providers: ["openai", "openai-codex"] },
+        { id: "openai", channels: [], providers: ["openai", "openai"] },
         {
           id: "codex",
           channels: [],
@@ -716,7 +717,7 @@ describe("applyPluginAutoEnable core", () => {
       },
       env,
       manifestRegistry: makeRegistry([
-        { id: "openai", channels: [], providers: ["openai", "openai-codex"] },
+        { id: "openai", channels: [], providers: ["openai", "openai"] },
         {
           id: "codex",
           channels: [],

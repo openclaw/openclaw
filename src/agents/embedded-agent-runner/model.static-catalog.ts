@@ -1,14 +1,21 @@
+/**
+ * Resolves bundled static catalog rows for embedded-agent model selection.
+ */
+import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { Model } from "../../llm/types.js";
 import { planManifestModelCatalogRows } from "../../model-catalog/manifest-planner.js";
-import type { NormalizedModelCatalogRow } from "../../model-catalog/types.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
-import { normalizeProviderId } from "../provider-id.js";
 
+/**
+ * Resolves bundled plugin static model-catalog rows into runtime model records.
+ */
 function rowMatchesModel(params: {
   row: NormalizedModelCatalogRow;
   provider: string;
@@ -24,23 +31,44 @@ function rowMatchesModel(params: {
   );
 }
 
-function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): Model {
+function normalizeStaticCatalogInput(
+  input: NormalizedModelCatalogRow["input"],
+): ProviderRuntimeModel["input"] {
+  const normalizedInput = input.filter(
+    (item): item is "text" | "image" => item === "text" || item === "image",
+  );
+  return normalizedInput.length > 0 ? normalizedInput : ["text"];
+}
+
+function normalizeStaticCatalogCost(
+  cost: NormalizedModelCatalogRow["cost"],
+): ProviderRuntimeModel["cost"] {
+  return {
+    input: cost?.input ?? 0,
+    output: cost?.output ?? 0,
+    cacheRead: cost?.cacheRead ?? 0,
+    cacheWrite: cost?.cacheWrite ?? 0,
+  };
+}
+
+/** Converts a normalized catalog row into the provider runtime model shape. */
+function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRuntimeModel {
   return {
     id: row.id,
     name: row.name || row.id,
     provider: row.provider,
     api: row.api ?? "openai-responses",
-    baseUrl: row.baseUrl,
+    baseUrl: row.baseUrl ?? "",
     reasoning: row.reasoning,
-    input: row.input,
-    cost: row.cost,
-    contextWindow: row.contextWindow,
+    input: normalizeStaticCatalogInput(row.input),
+    cost: normalizeStaticCatalogCost(row.cost),
+    contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     contextTokens: row.contextTokens,
-    maxTokens: row.maxTokens,
+    maxTokens: row.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
     headers: row.headers,
     compat: row.compat,
     mediaInput: row.mediaInput,
-  } as Model;
+  };
 }
 
 type StaticCatalogPlugin = Parameters<
@@ -91,6 +119,7 @@ function resolveManifestModelCatalogProviderAlias(params: {
   return targets.size === 1 ? [...targets][0] : undefined;
 }
 
+/** Resolves a provider alias from plugin model-catalog metadata when the alias is unambiguous. */
 export function canonicalizeManifestModelCatalogProviderAlias(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -113,6 +142,7 @@ export function canonicalizeManifestModelCatalogProviderAlias(params: {
   );
 }
 
+/** Returns whether a bundled static catalog asks runtime discovery to augment its rows. */
 export function bundledStaticCatalogProviderUsesRuntimeAugment(params: {
   provider: string;
   env?: NodeJS.ProcessEnv;
@@ -137,13 +167,15 @@ export function bundledStaticCatalogProviderUsesRuntimeAugment(params: {
   });
 }
 
+/** Resolves one bundled static-catalog model row for provider/model lookup. */
 export function resolveBundledStaticCatalogModel(params: {
   provider: string;
   modelId: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): Model | undefined {
+  includeRuntimeDiscovery?: boolean;
+}): ProviderRuntimeModel | undefined {
   const provider = normalizeProviderId(params.provider);
   if (!provider || !params.modelId.trim()) {
     return undefined;
@@ -157,7 +189,12 @@ export function resolveBundledStaticCatalogModel(params: {
     providerFilter: provider,
   });
   for (const entry of plan.entries) {
-    if (entry.discovery !== "static") {
+    if (
+      entry.discovery !== "static" &&
+      !(params.includeRuntimeDiscovery && entry.discovery === "runtime")
+    ) {
+      // Static lookups normally ignore runtime-discovery rows. Callers opt in only when they are
+      // merging static catalog facts with already-discovered provider runtime state.
       continue;
     }
     const row = entry.rows.find((candidate) =>

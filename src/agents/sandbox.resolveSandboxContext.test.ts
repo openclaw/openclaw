@@ -1,3 +1,4 @@
+// Verifies sandbox context resolution, backend registration, and main-session bypass.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -33,15 +34,15 @@ vi.mock("../plugin-sdk/browser-control-auth.js", () => browserControlAuthMock);
 
 vi.mock("../plugin-sdk/browser-profiles.js", () => browserProfilesMock);
 
-vi.mock("../infra/skills-remote.js", () => ({
-  getRemoteSkillEligibility: vi.fn(() => ({ note: "test-remote" })),
-}));
-
 vi.mock("./exec-defaults.js", () => ({
   canExecRequestNode: vi.fn(() => false),
 }));
 
-vi.mock("./skills.js", () => ({
+vi.mock("../skills/runtime/remote.js", () => ({
+  getRemoteSkillEligibility: vi.fn(() => ({ note: "test-remote" })),
+}));
+
+vi.mock("../skills/loading/workspace.js", () => ({
   syncSkillsToWorkspace: syncSkillsToWorkspaceMock,
 }));
 
@@ -49,6 +50,7 @@ let sandboxFixtureRoot = "";
 let sandboxFixtureCount = 0;
 
 async function createSandboxFixtureDir(prefix: string): Promise<string> {
+  // Shared fixture root avoids repeated temp-dir setup across sandbox context cases.
   const dir = path.join(sandboxFixtureRoot, `${prefix}-${sandboxFixtureCount++}`);
   await fs.mkdir(dir, { recursive: true });
   return dir;
@@ -102,6 +104,7 @@ describe("resolveSandboxContext", () => {
   }, 15_000);
 
   it("does not touch sandbox backends for cron or sub-agent sessions when sandbox mode is off", async () => {
+    // Mode=off should short-circuit before resolving any backend implementation.
     const backendFactory = vi.fn(async () => ({
       id: "test-off-backend",
       runtimeId: "unexpected-runtime",
@@ -343,5 +346,128 @@ describe("resolveSandboxContext", () => {
     expect(syncOptions?.config).toBe(cfg);
     expect(syncOptions?.agentId).toBe("main");
     expect(syncOptions?.eligibility).toEqual({ remote: { note: "test-remote" } });
+  }, 15_000);
+
+  it("materializes skills into a hidden read-only workspace for writable sandboxes", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
+    const workspaceDir = await createSandboxFixtureDir("workspace");
+    const userOwnedSandboxSkillsDir = path.join(
+      workspaceDir,
+      ".openclaw",
+      "sandbox-skills",
+      "skills",
+      "user-owned",
+    );
+    await fs.mkdir(userOwnedSandboxSkillsDir, { recursive: true });
+    await fs.writeFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "# User owned\n");
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "session",
+            workspaceAccess: "rw",
+            workspaceRoot: path.join(workspaceDir, ".openclaw", "sandboxes"),
+          },
+        },
+      },
+    };
+
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+
+    expect(result?.workspaceDir).toBe(workspaceDir);
+    const syncCalls = syncSkillsToWorkspaceMock.mock.calls as unknown as Array<
+      [
+        {
+          sourceWorkspaceDir?: string;
+          targetWorkspaceDir?: string;
+          config?: OpenClawConfig;
+          agentId?: string;
+          eligibility?: unknown;
+        },
+      ]
+    >;
+    const [syncOptions] = syncCalls[0] ?? [];
+    expect(syncOptions?.sourceWorkspaceDir).toBe(workspaceDir);
+    expect(syncOptions?.targetWorkspaceDir).toContain(
+      path.join(".openclaw", "sandbox", "skills-workspaces"),
+    );
+    expect(syncOptions?.targetWorkspaceDir).toMatch(
+      /[\\/]agent-main-main-[a-f0-9]{8}[\\/]\.openclaw[\\/]sandbox-skills$/,
+    );
+    expect(syncOptions?.targetWorkspaceDir).not.toBe(
+      path.join(workspaceDir, ".openclaw", "sandbox-skills"),
+    );
+    expect(syncOptions?.targetWorkspaceDir?.startsWith(path.join(workspaceDir, ".openclaw"))).toBe(
+      false,
+    );
+    expect(syncOptions?.config).toBe(cfg);
+    expect(syncOptions?.agentId).toBe("main");
+    expect(syncOptions?.eligibility).toEqual({ remote: { note: "test-remote" } });
+    await expect(
+      fs.readFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "utf8"),
+    ).resolves.toBe("# User owned\n");
+  }, 15_000);
+
+  it("materializes skills for shared writable sandboxes even when roots match", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
+    const workspaceDir = await createSandboxFixtureDir("shared-workspace");
+    const userOwnedSandboxSkillsDir = path.join(
+      workspaceDir,
+      ".openclaw",
+      "sandbox-skills",
+      "skills",
+      "user-owned",
+    );
+    await fs.mkdir(userOwnedSandboxSkillsDir, { recursive: true });
+    await fs.writeFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "# User owned\n");
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "shared",
+            workspaceAccess: "rw",
+            workspaceRoot: workspaceDir,
+          },
+        },
+      },
+    };
+
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+
+    expect(result?.workspaceDir).toBe(workspaceDir);
+    const syncCalls = syncSkillsToWorkspaceMock.mock.calls as unknown as Array<
+      [
+        {
+          sourceWorkspaceDir?: string;
+          targetWorkspaceDir?: string;
+        },
+      ]
+    >;
+    const [syncOptions] = syncCalls[0] ?? [];
+    expect(syncOptions?.sourceWorkspaceDir).toBe(workspaceDir);
+    expect(syncOptions?.targetWorkspaceDir).toContain(
+      path.join(".openclaw", "sandbox", "skills-workspaces"),
+    );
+    expect(syncOptions?.targetWorkspaceDir).toMatch(
+      /[\\/]shared-[a-f0-9]{8}[\\/]\.openclaw[\\/]sandbox-skills$/,
+    );
+    expect(syncOptions?.targetWorkspaceDir).not.toBe(
+      path.join(workspaceDir, ".openclaw", "sandbox-skills"),
+    );
+    await expect(
+      fs.readFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "utf8"),
+    ).resolves.toBe("# User owned\n");
   }, 15_000);
 });

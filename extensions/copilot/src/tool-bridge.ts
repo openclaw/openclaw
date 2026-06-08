@@ -1,3 +1,4 @@
+// Copilot plugin module implements tool bridge behavior.
 import type { Tool as SdkTool, ToolInvocation, ToolResultObject } from "@github/copilot-sdk";
 import type {
   AnyAgentTool,
@@ -420,7 +421,7 @@ export function convertOpenClawToolToSdkTool(
       );
     }
 
-    let preparedArgs = args;
+    let preparedArgs;
     try {
       preparedArgs = sourceTool.prepareArguments ? sourceTool.prepareArguments(args) : args;
     } catch (error: unknown) {

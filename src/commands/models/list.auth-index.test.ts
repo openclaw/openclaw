@@ -1,3 +1,4 @@
+// Model auth index tests cover auth index loading while listing models.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -242,18 +243,23 @@ describe("createModelListAuthIndex", () => {
     expect(index.hasProviderAuth("custom-openai")).toBe(true);
   });
 
-  it("treats OpenAI Codex auth as usable for canonical OpenAI agent routes", () => {
+  it("treats OpenAI OAuth auth as usable for canonical OpenAI agent routes", () => {
     const index = createModelListAuthIndex({
       cfg: {},
       authStore: {
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:default": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
+          },
+          "openai:token": {
+            type: "token",
+            provider: "openai",
+            token: "token",
           },
         },
       },
@@ -263,7 +269,26 @@ describe("createModelListAuthIndex", () => {
     expect(index.hasProviderAuth("openai")).toBe(true);
   });
 
-  it("does not treat OpenAI Codex auth as usable for custom OpenAI-compatible routes", () => {
+  it("treats OpenAI token auth as usable for canonical OpenAI agent routes", () => {
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:token": {
+            type: "token",
+            provider: "openai",
+            token: "token",
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(index.hasProviderAuth("openai")).toBe(true);
+  });
+
+  it("does not treat OpenAI OAuth auth as usable for custom OpenAI-compatible routes", () => {
     const index = createModelListAuthIndex({
       cfg: {
         models: {
@@ -279,9 +304,9 @@ describe("createModelListAuthIndex", () => {
       authStore: {
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:default": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,

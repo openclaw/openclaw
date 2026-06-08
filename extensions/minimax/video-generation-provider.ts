@@ -1,3 +1,4 @@
+// Minimax provider module implements model/runtime integration.
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -209,8 +210,6 @@ async function pollMinimaxVideo(params: {
           normalizeOptionalString(payload.base_resp?.status_msg) ||
             "MiniMax video generation failed",
         );
-      case "Preparing":
-      case "Processing":
       default:
         await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
         break;

@@ -1,3 +1,5 @@
+// Shared doctor dispatcher for channel plugin repair, warning, and compatibility adapters.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   getBundledChannelPlugin,
   getBundledChannelSetupPlugin,
@@ -11,7 +13,6 @@ import type {
   ChannelDoctorSequenceResult,
 } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 
 type ChannelDoctorEntry = {
   doctor: ChannelDoctorAdapter;
@@ -53,7 +54,9 @@ const channelDoctorEnumValues: Partial<Record<keyof ChannelDoctorAdapter, Readon
 };
 
 export type ChannelDoctorEmptyAllowlistPolicyHooks = {
+  /** Collect plugin-specific warning lines for a configured channel/account allowlist. */
   extraWarningsForAccount: (params: ChannelDoctorEmptyAllowlistAccountContext) => string[];
+  /** Let a channel doctor suppress the generic empty group-allowlist warning. */
   shouldSkipDefaultEmptyGroupAllowlistWarning: (
     params: ChannelDoctorEmptyAllowlistAccountContext,
   ) => boolean;
@@ -158,6 +161,7 @@ function mergeDoctorAdapters(
     for (const [key, value] of Object.entries(adapter) as Array<
       [keyof ChannelDoctorAdapter, unknown]
     >) {
+      // Earlier adapters win so read-only installed plugins can override bundled fallbacks.
       if (merged[key] !== undefined) {
         continue;
       }
@@ -260,6 +264,7 @@ function shouldSkipDefaultEmptyGroupAllowlistWarningForEntries(
   );
 }
 
+/** Build cached empty-allowlist hooks backed by channel doctor adapters. */
 export function createChannelDoctorEmptyAllowlistPolicyHooks(
   context: ChannelDoctorLookupContext,
 ): ChannelDoctorEmptyAllowlistPolicyHooks {
@@ -285,6 +290,7 @@ export function createChannelDoctorEmptyAllowlistPolicyHooks(
   };
 }
 
+/** Run interactive/non-interactive channel setup repair sequences and collect notes. */
 export async function runChannelDoctorConfigSequences(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -306,6 +312,7 @@ export async function runChannelDoctorConfigSequences(params: {
   return { changeNotes, warningNotes };
 }
 
+/** Collect compatibility migrations from configured channel doctor adapters in order. */
 export function collectChannelDoctorCompatibilityMutations(
   cfg: OpenClawConfig,
   options: { env?: NodeJS.ProcessEnv } = {},
@@ -327,6 +334,7 @@ export function collectChannelDoctorCompatibilityMutations(
   return mutations;
 }
 
+/** Collect stale channel config cleanup mutations from configured channel doctor adapters. */
 export async function collectChannelDoctorStaleConfigMutations(
   cfg: OpenClawConfig,
   options: { env?: NodeJS.ProcessEnv } = {},
@@ -347,6 +355,7 @@ export async function collectChannelDoctorStaleConfigMutations(
   return mutations;
 }
 
+/** Collect channel-specific doctor preview warnings for configured channels. */
 export async function collectChannelDoctorPreviewWarnings(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;
@@ -365,6 +374,7 @@ export async function collectChannelDoctorPreviewWarnings(params: {
   return warnings;
 }
 
+/** Collect warnings for mutable channel allowlists that doctor cannot safely edit. */
 export async function collectChannelDoctorMutableAllowlistWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -382,6 +392,7 @@ export async function collectChannelDoctorMutableAllowlistWarnings(params: {
   return warnings;
 }
 
+/** Collect channel repair mutations and warning-only repair results from doctor adapters. */
 export async function collectChannelDoctorRepairMutations(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;
@@ -396,6 +407,7 @@ export async function collectChannelDoctorRepairMutations(params: {
     const mutation = await entry.doctor.repairConfig?.({
       cfg: nextCfg,
       doctorFixCommand: params.doctorFixCommand,
+      ...(params.env ? { env: params.env } : {}),
     });
     if (!mutation || mutation.changes.length === 0) {
       if (mutation?.warnings?.length) {
@@ -409,6 +421,7 @@ export async function collectChannelDoctorRepairMutations(params: {
   return mutations;
 }
 
+/** Collect plugin-provided empty allowlist warning lines for one channel/account context. */
 export function collectChannelDoctorEmptyAllowlistExtraWarnings(
   params: ChannelDoctorEmptyAllowlistLookupParams,
 ): string[] {
@@ -420,6 +433,7 @@ export function collectChannelDoctorEmptyAllowlistExtraWarnings(
   );
 }
 
+/** Return true when a channel doctor owns empty group-allowlist warning behavior. */
 export function shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning(
   params: ChannelDoctorEmptyAllowlistLookupParams,
 ): boolean {

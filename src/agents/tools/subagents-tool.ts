@@ -1,3 +1,8 @@
+/**
+ * subagents built-in tool.
+ *
+ * Lists active and recent subagents controlled by the caller's session tree.
+ */
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
@@ -19,6 +24,7 @@ const SubagentsToolSchema = Type.Object({
   recentMinutes: optionalPositiveIntegerSchema(),
 });
 
+/** Creates the subagents list tool scoped to the caller's controlled session tree. */
 export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAgentTool {
   return {
     label: "Subagents",
@@ -39,6 +45,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
         cfg,
         agentSessionKey: opts?.agentSessionKey,
       });
+      // The caller only sees subagents controlled by its effective controller session.
       const runs = listControlledSubagentRuns(controller.controllerSessionKey);
 
       if (action === "list") {

@@ -1,3 +1,4 @@
+// Google provider adapts Gemini streams and tools to the agent runtime.
 import { type GenerateContentParameters, GoogleGenAI } from "@google/genai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
@@ -88,7 +89,7 @@ function buildParams(
   options: GoogleOptions = {},
 ): GenerateContentParameters {
   return buildGoogleGenerateContentParams(model, context, options, {
-    getDisabledThinkingConfig: (model) =>
-      getDisabledGoogleThinkingConfig(model, { includeGemma4: true }),
+    getDisabledThinkingConfig: (modelLocal) =>
+      getDisabledGoogleThinkingConfig(modelLocal, { includeGemma4: true }),
   });
 }

@@ -1,3 +1,5 @@
+// Covers plugin-dispatched message actions, target resolution, dry-run behavior,
+// and plugin tool-result extraction.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
@@ -441,7 +443,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("routes gateway-executed plugin actions through gateway RPC instead of local dispatch", async () => {
-      const handleAction = vi.fn(async () =>
+      const handleActionEntry = vi.fn(async () =>
         jsonResult({
           ok: true,
           local: true,
@@ -453,7 +455,7 @@ describe("runMessageAction plugin dispatch", () => {
         blurb: "Gateway Chat reaction test plugin.",
         actions: ["react"],
         capabilities: { chatTypes: ["direct"], reactions: true },
-        handleAction,
+        handleAction: handleActionEntry,
       });
       setActivePluginRegistry(
         createTestRegistry([
@@ -529,7 +531,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "gateway tool context",
       );
-      expect(handleAction).not.toHaveBeenCalled();
+      expect(handleActionEntry).not.toHaveBeenCalled();
       expectRecordFields(
         result,
         {
@@ -613,7 +615,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("routes gateway-executed plugin sends through gateway RPC instead of local dispatch", async () => {
-      const handleAction = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const handleActionResult = vi.fn(async () => jsonResult({ ok: true, local: true }));
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",
         label: "Gateway Chat",
@@ -624,7 +626,7 @@ describe("runMessageAction plugin dispatch", () => {
             looksLikeId: () => true,
           },
         },
-        handleAction,
+        handleAction: handleActionResult,
       });
       setActivePluginRegistry(
         createTestRegistry([
@@ -685,7 +687,7 @@ describe("runMessageAction plugin dispatch", () => {
         "gateway message params",
       );
       expect(mocks.executeSendAction).not.toHaveBeenCalled();
-      expect(handleAction).not.toHaveBeenCalled();
+      expect(handleActionResult).not.toHaveBeenCalled();
       expectRecordFields(
         result,
         {
@@ -703,6 +705,151 @@ describe("runMessageAction plugin dispatch", () => {
           messageId: "gw-send-1",
         },
         "result payload",
+      );
+    });
+
+    it("preserves buffer-only send bytes for gateway-side materialization", async () => {
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat send test plugin.",
+        actions: ["send"],
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        handleAction: vi.fn(async () => jsonResult({ ok: true })),
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        messageId: "gw-send-buffer",
+      });
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "gatewaychat",
+          target: "user-123",
+          buffer: Buffer.from("gateway bytes").toString("base64"),
+          filename: "gateway.txt",
+          contentType: "text/plain",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+      });
+
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
+      );
+      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+      expectRecordFields(
+        readRecordField(gatewayParams, "params", "gateway message params"),
+        {
+          to: "user-123",
+          media: "buffer://message-send/attachment",
+          mediaUrl: "buffer://message-send/attachment",
+          mediaUrls: ["buffer://message-send/attachment"],
+          buffer: Buffer.from("gateway bytes").toString("base64"),
+          filename: "gateway.txt",
+          contentType: "text/plain",
+        },
+        "gateway message params",
+      );
+      expect(mocks.executeSendAction).not.toHaveBeenCalled();
+    });
+
+    it("preserves buffer-only send bytes for gateway delivery-mode channels", async () => {
+      const gatewayDeliveryPlugin: ChannelPlugin = {
+        id: "gatewaydeliver",
+        meta: {
+          id: "gatewaydeliver",
+          label: "Gateway Deliver",
+          selectionLabel: "Gateway Deliver",
+          docsPath: "/channels/gatewaydeliver",
+          blurb: "Gateway delivery-mode send test plugin.",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: createAlwaysConfiguredPluginConfig(),
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        outbound: { deliveryMode: "gateway" },
+      };
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaydeliver",
+            source: "test",
+            plugin: gatewayDeliveryPlugin,
+          },
+        ]),
+      );
+      mocks.executeSendAction.mockResolvedValueOnce({
+        handledBy: "core",
+        payload: { ok: true },
+        sendResult: {
+          channel: "gatewaydeliver",
+          to: "user-123",
+          via: "gateway",
+          mediaUrl: "buffer://message-send/attachment",
+        },
+      });
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaydeliver: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "gatewaydeliver",
+          target: "user-123",
+          buffer: Buffer.from("gateway delivery bytes").toString("base64"),
+          filename: "delivery.txt",
+          contentType: "text/plain",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+      });
+
+      const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
+      expectRecordFields(
+        executeCall,
+        {
+          mediaUrl: "buffer://message-send/attachment",
+          mediaUrls: ["buffer://message-send/attachment"],
+          buffer: Buffer.from("gateway delivery bytes").toString("base64"),
+          filename: "delivery.txt",
+          contentType: "text/plain",
+        },
+        "execute send call",
       );
     });
 
@@ -784,7 +931,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("applies TTS before local plugin send fallback dispatch", async () => {
-      const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+      const handleActionValue = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
         jsonResult({ ok: true, params }),
       );
       const localPlugin = createGatewayActionPlugin({
@@ -798,7 +945,7 @@ describe("runMessageAction plugin dispatch", () => {
             looksLikeId: () => true,
           },
         },
-        handleAction,
+        handleAction: handleActionValue,
       });
       setActivePluginRegistry(
         createTestRegistry([
@@ -837,7 +984,7 @@ describe("runMessageAction plugin dispatch", () => {
         dryRun: false,
       });
 
-      const call = readFirstPluginCall(handleAction);
+      const call = readFirstPluginCall(handleActionValue);
       expectRecordFields(
         readRecordField(call, "params", "local plugin params"),
         {
@@ -1366,7 +1513,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("routes gateway-executed plugin polls through gateway RPC instead of local dispatch", async () => {
-      const handleAction = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const handleActionLocal = vi.fn(async () => jsonResult({ ok: true, local: true }));
       const pollGatewayPlugin = createGatewayActionPlugin({
         pluginId: "pollchat",
         label: "Poll Chat",
@@ -1377,7 +1524,7 @@ describe("runMessageAction plugin dispatch", () => {
             looksLikeId: () => true,
           },
         },
-        handleAction,
+        handleAction: handleActionLocal,
       });
       setActivePluginRegistry(
         createTestRegistry([
@@ -1440,7 +1587,7 @@ describe("runMessageAction plugin dispatch", () => {
         "gateway poll params",
       );
       expect(mocks.executePollAction).not.toHaveBeenCalled();
-      expect(handleAction).not.toHaveBeenCalled();
+      expect(handleActionLocal).not.toHaveBeenCalled();
       expectRecordFields(
         result,
         {

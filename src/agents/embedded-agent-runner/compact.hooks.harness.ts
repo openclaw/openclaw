@@ -1,3 +1,6 @@
+/**
+ * Test harness mocks for embedded-agent compaction hook coverage.
+ */
 import { vi, type Mock } from "vitest";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { clearAgentHarnesses } from "../harness/registry.js";
@@ -458,8 +461,11 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("../harness/selection.js", () => ({
+  vi.doMock("../harness/compaction.js", () => ({
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
+  }));
+
+  vi.doMock("../harness/policy.js", () => ({
     resolveAgentHarnessPolicy: resolveAgentHarnessPolicyMock,
   }));
 
@@ -755,9 +761,12 @@ export async function loadCompactHooksHarness(): Promise<{
     limitHistoryTurns: vi.fn((msgs: unknown[]) => msgs.slice(0, 2)),
   }));
 
-  vi.doMock("../skills.js", () => ({
+  vi.doMock("../../skills/runtime/env-overrides.js", () => ({
     applySkillEnvOverrides: vi.fn(() => () => {}),
     applySkillEnvOverridesFromSnapshot: vi.fn(() => () => {}),
+  }));
+
+  vi.doMock("../../skills/loading/workspace.js", () => ({
     loadWorkspaceSkillEntries: vi.fn(() => []),
     resolveSkillsPromptForRun: vi.fn(() => undefined),
   }));

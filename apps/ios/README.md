@@ -1,6 +1,6 @@
 # OpenClaw iOS (Super Alpha)
 
-This iPhone app is super-alpha and internal-use only. It connects to an OpenClaw Gateway as a `role: node`.
+This iOS app is super-alpha and internal-use only. The first public App Store release targets iPhone and connects to an OpenClaw Gateway as a `role: node`.
 
 ## Distribution Status
 
@@ -73,9 +73,10 @@ Release behavior:
 - Changing the root gateway version does not change the iOS app version until you explicitly pin from the gateway.
 - See `apps/ios/VERSIONING.md` for the full workflow.
 
-Required env for beta builds:
+Relay behavior for beta builds:
 
-- `OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com`
+- Beta builds default to `https://ios-push-relay.openclaw.ai`.
+- Optional custom relay override: `OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com`
   This must be a plain `https://host[:port][/path]` base URL without whitespace, query params, fragments, or xcconfig metacharacters.
 
 Archive without upload:
@@ -118,7 +119,7 @@ scripts/ios-asc-keychain-setup.sh \
 
 This should create `apps/ios/fastlane/.env` with the non-secret ASC variables while the private key stays in Keychain.
 
-3. Set the official/TestFlight relay URL for the build:
+3. Optional: set a custom official/TestFlight relay URL for the build. If unset, the beta flow uses `https://ios-push-relay.openclaw.ai`.
 
 ```bash
 export OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com
@@ -244,7 +245,7 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 - Pairing via QR or setup code flow (`/pair qr` or `/pair`, then `/pair approve` in Telegram).
 - Gateway connection via discovery or manual host/port with TLS fingerprint trust prompt.
 - Chat + Talk surfaces through the operator gateway session.
-- iPhone node commands in foreground: camera snap/clip, canvas present/navigate/eval/snapshot, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
+- iOS node commands in foreground: camera snap/clip, canvas present/navigate/eval/snapshot, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
 - Authenticated background `node.presence.alive` beacons that update gateway last-seen metadata when the app moves between foreground and background, without treating suspended sockets as connected.
 - Share extension deep-link forwarding into the connected gateway session.
 

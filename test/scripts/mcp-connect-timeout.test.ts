@@ -1,3 +1,4 @@
+// Mcp Connect Timeout tests cover mcp connect timeout script behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { connectMcpWithTimeout } from "../../scripts/e2e/mcp-connect-timeout.ts";
 
@@ -23,7 +24,7 @@ describe("MCP stdio connect timeout", () => {
   it("closes the transport when MCP initialize hangs", async () => {
     vi.useFakeTimers();
     const client = {
-      connect: vi.fn(() => new Promise<void>(() => undefined)),
+      connect: vi.fn(() => new Promise<void>(() => {})),
     };
     const transport = {
       close: vi.fn(),
@@ -41,7 +42,7 @@ describe("MCP stdio connect timeout", () => {
     vi.useFakeTimers();
     let closeSettled = false;
     const client = {
-      connect: vi.fn(() => new Promise<void>(() => undefined)),
+      connect: vi.fn(() => new Promise<void>(() => {})),
     };
     const transport = {
       close: vi.fn(
@@ -70,7 +71,7 @@ describe("MCP stdio connect timeout", () => {
   it("keeps the original timeout error when cleanup rejects", async () => {
     vi.useFakeTimers();
     const client = {
-      connect: vi.fn(() => new Promise<void>(() => undefined)),
+      connect: vi.fn(() => new Promise<void>(() => {})),
     };
     const transport = {
       close: vi.fn(async () => {
