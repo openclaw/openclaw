@@ -54,7 +54,16 @@ describe("discordMessageActions", () => {
     });
 
     expect(discovery?.capabilities).toEqual(["presentation"]);
-    expect(discovery?.schema).toBeUndefined();
+    expect(discovery?.schema).toEqual([
+      {
+        actions: ["send"],
+        properties: {
+          useReply: expect.objectContaining({
+            type: "boolean",
+          }),
+        },
+      },
+    ]);
     expect(discovery?.actions).toEqual([
       "send",
       "poll",
@@ -344,7 +353,7 @@ describe("discordMessageActions", () => {
     expect(discovery?.actions).not.toContain("delete");
   });
 
-  it("does not expose Discord-native message tool schema", () => {
+  it("exposes Discord-native reply opt-out schema", () => {
     const discovery = discordMessageActions.describeMessageTool?.({
       cfg: {
         channels: {
@@ -354,7 +363,12 @@ describe("discordMessageActions", () => {
         },
       } as OpenClawConfig,
     });
-    expect(discovery?.schema).toBeUndefined();
+    const useReply = discovery?.schema?.[0]?.properties.useReply as
+      | { description?: string; type?: string }
+      | undefined;
+    expect(discovery?.schema?.[0]?.actions).toEqual(["send"]);
+    expect(useReply?.type).toBe("boolean");
+    expect(useReply?.description).toContain("Discord-only opt-out");
   });
 
   it.each(["read", "search", "edit", "delete", "react", "pin", "poll", "channel-info"])(

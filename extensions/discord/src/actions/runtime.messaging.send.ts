@@ -155,7 +155,8 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         allowEmpty: true,
       });
       const filename = readStringParam(ctx.params, "filename");
-      const replyTo = readStringParam(ctx.params, "replyTo");
+      const useReply = readBooleanParam(ctx.params, "useReply") !== false;
+      const replyTo = useReply ? readStringParam(ctx.params, "replyTo") : undefined;
       const threadName = readStringParam(ctx.params, "threadName");
       const rawEmbeds = ctx.params.embeds;
       const embeds: DiscordSendEmbeds | undefined = Array.isArray(rawEmbeds)

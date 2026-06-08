@@ -343,6 +343,49 @@ describe("message action threading helpers", () => {
     expect(hasRepliedRef.value).toBe(true);
   });
 
+  it("does not consume first-mode when replies are suppressed", () => {
+    const hasRepliedRef = { value: false };
+    const suppressedResolved = resolveAndApplyOutboundReplyToId(
+      {
+        channel: "discord",
+        target: "channel:C123",
+        message: "first",
+        replyTo: "explicit-1",
+      },
+      {
+        channel: "discord",
+        toolContext: {
+          currentChannelId: "channel:C123",
+          currentMessageId: "msg-42",
+          replyToMode: "first",
+          hasRepliedRef,
+        },
+        suppressReplies: true,
+      },
+    );
+
+    const inheritedResolved = resolveAndApplyOutboundReplyToId(
+      {
+        channel: "discord",
+        target: "channel:C123",
+        message: "followup",
+      },
+      {
+        channel: "discord",
+        toolContext: {
+          currentChannelId: "channel:C123",
+          currentMessageId: "msg-42",
+          replyToMode: "first",
+          hasRepliedRef,
+        },
+      },
+    );
+
+    expect(suppressedResolved).toBeUndefined();
+    expect(inheritedResolved).toBe("msg-42");
+    expect(hasRepliedRef.value).toBe(true);
+  });
+
   it("does not inherit reply threading across providers even when target ids match", () => {
     const actionParams: Record<string, unknown> = {
       channel: "discord",

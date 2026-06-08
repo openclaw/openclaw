@@ -79,8 +79,12 @@ export function resolveAndApplyOutboundReplyToId(
   context: {
     channel: ChannelId;
     toolContext?: ChannelThreadingToolContext;
+    suppressReplies?: boolean;
   },
 ): string | undefined {
+  if (context.suppressReplies) {
+    return undefined;
+  }
   const explicitReplyToId = readStringParam(actionParams, "replyTo");
   if (explicitReplyToId) {
     if (context.toolContext?.replyToMode === "first") {
