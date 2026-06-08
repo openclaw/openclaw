@@ -204,6 +204,7 @@ function makeBaseParams(overrides: {
   deliveryBestEffort?: boolean;
   runSessionKey?: string;
   resolvedDeliveryMode?: "explicit" | "implicit";
+  deliveryTargetExplicit?: boolean;
 }): Parameters<typeof dispatchCronDelivery>[0] {
   const resolvedDelivery = {
     ...makeResolvedDelivery(),
@@ -230,6 +231,7 @@ function makeBaseParams(overrides: {
     timeoutMs: 30_000,
     resolvedDelivery,
     deliveryRequested: overrides.deliveryRequested ?? true,
+    deliveryTargetExplicit: overrides.deliveryTargetExplicit ?? true,
     skipHeartbeatDelivery: false,
     sourceDeliveryOutcome: {
       visibleDeliveries: [],
@@ -1811,6 +1813,61 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(state.deliveryAttempted).toBe(false);
+  });
+
+  it("downgrades an unresolved implicit last-channel delivery to a silent ok (#56078)", async () => {
+    // Local/no-channel setups: backend/Control-UI isolated agentTurn cron jobs
+    // default to implicit announce-to-`last`. With no previous channel the target
+    // is unresolvable, but the agent turn (e.g. a report written to disk) still ran.
+    const params = makeBaseParams({
+      synthesizedText: "Saved the report to /home/nobby/stock.",
+      deliveryTargetExplicit: false,
+    });
+    params.resolvedDelivery = {
+      ok: false,
+      channel: undefined,
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("Channel is required when delivery.channel=last has no previous channel."),
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expectResultFields(state.result, {
+      status: "ok",
+      summary: "Saved the report to /home/nobby/stock.",
+      outputText: "Saved the report to /home/nobby/stock.",
+    });
+    expect(requireRecord(state.result, "cron delivery result").errorKind).toBeUndefined();
+    expect(state.delivered).toBe(false);
+    expect(state.deliveryAttempted).toBe(false);
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("still fails the run when an explicit delivery target cannot be resolved (#56078 guard)", async () => {
+    const params = makeBaseParams({
+      synthesizedText: "Report for #ops.",
+      deliveryTargetExplicit: true,
+    });
+    params.resolvedDelivery = {
+      ok: false,
+      channel: undefined,
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "explicit",
+      error: new Error("Channel is required when delivery.channel=last has no previous channel."),
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expectResultFields(state.result, {
+      status: "error",
+      errorKind: "delivery-target",
+    });
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
   it("text delivery always bypasses the write-ahead queue", async () => {

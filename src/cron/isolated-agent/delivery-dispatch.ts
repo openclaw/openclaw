@@ -112,6 +112,12 @@ type DispatchCronDeliveryParams = {
   timeoutMs: number;
   resolvedDelivery: DeliveryTargetResolution;
   deliveryRequested: boolean;
+  /**
+   * Whether the job named a concrete delivery target (channel != "last", to,
+   * threadId, or accountId). Implicit announce-to-`last` jobs with no resolvable
+   * channel are downgraded to a silent ok instead of failing the run.
+   */
+  deliveryTargetExplicit: boolean;
   skipHeartbeatDelivery: boolean;
   sourceDeliveryOutcome: SourceDeliveryOutcome;
   deliveryBestEffort: boolean;
@@ -1404,7 +1410,12 @@ export async function dispatchCronDelivery(
       // returning — otherwise the one-shot session leaks. Safe no-op for
       // non-deleteAfterRun / non-cron sessions (see cleanupDirectCronSession).
       await cleanupDirectCronSessionIfNeeded();
-      if (!params.deliveryBestEffort) {
+      // Only hard-fail the run when the job named a concrete delivery target.
+      // An implicit announce-to-`last` with no resolvable channel never had a
+      // sendable target (local/no-channel setups, #56078); hard-erroring would
+      // mark a successful agent turn as failed and drop its output. Downgrade
+      // those to the silent-ok path, same as best-effort delivery already does.
+      if (params.deliveryTargetExplicit && !params.deliveryBestEffort) {
         return buildDeliveryState(failDeliveryTarget(params.resolvedDelivery.error.message));
       }
       await logCronDeliveryWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`);
