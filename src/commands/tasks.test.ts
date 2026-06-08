@@ -249,6 +249,7 @@ describe("tasks commands", () => {
         task: "Review old cron child session",
       });
       vi.setSystemTime(now);
+      vi.useRealTimers();
 
       const sessionsDir = state.sessionsDir("main");
       const storePath = path.join(sessionsDir, "sessions.json");
