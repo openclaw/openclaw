@@ -29,6 +29,7 @@ type OverviewProps = {
   password: string;
   lastError: string | null;
   lastChannelsRefresh: number | null;
+  configPath: string | null;
   modelAuthStatus: ModelAuthStatusResult | null;
   usageResult: SessionsUsageResult | null;
   sessionsResult: SessionsListResult | null;
@@ -58,6 +59,7 @@ export function renderOverview(props: OverviewProps) {
     | {
         uptimeMs?: number;
         authMode?: "none" | "token" | "password" | "trusted-proxy";
+        configPath?: string;
       }
     | undefined;
   const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : t("common.na");
@@ -231,6 +233,13 @@ export function renderOverview(props: OverviewProps) {
             </div>
           </div>
         </div>
+        ${props.configPath
+          ? html`
+              <div class="callout" style="margin-top: 14px">
+                ${t("overview.snapshot.configPath")}: <span class="mono">${props.configPath}</span>
+              </div>
+            `
+          : ""}
         ${props.lastError
           ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${props.lastError}</div>

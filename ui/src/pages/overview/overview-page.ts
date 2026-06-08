@@ -470,6 +470,10 @@ class OverviewPage extends OpenClawLightDomElement {
         password: this.password,
         lastError: gateway.lastError,
         lastChannelsRefresh: channels.channelsLastSuccess,
+        configPath:
+          typeof gateway.hello?.snapshot?.configPath === "string"
+            ? gateway.hello.snapshot.configPath
+            : null,
         modelAuthStatus: this.modelAuthStatus,
         usageResult: this.usageResult,
         sessionsResult: sessions.result,

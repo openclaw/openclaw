@@ -1273,6 +1273,7 @@ export const ru: TranslationMap = {
       uptime: "Время работы",
       tickInterval: "Интервал тика",
       lastChannelsRefresh: "Последнее обновление каналов",
+      configPath: "Config Path",
       channelsHint:
         "Используйте «Каналы», чтобы подключить WhatsApp, Telegram, Discord, Signal или iMessage.",
     },

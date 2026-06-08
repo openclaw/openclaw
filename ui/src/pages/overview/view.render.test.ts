@@ -31,6 +31,7 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     password: "",
     lastError: null,
     lastChannelsRefresh: null,
+    configPath: null,
     modelAuthStatus: null,
     usageResult: null,
     sessionsResult: null,
@@ -137,6 +138,19 @@ describe("overview view rendering", () => {
     );
     expect(recentNames).toEqual(["Ops Room", "Telegram Session", "Main Project"]);
     expect(recentNames).not.toContain("telegram:123:456");
+  });
+
+  it("renders the gateway config path when the snapshot includes one", async () => {
+    const container = document.createElement("div");
+    const props = createOverviewProps({
+      configPath: "/tmp/openclaw/config.json5",
+    });
+
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Config Path");
+    expect(container.textContent).toContain("/tmp/openclaw/config.json5");
   });
 
   it("promotes provider quota into a dedicated overview card", async () => {
