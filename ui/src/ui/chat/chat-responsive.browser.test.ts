@@ -525,6 +525,20 @@ describeBrowserLayout("chat responsive browser layout", () => {
     }
   });
 
+  it("keeps the mobile composer above a simulated virtual keyboard inset", async () => {
+    const page = await openFixture(390, 844);
+    try {
+      await page.evaluate(() => {
+        document.documentElement.style.setProperty("--keyboard-inset-bottom", "320px");
+      });
+
+      const input = await getRect(page, ".agent-chat__input");
+      expect(input.bottom).toBeLessThanOrEqual(844 - 320 + 1);
+    } finally {
+      await page.close();
+    }
+  });
+
   it("uses the compact mobile grid when the agent filter is not rendered", async () => {
     const page = await openFixture(320, 568, { singleAgent: true });
     try {

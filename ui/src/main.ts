@@ -2,6 +2,7 @@
 import "./styles.css";
 import "./ui/app.ts";
 import { inferControlUiPublicAssetPath } from "./ui/public-assets.ts";
+import { installViewportKeyboardInset } from "./ui/viewport-keyboard-inset.ts";
 
 type ViteImportMeta = ImportMeta & {
   readonly env?: {
@@ -14,6 +15,7 @@ declare const OPENCLAW_CONTROL_UI_BUILD_ID: string | undefined;
 const isProd = (import.meta as ViteImportMeta).env?.PROD === true;
 
 syncDocumentPublicAssetLinks();
+installViewportKeyboardInset();
 
 if (isProd && "serviceWorker" in navigator) {
   const swUrl = new URL(inferControlUiPublicAssetPath("sw.js"), window.location.origin);
