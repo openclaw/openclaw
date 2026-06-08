@@ -1,3 +1,7 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { runCronCommandJob } from "./command-runner.js";
 import type { CronJob } from "./types.js";
@@ -88,6 +92,31 @@ describe("runCronCommandJob", () => {
       source: "exec",
       severity: "error",
     });
+  });
+
+  it.skipIf(process.platform === "win32")("kills shell process groups on timeout", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-command-"));
+    const markerPath = path.join(tempDir, "survived");
+    const childScript = [
+      `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "alive"), 350)`,
+      "setInterval(() => {}, 1000)",
+    ].join(";");
+    const shellCommand = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(childScript)}`;
+
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: ["sh", "-lc", shellCommand],
+        timeoutSeconds: 0.05,
+      }),
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("command timed out");
+
+    await delay(700);
+    await expect(fs.access(markerPath)).rejects.toThrow();
+    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it("marks no-output timeouts as cron errors", async () => {

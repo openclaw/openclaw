@@ -256,6 +256,7 @@ export type CommandOptions = {
   noOutputTimeoutMs?: number;
   signal?: AbortSignal;
   maxOutputBytes?: number;
+  killProcessTree?: boolean;
 };
 
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
@@ -368,7 +369,8 @@ export async function runCommandWithTimeout(
 ): Promise<SpawnResult> {
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
-  const { timeoutMs, cwd, input, baseEnv, env, noOutputTimeoutMs, signal } = options;
+  const { timeoutMs, cwd, input, baseEnv, env, noOutputTimeoutMs, signal, killProcessTree } =
+    options;
   const hasInput = input !== undefined;
   const resolvedEnv = resolveCommandEnv({ argv, baseEnv, env });
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
@@ -393,6 +395,9 @@ export async function runCommandWithTimeout(
     stdio,
     cwd,
     env: resolvedEnv,
+    // Cron shell wrappers need their own process group so timeout/abort kills
+    // reach foreground children instead of leaving duplicate scheduled work.
+    ...(killProcessTree && process.platform !== "win32" ? { detached: true } : {}),
     windowsHide: invocation.windowsHide,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     ...(shouldSpawnWithShell({ resolvedCommand: invocation.command, platform: process.platform })
@@ -450,6 +455,19 @@ export async function runCommandWithTimeout(
             stdio: "ignore",
             windowsHide: true,
           });
+          return;
+        } catch {
+          // Fall through to Node's direct child kill as a last resort.
+        }
+      }
+      if (
+        killProcessTree &&
+        process.platform !== "win32" &&
+        typeof child.pid === "number" &&
+        child.pid > 0
+      ) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
           return;
         } catch {
           // Fall through to Node's direct child kill as a last resort.

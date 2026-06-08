@@ -116,6 +116,7 @@ export async function runCronCommandJob(params: {
       ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
       ...(payload.outputMaxBytes !== undefined ? { maxOutputBytes: payload.outputMaxBytes } : {}),
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+      killProcessTree: true,
     });
     const ok =
       result.code === 0 &&
