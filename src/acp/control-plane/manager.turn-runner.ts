@@ -15,6 +15,7 @@ import {
   markBackgroundTaskRunning,
   markBackgroundTaskTerminal,
   resolveBackgroundTaskContext,
+  resolveBackgroundTaskFailureTerminalSummary,
   resolveBackgroundTaskFailureStatus,
   resolveBackgroundTaskTerminalResult,
 } from "./manager.background-task.js";
@@ -110,6 +111,10 @@ export async function runManagerTurn(params: {
       errorCode: errorToRecord.code,
     });
     if (taskContext) {
+      const terminalSummary = resolveBackgroundTaskFailureTerminalSummary(
+        errorToRecord,
+        taskProgressSummary,
+      );
       markBackgroundTaskTerminal(taskContext.runId, {
         sessionKey,
         status: resolveBackgroundTaskFailureStatus(errorToRecord),
@@ -117,7 +122,7 @@ export async function runManagerTurn(params: {
         lastEventAt: Date.now(),
         error: formatAcpErrorChain(errorToRecord),
         progressSummary: taskProgressSummary || null,
-        terminalSummary: null,
+        terminalSummary,
       });
     }
     await params.setSessionState({
