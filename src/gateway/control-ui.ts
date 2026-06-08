@@ -846,6 +846,21 @@ const CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH = `${CONTROL_UI_NAMESPA
   "",
 )}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
 
+// Single-underscore `/__openclaw` prefix used by the pre-base-path-relative
+// bootstrap endpoint. Before #66946 made the config path base-path-relative,
+// `CONTROL_UI_BOOTSTRAP_CONFIG_PATH` was hard-coded to
+// `/__openclaw/control-ui-config.json`, so current main and the v2026.6.1
+// release serve and document that exact path under an empty base path.
+const LEGACY_CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw";
+
+// The old documented no-base-path bootstrap endpoint
+// (`/__openclaw/control-ui-config.json`, single underscore). It is derived from
+// the legacy `/__openclaw` namespace joined with the canonical config constant
+// so it tracks any rename of the config filename. Kept as an empty-base-path
+// compatibility alias so older bundles and clients that fetch the previously
+// documented endpoint keep receiving config after upgrading instead of 404ing.
+const LEGACY_BOOTSTRAP_CONFIG_PATH = `${LEGACY_CONTROL_UI_NAMESPACE_PREFIX}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
+
 /**
  * Whether `pathname` should be served the Control UI bootstrap config payload.
  *
@@ -853,8 +868,10 @@ const CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH = `${CONTROL_UI_NAMESPA
  * bootstrap constant (or the bare constant when no base path is configured).
  * When no base path is configured we additionally accept the default-namespace
  * alias `/__openclaw__/control-ui-config.json`, which is what the default
- * `/__openclaw__/` entry requests after inferring its base path from the URL.
- * The bare endpoint is preserved for compatibility; no path is removed.
+ * `/__openclaw__/` entry requests after inferring its base path from the URL,
+ * and the legacy single-underscore `/__openclaw/control-ui-config.json`, which
+ * current main and v2026.6.1 serve and document under an empty base path. The
+ * bare and legacy endpoints are preserved for compatibility; no path is removed.
  */
 function matchesControlUiBootstrapConfigPath(pathname: string, basePath: string): boolean {
   if (basePath) {
@@ -862,7 +879,8 @@ function matchesControlUiBootstrapConfigPath(pathname: string, basePath: string)
   }
   return (
     pathname === CONTROL_UI_BOOTSTRAP_CONFIG_PATH ||
-    pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH
+    pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH ||
+    pathname === LEGACY_BOOTSTRAP_CONFIG_PATH
   );
 }
 

@@ -972,6 +972,41 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  // Compatibility regression: current main and v2026.6.1 serve and document the
+  // single-underscore `/__openclaw/control-ui-config.json` endpoint under an empty
+  // base path. #66946 makes the config path base-path-relative; this case proves
+  // the old documented endpoint still returns config (no upgrade 404 break).
+  // Without the LEGACY_BOOTSTRAP_CONFIG_PATH alias this request 404s, so it is not
+  // vacuous.
+  it("still serves bootstrap config at the legacy /__openclaw/control-ui-config.json with no configured basePath (#66946)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          {
+            url: "/__openclaw/control-ui-config.json",
+            method: "GET",
+          } as IncomingMessage,
+          res,
+          {
+            // No basePath: matches the legacy default deployment that documented
+            // and served the single-underscore endpoint.
+            root: { kind: "resolved", path: tmp },
+            config: {
+              agents: { defaults: { workspace: tmp } },
+              ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+            },
+          },
+        );
+        expect(handled).toBe(true);
+        expect(res.statusCode).not.toBe(404);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.basePath).toBe("");
+        expect(parsed.assistantAgentId).toBe("main");
+      },
+    });
+  });
+
   it("does not serve bootstrap config from the doubled /__openclaw__/__openclaw path (#66946)", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
