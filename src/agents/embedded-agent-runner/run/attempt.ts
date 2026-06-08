@@ -382,7 +382,9 @@ import {
   shouldRunLlmOutputHooksForAttempt,
 } from "./attempt.run-decisions.js";
 import {
+  acquireEmbeddedAttemptSessionFileOwner,
   EmbeddedAttemptSessionTakeoverError,
+  type EmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
   installPromptSubmissionLockRelease,
 } from "./attempt.session-lock.js";
@@ -954,6 +956,7 @@ export async function runEmbeddedAttempt(
   let beforeAgentRunBlockedBy: string | undefined;
   // Releases the eager session lock if post-prompt code exits before cleanup.
   let releaseRetainedSessionLock: (() => Promise<void>) | undefined;
+  let retainedSessionFileOwner: EmbeddedAttemptSessionFileOwner | undefined;
   let bundleMcpRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
@@ -2000,6 +2003,11 @@ export async function runEmbeddedAttempt(
       compactionTimeoutMs,
     });
     await throwIfAttemptAbortSignalFiredAfterPrepCleanup();
+    retainedSessionFileOwner = await acquireEmbeddedAttemptSessionFileOwner({
+      sessionFile: params.sessionFile,
+      timeoutMs: sessionWriteLockOptions.maxHoldMs,
+      signal: params.abortSignal,
+    });
     const sessionLockController = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock,
       lockOptions: {
@@ -5415,6 +5423,7 @@ export async function runEmbeddedAttempt(
         `failed to release retained session lock on attempt teardown: runId=${params.runId} ${String(releaseErr)}`,
       );
     }
+    retainedSessionFileOwner?.release();
     emitDiagnosticRunCompleted?.(
       aborted ? "aborted" : "error",
       promptError ?? new Error("run exited before diagnostic completion"),
