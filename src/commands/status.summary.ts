@@ -130,6 +130,7 @@ type SessionCandidate = {
   key: string;
   entry: SessionEntry | undefined;
   updatedAt: number | null;
+  storePath?: string;
 };
 
 function compareSessionCandidatesByUpdatedAt(left: SessionCandidate, right: SessionCandidate) {
@@ -271,7 +272,9 @@ export async function getStatusSummary(
     if (cached) {
       return cached;
     }
-    const candidates = listSessionCandidates(loadStore(storePath));
+    const candidates = listSessionCandidates(loadStore(storePath)).map((c) =>
+      Object.assign(c, { storePath }),
+    );
     candidateCache.set(storePath, candidates);
     return candidates;
   };
@@ -281,6 +284,7 @@ export async function getStatusSummary(
   ) => {
     const resolveCompactableCounts = (
       entry: SessionEntry | undefined,
+      storePath: string | undefined,
     ): { realConversationMessages?: number; totalTranscriptMessages?: number } => {
       const sessionId = entry?.sessionId?.trim();
       if (!sessionId) {
@@ -289,7 +293,7 @@ export async function getStatusSummary(
       try {
         const messages = readSessionMessages(
           sessionId,
-          opts.storePath,
+          storePath,
           entry?.sessionFile,
         ) as AgentMessage[];
         if (!messages.length) {
@@ -308,7 +312,10 @@ export async function getStatusSummary(
       }
     };
 
-    return candidates.map(({ key, entry, updatedAt }) => {
+    return candidates.map(({ key, entry, updatedAt, storePath: candidateStorePath }) => {
+      // Prefer the per-candidate storePath (set by loadSessionCandidates) so
+      // flattened recent-session rows also resolve compactable counts correctly.
+      const effectiveStorePath = candidateStorePath ?? opts.storePath;
       const age = updatedAt ? now - updatedAt : null;
       const parsedAgentId = parseAgentSessionKey(key)?.agentId;
       const agentId = opts.agentIdOverride ?? parsedAgentId;
@@ -357,7 +364,7 @@ export async function getStatusSummary(
         sessionKey: key,
       });
 
-      const compactableCounts = resolveCompactableCounts(entry);
+      const compactableCounts = resolveCompactableCounts(entry, effectiveStorePath);
 
       return {
         agentId,
