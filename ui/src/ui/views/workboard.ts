@@ -2261,7 +2261,6 @@ export function renderWorkboard(props: WorkboardProps) {
     host: props.host,
     client: props.client,
     enabled: props.pluginEnabled === true && state.autoRefreshIntervalMs > 0,
-    refreshDiagnostics: canMutate(props),
     requestUpdate: props.onRequestUpdate,
   });
   if (props.pluginEnabled === true) {
@@ -2514,7 +2513,6 @@ export function renderWorkboard(props: WorkboardProps) {
                     host: props.host,
                     client: props.client,
                     enabled: props.pluginEnabled === true && state.autoRefreshIntervalMs > 0,
-                    refreshDiagnostics: writable,
                     requestUpdate: props.onRequestUpdate,
                   });
                   props.onRequestUpdate?.();

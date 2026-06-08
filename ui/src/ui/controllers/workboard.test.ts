@@ -209,6 +209,26 @@ describe("workboard controller", () => {
     expect(updates).toContain("Gateway client unavailable");
   });
 
+  it("clears stale refresh errors after a later direct load succeeds", async () => {
+    const host = {};
+    await refreshWorkboard({
+      host,
+      client: null,
+      source: "manual",
+    });
+
+    const client = createClient({
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+      "tasks.list": { tasks: [] },
+    });
+    await loadWorkboard({ host, client: client as never, force: true });
+
+    const state = getWorkboardState(host);
+    expect(state.loaded).toBe(true);
+    expect(state.error).toBeNull();
+    expect(state.lastRefreshError).toBeNull();
+  });
+
   it("keeps refreshed cards when task enrichment fails", async () => {
     const host = {};
     const refreshedCard = { ...sampleCard, title: "Refreshed card" };
@@ -253,6 +273,10 @@ describe("workboard controller", () => {
     await vi.advanceTimersByTimeAsync(5000);
 
     expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
+    expect(client.request).not.toHaveBeenCalledWith(
+      "workboard.cards.diagnostics.refresh",
+      expect.anything(),
+    );
     expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
     vi.clearAllMocks();
     stopWorkboardPolling(host);

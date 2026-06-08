@@ -422,7 +422,6 @@ const workboardPollingEntries = new WeakMap<
     client: GatewayBrowserClient | null;
     enabled: boolean;
     intervalMs: WorkboardAutoRefreshIntervalMs;
-    refreshDiagnostics: boolean;
     requestUpdate?: () => void;
   }
 >();
@@ -1353,6 +1352,7 @@ export async function loadWorkboard(params: {
   state.loadAttempted = true;
   state.loading = true;
   state.error = null;
+  state.lastRefreshError = null;
   params.requestUpdate?.();
   const loadPromise = (async () => {
     try {
@@ -1500,7 +1500,6 @@ function scheduleWorkboardPoll(host: WorkboardHost) {
           client: current.client,
           requestUpdate: current.requestUpdate,
           source: "poll",
-          refreshDiagnostics: current.refreshDiagnostics,
         });
       }
     };
@@ -1513,19 +1512,16 @@ export function configureWorkboardPolling(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
   enabled: boolean;
-  refreshDiagnostics?: boolean;
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
   const intervalMs = state.autoRefreshIntervalMs;
   const previous = workboardPollingEntries.get(params.host);
   const enabled = params.enabled && intervalMs > 0;
-  const refreshDiagnostics = params.refreshDiagnostics === true;
   workboardPollingEntries.set(params.host, {
     client: params.client,
     enabled,
     intervalMs,
-    refreshDiagnostics,
     requestUpdate: params.requestUpdate,
   });
   if (!enabled) {
@@ -1536,7 +1532,6 @@ export function configureWorkboardPolling(params: {
     !previous ||
     previous.enabled !== enabled ||
     previous.intervalMs !== intervalMs ||
-    previous.refreshDiagnostics !== refreshDiagnostics ||
     previous.client !== params.client;
   if (configChanged || !workboardPollingTimers.get(params.host)) {
     scheduleWorkboardPoll(params.host);
