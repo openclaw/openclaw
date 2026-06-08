@@ -422,16 +422,19 @@ Legacy aliases still normalize to the canonical bundled ids:
 
   <Accordion title="Realtime voice">
     The bundled `xai` plugin registers a realtime voice provider for Talk
-    Gateway relay sessions.
+    browser WebSocket and Gateway relay sessions.
 
     - Provider id: `xai`
-    - Transport: `gateway-relay`
-    - Default model: `grok-voice-think-fast-1.0`
-    - Models: `grok-voice-think-fast-1.0`, `grok-voice-latest`,
+    - Transports: `provider-websocket`, `gateway-relay`
+    - Default model: `grok-voice-latest`
+    - Models: `grok-voice-latest`, `grok-voice-think-fast-1.0`,
       `grok-voice-fast-1.0`
-    - Default voice: `eve`
+    - Default voice: `leo`
     - Voices: `eve`, `ara`, `rex`, `sal`, `leo`, or another xAI voice id
     - Audio formats: PCM16 24 kHz or G.711 µ-law 8 kHz
+    - Browser auth: OpenClaw creates an ephemeral xAI Realtime client secret
+      with `POST /v1/realtime/client_secrets`; the browser connects with the
+      `xai-client-secret.<token>` WebSocket subprotocol.
     - Inbound speech transcripts: xAI's cumulative
       `conversation.item.input_audio_transcription.updated` event is exposed as
       user transcript updates, so Talk and meeting surfaces can consume live
@@ -442,10 +445,10 @@ Legacy aliases still normalize to the canonical bundled ids:
       talk: {
         realtime: {
           provider: "xai",
-          model: "grok-voice-think-fast-1.0",
+          model: "grok-voice-latest",
           speakerVoice: "leo",
           mode: "realtime",
-          transport: "gateway-relay",
+          transport: "provider-websocket",
           brain: "agent-consult",
           providers: {
             xai: {
@@ -468,9 +471,9 @@ Legacy aliases still normalize to the canonical bundled ids:
     `XAI_API_KEY` and then the configured xAI auth profile.
 
     <Note>
-    xAI Realtime voice is exposed through Gateway relay so credentials and the
-    vendor WebSocket remain server-side. Browser-owned provider-WebSocket
-    sessions for xAI are not exposed yet.
+    Browser-owned xAI Realtime sessions use ephemeral client secrets. Gateway
+    relay remains available when you need the vendor WebSocket to stay
+    server-side, such as native clients or backend-owned meeting capture.
     </Note>
 
   </Accordion>

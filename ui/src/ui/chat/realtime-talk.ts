@@ -15,6 +15,7 @@ import type {
   RealtimeTalkWebRtcSdpSessionResult,
 } from "./realtime-talk-shared.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./realtime-talk-webrtc.ts";
+import { XaiRealtimeTalkTransport } from "./realtime-talk-xai.ts";
 
 export type {
   RealtimeTalkCallbacks,
@@ -43,10 +44,14 @@ function createTransport(
     return new WebRtcSdpRealtimeTalkTransport(session as RealtimeTalkWebRtcSdpSessionResult, ctx);
   }
   if (transport === "provider-websocket") {
-    return new GoogleLiveRealtimeTalkTransport(
-      session as RealtimeTalkJsonPcmWebSocketSessionResult,
-      ctx,
-    );
+    const websocketSession = session as RealtimeTalkJsonPcmWebSocketSessionResult;
+    if (websocketSession.protocol === "google-live-bidi") {
+      return new GoogleLiveRealtimeTalkTransport(websocketSession, ctx);
+    }
+    if (websocketSession.protocol === "xai-realtime") {
+      return new XaiRealtimeTalkTransport(websocketSession, ctx);
+    }
+    throw new Error(`Unsupported realtime WebSocket protocol: ${websocketSession.protocol}`);
   }
   if (transport === "gateway-relay") {
     return new GatewayRelayRealtimeTalkTransport(
