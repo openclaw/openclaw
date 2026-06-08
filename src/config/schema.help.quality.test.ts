@@ -618,8 +618,21 @@ describe("config help copy quality", () => {
   });
 
   it("keeps labels in parity for all help keys", () => {
+    const missingKeys: string[] = [];
     for (const key of Object.keys(FIELD_HELP)) {
-      expect(requireLabel(key)).not.toHaveLength(0);
+      try {
+        requireLabel(key);
+      } catch (err) {
+        missingKeys.push(key);
+      }
+    }
+    if (missingKeys.length > 0) {
+      const stubs = missingKeys.map((key) => `  "${key}": "",`).join("\n");
+      throw new Error(
+        `Missing labels in FIELD_LABELS for ${missingKeys.length} config help keys.\n` +
+          `Please copy-paste these stubs into src/config/schema.labels.ts:\n\n` +
+          `${stubs}\n`
+      );
     }
   });
 
