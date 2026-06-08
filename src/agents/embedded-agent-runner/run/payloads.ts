@@ -138,11 +138,17 @@ function shouldIncludeToolErrorDetails(params: {
   if (isVerboseToolDetailEnabled(params.verboseLevel)) {
     return true;
   }
+  if (!isExecLikeToolName(params.lastToolError.toolName)) {
+    return false;
+  }
+  // Heartbeat runs usually have no assistant reply to carry the command
+  // output, so keep exec details in the warning instead of a generic label.
+  if (params.isHeartbeatTrigger === true) {
+    return true;
+  }
   return (
-    isExecLikeToolName(params.lastToolError.toolName) &&
-    (params.isHeartbeatTrigger === true ||
-      (params.lastToolError.timedOut === true &&
-        (params.isCronTrigger === true || isCronSessionKey(params.sessionKey))))
+    params.lastToolError.timedOut === true &&
+    (params.isCronTrigger === true || isCronSessionKey(params.sessionKey))
   );
 }
 
