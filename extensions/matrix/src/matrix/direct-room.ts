@@ -118,12 +118,13 @@ export async function isStrictDirectRoom(params: {
   remoteUserId: string;
   selfUserId?: string | null;
 }): Promise<boolean> {
-  return (
-    await inspectMatrixDirectRoomEvidence({
-      client: params.client,
-      roomId: params.roomId,
-      remoteUserId: params.remoteUserId,
-      selfUserId: params.selfUserId,
-    })
-  ).strict;
+  const evidence = await inspectMatrixDirectRoomEvidence({
+    client: params.client,
+    roomId: params.roomId,
+    remoteUserId: params.remoteUserId,
+    selfUserId: params.selfUserId,
+  });
+  if (!evidence.strict) return false;
+  if (evidence.memberStateFlag === false) return false;
+  return true;
 }
