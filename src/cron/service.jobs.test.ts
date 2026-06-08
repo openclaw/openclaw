@@ -294,6 +294,52 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("clears agentTurn payload.model when patched with null", () => {
+    const job = createIsolatedAgentTurnJob("job-clear-model", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "agentTurn", message: "do it", model: "openrouter/some/model" };
+
+    applyJobPatch(job, { payload: { kind: "agentTurn", model: null } });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.model).toBeUndefined();
+    }
+  });
+
+  it("preserves agentTurn payload.model when the patch omits it", () => {
+    const job = createIsolatedAgentTurnJob("job-keep-model", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "agentTurn", message: "do it", model: "openrouter/some/model" };
+
+    applyJobPatch(job, { payload: { kind: "agentTurn", thinking: "high" } });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.model).toBe("openrouter/some/model");
+      expect(job.payload.thinking).toBe("high");
+    }
+  });
+
+  it("updates agentTurn payload.model when patched with a string", () => {
+    const job = createIsolatedAgentTurnJob("job-update-model", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "agentTurn", message: "do it", model: "old/model" };
+
+    applyJobPatch(job, { payload: { kind: "agentTurn", model: "new/model" } });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.model).toBe("new/model");
+    }
+  });
+
   it("persists agentTurn payload.fallbacks updates when editing existing jobs", () => {
     const job = createIsolatedAgentTurnJob("job-fallbacks", {
       mode: "announce",

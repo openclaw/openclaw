@@ -10,12 +10,16 @@ import { NonEmptyString } from "./primitives.js";
  */
 
 /** Builds create/patch payload variants while preserving per-call field optionality. */
-function cronAgentTurnPayloadSchema(params: { message: TSchema; toolsAllow: TSchema }) {
+function cronAgentTurnPayloadSchema(params: {
+  message: TSchema;
+  toolsAllow: TSchema;
+  model: TSchema;
+}) {
   return Type.Object(
     {
       kind: Type.Literal("agentTurn"),
       message: params.message,
-      model: Type.Optional(Type.String()),
+      model: Type.Optional(params.model),
       fallbacks: Type.Optional(Type.Array(Type.String())),
       thinking: Type.Optional(Type.String()),
       timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
@@ -228,6 +232,7 @@ export const CronPayloadSchema = Type.Union([
   cronAgentTurnPayloadSchema({
     message: NonEmptyString,
     toolsAllow: Type.Array(Type.String()),
+    model: Type.String(),
   }),
   cronCommandPayloadSchema({
     argv: Type.Array(NonEmptyString, { minItems: 1 }),
@@ -246,6 +251,7 @@ export const CronPayloadPatchSchema = Type.Union([
   cronAgentTurnPayloadSchema({
     message: Type.Optional(NonEmptyString),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
+    model: Type.Union([Type.String(), Type.Null()]),
   }),
   cronCommandPayloadSchema({
     argv: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),

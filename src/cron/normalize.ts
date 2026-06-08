@@ -170,11 +170,17 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("model" in next) {
-    const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
-    if (model !== undefined) {
-      next.model = model;
+    if (next.model === null || (typeof next.model === "string" && next.model.trim().length === 0)) {
+      // Patch clear: null or empty string drops the override so the job inherits
+      // the agent/global default model. Mirrors toolsAllow null handling.
+      next.model = null;
     } else {
-      delete next.model;
+      const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
+      if (model !== undefined) {
+        next.model = model;
+      } else {
+        delete next.model;
+      }
     }
   }
   if ("thinking" in next) {

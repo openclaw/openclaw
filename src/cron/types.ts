@@ -256,8 +256,11 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
+} & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow" | "model">> & {
     toolsAllow?: string[] | null;
+    // `null` (or an empty string) clears the override so the job inherits the
+    // agent/global default model. Omitting `model` preserves the current value.
+    model?: string | null;
   };
 
 type CronCommandPayloadFields = {
