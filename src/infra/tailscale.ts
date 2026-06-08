@@ -26,6 +26,37 @@ function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   return JSON.parse(trimmed) as Record<string, unknown>;
 }
 
+const TAILSCALE_STATUS_JSON_RETRY_ATTEMPTS = 3;
+const TAILSCALE_STATUS_JSON_RETRY_DELAY_MS = 500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function readTailscaleStatusJson(
+  candidate: string,
+  exec: typeof runExec,
+): Promise<Record<string, unknown>> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= TAILSCALE_STATUS_JSON_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      const { stdout } = await exec(candidate, ["status", "--json"], {
+        timeoutMs: 5000,
+        maxBuffer: 400_000,
+      });
+      return stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+    } catch (error) {
+      lastError = error;
+      if (attempt < TAILSCALE_STATUS_JSON_RETRY_ATTEMPTS) {
+        await sleep(TAILSCALE_STATUS_JSON_RETRY_DELAY_MS);
+      }
+    }
+  }
+  throw toLintErrorObject(lastError, "Non-Error thrown");
+}
+
 /**
  * Locate Tailscale binary using multiple strategies:
  * 1. PATH lookup (via which command)
@@ -126,11 +157,8 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
       continue;
     }
     try {
-      const { stdout } = await exec(candidate, ["status", "--json"], {
-        timeoutMs: 5000,
-        maxBuffer: 400_000,
-      });
-      const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+      // Serve startup can race the first status read even when the next attempt succeeds.
+      const parsed = await readTailscaleStatusJson(candidate, exec);
       const self =
         typeof parsed.Self === "object" && parsed.Self !== null
           ? (parsed.Self as Record<string, unknown>)

@@ -88,6 +88,30 @@ describe("tailscale helpers", () => {
     expect(host).toBe("noisy.tailnet.ts.net");
   });
 
+  it("retries tailscale status after a transient failure", async () => {
+    const exec = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Command failed: tailscale status --json"))
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          Self: { DNSName: "retry.tailnet.ts.net.", TailscaleIPs: ["100.7.7.7"] },
+        }),
+      });
+
+    const host = await getTailnetHostname(exec, tailscaleBin);
+
+    expect(host).toBe("retry.tailnet.ts.net");
+    expect(exec).toHaveBeenCalledTimes(2);
+    expectExecCall(exec, 1, tailscaleBin, ["status", "--json"], {
+      timeoutMs: 5000,
+      maxBuffer: 400_000,
+    });
+    expectExecCall(exec, 2, tailscaleBin, ["status", "--json"], {
+      timeoutMs: 5000,
+      maxBuffer: 400_000,
+    });
+  });
+
   it("does not cache whois results when the cache expiry would exceed Date range", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(8_640_000_000_000_000));
