@@ -107,15 +107,15 @@ describe("Codex app inventory cache", () => {
       request: async () => ({ data: [app("app-1")], nextCursor: null }),
     });
 
-    await expect(
-      cache.refreshNow({
-        key,
-        nowMs: 2,
-        request: async () => {
-          throw new Error("app list failed");
-        },
-      }),
-    ).rejects.toThrow("app list failed");
+    const failed = await cache.refreshNow({
+      key,
+      nowMs: 2,
+      request: async () => {
+        throw new Error("app list failed");
+      },
+    });
+    expect(failed.lastError?.message).toBe("app list failed");
+    expect(failed.apps.map((item) => item.id)).toEqual(["app-1"]);
 
     const read = cache.read({
       key,
@@ -124,6 +124,30 @@ describe("Codex app inventory cache", () => {
     });
     expect(read.snapshot?.apps.map((item) => item.id)).toEqual(["app-1"]);
     expect(read.diagnostic?.message).toBe("app list failed");
+  });
+
+  it("returns a diagnostic snapshot when the first refresh fails", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
+    const key = "runtime";
+
+    const failed = await cache.refreshNow({
+      key,
+      nowMs: 0,
+      request: async () => {
+        throw new Error("initial app list failed");
+      },
+    });
+    expect(failed.lastError?.message).toBe("initial app list failed");
+    expect(failed.apps).toEqual([]);
+    expect(failed.expiresAtMs).toBe(0);
+
+    const read = cache.read({
+      key,
+      nowMs: 0,
+      request: async () => ({ data: [app("app-1")], nextCursor: null }),
+    });
+    expect(read.state).toBe("missing");
+    expect(read.diagnostic?.message).toBe("initial app list failed");
   });
 
   it("omits challenge HTML when serializing app/list errors", () => {

@@ -221,7 +221,20 @@ export class CodexAppInventoryCache {
         keyFingerprint: fingerprintInventoryCacheKey(params.key),
         error: serializeCodexAppInventoryError(error),
       });
-      throw error;
+      // Return a best-effort snapshot instead of throwing so callers can keep
+      // building thread config without plugin apps rather than failing the turn.
+      if (entry) {
+        return { ...stripEntryState(entry), lastError: diagnostic };
+      }
+      this.revision += 1;
+      return {
+        key: params.key,
+        apps: [],
+        fetchedAtMs: nowMs,
+        expiresAtMs: 0,
+        revision: this.revision,
+        lastError: diagnostic,
+      };
     }
   }
 }
