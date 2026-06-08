@@ -140,6 +140,8 @@ const XAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX =
   "Conversation already has an active response in progress:";
 const XAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
   "Cancellation failed: no active response found";
+const XAI_REALTIME_BROWSER_WS_HOST = "api.x.ai";
+const XAI_REALTIME_BROWSER_WS_PATH = "/v1/realtime";
 
 const XAI_REALTIME_MODELS = [
   "grok-voice-latest",
@@ -203,6 +205,22 @@ function toXaiRealtimeWsUrl(config: { baseUrl?: string; model: string }): string
   url.pathname = `${url.pathname.replace(/\/+$/, "")}/realtime`;
   url.searchParams.set("model", config.model);
   return url.toString();
+}
+
+function isNativeXaiRealtimeBrowserBaseUrl(baseUrl?: string): boolean {
+  const url = new URL(
+    toXaiRealtimeWsUrl({
+      baseUrl,
+      model: XAI_REALTIME_DEFAULT_MODEL,
+    }),
+  );
+  return (
+    url.protocol === "wss:" &&
+    url.hostname.toLowerCase() === XAI_REALTIME_BROWSER_WS_HOST &&
+    url.pathname === XAI_REALTIME_BROWSER_WS_PATH &&
+    !url.username &&
+    !url.password
+  );
 }
 
 function toXaiRealtimeClientSecretsUrl(baseUrl?: string): string {
@@ -1009,6 +1027,11 @@ async function createXaiRealtimeBrowserSession(
   const model = normalizeOptionalString(req.model) ?? config.model ?? XAI_REALTIME_DEFAULT_MODEL;
   const voice = normalizeOptionalString(req.voice) ?? config.voice ?? XAI_REALTIME_DEFAULT_VOICE;
   const baseUrl = normalizeXaiRealtimeBaseUrl(config.baseUrl);
+  if (!isNativeXaiRealtimeBrowserBaseUrl(baseUrl)) {
+    throw new Error(
+      'xAI provider-websocket sessions require the native https://api.x.ai/v1 baseUrl. Use talk.realtime.transport="gateway-relay" for custom xAI Realtime baseUrl or proxy endpoints.',
+    );
+  }
   const apiKey = await resolveXaiRealtimeApiKey({
     configApiKey: config.apiKey,
     cfg: req.cfg,
@@ -1088,6 +1111,7 @@ export function buildXaiRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
 }
 
 export const xaiRealtimeVoiceProviderInternalsForTest = {
+  isNativeXaiRealtimeBrowserBaseUrl,
   normalizeProviderConfig,
   toXaiRealtimeClientSecretsUrl,
   toXaiRealtimeWsUrl,

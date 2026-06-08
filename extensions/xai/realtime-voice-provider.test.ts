@@ -342,6 +342,25 @@ describe("xai realtime voice provider", () => {
     ).toEqual({ model: "grok-transcribe" });
   });
 
+  it("rejects custom xAI baseUrl values for browser websocket sessions", async () => {
+    const provider = buildXaiRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected xAI realtime provider to support browser sessions");
+    }
+
+    await expect(
+      provider.createBrowserSession({
+        providerConfig: {
+          apiKey: "xai-test-key",
+          baseUrl: "http://127.0.0.1:9999/v1",
+        },
+      }),
+    ).rejects.toThrow(
+      'xAI provider-websocket sessions require the native https://api.x.ai/v1 baseUrl. Use talk.realtime.transport="gateway-relay"',
+    );
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
   it("emits inbound speech transcript updates for meeting and voice surfaces", async () => {
     const provider = buildXaiRealtimeVoiceProvider();
     const onAudio = vi.fn();

@@ -435,6 +435,9 @@ Legacy aliases still normalize to the canonical bundled ids:
     - Browser auth: OpenClaw creates an ephemeral xAI Realtime client secret
       with `POST /v1/realtime/client_secrets`; the browser connects with the
       `xai-client-secret.<token>` WebSocket subprotocol.
+    - Browser transport origin: `provider-websocket` is limited to the native
+      `https://api.x.ai/v1` Realtime endpoint. Use `gateway-relay` for custom
+      `baseUrl` or proxy endpoints.
     - Inbound speech transcripts: xAI's cumulative
       `conversation.item.input_audio_transcription.updated` event is exposed as
       user transcript updates, so Talk and meeting surfaces can consume live
@@ -468,12 +471,15 @@ Legacy aliases still normalize to the canonical bundled ids:
     `voiceId`, `speakerVoiceId`, `vadThreshold`, `silenceDurationMs`,
     `prefixPaddingMs`, `interruptResponseOnInputAudio`, and
     `minBargeInAudioEndMs`. When `apiKey` is omitted, OpenClaw tries
-    `XAI_API_KEY` and then the configured xAI auth profile.
+    `XAI_API_KEY` and then the configured xAI auth profile. `baseUrl` is a
+    server-side option for `gateway-relay`; browser-owned `provider-websocket`
+    sessions require the native xAI Realtime endpoint.
 
     <Note>
     Browser-owned xAI Realtime sessions use ephemeral client secrets. Gateway
     relay remains available when you need the vendor WebSocket to stay
-    server-side, such as native clients or backend-owned meeting capture.
+    server-side, such as native clients, backend-owned meeting capture, or
+    custom/proxy `baseUrl` deployments.
     </Note>
 
   </Accordion>
