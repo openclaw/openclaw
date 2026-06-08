@@ -209,6 +209,7 @@ export type ChannelAccountSnapshot = {
   lastEventAt?: number | null;
   lastTransportActivityAt?: number | null;
   lastError?: string | null;
+  externalArgMenuError?: string;
   healthState?: string;
   lastStartAt?: number | null;
   lastStopAt?: number | null;

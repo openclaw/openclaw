@@ -172,6 +172,7 @@ export type SlackMonitorContext = {
     title?: string;
     prompts: SlackAssistantSuggestedPrompt[];
   }) => Promise<boolean>;
+  setStatus?: (next: Record<string, unknown>) => void;
 };
 
 const SLACK_ASSISTANT_CONTEXT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -216,6 +217,7 @@ export function createSlackMonitorContext(params: {
   typingReaction: string;
   mediaMaxBytes: number;
   removeAckAfterReply: boolean;
+  setStatus?: (next: Record<string, unknown>) => void;
 }): SlackMonitorContext {
   const channelHistories = new Map<string, HistoryEntry[]>();
   const logger = getChildLogger({ module: "slack-auto-reply" });
@@ -645,5 +647,6 @@ export function createSlackMonitorContext(params: {
     getSlackAssistantThreadContext,
     saveSlackAssistantThreadContext,
     setSlackAssistantSuggestedPrompts,
+    setStatus: params.setStatus,
   };
 }

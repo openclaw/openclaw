@@ -588,6 +588,7 @@ describe("Slack native command argument menus", () => {
     const commands = new Map<string, (args: unknown) => Promise<void>>();
     const actions = new Map<string | RegExp, (args: unknown) => Promise<void>>();
     const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
+    const setStatus = vi.fn();
     const app = {
       client: { chat: { postEphemeral } },
       command: (name: string, handler: (args: unknown) => Promise<void>) => {
@@ -624,6 +625,7 @@ describe("Slack native command argument menus", () => {
       },
       textLimit: 4000,
       app,
+      setStatus,
       isChannelAllowed: () => true,
       resolveChannelName: async () => ({ name: "dm", type: "im" }),
       resolveUserName: async () => ({ name: "Ada" }),
@@ -635,6 +637,10 @@ describe("Slack native command argument menus", () => {
 
     // Registration should not throw despite app.options() throwing
     await registerCommands(ctx, account);
+    expect(setStatus).toHaveBeenCalledTimes(1);
+    expect(setStatus).toHaveBeenCalledWith({
+      externalArgMenuError: "Cannot read properties of undefined (reading 'listeners')",
+    });
     expect(commands.size).toBeGreaterThan(0);
     expect(
       Array.from(actions.keys()).some(

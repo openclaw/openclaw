@@ -7,6 +7,7 @@ import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-h
 import {
   buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
+  type ChannelStatusIssue,
 } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
@@ -747,6 +748,34 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
             ...projectCredentialSnapshotFields(account),
           },
         };
+      },
+      collectStatusIssues: (accounts): ChannelStatusIssue[] => {
+        const issues: ChannelStatusIssue[] = [];
+        for (const account of accounts) {
+          const enabled = account.enabled !== false;
+          const configured = account.configured === true;
+          if (!enabled || !configured) {
+            continue;
+          }
+          if (account.externalArgMenuError) {
+            issues.push({
+              channel: "slack",
+              accountId: account.accountId,
+              kind: "runtime",
+              message: `Slack external arg-menu registration failed, falling back to static menus: ${account.externalArgMenuError}`,
+            });
+          }
+          const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
+          if (lastError) {
+            issues.push({
+              channel: "slack",
+              accountId: account.accountId,
+              kind: "runtime",
+              message: `Channel error: ${lastError}`,
+            });
+          }
+        }
+        return issues;
       },
     }),
     gateway: {
