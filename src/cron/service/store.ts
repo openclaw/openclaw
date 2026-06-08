@@ -1,4 +1,5 @@
 /** Loads, normalizes, quarantines, and persists cron service store state. */
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
@@ -104,11 +105,14 @@ export async function ensureLoaded(
     previousJobsById.set(job.id, job);
   }
   const loaded = await loadCronJobsStoreWithConfigJobs(state.deps.storePath);
-  const loadedJobs = (loaded.store.jobs ?? []) as unknown as CronJob[];
+  const rawJobs = loaded.store.jobs ?? [];
+  if (!Array.isArray(rawJobs)) {
+    throw new Error("cron store jobs payload is not an array");
+  }
   const jobs: CronJob[] = [];
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
-  for (const [index, job] of loadedJobs.entries()) {
-    const decodedRaw = job as unknown as Record<string, unknown>;
+  for (const [index, job] of rawJobs.entries()) {
+    const decodedRaw = asRecord(job);
     const rawConfigJob = loaded.configJobs[index] ?? structuredClone(decodedRaw);
     const raw = decodedRaw;
     const sourceIndex = loaded.configJobIndexes[index] ?? index;
@@ -130,10 +134,10 @@ export async function ensureLoaded(
       );
     }
     const hydrated =
-      normalized && typeof normalized === "object" ? (normalized as unknown as CronJob) : job;
-    const invalidReason = getInvalidPersistedCronJobReason(
-      hydrated as unknown as Record<string, unknown>,
-    );
+      normalized && typeof normalized === "object"
+        ? (normalized as CronJob)
+        : (job as CronJob);
+    const invalidReason = getInvalidPersistedCronJobReason(asRecord(hydrated));
     if (invalidReason) {
       const quarantineEntry: QuarantinedCronConfigJob = {
         sourceIndex,
