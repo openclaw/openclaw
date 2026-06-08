@@ -492,5 +492,6 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     taskLine,
     mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: params.includeTranscriptUsage ?? true,
+    statusNotes: params.statusNotes,
   });
 }

@@ -3,10 +3,12 @@ import { logVerbose } from "../../globals.js";
 import { buildStatusText } from "../../status/status-text.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import type { ReplyPayload } from "../types.js";
+import type { MsgContext } from "../templating.js";
 import type { CommandContext } from "./commands-types.js";
 export { buildStatusText } from "../../status/status-text.js";
 
 type BuildStatusReplyParams = Omit<BuildStatusTextParams, "statusChannel"> & {
+  ctx: MsgContext;
   command: CommandContext;
 };
 
@@ -24,6 +26,7 @@ export async function buildStatusReply(
     text: await buildStatusText({
       ...params,
       statusChannel: command.channel,
+      statusNotes: params.ctx.StatusNotes,
     }),
   };
 }

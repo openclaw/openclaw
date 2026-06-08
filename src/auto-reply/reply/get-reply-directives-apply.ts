@@ -354,6 +354,7 @@ export async function applyInlineDirectiveOverrides(params: {
       const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       statusReply = await buildStatusReply({
         cfg,
+        ctx,
         command,
         sessionEntry: targetSessionEntry,
         sessionKey,

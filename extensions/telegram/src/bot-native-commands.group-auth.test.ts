@@ -7,7 +7,9 @@ import {
   createNativeCommandsHarness,
   createTelegramDmCommandContext,
   createTelegramGroupCommandContext,
+  clearNativeCommandRuntimeMocksForTest,
   findNotAuthorizedCalls,
+  getFinalizedNativeCommandContextsForTest,
 } from "./bot-native-commands.test-helpers.js";
 
 describe("native command auth in groups", () => {
@@ -69,14 +71,21 @@ describe("native command auth in groups", () => {
   });
 
   it("authorizes native commands in groups from commands.allowFrom.telegram", async () => {
+    clearNativeCommandRuntimeMocksForTest();
     const { handlers, sendMessage } = setup({
       cfg: {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+          },
+        },
         commands: {
           allowFrom: {
             telegram: ["12345"],
           },
         },
       } as OpenClawConfig,
+      telegramCfg: { groupPolicy: "allowlist" } as TelegramAccountConfig,
       allowFrom: ["99999"],
       groupAllowFrom: ["99999"],
       useAccessGroups: true,
@@ -88,6 +97,15 @@ describe("native command auth in groups", () => {
 
     const notAuthCalls = findNotAuthorizedCalls(sendMessage);
     expect(notAuthCalls).toHaveLength(0);
+
+    const contexts = getFinalizedNativeCommandContextsForTest();
+    expect(contexts.at(-1)).toMatchObject({
+      StatusNotes: [
+        expect.stringContaining(
+          "Telegram commands are authorized, but normal group messages are blocked by groupPolicy=allowlist: sender does not match allowFrom.",
+        ),
+      ],
+    });
   });
 
   it("uses commands.allowFrom.telegram as the sole auth source when configured", async () => {
