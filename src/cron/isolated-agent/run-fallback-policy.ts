@@ -14,6 +14,7 @@ export function resolveCronFallbacksOverride(params: {
   job: CronJob;
   agentId: string;
   useSubagentFallbacks?: boolean;
+  isDefaultPrimaryShorthand?: boolean;
 }): string[] | undefined {
   const payload = params.job.payload.kind === "agentTurn" ? params.job.payload : undefined;
   const payloadFallbacks = Array.isArray(payload?.fallbacks) ? payload.fallbacks : undefined;
@@ -33,6 +34,13 @@ export function resolveCronFallbacksOverride(params: {
       return subagentFallbacksOverride;
     }
   }
+  if (!hasCronPayloadModelOverride && params.isDefaultPrimaryShorthand === true) {
+    // Default-primary shorthand: the agent uses the same string model as the
+    // configured default primary and carries no explicit fallback policy.
+    // For isolated cron, inherit default fallbacks instead of treating the
+    // agent as strict.
+    return undefined;
+  }
   return resolveEffectiveModelFallbacks({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -49,12 +57,14 @@ export function resolveCronPreflightCandidates(params: {
   provider: string;
   model: string;
   useSubagentFallbacks?: boolean;
+  isDefaultPrimaryShorthand?: boolean;
 }): ModelCandidate[] {
   const fallbacksOverride = resolveCronFallbacksOverride({
     cfg: params.cfg,
     job: params.job,
     agentId: params.agentId,
     useSubagentFallbacks: params.useSubagentFallbacks,
+    isDefaultPrimaryShorthand: params.isDefaultPrimaryShorthand,
   });
   return resolveModelCandidateChain({
     cfg: params.cfg,

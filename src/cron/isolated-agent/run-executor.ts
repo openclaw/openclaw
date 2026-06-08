@@ -146,6 +146,7 @@ export function createCronPromptExecutor(params: {
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
   modelFallbacksOverride?: string[];
+  isDefaultPrimaryShorthand?: boolean;
   liveSelection: CronLiveSelection;
   cronSession: MutableCronSession;
   abortSignal?: AbortSignal;
@@ -170,6 +171,7 @@ export function createCronPromptExecutor(params: {
       job: params.job,
       agentId: params.agentId,
       useSubagentFallbacks: params.useSubagentFallbacks,
+      isDefaultPrimaryShorthand: params.isDefaultPrimaryShorthand,
     });
   let runResult: CronPromptRunResult | undefined;
   let fallbackProvider = params.liveSelection.provider;
@@ -381,6 +383,7 @@ export async function executeCronRun(params: {
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
   modelFallbacksOverride?: string[];
+  isDefaultPrimaryShorthand?: boolean;
   agentVerboseDefault: AgentDefaultsConfig["verboseDefault"];
   liveSelection: CronLiveSelection;
   cronSession: MutableCronSession;
@@ -431,6 +434,7 @@ export async function executeCronRun(params: {
     agentPayload: params.agentPayload,
     useSubagentFallbacks: params.useSubagentFallbacks,
     modelFallbacksOverride: params.modelFallbacksOverride,
+    isDefaultPrimaryShorthand: params.isDefaultPrimaryShorthand,
     liveSelection: params.liveSelection,
     cronSession: params.cronSession,
     abortSignal: params.abortSignal,

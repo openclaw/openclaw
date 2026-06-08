@@ -1,5 +1,8 @@
 /** Orchestrates isolated cron agent turn setup, execution, delivery, and cleanup. */
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -492,6 +495,7 @@ type PreparedCronRunContext = {
   liveSelection: CronLiveSelection;
   useSubagentFallbacks: boolean;
   modelFallbacksOverride?: string[];
+  isDefaultPrimaryShorthand: boolean;
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
   /**
@@ -540,6 +544,11 @@ async function prepareCronRunContext(params: {
     ? resolveAgentConfig(runtimeCfg, normalizedRequested)
     : undefined;
   const agentId = normalizedRequested ?? defaultAgentId;
+  const rawAgentModel = agentConfigOverride?.model;
+  const defaultPrimary = resolvePrimaryStringValue(runtimeCfg.agents?.defaults?.model);
+  const isDefaultPrimaryShorthand =
+    typeof rawAgentModel === "string" &&
+    resolvePrimaryStringValue(rawAgentModel) === defaultPrimary;
   const agentCfg: AgentDefaultsConfig = buildCronAgentDefaultsConfig({
     defaults: runtimeCfg.agents?.defaults,
     agentConfigOverride,
@@ -661,6 +670,7 @@ async function prepareCronRunContext(params: {
     provider,
     model,
     useSubagentFallbacks,
+    isDefaultPrimaryShorthand,
   });
   let selectedPreflightCandidate: { provider: string; model: string } | undefined;
   let selectedPreflightCandidateIndex = -1;
@@ -911,6 +921,7 @@ async function prepareCronRunContext(params: {
       liveSelection,
       useSubagentFallbacks,
       modelFallbacksOverride,
+      isDefaultPrimaryShorthand,
       thinkLevel,
       timeoutMs,
       runTimeoutOverrideMs,
@@ -1317,6 +1328,7 @@ export async function runCronIsolatedAgentTurn(params: {
       agentPayload: prepared.context.agentPayload,
       useSubagentFallbacks: prepared.context.useSubagentFallbacks,
       modelFallbacksOverride: prepared.context.modelFallbacksOverride,
+      isDefaultPrimaryShorthand: prepared.context.isDefaultPrimaryShorthand,
       agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
       liveSelection: prepared.context.liveSelection,
       cronSession: prepared.context.cronSession,

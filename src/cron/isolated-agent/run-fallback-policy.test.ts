@@ -307,6 +307,105 @@ describe("resolveCronFallbacksOverride", () => {
     ).toStrictEqual([{ provider: "ollama", model: "qwen3:32b" }]);
   });
 
+  it("inherits default fallbacks for string agent model configs during cron preflight", () => {
+    expect(
+      resolveCronPreflightCandidates({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "openai/gpt-5.4",
+                fallbacks: ["anthropic/claude-sonnet-4-6"],
+              },
+            },
+            list: [
+              {
+                id: "main",
+                model: "openai/gpt-5.4",
+              },
+            ],
+          },
+        },
+        agentId: "main",
+        provider: "openai",
+        model: "gpt-5.4",
+        isDefaultPrimaryShorthand: true,
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toEqual([
+      { provider: "openai", model: "gpt-5.4" },
+      { provider: "anthropic", model: "claude-sonnet-4-6" },
+    ]);
+  });
+
+  it("keeps differing string agent models strict in cron preflight", () => {
+    expect(
+      resolveCronPreflightCandidates({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "openai/gpt-5.4",
+                fallbacks: ["anthropic/claude-sonnet-4-6"],
+              },
+            },
+            list: [
+              {
+                id: "main",
+                model: "google/gemini-3-pro",
+              },
+            ],
+          },
+        },
+        agentId: "main",
+        provider: "google",
+        model: "gemini-3-pro",
+        isDefaultPrimaryShorthand: false,
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toEqual([{ provider: "google", model: expect.stringContaining("gemini-3") }]);
+  });
+
+  it("keeps rewritten defaults strict when the signal says the agent is not a shorthand", () => {
+    // This simulates the real cron preflight path where buildCronAgentDefaultsConfig
+    // has already copied the per-agent string model into agents.defaults.model.primary,
+    // making the config look like a shorthand even when the raw config was different.
+    expect(
+      resolveCronPreflightCandidates({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "google/gemini-3-pro",
+                fallbacks: ["anthropic/claude-sonnet-4-6"],
+              },
+            },
+            list: [
+              {
+                id: "main",
+                model: "google/gemini-3-pro",
+              },
+            ],
+          },
+        },
+        agentId: "main",
+        provider: "google",
+        model: "gemini-3-pro",
+        isDefaultPrimaryShorthand: false,
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toEqual([{ provider: "google", model: expect.stringContaining("gemini-3") }]);
+  });
+
   it("documents that cron preflight walks fallbacks before skipping", () => {
     const cliDocs = readFileSync("docs/cli/cron.md", "utf8");
     const automationDocs = readFileSync("docs/automation/cron-jobs.md", "utf8");
