@@ -175,6 +175,7 @@ import {
   shouldEmitTranscriptToolProgress,
 } from "./event-projector.js";
 import {
+  assertCodexNativeHookRelayStartupCanary,
   buildCodexNativeHookRelayDisabledConfig,
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayId,
@@ -1881,6 +1882,25 @@ export async function runCodexAppServerAttempt(
     throwIfTurnStartAcceptedAfterAbort();
     return startedTurn;
   };
+  const nativeHookRelayStartupCanaryRequired =
+    nativeToolSurfaceEnabled &&
+    (beforeToolCallPolicy.hasBeforeToolCallHook ||
+      beforeToolCallPolicy.trustedToolPolicies.length > 0);
+  const startCodexTurnWithStartupCanary = async (): Promise<CodexTurnStartResponse> => {
+    const startedTurn = await startCodexTurn();
+    try {
+      await assertCodexNativeHookRelayStartupCanary({
+        relay: nativeHookRelay,
+        required: nativeHookRelayStartupCanaryRequired,
+        signal: runAbortController.signal,
+      });
+    } catch (error) {
+      runAbortController.abort(error);
+      await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId);
+      throw error;
+    }
+    return startedTurn;
+  };
   try {
     codexModelCallDiagnostics.emitStarted();
     runAgentHarnessLlmInputHook({
@@ -1892,7 +1912,7 @@ export async function runCodexAppServerAttempt(
       stream: "codex_app_server.lifecycle",
       data: { phase: "turn_starting", threadId: thread.threadId },
     });
-    turn = await startCodexTurn();
+    turn = await startCodexTurnWithStartupCanary();
   } catch (error) {
     let turnStartError = error;
     if (
@@ -1970,7 +1990,7 @@ export async function runCodexAppServerAttempt(
             data: { phase: "thread_ready_retry", threadId: thread.threadId },
           });
           try {
-            turn = await startCodexTurn();
+            turn = await startCodexTurnWithStartupCanary();
           } catch (retryError) {
             turnStartError = retryError;
           }

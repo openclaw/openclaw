@@ -53,6 +53,7 @@ export type JsonValue =
   | { [key: string]: JsonValue };
 
 const NATIVE_HOOK_RELAY_EVENTS = [
+  "session_start",
   "pre_tool_use",
   "post_tool_use",
   "permission_request",
@@ -67,6 +68,7 @@ export type NativeHookRelayProvider = (typeof NATIVE_HOOK_RELAY_PROVIDERS)[numbe
 export type NativeHookRelayInvocation = {
   provider: NativeHookRelayProvider;
   relayId: string;
+  generation?: string;
   event: NativeHookRelayEvent;
   nativeEventName?: string;
   agentId?: string;
@@ -442,10 +444,6 @@ export function registerNativeHookRelay(
         relayId,
         generation: registration.generation,
         event,
-        preToolUseUnavailable:
-          event === "pre_tool_use" && !nativeHookRelayEventHasLocalWork(registration, event)
-            ? "noop"
-            : undefined,
         nice: params.command?.nice,
         timeoutMs: params.command?.timeoutMs,
         executable: params.command?.executable,
@@ -524,7 +522,6 @@ export function buildNativeHookRelayCommand(params: {
   relayId: string;
   generation?: string;
   event: NativeHookRelayEvent;
-  preToolUseUnavailable?: "noop";
   timeoutMs?: number;
   executable?: string;
   nice?: number | false;
@@ -549,9 +546,6 @@ export function buildNativeHookRelayCommand(params: {
     ...(params.generation ? ["--generation", params.generation] : []),
     "--event",
     params.event,
-    ...(params.event === "pre_tool_use" && params.preToolUseUnavailable
-      ? ["--pre-tool-use-unavailable", params.preToolUseUnavailable]
-      : []),
     "--timeout",
     String(timeoutMs),
   ]);
@@ -604,6 +598,7 @@ export async function invokeNativeHookRelay(
   if (registration.provider !== provider) {
     throw new Error("native hook relay provider mismatch");
   }
+  let acceptedGeneration: string | undefined;
   if (params.requireGeneration) {
     const generation = readNonEmptyString(params.generation, "generation");
     if (generation !== registration.generation) {
@@ -616,6 +611,7 @@ export async function invokeNativeHookRelay(
         runId: registration.runId,
       });
     }
+    acceptedGeneration = registration.generation;
   }
   if (!registration.allowedEvents.includes(event)) {
     throw new Error("native hook relay event not allowed");
@@ -626,6 +622,7 @@ export async function invokeNativeHookRelay(
 
   const normalized = normalizeNativeHookInvocation({
     registration,
+    generation: acceptedGeneration ?? registration.generation,
     event,
     rawPayload: params.rawPayload,
   });
@@ -639,6 +636,7 @@ export async function invokeNativeHookRelay(
 
 export function hasNativeHookRelayInvocation(params: {
   relayId: string;
+  generation?: string;
   event: NativeHookRelayEvent;
   toolUseId?: string;
 }): boolean {
@@ -646,11 +644,52 @@ export function hasNativeHookRelayInvocation(params: {
   if (!toolUseId) {
     return false;
   }
+  return hasNativeHookRelayInvocationMatching(params);
+}
+
+export function hasNativeHookRelayEventInvocation(params: {
+  relayId: string;
+  generation?: string;
+  event: NativeHookRelayEvent;
+}): boolean {
+  return hasNativeHookRelayInvocationMatching(params);
+}
+
+export async function waitForNativeHookRelayEventInvocation(params: {
+  relayId: string;
+  generation?: string;
+  event: NativeHookRelayEvent;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<boolean> {
+  const timeoutMs = normalizePositiveInteger(params.timeoutMs, 1_000);
+  const expiresAtMs = Date.now() + timeoutMs;
+  while (Date.now() <= expiresAtMs) {
+    if (params.signal?.aborted) {
+      throw new Error("native hook relay invocation wait aborted");
+    }
+    if (hasNativeHookRelayEventInvocation(params)) {
+      return true;
+    }
+    await delay(Math.min(25, Math.max(0, expiresAtMs - Date.now())));
+  }
+  return hasNativeHookRelayEventInvocation(params);
+}
+
+function hasNativeHookRelayInvocationMatching(params: {
+  relayId: string;
+  generation?: string;
+  event: NativeHookRelayEvent;
+  toolUseId?: string;
+}): boolean {
+  const generation = params.generation?.trim();
+  const toolUseId = params.toolUseId?.trim();
   return invocations.some(
     (invocation) =>
       invocation.relayId === params.relayId &&
+      (!generation || invocation.generation === generation) &&
       invocation.event === params.event &&
-      invocation.toolUseId === toolUseId,
+      (!toolUseId || invocation.toolUseId === toolUseId),
   );
 }
 
@@ -763,7 +802,6 @@ export async function invokeNativeHookRelayBridge(
 export function renderNativeHookRelayUnavailableResponse(params: {
   provider: unknown;
   event: unknown;
-  preToolUseUnavailable?: unknown;
   message?: string;
 }): NativeHookRelayProcessResponse {
   const provider = readNativeHookRelayProvider(params.provider);
@@ -772,12 +810,11 @@ export function renderNativeHookRelayUnavailableResponse(params: {
   const message = params.message?.trim() || "Native hook relay unavailable";
   if (event === "pre_tool_use") {
     // The standalone CLI cannot reconstruct the originating registration after
-    // relay lookup fails, so unavailable PreToolUse must fail closed unless the
-    // generated command explicitly recorded that no before-tool policy existed.
-    if (params.preToolUseUnavailable === "noop") {
-      return adapter.renderNoopResponse(event);
-    }
+    // relay lookup fails, so unavailable PreToolUse must fail closed.
     return adapter.renderPreToolUseBlockResponse(message);
+  }
+  if (event === "session_start") {
+    return adapter.renderBeforeAgentFinalizeStopResponse(message);
   }
   if (event === "permission_request") {
     return adapter.renderPermissionDecisionResponse("deny", message);
@@ -1347,6 +1384,9 @@ async function processNativeHookRelayInvocation(params: {
   if (params.invocation.event === "pre_tool_use") {
     return runNativeHookRelayPreToolUse(params);
   }
+  if (params.invocation.event === "session_start") {
+    return params.adapter.renderNoopResponse(params.invocation.event);
+  }
   if (params.invocation.event === "post_tool_use") {
     return runNativeHookRelayPostToolUse(params);
   }
@@ -1819,6 +1859,7 @@ function snapshotString(value: string, state: { remainingStringLength: number })
 
 function normalizeNativeHookInvocation(params: {
   registration: NativeHookRelayRegistration;
+  generation?: string;
   event: NativeHookRelayEvent;
   rawPayload: JsonValue;
 }): NativeHookRelayInvocation {
@@ -1828,6 +1869,7 @@ function normalizeNativeHookInvocation(params: {
   return {
     provider: params.registration.provider,
     relayId: params.registration.relayId,
+    ...(params.generation ? { generation: params.generation } : {}),
     event: params.event,
     ...metadata,
     ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
@@ -2180,6 +2222,7 @@ function readNativeHookRelayProvider(value: unknown): NativeHookRelayProvider {
 
 function readNativeHookRelayEvent(value: unknown): NativeHookRelayEvent {
   if (
+    value === "session_start" ||
     value === "pre_tool_use" ||
     value === "post_tool_use" ||
     value === "permission_request" ||

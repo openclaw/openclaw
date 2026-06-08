@@ -155,6 +155,10 @@ export {
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
 };
+export {
+  hasNativeHookRelayEventInvocation,
+  waitForNativeHookRelayEventInvocation,
+} from "../agents/harness/native-hook-relay.js";
 export type { AbortAndDrainEmbeddedAgentRunResult as AbortAndDrainAgentHarnessRunResult };
 
 /**

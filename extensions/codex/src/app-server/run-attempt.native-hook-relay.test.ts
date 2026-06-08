@@ -5,6 +5,8 @@ import {
   invokeNativeHookRelay,
   nativeHookRelayTesting,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
 import {
@@ -51,15 +53,74 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(preToolUseCommand?.type).toBe("command");
     expect(preToolUseCommand?.timeout).toBe(9);
     expect(preToolUseCommand?.command).toContain("--event pre_tool_use --timeout 4321");
+    const sessionStartHooks = startConfig?.["hooks.SessionStart"] as
+      | Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
+      | undefined;
+    const sessionStartCommand = sessionStartHooks?.[0]?.hooks?.[0];
+    expect(sessionStartCommand?.type).toBe("command");
+    expect(sessionStartCommand?.timeout).toBe(9);
+    expect(sessionStartCommand?.command).toContain("--event session_start --timeout 4321");
     const hookState = startConfig?.["hooks.state"] as Record<
       string,
       { enabled?: unknown; trusted_hash?: unknown }
     >;
+    const sessionStartState = hookState?.["/<session-flags>/config.toml:session_start:0:0"];
+    expect(sessionStartState?.enabled).toBe(true);
+    expect(sessionStartState?.trusted_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
     const preToolUseState = hookState?.["/<session-flags>/config.toml:pre_tool_use:0:0"];
     expect(preToolUseState?.enabled).toBe(true);
     expect(preToolUseState?.trusted_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeDefined();
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("fails closed after turn/start when tool policy is active but the startup canary is missing", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness(undefined, {
+      skipNativeHookRelaySessionStart: true,
+    });
+
+    await expect(
+      runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+        nativeHookRelay: {
+          enabled: true,
+          events: ["pre_tool_use"],
+        },
+      }),
+    ).rejects.toThrow("Codex did not invoke the native hook relay startup canary");
+
+    expect(harness.requests.map((request) => request.method)).toContain("thread/start");
+    expect(harness.requests.map((request) => request.method)).toContain("turn/start");
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("does not require the startup canary when no tool policy is active", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness(undefined, {
+      skipNativeHookRelaySessionStart: true,
+    });
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    await expect(run).resolves.toBeDefined();
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
@@ -277,7 +338,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(
       nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)?.allowedEvents,
-    ).toEqual(["pre_tool_use", "post_tool_use", "before_agent_finalize"]);
+    ).toEqual(["session_start", "pre_tool_use", "post_tool_use", "before_agent_finalize"]);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
@@ -425,7 +486,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const resumedRegistration =
       nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId);
     expect(resumedRegistration?.runId).toBe("run-2");
-    expect(resumedRegistration?.allowedEvents).toEqual(["pre_tool_use"]);
+    expect(resumedRegistration?.allowedEvents).toEqual(["session_start", "pre_tool_use"]);
 
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId)?.runId).toBe(
@@ -689,6 +750,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
     expect(startConfig?.["features.hooks"]).toBe(false);
+    expect(startConfig?.["hooks.SessionStart"]).toEqual([]);
     expect(startConfig?.["hooks.PreToolUse"]).toEqual([]);
     expect(startConfig?.["hooks.PostToolUse"]).toEqual([]);
     expect(startConfig?.["hooks.PermissionRequest"]).toEqual([]);

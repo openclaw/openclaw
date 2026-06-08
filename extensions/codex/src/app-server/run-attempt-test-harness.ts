@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   abortAndDrainAgentHarnessRun,
+  invokeNativeHookRelay,
   nativeHookRelayTesting,
   queueAgentHarnessMessage,
   resetAgentEventsForTest,
@@ -394,10 +395,18 @@ export function createStartedThreadHarness(
   ) => Promise<unknown> = async () => undefined,
   options: {
     onStart?: (authProfileId: string | undefined, agentDir: string | undefined) => void;
+    skipNativeHookRelaySessionStart?: boolean;
   } = {},
 ) {
+  let threadConfigRequestParams: unknown;
   return createAppServerHarness(async (method, params, requestOptions) => {
     const override = await requestImpl(method, params, requestOptions);
+    if (method === "thread/start" || method === "thread/resume") {
+      threadConfigRequestParams = params;
+    }
+    if (method === "turn/start" && !options.skipNativeHookRelaySessionStart) {
+      await invokeNativeHookRelaySessionStartFromThreadRequest(threadConfigRequestParams);
+    }
     if (override !== undefined) {
       return override;
     }
@@ -412,11 +421,14 @@ export function createStartedThreadHarness(
 }
 
 export function createResumeHarness() {
-  return createAppServerHarness(async (method) => {
+  let threadConfigRequestParams: unknown;
+  return createAppServerHarness(async (method, params) => {
     if (method === "thread/resume") {
+      threadConfigRequestParams = params;
       return threadStartResult("thread-existing");
     }
     if (method === "turn/start") {
+      await invokeNativeHookRelaySessionStartFromThreadRequest(threadConfigRequestParams);
       return turnStartResult();
     }
     return {};
@@ -425,6 +437,9 @@ export function createResumeHarness() {
 
 export function extractRelayIdFromThreadRequest(params: unknown): string {
   const command = extractNativeHookRelayCommandFromThreadRequest(params);
+  if (!command) {
+    throw new Error("native hook relay command missing from thread request");
+  }
   const match = command.match(/--relay-id ([^ ]+)/);
   if (!match?.[1]) {
     throw new Error(`relay id missing from command: ${command}`);
@@ -434,6 +449,9 @@ export function extractRelayIdFromThreadRequest(params: unknown): string {
 
 export function extractGenerationFromThreadRequest(params: unknown): string {
   const command = extractNativeHookRelayCommandFromThreadRequest(params);
+  if (!command) {
+    throw new Error("native hook relay command missing from thread request");
+  }
   const match = command.match(/--generation ([^ ]+)/);
   if (!match?.[1]) {
     throw new Error(`relay generation missing from command: ${command}`);
@@ -441,15 +459,45 @@ export function extractGenerationFromThreadRequest(params: unknown): string {
   return match[1];
 }
 
-function extractNativeHookRelayCommandFromThreadRequest(params: unknown): string {
-  const config = (params as { config?: Record<string, unknown> }).config;
-  let command: string | undefined;
-  for (const key of [
+async function invokeNativeHookRelaySessionStartFromThreadRequest(params: unknown): Promise<void> {
+  const command = extractNativeHookRelayCommandFromThreadRequest(params, ["hooks.SessionStart"], {
+    optional: true,
+  });
+  if (!command) {
+    return;
+  }
+  const relayId = extractNativeHookRelayCommandField(command, "--relay-id", "relay id");
+  const generation = extractNativeHookRelayCommandField(
+    command,
+    "--generation",
+    "relay generation",
+  );
+  await invokeNativeHookRelay({
+    provider: "codex",
+    relayId,
+    generation,
+    event: "session_start",
+    rawPayload: {
+      hook_event_name: "SessionStart",
+    },
+    requireGeneration: true,
+  });
+}
+
+function extractNativeHookRelayCommandFromThreadRequest(
+  params: unknown,
+  hookKeys = [
+    "hooks.SessionStart",
     "hooks.PreToolUse",
     "hooks.PostToolUse",
     "hooks.PermissionRequest",
     "hooks.Stop",
-  ]) {
+  ],
+  options?: { optional?: boolean },
+): string | undefined {
+  const config = (params as { config?: Record<string, unknown> }).config;
+  let command: string | undefined;
+  for (const key of hookKeys) {
     const entries = config?.[key];
     if (!Array.isArray(entries)) {
       continue;
@@ -465,9 +513,20 @@ function extractNativeHookRelayCommandFromThreadRequest(params: unknown): string
     }
   }
   if (!command) {
+    if (options?.optional) {
+      return undefined;
+    }
     throw new Error("native hook relay command missing from thread request");
   }
   return command;
+}
+
+function extractNativeHookRelayCommandField(command: string, flag: string, label: string): string {
+  const match = command.match(new RegExp(`${flag} ([^ ]+)`));
+  if (!match?.[1]) {
+    throw new Error(`${label} missing from command: ${command}`);
+  }
+  return match[1];
 }
 
 type RuntimeDynamicToolForTest = Parameters<

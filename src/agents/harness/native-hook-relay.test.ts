@@ -18,11 +18,13 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   testing,
   buildNativeHookRelayCommand,
+  hasNativeHookRelayEventInvocation,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
   invokeNativeHookRelayBridge,
   registerNativeHookRelay,
   resolveNativeHookRelayDeferredToolApproval,
+  waitForNativeHookRelayEventInvocation,
 } from "./native-hook-relay.js";
 
 afterEach(() => {
@@ -302,6 +304,83 @@ describe("native hook relay registry", () => {
     });
   });
 
+  it("records generation-scoped session_start canary invocations", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-session-start-canary",
+      generation: "generation-current",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["session_start"],
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      generation: relay.generation,
+      event: "session_start",
+      rawPayload: {
+        hook_event_name: "SessionStart",
+      },
+      requireGeneration: true,
+    });
+
+    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    expect(
+      hasNativeHookRelayEventInvocation({ relayId: relay.relayId, event: "session_start" }),
+    ).toBe(true);
+    expect(
+      hasNativeHookRelayEventInvocation({
+        relayId: relay.relayId,
+        generation: relay.generation,
+        event: "session_start",
+      }),
+    ).toBe(true);
+    expect(
+      hasNativeHookRelayEventInvocation({
+        relayId: relay.relayId,
+        generation: "generation-stale",
+        event: "session_start",
+      }),
+    ).toBe(false);
+    await expect(
+      waitForNativeHookRelayEventInvocation({
+        relayId: relay.relayId,
+        generation: relay.generation,
+        event: "session_start",
+        timeoutMs: 1,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("records registration generation for direct invocations without caller generation", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-direct-generation-source",
+      generation: "generation-current",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["session_start"],
+    });
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "session_start",
+      rawPayload: {
+        hook_event_name: "SessionStart",
+      },
+    });
+
+    expect(
+      hasNativeHookRelayEventInvocation({
+        relayId: relay.relayId,
+        generation: relay.generation,
+        event: "session_start",
+      }),
+    ).toBe(true);
+  });
+
   it("stores permission approval state in process-global state", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
@@ -534,7 +613,7 @@ describe("native hook relay registry", () => {
     expect(relay.shouldRelayEvent("permission_request")).toBe(true);
     expect(relay.commandForEvent("pre_tool_use")).toBe(
       "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
-        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --pre-tool-use-unavailable noop --timeout 1234`,
+        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --timeout 1234`,
     );
   });
 
@@ -896,6 +975,7 @@ describe("native hook relay registry", () => {
     expect(getOnlyNativeHookRelayInvocation()).toMatchObject({
       relayId: relay.relayId,
       runId: "run-1",
+      generation: relay.generation,
       event: "pre_tool_use",
     });
 
@@ -913,6 +993,45 @@ describe("native hook relay registry", () => {
         },
       }),
     ).rejects.toThrow("native hook relay bridge stale registration");
+  });
+
+  it("counts accepted bootstrap generation mismatches toward session_start canaries", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-bootstrap-stale-session-start-generation",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["session_start"],
+      generationMismatchGraceMs: 60_000,
+    });
+
+    await expect(
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId: relay.relayId,
+        generation: "stale-generation-from-resumed-thread",
+        event: "session_start",
+        timeoutMs: 2_000,
+        rawPayload: {
+          hook_event_name: "SessionStart",
+        },
+      }),
+    ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+
+    expect(
+      hasNativeHookRelayEventInvocation({
+        relayId: relay.relayId,
+        generation: relay.generation,
+        event: "session_start",
+      }),
+    ).toBe(true);
+    expect(
+      hasNativeHookRelayEventInvocation({
+        relayId: relay.relayId,
+        generation: "stale-generation-from-resumed-thread",
+        event: "session_start",
+      }),
+    ).toBe(false);
   });
 
   it("rejects bootstrap generation mismatches after the grace window", async () => {
@@ -3208,18 +3327,17 @@ describe("native hook relay command builder", () => {
     );
   });
 
-  it("includes explicit unavailable noop mode only for PreToolUse", () => {
+  it("uses the Codex PreToolUse hook relay command shape without an unavailable no-op marker", () => {
     expect(
       buildNativeHookRelayCommand({
         provider: "codex",
         relayId: "relay-1",
         generation: "generation-1",
         event: "pre_tool_use",
-        preToolUseUnavailable: "noop",
         executable: "openclaw",
       }),
     ).toBe(
-      "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use --pre-tool-use-unavailable noop --timeout 5000",
+      "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use --timeout 5000",
     );
   });
 });
