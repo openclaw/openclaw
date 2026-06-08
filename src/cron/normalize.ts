@@ -142,11 +142,15 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("model" in next) {
-    const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
-    if (model !== undefined) {
-      next.model = model;
+    if (next.model === null) {
+      next.model = null;
     } else {
-      delete next.model;
+      const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
+      if (model !== undefined) {
+        next.model = model;
+      } else {
+        delete next.model;
+      }
     }
   }
   if ("thinking" in next) {
@@ -166,7 +170,7 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("fallbacks" in next) {
-    const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
+    const fallbacks = normalizeTrimmedStringArray(next.fallbacks, { allowNull: true });
     if (fallbacks !== undefined) {
       next.fallbacks = fallbacks;
     } else {

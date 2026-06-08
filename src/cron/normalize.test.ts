@@ -690,6 +690,34 @@ describe("normalizeCronJobPatch", () => {
     expect(payload.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
+  it("preserves null model so patches can clear the model override", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        model: null,
+        message: "test",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.model).toBe(null);
+  });
+
+  it("preserves null fallbacks so patches can clear fallback lists", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        fallbacks: null,
+        message: "test",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.fallbacks).toBe(null);
+  });
+
   it("preserves empty fallback lists so patches can disable fallbacks", () => {
     const normalized = normalizeCronJobPatch({
       payload: {

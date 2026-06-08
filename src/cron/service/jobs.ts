@@ -892,9 +892,13 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   }
   if (typeof patch.model === "string") {
     next.model = patch.model;
+  } else if (patch.model === null) {
+    delete next.model;
   }
   if (Array.isArray(patch.fallbacks)) {
     next.fallbacks = patch.fallbacks;
+  } else if (patch.fallbacks === null) {
+    delete next.fallbacks;
   }
   if (Array.isArray(patch.toolsAllow)) {
     next.toolsAllow = patch.toolsAllow;
