@@ -15,6 +15,11 @@ vi.mock("../../plugins/manifest.js", async (importOriginal) => ({
   loadPluginManifest: manifestMocks.loadPluginManifest,
 }));
 
+import { readFileSync } from "node:fs";
+import {
+  collectManifestModelIdNormalizationPolicies,
+  normalizeStaticProviderModelIdWithPolicies,
+} from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { resolveBundledStaticCatalogModel } from "./model.static-catalog.js";
 
 function setManifestPlugins(plugins: unknown[]) {
@@ -164,5 +169,23 @@ describe("resolveBundledStaticCatalogModel", () => {
         cfg: {},
       }),
     ).toBeUndefined();
+  });
+
+  it("resolves Claude Haiku 4.5 from the bundled anthropic manifest via rolling and dated refs", () => {
+    // Regression for #90088: both the rolling alias and the dated Anthropic id must
+    // resolve to the bundled static catalog row, the same way Sonnet/Opus do.
+    const anthropicManifest = {
+      ...JSON.parse(readFileSync("extensions/anthropic/openclaw.plugin.json", "utf8")),
+      origin: "bundled",
+    };
+    setManifestPlugins([anthropicManifest]);
+    const policies = collectManifestModelIdNormalizationPolicies([anthropicManifest]);
+
+    for (const ref of ["anthropic/claude-haiku-4-5", "anthropic/claude-haiku-4-5-20251001"]) {
+      const modelId = normalizeStaticProviderModelIdWithPolicies("anthropic", ref, policies);
+      const model = resolveBundledStaticCatalogModel({ provider: "anthropic", modelId, cfg: {} });
+      expect(model?.id, `expected ${ref} to resolve`).toBe("claude-haiku-4-5");
+      expect(model?.name).toBe("Claude Haiku 4.5");
+    }
   });
 });

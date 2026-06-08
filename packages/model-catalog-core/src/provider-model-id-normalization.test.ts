@@ -49,6 +49,23 @@ describe("provider model id policy normalization", () => {
     ).toBe("claude-haiku-4-5");
   });
 
+  it("maps the dated Claude Haiku 4.5 id onto the rolling catalog alias", () => {
+    // Anthropic ships Haiku 4.5 under the dated id; the static catalog row is the
+    // rolling alias, so the dated id must normalize onto it to resolve.
+    expect(
+      normalizeStaticProviderModelIdWithPolicies(
+        "anthropic",
+        "anthropic/claude-haiku-4-5-20251001",
+      ),
+    ).toBe("claude-haiku-4-5");
+    expect(
+      normalizeConfiguredProviderCatalogModelId("anthropic", "anthropic/claude-haiku-4-5-20251001"),
+    ).toBe("claude-haiku-4-5");
+    expect(
+      normalizeStaticProviderModelIdWithPolicies("anthropic", "claude-haiku-4-5-20251001"),
+    ).toBe("claude-haiku-4-5");
+  });
+
   it("normalizes provider-prefixed native catalog refs without stripping catalog prefixes", () => {
     expect(normalizeStaticProviderModelIdWithPolicies("google", "google/gemini-2.0-flash")).toBe(
       "google/gemini-2.0-flash",

@@ -139,6 +139,9 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       opus: "claude-opus-4-8",
       "opus-4.6": "claude-opus-4-6",
       "sonnet-4.6": "claude-sonnet-4-6",
+      // Anthropic ships Haiku 4.5 under the dated API id; the catalog row is the
+      // rolling alias, so map the dated id onto it or it resolves as Unknown model.
+      "claude-haiku-4-5-20251001": "claude-haiku-4-5",
     };
     const anthropicPrefix = "anthropic/";
     const normalizedModel = normalizeLowercaseStringOrEmpty(model);

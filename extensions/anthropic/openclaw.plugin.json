@@ -106,7 +106,7 @@
             "maxTokens": 64000
           },
           {
-            "id": "claude-haiku-4-5-20251001",
+            "id": "claude-haiku-4-5",
             "name": "Claude Haiku 4.5",
             "reasoning": true,
             "input": ["text", "image"],
@@ -134,7 +134,8 @@
           "opus-4.8": "claude-opus-4-8",
           "opus": "claude-opus-4-8",
           "opus-4.6": "claude-opus-4-6",
-          "sonnet-4.6": "claude-sonnet-4-6"
+          "sonnet-4.6": "claude-sonnet-4-6",
+          "claude-haiku-4-5-20251001": "claude-haiku-4-5"
         }
       }
     }
