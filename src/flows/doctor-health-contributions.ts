@@ -733,25 +733,22 @@ async function hasActiveGatewayExecCredential(
 ): Promise<boolean> {
   const { resolveSecretInputRef } = await loadSecretTypesModule();
   const { gatewaySecretInputPathCanWin } = await import("../gateway/credentials-secret-inputs.js");
-  const { resolveGatewayProbeCredentialConfig } = await import("../gateway/probe-auth.js");
   const { ALL_GATEWAY_SECRET_INPUT_PATHS, readGatewaySecretInputValue } =
     await import("../gateway/secret-input-paths.js");
-  const cfg = resolveGatewayProbeCredentialConfig({ cfg: ctx.cfg, mode });
   return ALL_GATEWAY_SECRET_INPUT_PATHS.some((path) => {
     if (
       !gatewaySecretInputPathCanWin({
-        config: cfg,
+        config: ctx.cfg,
         env: process.env,
         modeOverride: mode,
         path,
-        remoteTokenFallback: "remote-only",
       })
     ) {
       return false;
     }
     const ref = resolveSecretInputRef({
-      value: readGatewaySecretInputValue(cfg, path),
-      defaults: cfg.secrets?.defaults,
+      value: readGatewaySecretInputValue(ctx.cfg, path),
+      defaults: ctx.cfg.secrets?.defaults,
     }).ref;
     return ref?.source === "exec";
   });

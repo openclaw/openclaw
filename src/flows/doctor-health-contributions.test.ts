@@ -250,7 +250,7 @@ describe("doctor health contributions", () => {
     expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
   });
 
-  it("does not skip remote gateway health probes for local-only exec SecretRefs", async () => {
+  it("skips remote gateway health probes for local fallback exec SecretRefs", async () => {
     mocks.checkGatewayHealth.mockResolvedValue({
       authenticated: false,
       healthOk: true,
@@ -287,15 +287,54 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
-    expect(mocks.checkGatewayHealth).toHaveBeenCalledWith({
-      runtime: ctx.runtime,
-      cfg,
-      timeoutMs: 10_000,
-    });
-    expect(mocks.note).not.toHaveBeenCalledWith(
+    expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("Gateway health probes skipped"),
       "Gateway",
     );
+    expect(ctx.gatewayHealthSkipped).toBe(true);
+    expect(ctx.gatewayMemoryProbe).toEqual({ checked: false, ready: false, skipped: true });
+  });
+
+  it("skips local gateway health probes for remote fallback exec SecretRefs", async () => {
+    const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
+    const cfg = {
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "token",
+        },
+        remote: {
+          token: { source: "exec", provider: "vault", id: "gateway/remote-token" },
+        },
+      },
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: "/bin/false" },
+        },
+      },
+    };
+    const ctx = {
+      cfg,
+      configResult: { cfg },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      cfgForPersistence: cfg,
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway health probes skipped"),
+      "Gateway",
+    );
+    expect(ctx.gatewayHealthSkipped).toBe(true);
+    expect(ctx.gatewayMemoryProbe).toEqual({ checked: false, ready: false, skipped: true });
   });
 
   it("keeps release configured plugin installs repair-only", async () => {
