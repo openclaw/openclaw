@@ -201,7 +201,7 @@ export function resolveExecDefaults(params: {
     sandboxAvailable,
   });
   const defaultSecurity = resolved.effectiveHost === "sandbox" ? "deny" : "full";
-  const approvalDefaults =
+  const approvalResult =
     resolved.effectiveHost === "sandbox"
       ? undefined
       : resolveExecApprovalsFromFile({
@@ -211,7 +211,9 @@ export function resolveExecDefaults(params: {
             security: defaultSecurity,
             ask: "off",
           },
-        }).agent;
+        });
+  const approvalDefaults = approvalResult?.agent;
+  const approvalSecurityIsFallback = approvalResult?.agentSources?.security === null;
   const basePolicy: LayeredExecPolicy = {
     security: approvalDefaults?.security ?? defaultSecurity,
     ask: approvalDefaults?.ask ?? "off",
@@ -226,8 +228,10 @@ export function resolveExecDefaults(params: {
   const modePolicy = resolveExecModePolicy(layeredPolicy);
   // Approval files are safety bounds: they can only reduce security/ask from
   // config-derived policy, never grant a less restrictive effective mode.
+  // But only apply this when the approval file has an explicit setting,
+  // not when it's just a fallback value.
   const security =
-    approvalDefaults?.security !== undefined
+    approvalDefaults?.security !== undefined && !approvalSecurityIsFallback
       ? minSecurity(modePolicy.security, approvalDefaults.security)
       : modePolicy.security;
   const ask =
