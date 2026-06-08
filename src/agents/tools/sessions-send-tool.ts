@@ -21,6 +21,7 @@ import {
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import {
@@ -30,6 +31,7 @@ import {
 import { listAgentIds } from "../agent-scope.js";
 import {
   type EmbeddedAgentQueueMessageOptions,
+  type EmbeddedAgentQueueMessageOutcome,
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
@@ -199,6 +201,39 @@ function isPendingErrorAgentWaitTimeout(result: AgentWaitResult): boolean {
   );
 }
 
+function resolveCronRunScopedFallbackSessionKey(sessionKey: string): string | undefined {
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
+  if (!normalizedSessionKey || !isCronRunSessionKey(normalizedSessionKey)) {
+    return undefined;
+  }
+  const parsed = parseAgentSessionKey(normalizedSessionKey);
+  if (!parsed) {
+    return undefined;
+  }
+  const runMarker = ":run:";
+  const runMarkerIndex = parsed.rest.lastIndexOf(runMarker);
+  if (runMarkerIndex <= 0) {
+    return undefined;
+  }
+  const runId = parsed.rest.slice(runMarkerIndex + runMarker.length);
+  if (!runId || runId.includes(":")) {
+    return undefined;
+  }
+  const fallbackRest = parsed.rest.slice(0, runMarkerIndex);
+  if (!fallbackRest) {
+    return undefined;
+  }
+  return `agent:${parsed.agentId}:${fallbackRest}`;
+}
+
+function shouldFallbackCronRunScopedActiveDelivery(
+  outcome: EmbeddedAgentQueueMessageOutcome,
+): boolean {
+  return (
+    !outcome.queued && (outcome.reason === "not_streaming" || outcome.reason === "no_active_run")
+  );
+}
+
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
   runId: string;
@@ -251,6 +286,25 @@ async function startAgentRun(params: {
       }
       if (queueOutcome.queued) {
         return { ok: true, runId: params.runId, activeRunQueue: true };
+      }
+      const fallbackSessionKey = resolveCronRunScopedFallbackSessionKey(params.sessionKey);
+      if (fallbackSessionKey && shouldFallbackCronRunScopedActiveDelivery(queueOutcome)) {
+        const response = await params.callGateway<{ runId: string }>({
+          method: "agent",
+          params: {
+            ...params.sendParams,
+            sessionKey: fallbackSessionKey,
+            idempotencyKey: crypto.randomUUID(),
+          },
+          timeoutMs: 10_000,
+        });
+        return {
+          ok: true,
+          runId:
+            typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+          a2aSessionKey: fallbackSessionKey,
+          a2aDisplayKey: fallbackSessionKey,
+        };
       }
       const queueSummary =
         formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
