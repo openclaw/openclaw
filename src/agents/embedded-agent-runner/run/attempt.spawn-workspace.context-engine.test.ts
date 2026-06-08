@@ -1060,7 +1060,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       customType: "model-snapshot",
       data: { provider: "deepseek", modelId: "deepseek-chat" },
     });
-    hoisted.sessionManager.getEntry.mockImplementation((id: string) =>
+    hoisted.sessionManager.getEntry.mockImplementation((id: unknown) =>
       id === "orphan-leaf" ? orphanLeaf : undefined,
     );
     const seen: { modelInputPrompt?: string } = {};
