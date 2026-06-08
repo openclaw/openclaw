@@ -18,8 +18,21 @@ import {
   type SystemEvent,
 } from "../../infra/system-events.js";
 
+function isCronContextSystemEvent(event: SystemEvent): boolean {
+  return event.contextKey?.startsWith("cron:") ?? false;
+}
+
 function selectGenericSystemEvents(events: readonly SystemEvent[]): SystemEvent[] {
-  return events.filter((event) => !isExecCompletionEvent(event.text));
+  // Exec completions and tagged cron events each own a dedicated heartbeat prompt
+  // (buildExecEventPrompt / buildCronEventPrompt) that surfaces them to the model
+  // once. Rendering them here as raw `System:` lines too double-surfaces the same
+  // text: a `sessionTarget: "main"` cron systemEvent (tagged `cron:<jobId>`) would
+  // appear both as a `System:` line and inside the heartbeat reminder wrapper
+  // (#44922). Leave them queued so the heartbeat path stays the single owner that
+  // consumes and renders them.
+  return events.filter(
+    (event) => !isExecCompletionEvent(event.text) && !isCronContextSystemEvent(event),
+  );
 }
 
 function compactSystemEvent(line: string): string | null {
