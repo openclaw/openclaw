@@ -990,13 +990,13 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
   return {
     kind: "agentTurn",
     message: patch.message,
-    model: patch.model,
-    fallbacks: patch.fallbacks,
+    model: patch.model ?? undefined,
+    fallbacks: patch.fallbacks ?? undefined,
     toolsAllow: Array.isArray(patch.toolsAllow) ? patch.toolsAllow : undefined,
-    thinking: patch.thinking,
-    timeoutSeconds: patch.timeoutSeconds,
-    lightContext: patch.lightContext,
-    allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
+    thinking: patch.thinking ?? undefined,
+    timeoutSeconds: patch.timeoutSeconds ?? undefined,
+    lightContext: patch.lightContext ?? undefined,
+    allowUnsafeExternalContent: patch.allowUnsafeExternalContent ?? undefined,
   };
 }
 
