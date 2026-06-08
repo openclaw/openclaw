@@ -2069,6 +2069,44 @@ describe("cron tool", () => {
     });
   });
 
+  it("adds the creator tool surface when converting an existing job to agentTurn", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "job-12",
+        payload: { kind: "systemEvent", text: "hello" },
+      })
+      .mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:telegram:group:restricted-room",
+      creatorToolAllowlist: ["read", "cron"],
+    });
+    await tool.execute("call-update-convert-capped-agent-turn", {
+      action: "update",
+      id: "job-12",
+      patch: {
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "run later" },
+      },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.update",
+      params: {
+        id: "job-12",
+        patch: {
+          sessionTarget: "isolated",
+          payload: {
+            kind: "agentTurn",
+            message: "run later",
+            toolsAllow: ["read", "cron"],
+          },
+        },
+      },
+    });
+  });
+
   it("preserves null model payload patches on update", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 
