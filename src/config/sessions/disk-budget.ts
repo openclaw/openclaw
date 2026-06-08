@@ -500,9 +500,14 @@ export async function pruneUnreferencedSessionArtifacts(params: {
     if (isSessionStoreTempArtifactName(file.name, storeBasename)) {
       return file.mtimeMs <= tempCutoffMs;
     }
+    if (
+      parseSessionArchiveTimestamp(file.name, "deleted") != null ||
+      parseSessionArchiveTimestamp(file.name, "reset") != null
+    ) {
+      return isSessionCleanupArchiveExpired(file.name, cutoffMs, resetArchiveCutoffMs);
+    }
     return (
-      (file.mtimeMs <= cutoffMs && isUnreferencedSessionArtifactFile(file, referencedPaths)) ||
-      isSessionCleanupArchiveExpired(file.name, cutoffMs, resetArchiveCutoffMs)
+      file.mtimeMs <= cutoffMs && isUnreferencedSessionArtifactFile(file, referencedPaths)
     );
   });
   const removablePromptBlobFiles = promptBlobFiles.filter((file) => {
