@@ -4527,10 +4527,63 @@ td.data-table-key-col {
   gap: 14px;
 }
 
+/* Desktop shows the agent list beside the panels; the narrow-screen fallback (the
+   toolbar select) is toggled in by the media query below. See issue #57067. */
+.agents-layout--nav {
+  grid-template-columns: minmax(0, 264px) minmax(0, 1fr);
+  grid-template-areas:
+    "nav toolbar"
+    "nav main";
+  grid-template-rows: auto 1fr;
+  align-items: start;
+}
+
+.agents-layout--nav > .agents-sidebar {
+  grid-area: nav;
+}
+
+.agents-layout--nav > .agents-toolbar {
+  grid-area: toolbar;
+}
+
+.agents-layout--nav > .agents-main {
+  grid-area: main;
+}
+
 .agents-sidebar {
   display: grid;
   gap: 12px;
   align-self: start;
+}
+
+.agents-nav-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 8px 4px;
+}
+
+/* The agent list is the desktop navigation, so the duplicate toolbar select is hidden
+   until the layout collapses to a single column. */
+.agents-control-select--mobile {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .agents-layout--nav {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "toolbar"
+      "main";
+    grid-template-rows: auto auto;
+  }
+
+  .agents-sidebar {
+    display: none;
+  }
+
+  .agents-control-select--mobile {
+    display: block;
+  }
 }
 
 .agents-toolbar {
@@ -4669,6 +4722,9 @@ td.data-table-key-col {
 
 .agent-title {
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-sub {

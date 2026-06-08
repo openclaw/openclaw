@@ -147,10 +147,15 @@ export function renderAgents(props: AgentsProps) {
   };
 
   return html`
-    <div class="agents-layout">
+    <div class="agents-layout agents-layout--nav">
+      <aside class="agents-sidebar">
+        ${renderAgentNav(agents, selectedId, defaultId, props.loading, (id) =>
+          props.onSelectAgent(id),
+        )}
+      </aside>
       <section class="agents-toolbar">
         <div class="agents-toolbar-row">
-          <div class="agents-control-select">
+          <div class="agents-control-select agents-control-select--mobile">
             <select
               class="agents-select"
               .value=${selectedId ?? ""}
@@ -346,6 +351,46 @@ export function renderAgents(props: AgentsProps) {
             `}
       </section>
     </div>
+  `;
+}
+
+// Desktop-visible agent navigation. The toolbar `<select>` stays as the narrow-screen
+// fallback (CSS toggles them), so users with many agents can switch in one click instead
+// of opening a dropdown every time. See issue #57067.
+function renderAgentNav(
+  agents: AgentsListResult["agents"],
+  selectedId: string | null,
+  defaultId: string | null,
+  loading: boolean,
+  onSelect: (agentId: string) => void,
+) {
+  if (agents.length === 0) {
+    return html`<div class="agents-nav-empty">${t("agents.noAgents")}</div>`;
+  }
+  return html`
+    <nav class="agent-list" aria-label=${t("agents.selectTitle")}>
+      ${agents.map((agent) => {
+        const label = normalizeAgentLabel(agent);
+        const isSelected = agent.id === selectedId;
+        const isDefault = Boolean(agentBadgeText(agent.id, defaultId));
+        return html`
+          <button
+            type="button"
+            class="agent-row ${isSelected ? "active" : ""}"
+            aria-pressed=${isSelected}
+            ?disabled=${loading}
+            @click=${() => onSelect(agent.id)}
+          >
+            <span class="agent-avatar" aria-hidden="true">${label.slice(0, 1).toUpperCase()}</span>
+            <span class="agent-info">
+              <span class="agent-title">${label}</span>
+              ${label === agent.id ? nothing : html`<span class="agent-sub">${agent.id}</span>`}
+            </span>
+            ${isDefault ? html`<span class="agent-pill">${t("agents.default")}</span>` : nothing}
+          </button>
+        `;
+      })}
+    </nav>
   `;
 }
 
