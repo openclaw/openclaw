@@ -1178,6 +1178,43 @@ describe("loadOpenClawPlugins", () => {
     expect(registerFailMetrics.loadAndRegisterMs).toEqual(expect.any(Number));
   });
 
+  it("rolls back trusted policies when plugin register fails", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "trusted-policy-register-fail",
+      filename: "trusted-policy-register-fail.cjs",
+      body: `module.exports = { id: "trusted-policy-register-fail", register(api) {
+  api.registerTrustedToolPolicy({
+    id: "failed-policy",
+    description: "Must be removed after register failure",
+    evaluate: () => ({ block: true, blockReason: "stale failed policy" })
+  });
+  throw new Error("register boom");
+} };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { trustedToolPolicies: ["failed-policy"] },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["trusted-policy-register-fail"],
+      },
+    });
+
+    expect(registry.trustedToolPolicies ?? []).toHaveLength(0);
+    const loaded = registry.plugins.find((entry) => entry.id === "trusted-policy-register-fail");
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.error).toContain("register boom");
+    expectDiagnosticContaining({
+      registry,
+      level: "error",
+      pluginId: "trusted-policy-register-fail",
+      message: "plugin failed during register: Error: register boom",
+    });
+  });
+
   it("can load scoped plugins from a supplied manifest registry without rereading manifests", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

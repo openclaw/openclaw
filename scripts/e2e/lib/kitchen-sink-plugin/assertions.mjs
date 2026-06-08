@@ -203,7 +203,7 @@ const expectMissing = (listValue, expected, field) => {
 
 const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance", "adversarial"]);
 const requiredFullDiagnosticCanaries = new Set([
-  "only bundled plugins can register trusted tool policies",
+  "plugin must declare contracts.trustedToolPolicies for: kitchen-sink-trusted-tool-policy",
   "plugin must declare contracts.tools for: kitchen-sink-tool",
   'channel "kitchen-sink-channel-probe" registration missing required config helpers',
   'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
@@ -221,7 +221,7 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "hosted media resolver registration missing resolver",
     "http route registration missing or invalid auth: /kitchen-sink/http-route",
     "node invoke policy registration missing commands",
-    "only bundled plugins can register trusted tool policies",
+    "plugin must declare contracts.trustedToolPolicies for: kitchen-sink-trusted-tool-policy",
     "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider",
     "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
     "plugin must declare contracts.tools for: kitchen-sink-tool",
