@@ -191,6 +191,22 @@ function findFencedCodeSegment(text: string, index: number): MarkdownCodeSegment
   const lineStart = text.lastIndexOf("\n", index - 1) + 1;
   const openerIsIndentedLine =
     index - lineStart <= 3 && text.slice(lineStart, index).trim() === "";
+  const openerLineEnd = findLineEnd(text, index);
+  let sameLineCloserCursor = index + fenceLength;
+  while (sameLineCloserCursor < openerLineEnd) {
+    if (text[sameLineCloserCursor] !== fenceChar) {
+      sameLineCloserCursor += 1;
+      continue;
+    }
+    const closingLength = countRun(text, sameLineCloserCursor, fenceChar);
+    if (closingLength >= fenceLength) {
+      return {
+        start: openerIsIndentedLine ? lineStart : index,
+        end: sameLineCloserCursor + closingLength,
+      };
+    }
+    sameLineCloserCursor += closingLength;
+  }
   let nextLineStart = findLineEnd(text, index);
   if (nextLineStart < text.length) {
     nextLineStart += 1;
