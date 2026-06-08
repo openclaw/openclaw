@@ -311,6 +311,8 @@ export function createMsteamsRealtimeCall(params: {
   /** Phase 4 proactive vision: the last frame bytes pushed into the session (skip unchanged), + timer. */
   let lastPushedFrameData: string | undefined;
   let visionPushTimer: ReturnType<typeof setInterval> | undefined;
+  /** Phase 6b: last emotion cued to the worker, so we only send on change (early + self-correcting). */
+  let lastSentExpression: string | undefined;
 
   function recordTranscript(role: "user" | "assistant", text: string): void {
     // Media Access API: never retain media-derived transcript text before Teams
@@ -445,17 +447,23 @@ export function createMsteamsRealtimeCall(params: {
       },
     },
     onTranscript: (role, text, isFinal) => {
-      if (isFinal) {
-        recordTranscript(role, text);
-        // CVI Phase 6b: cue the avatar's emotion from the assistant's spoken transcript. Best-effort
-        // cosmetic hint — the worker ignores unknown tags; a send failure must not disrupt the call.
-        if (role === "assistant" && !closed) {
+      // CVI Phase 6b: cue emotion as EARLY as possible — on the FIRST assistant transcript chunk of a
+      // turn (partial or final), not only the final — so the face isn't neutral while a happy/sad reply
+      // is already being spoken. De-duped on the inferred emotion so unchanged cues aren't spammed, and
+      // it self-corrects if later text shifts the emotion (e.g. "sorry … but that's great!").
+      if (role === "assistant" && !closed) {
+        const emotion = inferEmotion(text);
+        if (emotion !== lastSentExpression) {
+          lastSentExpression = emotion;
           try {
-            session.send({ type: "expression", emotion: inferEmotion(text) });
+            session.send({ type: "expression", emotion });
           } catch {
             // non-fatal
           }
         }
+      }
+      if (isFinal) {
+        recordTranscript(role, text);
       }
     },
     onToolCall: (event, rtSession) => {

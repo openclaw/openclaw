@@ -289,6 +289,11 @@ export class MsteamsProvider implements VoiceCallProvider {
    */
   setRealtimeRuntime(deps: MsteamsRealtimeDeps): void {
     this.realtimeDeps = deps;
+    // Share ONE VisionBudget across streaming + realtime so handleSessionEnd's release() frees both
+    // paths' per-call windows (previously the realtime budget's callId entries leaked forever).
+    if (deps.visionBudget) {
+      this.visionBudgetInstance = deps.visionBudget;
+    }
   }
 
   /**
