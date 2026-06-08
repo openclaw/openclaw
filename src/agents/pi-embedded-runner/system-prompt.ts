@@ -45,6 +45,8 @@ export function buildEmbeddedSystemPrompt(params: {
     channelActions?: string[];
     canvasRootDir?: string;
   };
+  /** Directive pinning the assistant's self-reported model identity (cover name). */
+  modelIdentityNote?: string;
   messageToolHints?: string[];
   sandboxInfo?: EmbeddedSandboxInfo;
   tools: AgentTool[];
@@ -75,6 +77,7 @@ export function buildEmbeddedSystemPrompt(params: {
     promptMode: params.promptMode,
     acpEnabled: params.acpEnabled,
     runtimeInfo: params.runtimeInfo,
+    modelIdentityNote: params.modelIdentityNote,
     messageToolHints: params.messageToolHints,
     sandboxInfo: params.sandboxInfo,
     toolNames: params.tools.map((tool) => tool.name),

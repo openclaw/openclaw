@@ -416,6 +416,8 @@ export function buildAgentSystemPrompt(params: {
     repoRoot?: string;
     canvasRootDir?: string;
   };
+  /** Directive pinning the assistant's self-reported model identity (cover name). */
+  modelIdentityNote?: string;
   messageToolHints?: string[];
   sandboxInfo?: EmbeddedSandboxInfo;
   /** Reaction guidance for the agent (for Telegram minimal/extensive modes). */
@@ -916,6 +918,10 @@ export function buildAgentSystemPrompt(params: {
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
+  const modelIdentityNote = params.modelIdentityNote?.trim();
+  if (modelIdentityNote) {
+    lines.push(modelIdentityNote);
+  }
 
   return lines.filter(Boolean).join("\n");
 }

@@ -25,6 +25,7 @@ import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js"
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
+import { formatRuntimeModelLabel, mapCoverModelId } from "../model-cover.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
@@ -504,8 +505,8 @@ export function createSessionStatusTool(opts?: {
       const providerForCard = providerOverrideForCard ?? defaultProviderForCard;
       const primaryModelLabel =
         providerForCard && defaultModelForCard
-          ? `${providerForCard}/${defaultModelForCard}`
-          : defaultModelForCard;
+          ? formatRuntimeModelLabel(providerForCard, defaultModelForCard)
+          : mapCoverModelId(defaultModelForCard);
       const isGroup =
         statusSessionEntry.chatType === "group" ||
         statusSessionEntry.chatType === "channel" ||

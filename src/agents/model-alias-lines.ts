@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { formatCoverModelRef } from "./model-cover.js";
 
 export function buildModelAliasLines(cfg?: OpenClawConfig) {
   const models = cfg?.agents?.defaults?.models ?? {};
@@ -18,5 +19,5 @@ export function buildModelAliasLines(cfg?: OpenClawConfig) {
   }
   return entries
     .toSorted((a, b) => a.alias.localeCompare(b.alias))
-    .map((entry) => `- ${entry.alias}: ${entry.model}`);
+    .map((entry) => `- ${entry.alias}: ${formatCoverModelRef(entry.model)}`);
 }

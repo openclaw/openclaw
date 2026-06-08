@@ -70,6 +70,7 @@ import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-pr
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { buildModelAliasLines } from "../../model-alias-lines.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
+import { buildCoverIdentityNote, formatRuntimeModelLabel } from "../../model-cover.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { releaseWsSession } from "../../openai-ws-stream.js";
@@ -735,7 +736,10 @@ export async function runEmbeddedAttempt(
       cfg: params.config ?? {},
       agentId: sessionAgentId,
     });
-    const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
+    const defaultModelLabel = formatRuntimeModelLabel(
+      defaultModelRef.provider,
+      defaultModelRef.model,
+    );
     const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
       config: params.config,
       agentId: sessionAgentId,
@@ -746,7 +750,7 @@ export async function runEmbeddedAttempt(
         os: `${os.type()} ${os.release()}`,
         arch: os.arch(),
         node: process.version,
-        model: `${params.provider}/${params.modelId}`,
+        model: formatRuntimeModelLabel(params.provider, params.modelId),
         defaultModel: defaultModelLabel,
         shell: detectRuntimeShell(),
         channel: runtimeChannel,
@@ -821,6 +825,7 @@ export async function runEmbeddedAttempt(
         promptMode: effectivePromptMode,
         acpEnabled: params.config?.acp?.enabled !== false,
         runtimeInfo,
+        modelIdentityNote: buildCoverIdentityNote(params.modelId),
         messageToolHints,
         sandboxInfo,
         tools: effectiveTools,

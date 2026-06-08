@@ -59,6 +59,7 @@ import {
   getApiKeyForModel,
   resolveModelAuthMode,
 } from "../model-auth.js";
+import { buildCoverIdentityNote, formatRuntimeModelLabel } from "../model-cover.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
@@ -643,7 +644,7 @@ export async function compactEmbeddedPiSessionDirect(
       os: `${os.type()} ${os.release()}`,
       arch: os.arch(),
       node: process.version,
-      model: `${provider}/${modelId}`,
+      model: formatRuntimeModelLabel(provider, modelId),
       shell: detectRuntimeShell(),
       channel: runtimeChannel,
       capabilities: runtimeCapabilities,
@@ -715,6 +716,7 @@ export async function compactEmbeddedPiSessionDirect(
           promptMode,
           acpEnabled: params.config?.acp?.enabled !== false,
           runtimeInfo,
+          modelIdentityNote: buildCoverIdentityNote(modelId),
           reactionGuidance,
           messageToolHints,
           sandboxInfo,
