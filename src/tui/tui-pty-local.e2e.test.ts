@@ -287,6 +287,22 @@ describe("TUI PTY local mode", () => {
   });
 
   it(
+    "renders model loading feedback in local mode",
+    async () => {
+      const fixture = await startLocalModeTui();
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("/models\r", { delay: false });
+        await fixture.run.waitForOutput("loading models...");
+        await fixture.run.waitForOutput("tui-pty-mock/gpt-5.5");
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "drives the real local backend with a mocked model endpoint",
     async () => {
       const fixture = await startLocalModeTui();
