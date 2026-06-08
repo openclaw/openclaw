@@ -5,7 +5,9 @@ import { createEmptyPluginRegistry } from "../registry-empty.js";
 import type { PluginRegistry } from "../registry-types.js";
 import {
   getActivePluginChannelRegistry,
+  getActivePluginHttpRouteRegistry,
   pinActivePluginChannelRegistry,
+  pinActivePluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../runtime.js";
@@ -148,6 +150,36 @@ describe("ensureStandaloneRuntimePluginRegistryLoaded", () => {
     expect(result).toBe(loadedRegistry);
     // The previous startup pinned registry should still be the active channel registry
     expect(getActivePluginChannelRegistry()).toBe(startupRegistry);
+    expect(loaderMocks.loadOpenClawPlugins).toHaveBeenCalledOnce();
+  });
+
+  it("pins the http-route registry during tool discovery even when channels are empty", () => {
+    const startupRegistry = createEmptyPluginRegistry();
+    startupRegistry.httpRoutes.push({} as never);
+    setActivePluginRegistry(startupRegistry, "startup", "gateway-bindable");
+    pinActivePluginHttpRouteRegistry(startupRegistry);
+
+    expect(getActivePluginHttpRouteRegistry()).toBe(startupRegistry);
+
+    const loadedRegistry = createEmptyPluginRegistry();
+    loadedRegistry.httpRoutes.push({} as never);
+    loaderMocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry);
+
+    const result = ensureStandaloneRuntimePluginRegistryLoaded({
+      loadOptions: {
+        config: { plugins: { allow: ["demo"] } },
+        onlyPluginIds: ["demo"],
+        workspaceDir: "/tmp/ws",
+        activate: false,
+        toolDiscovery: true,
+      },
+      surface: "http-route",
+      forceLoad: true,
+      installRegistry: true,
+    });
+
+    expect(result).toBe(loadedRegistry);
+    expect(getActivePluginHttpRouteRegistry()).toBe(loadedRegistry);
     expect(loaderMocks.loadOpenClawPlugins).toHaveBeenCalledOnce();
   });
 });
