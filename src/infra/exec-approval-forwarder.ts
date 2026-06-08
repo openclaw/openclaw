@@ -404,6 +404,9 @@ async function deliverToTargets(params: {
         }
         throw send.error instanceof Error ? send.error : new Error(String(send.error));
       }
+      if (send.status === "suppressed") {
+        return { attempted: true, delivered: false, failed: false };
+      }
       return { attempted: true, delivered: true, failed: false };
     } catch (err) {
       log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
@@ -661,7 +664,7 @@ function createApprovalHandlers<
         pending.delete(requestId);
         clearTimeout(timeoutId);
       }
-      if (delivery.attempted > 0 && delivery.failed > 0) {
+      if (delivery.attempted > 0) {
         throw new Error(
           `${params.strategy.kind} approvals: failed to deliver request ${requestId}`,
         );

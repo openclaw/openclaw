@@ -449,6 +449,33 @@ describe("exec approval forwarder", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
+  it("reports request delivery failure when all approval targets are suppressed", async () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn().mockResolvedValue({
+      status: "suppressed",
+      results: [],
+      reason: "no_visible_result",
+    });
+    const { forwarder } = createForwarder({
+      cfg: makeTargetsCfg([{ channel: "slack", to: "U-suppressed" }]),
+      deliver,
+    });
+
+    await expect(forwarder.handleRequested(baseRequest)).rejects.toThrow(
+      "exec approvals: failed to deliver request req-1",
+    );
+    expect(deliver).toHaveBeenCalledTimes(1);
+
+    await forwarder.handleResolved({
+      id: baseRequest.id,
+      decision: "allow-once",
+      resolvedBy: "slack:U-suppressed",
+      ts: 2000,
+    });
+    await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - baseRequest.createdAtMs);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps approval pending when at least one request target delivers", async () => {
     vi.useFakeTimers();
     const deliver = vi
