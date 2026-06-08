@@ -21,7 +21,7 @@ import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
-import { DEFAULT_GIT_CHANNEL, type UpdateChannel } from "./update-channels.js";
+import type { UpdateChannel } from "./update-channels.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
 // Whole-process backstop for the finalizer. `update finalize` runs several timed
@@ -158,16 +158,17 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
       ? params.timeoutMs
       : undefined;
-  // This helper only runs for git/source updates, where `runGatewayUpdate`
-  // defaults the core update to the git/dev channel (`opts.channel ?? "dev"`).
-  // Match it so the finalizer converges official plugins on the same channel as
-  // the core update instead of falling back to the package (stable) channel.
-  const channel = params.channel ?? DEFAULT_GIT_CHANNEL;
+  // Only forward `--channel` when the caller actually has a configured channel.
+  // `update finalize` treats any `--channel` as an explicit request and persists
+  // it to `openclaw.json` (`persistRequestedUpdateChannel`); emitting a defaulted
+  // channel here would write a channel the user never requested. When omitted,
+  // the finalizer converges on the stored/default channel — the reconcile still
+  // resolves a host-compatible version, it just does not mutate config.
   const nodePath = await resolveStableNodePath(process.execPath);
   const argv = buildFinalizeArgv({
     nodePath,
     entrypoint,
-    channel,
+    ...(params.channel ? { channel: params.channel } : {}),
     ...(perStepTimeoutMs === undefined ? {} : { timeoutMs: perStepTimeoutMs }),
   });
   // Pin the finalizer's host-compat resolution to the just-installed core
