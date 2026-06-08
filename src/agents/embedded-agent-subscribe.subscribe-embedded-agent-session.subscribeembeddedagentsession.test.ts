@@ -880,6 +880,20 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
+  it.each(["Use <reasoning> tag for this example.", "Use <antml:reasoning> tag for this example."])(
+    "preserves visible prose mention in block replies: %s",
+    async (text) => {
+      await expect(collectTextEndBlockReplyPayloads([text])).resolves.toEqual([text]);
+    },
+  );
+
+  it.each([
+    "Visible prefix <reasoning> tag for internal analysis",
+    "Visible prefix <antml:reasoning> tag for internal analysis",
+  ])("hides broader trailing reasoning tag prose in block replies: %s", async (text) => {
+    await expect(collectTextEndBlockReplyPayloads([text])).resolves.toEqual(["Visible prefix"]);
+  });
+
   it("streams native thinking_delta events and signals reasoning end", () => {
     const onReasoningStream = vi.fn();
     const onReasoningEnd = vi.fn();
