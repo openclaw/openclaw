@@ -237,7 +237,9 @@ async function maybeRequestNodesRunApproval(params: {
       approvedByAsk = true;
       approvalDecision = "allow-once";
     } else if (params.askFallback !== "allowlist") {
-      throw new Error("exec denied: approval required (approval UI not available)");
+      throw new Error(
+        "exec denied: approval required (approval UI not available; open the Control UI with `openclaw dashboard --no-open` or check pending approvals with `openclaw exec-approvals list`)",
+      );
     }
   }
   if (decision === "allow-once") {
