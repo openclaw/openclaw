@@ -1,3 +1,4 @@
+// Codex tests cover dynamic tools plugin behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
@@ -369,6 +370,116 @@ describe("createCodexDynamicToolBridge", () => {
       contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: fuzzplugin_move_angles" }],
     });
     expect(badExecute).not.toHaveBeenCalled();
+  });
+
+  it("quarantines unreadable dynamic tool descriptors without dropping healthy siblings", () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const poisonedName = createTool({
+      name: "fuzzplugin_unreadable_name",
+      execute: vi.fn(),
+    });
+    Object.defineProperty(poisonedName, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin dynamic tool name getter exploded");
+      },
+    });
+    const poisonedSchema = createTool({
+      name: "fuzzplugin_unreadable_schema",
+      execute: vi.fn(),
+    });
+    Object.defineProperty(poisonedSchema, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin dynamic tool schema getter exploded");
+      },
+    });
+    const invalidName = createTool({
+      name: "",
+      execute: vi.fn(),
+    });
+    const poisonedExecute = createTool({
+      name: "fuzzplugin_unreadable_execute",
+    });
+    Object.defineProperty(poisonedExecute, "execute", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin dynamic tool execute getter exploded");
+      },
+    });
+
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        poisonedName,
+        poisonedSchema,
+        invalidName,
+        poisonedExecute,
+        createTool({ name: "message" }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableSpecs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.specs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.telemetry.quarantinedTools).toEqual([
+      {
+        tool: "tool[0]",
+        violations: ["tool[0].name is unreadable"],
+      },
+      {
+        tool: "fuzzplugin_unreadable_schema",
+        violations: ["fuzzplugin_unreadable_schema.inputSchema is unreadable"],
+      },
+      {
+        tool: "tool[2]",
+        violations: ["tool[2].name must be a non-empty string"],
+      },
+      {
+        tool: "fuzzplugin_unreadable_execute",
+        violations: [
+          "fuzzplugin_unreadable_execute could not be wrapped for before-tool-call hooks",
+        ],
+      },
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "tool[0], fuzzplugin_unreadable_schema, tool[2], fuzzplugin_unreadable_execute",
+      ),
+      expect.objectContaining({
+        tools: [
+          {
+            tool: "tool[0]",
+            violations: ["tool[0].name is unreadable"],
+          },
+          {
+            tool: "fuzzplugin_unreadable_schema",
+            violations: ["fuzzplugin_unreadable_schema.inputSchema is unreadable"],
+          },
+          {
+            tool: "tool[2]",
+            violations: ["tool[2].name must be a non-empty string"],
+          },
+          {
+            tool: "fuzzplugin_unreadable_execute",
+            violations: [
+              "fuzzplugin_unreadable_execute could not be wrapped for before-tool-call hooks",
+            ],
+          },
+        ],
+      }),
+    );
+
+    const registeredBridge = createCodexDynamicToolBridge({
+      tools: [poisonedExecute, createTool({ name: "message" })],
+      registeredTools: [
+        createTool({ name: "fuzzplugin_unreadable_execute" }),
+        createTool({ name: "message" }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    expect(registeredBridge.availableSpecs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(registeredBridge.specs.map((tool) => tool.name)).toEqual(["message"]);
   });
 
   it("can expose all dynamic tools directly for compatibility", () => {

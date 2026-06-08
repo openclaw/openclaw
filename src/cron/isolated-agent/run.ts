@@ -1,7 +1,8 @@
+/** Orchestrates isolated cron agent turn setup, execution, delivery, and cleanup. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
@@ -269,6 +270,8 @@ function buildCronDeliveryTrace(params: {
   fallbackUsed: boolean;
   delivered: boolean;
 }): CronDeliveryTrace {
+  // Trace both intended and resolved targets so run logs can explain fallback
+  // delivery without leaking provider-specific raw routing internals.
   const intended = normalizeCronTraceTarget({
     channel: params.deliveryPlan.channel ?? "last",
     to: params.deliveryPlan.to ?? null,
@@ -305,6 +308,7 @@ function resolveCronSourceDeliveryPlan(params: {
     threadId: params.resolvedDelivery.threadId,
   };
   if (params.deliveryPlan.mode === "webhook") {
+    // Webhook jobs do not expose chat delivery or message-tool fallback.
     return createSourceDeliveryPlan({
       owner: "none",
       reason: "cron_webhook",
@@ -313,6 +317,8 @@ function resolveCronSourceDeliveryPlan(params: {
     });
   }
   if (params.deliveryPlan.mode === "none") {
+    // delivery=none still allows explicit message-tool sends from the agent,
+    // but cron itself must not auto-announce a final reply.
     return createSourceDeliveryPlan({
       owner: "none",
       reason: "cron_none",
@@ -449,6 +455,13 @@ type RunCronAgentTurnParams = {
   agentId?: string;
   lane?: string;
 };
+
+function resolveCronAgentTurnMessage(input: RunCronAgentTurnParams): string {
+  if (input.job.payload.kind === "agentTurn") {
+    return input.job.payload.message;
+  }
+  return input.message;
+}
 
 type WithRunSession = (
   result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
@@ -693,6 +706,8 @@ async function prepareCronRunContext(params: {
           .slice(selectedPreflightCandidateIndex + 1)
           .map((candidate) => `${candidate.provider}/${candidate.model}`)
       : undefined;
+  // When preflight skips the first local candidate, trim the fallback chain so
+  // execution starts at the reachable provider and only falls forward from it.
   if (selectedPreflightCandidate && modelFallbacksOverride) {
     if (firstUnavailablePreflight?.status === "unavailable") {
       logWarn(
@@ -757,7 +772,8 @@ async function prepareCronRunContext(params: {
     });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now);
-  const base = `[cron:${input.job.id} ${input.job.name}] ${input.message}`.trim();
+  const message = resolveCronAgentTurnMessage(input);
+  const base = `[cron:${input.job.id} ${input.job.name}] ${message}`.trim();
   const isExternalHook =
     hookExternalContentSource !== undefined || isExternalHookSession(baseSessionKey);
   const allowUnsafeExternalContent =
@@ -768,7 +784,7 @@ async function prepareCronRunContext(params: {
 
   if (isExternalHook) {
     const { detectSuspiciousPatterns } = await loadCronExternalContentRuntime();
-    const suspiciousPatterns = detectSuspiciousPatterns(input.message);
+    const suspiciousPatterns = detectSuspiciousPatterns(message);
     if (suspiciousPatterns.length > 0) {
       logWarn(
         `[security] Suspicious patterns detected in external hook content ` +
@@ -781,7 +797,7 @@ async function prepareCronRunContext(params: {
     const { buildSafeExternalPrompt } = await loadCronExternalContentRuntime();
     const hookType = mapHookExternalContentSource(hookExternalContentSource ?? "webhook");
     const safeContent = buildSafeExternalPrompt({
-      content: input.message,
+      content: message,
       source: hookType,
       jobName: input.job.name,
       jobId: input.job.id,
@@ -837,6 +853,8 @@ async function prepareCronRunContext(params: {
       : await (
           await loadCronAuthProfileRuntime()
         ).resolveSessionAuthProfileOverride({
+          // Auth profile resolution can mutate session state; pass the same
+          // store and key that persistence will later write.
           cfg: cfgWithAgentDefaults,
           provider,
           acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
@@ -1196,7 +1214,9 @@ async function disposeCronRunContext(params: {
       sessionId: params.sessionId,
       reason: "isolated-cron-dispose",
       onError: (error, sid) => {
-        logWarn(`[cron] Failed to retire MCP runtime during isolated cron dispose ${sid}: ${String(error)}`);
+        logWarn(
+          `[cron] Failed to retire MCP runtime during isolated cron dispose ${sid}: ${String(error)}`,
+        );
       },
     }).catch(() => {});
   }

@@ -1,3 +1,4 @@
+// Update CLI tests cover update command behavior, runtime calls, and output handling.
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -1147,6 +1148,55 @@ describe("update-cli", () => {
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
   });
 
+  it("clears stale npm resolution metadata before post-core downgrade resume", async () => {
+    const { root } = setupUpdatedRootRefresh();
+    readPackageVersion.mockImplementation(async (pkgRoot: string) =>
+      pkgRoot === root ? "0.0.1" : "2026.5.28",
+    );
+    const pluginInstallRecords = {
+      msteams: {
+        source: "npm",
+        spec: "@openclaw/msteams",
+        installPath: "/tmp/openclaw-msteams-plugin",
+        version: "1.0.0",
+        resolvedName: "@openclaw/msteams",
+        resolvedVersion: "1.0.0",
+        resolvedSpec: "@openclaw/msteams@1.0.0",
+        integrity: "sha512-newer",
+      },
+    } as const;
+    let capturedRecords: unknown;
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(pluginInstallRecords);
+    spawn.mockImplementationOnce((_node, _argv, options) => {
+      const env = (options as { env?: NodeJS.ProcessEnv }).env;
+      const recordsPath = env?.OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH;
+      if (!recordsPath) {
+        throw new Error("missing post-core install records path");
+      }
+      capturedRecords = JSON.parse(fsSync.readFileSync(recordsPath, "utf-8"));
+      const child = new EventEmitter() as EventEmitter & {
+        once: EventEmitter["once"];
+      };
+      queueMicrotask(() => {
+        child.emit("exit", 0, null);
+      });
+      return child;
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(capturedRecords).toEqual({
+      msteams: {
+        source: "npm",
+        spec: "@openclaw/msteams",
+        installPath: "/tmp/openclaw-msteams-plugin",
+        version: "1.0.0",
+        resolvedName: "@openclaw/msteams",
+        integrity: "sha512-newer",
+      },
+    });
+  });
+
   it("respawns into the updated git root before requested channel persistence", async () => {
     const { entrypoints } = setupUpdatedRootRefresh({
       gatewayUpdateImpl: async (root) =>
@@ -1213,6 +1263,47 @@ describe("update-cli", () => {
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(probeGateway).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
+  it("pins the compatibility host version to the downgraded target during current-process post-core plugin convergence (#87914)", async () => {
+    const downgradedRoot = createCaseDir("openclaw-downgraded-compat-root");
+    setupUpdatedRootRefresh({
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: downgradedRoot,
+          before: { version: "2026.4.14" },
+          after: { version: "2026.4.10" },
+        }),
+    });
+    // The old core is still installed at the invocation root; the freshly
+    // installed downgraded target lives at the post-update root.
+    readPackageVersion.mockImplementation(async (pkgRoot: string) =>
+      pkgRoot === downgradedRoot ? "2026.4.10" : "2026.4.14",
+    );
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag: "latest", version: "2026.4.10" });
+
+    delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    let hostVersionDuringPluginUpdate: string | undefined = "unset";
+    updateNpmInstalledPlugins.mockImplementation(async () => {
+      hostVersionDuringPluginUpdate = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+      return { changed: false, config: baseConfig, outcomes: [] };
+    });
+
+    try {
+      await updateCommand({ yes: true, tag: "2026.4.10", restart: false });
+
+      expect(spawn).not.toHaveBeenCalled();
+      expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+      // Compatibility is evaluated against the downgraded target core, not the
+      // still-running old VERSION, so incompatible newer plugins are disabled
+      // before restart.
+      expect(hostVersionDuringPluginUpdate).toBe("2026.4.10");
+      // The override is scoped to the plugin convergence and restored afterward.
+      expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
+    } finally {
+      delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    }
   });
 
   it("fails the update when the fresh process exits non-zero", async () => {
@@ -1488,6 +1579,49 @@ describe("update-cli", () => {
     );
 
     expect(npmPluginUpdateCall()?.timeoutMs).toBe(1_800_000);
+  });
+
+  it("prints plugin channel fallbacks near the post-core plugin summary", async () => {
+    updateNpmInstalledPlugins.mockResolvedValueOnce({
+      changed: false,
+      config: baseConfig,
+      outcomes: [
+        {
+          pluginId: "lossless-claw",
+          status: "updated",
+          message: "Updated lossless-claw: 1.0.0 -> 1.0.1.",
+          channelFallback: {
+            requestedSpec: "lossless-claw@beta",
+            usedSpec: "lossless-claw",
+            requestedLabel: "@beta",
+            usedLabel: "@latest",
+            reason: "unavailable",
+            message:
+              "plugin channel fallback: lossless-claw used @latest because @beta was unavailable",
+          },
+        },
+      ],
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "beta",
+      },
+      async () => {
+        await updateCommand({ restart: false });
+      },
+    );
+
+    const logs = vi.mocked(runtimeCapture.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.some((line) => line.includes("npm plugins: 1 updated, 0 unchanged."))).toBe(true);
+    expect(
+      logs.some((line) =>
+        line.includes(
+          "plugin channel fallback: lossless-claw used @latest because @beta was unavailable",
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("uses a fail-closed integrity policy for post-core plugin updates", async () => {

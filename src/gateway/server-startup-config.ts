@@ -1,3 +1,5 @@
+// Gateway startup config loads, repairs, validates, and activates runtime config
+// plus secrets snapshots before the server exposes user-facing surfaces.
 import { isDeepStrictEqual } from "node:util";
 import {
   formatInvalidConfigRecoveryHint,
@@ -435,6 +437,7 @@ export async function prepareGatewayStartupConfig(params: {
   tailscaleOverride?: GatewayTailscaleConfig;
   activateRuntimeSecrets: ActivateRuntimeSecrets;
   persistStartupAuth?: boolean;
+  log?: GatewayStartupLog;
   measure?: GatewayStartupConfigMeasure;
 }): Promise<Awaited<ReturnType<typeof ensureGatewayStartupAuth>>> {
   const measure = params.measure ?? (async (_name, run) => await run());
@@ -510,6 +513,7 @@ export async function prepareGatewayStartupConfig(params: {
       env: process.env,
       authOverride: preflightAuthOverride,
       tailscaleOverride: params.tailscaleOverride,
+      warn: params.log?.warn,
       persist: params.persistStartupAuth ?? false,
       baseHash: params.configSnapshot.hash,
     }),

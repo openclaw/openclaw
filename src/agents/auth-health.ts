@@ -1,3 +1,8 @@
+/**
+ * Auth profile health summarization.
+ * Classifies stored and runtime credentials into profile/provider rollups for
+ * status commands and doctor output without prompting keychain access.
+ */
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -61,6 +66,7 @@ function resolveAuthProfileSource(_profileId: string): AuthProfileSource {
   return "store";
 }
 
+/** Format a remaining-duration value for compact auth status displays. */
 export function formatRemainingShort(
   remainingMs?: number,
   opts?: {
@@ -122,8 +128,18 @@ function buildProfileHealth(params: {
   cfg?: OpenClawConfig;
   now: number;
   warnAfterMs: number;
+  allowKeychainPrompt?: boolean;
 }): AuthProfileHealth {
-  const { profileId, credential, runtimeCredential, store, cfg, now, warnAfterMs } = params;
+  const {
+    profileId,
+    credential,
+    runtimeCredential,
+    store,
+    cfg,
+    now,
+    warnAfterMs,
+    allowKeychainPrompt,
+  } = params;
   const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
   const source = resolveAuthProfileSource(profileId);
   const healthCredential = runtimeCredential ?? credential;
@@ -188,10 +204,43 @@ function buildProfileHealth(params: {
     };
   }
 
+  const storedEligibility = evaluateStoredCredentialEligibility({
+    credential: healthCredential,
+    now,
+  });
+  if (!storedEligibility.eligible && storedEligibility.reasonCode === "unresolved_ref") {
+    return {
+      profileId,
+      provider,
+      type: "oauth",
+      status: "missing",
+      reasonCode: storedEligibility.reasonCode,
+      source,
+      label,
+    };
+  }
+
   const effectiveCredential = resolveEffectiveOAuthCredential({
     profileId,
     credential: healthCredential,
+    allowKeychainPrompt,
   });
+  const eligibility = evaluateStoredCredentialEligibility({
+    credential: effectiveCredential,
+    now,
+  });
+  if (!eligibility.eligible) {
+    return {
+      profileId,
+      provider,
+      type: "oauth",
+      status: eligibility.reasonCode === "expired" ? "expired" : "missing",
+      reasonCode: eligibility.reasonCode,
+      source,
+      label,
+    };
+  }
+
   const oauthWarnAfterMs = Math.max(warnAfterMs, DEFAULT_OAUTH_REFRESH_MARGIN_MS);
   const {
     status: rawStatus,
@@ -210,12 +259,14 @@ function buildProfileHealth(params: {
   };
 }
 
+/** Build profile and provider auth health rollups from an auth profile store. */
 export function buildAuthHealthSummary(params: {
   store: AuthProfileStore;
   cfg?: OpenClawConfig;
   warnAfterMs?: number;
   providers?: string[];
   runtimeCredentialsByProvider?: ReadonlyMap<string, AuthProfileCredential>;
+  allowKeychainPrompt?: boolean;
 }): AuthHealthSummary {
   const now = Date.now();
   const warnAfterMs = params.warnAfterMs ?? DEFAULT_OAUTH_WARN_MS;
@@ -238,6 +289,7 @@ export function buildAuthHealthSummary(params: {
         cfg: params.cfg,
         now,
         warnAfterMs,
+        allowKeychainPrompt: params.allowKeychainPrompt,
       }),
     )
     .toSorted((a, b) => {

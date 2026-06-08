@@ -1,3 +1,5 @@
+// Talk session methods manage unified realtime/transcription/handoff sessions,
+// audio appends, tool results, steering, turns, joins, and cleanup.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -68,6 +70,12 @@ import {
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
+/**
+ * Gateway-managed Talk session methods for managed rooms and audio relays.
+ *
+ * The public `sessionId` is resolved through the unified registry so each RPC
+ * can enforce the correct connection ownership for its concrete backend.
+ */
 type ManagedRoomTalkSession = Extract<UnifiedTalkSessionRecord, { kind: "managed-room" }>;
 
 function normalizeTalkSessionMode(params: { mode?: string; transport?: string }): TalkMode {
@@ -136,7 +144,20 @@ function respondInvalidRequest(respond: RespondFn, message: string) {
 }
 
 function respondUnavailable(respond: RespondFn, err: unknown) {
-  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+  const message = formatForLog(err);
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.UNAVAILABLE, message, {
+      details: {
+        talkIssue: {
+          code: "realtime_unavailable",
+          message,
+          phase: "request",
+        },
+      },
+    }),
+  );
 }
 
 function respondOk(respond: RespondFn, payload: unknown = { ok: true }) {
@@ -181,6 +202,7 @@ function respondManagedRoomTurn(params: {
   respondOk(params.respond, { ok: true, turnId: result.turnId, events: result.events });
 }
 
+/** RPC handlers for gateway-managed Talk sessions and room lifecycle. */
 export const talkSessionHandlers: GatewayRequestHandlers = {
   "talk.session.create": async ({ params, respond, context, client }) => {
     if (

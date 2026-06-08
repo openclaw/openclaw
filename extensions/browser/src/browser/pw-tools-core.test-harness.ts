@@ -1,3 +1,7 @@
+/**
+ * Vitest harness for pw-tools-core modules that need mocked Playwright session
+ * state and navigation guards.
+ */
 import { beforeEach, vi } from "vitest";
 
 let currentPage: Record<string, unknown> | null = null;
@@ -106,18 +110,22 @@ vi.mock("./navigation-guard.js", async (importOriginal) => {
   };
 });
 
+/** Returns mocked pw-session exports shared by pw-tools-core tests. */
 export function getPwToolsCoreSessionMocks() {
   return sessionMocks;
 }
 
+/** Returns mocked navigation guard exports shared by pw-tools-core tests. */
 export function getPwToolsCoreNavigationGuardMocks() {
   return navigationGuardMocks;
 }
 
+/** Sets the current mocked page returned by getPageForTargetId. */
 export function setPwToolsCoreCurrentPage(page: Record<string, unknown> | null) {
   currentPage = page;
 }
 
+/** Sets the current mocked locator returned by refLocator. */
 export function setPwToolsCoreCurrentRefLocator(locator: Record<string, unknown> | null) {
   currentRefLocator = locator;
 }
@@ -139,6 +147,7 @@ export function setPwToolsCoreDownloadCapture(
   currentDownloadCapture = capture;
 }
 
+/** Installs per-test cleanup for pw-tools-core mocked session state. */
 export function installPwToolsCoreTestHooks() {
   beforeEach(() => {
     currentPage = null;

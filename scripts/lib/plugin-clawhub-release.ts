@@ -1,3 +1,4 @@
+// Plugin Clawhub Release script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
@@ -7,6 +8,7 @@ import {
   collectChangedPathsFromGitRange,
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
+  assertPluginReleaseVersionFloors,
   parsePluginReleaseArgs,
   resolvePublishablePluginVersion,
   resolveGitCommitSha,
@@ -16,7 +18,7 @@ import {
   type PluginReleaseSelectionMode,
 } from "./plugin-npm-release.ts";
 
-export { parsePluginReleaseArgs };
+export { assertPluginReleaseVersionFloors, parsePluginReleaseArgs };
 
 type PluginPackageJson = {
   name?: string;
@@ -451,6 +453,11 @@ export async function collectPluginClawHubReleasePlan(params?: {
     gitRange: params?.gitRange,
     rootDir,
   });
+
+  const explicitPublishSelection = params?.selectionMode !== undefined || selection.length > 0;
+  if (explicitPublishSelection) {
+    assertPluginReleaseVersionFloors(selectedPublishable, "Plugin ClawHub release plan");
+  }
 
   const all = await Promise.all(
     selectedPublishable.map(async (plugin) =>

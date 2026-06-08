@@ -1,3 +1,4 @@
+// Verifies OpenAI-compatible streaming payloads, failures, and transport wrapping.
 import { createServer } from "node:http";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
@@ -99,6 +100,7 @@ function createAzureResponsesModel(): Model<"azure-openai-responses"> {
 }
 
 function neverYieldsStream(): AsyncIterable<unknown> {
+  // Simulates an HTTP stream that opened but never delivered the first SSE event.
   return {
     [Symbol.asyncIterator]() {
       return {
@@ -116,6 +118,7 @@ async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<never> 
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  // Shared assertion helper for parsed transport payload/event records.
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
   }
@@ -141,6 +144,7 @@ describe("openai transport stream", () => {
   });
 
   it("observes detail-less Responses failures without leaking request ids", async () => {
+    // Observation should preserve hashes/metadata shape while dropping raw request ids.
     const model = createAzureResponsesModel();
     const event = {
       type: "response.failed",
@@ -1294,6 +1298,9 @@ describe("openai transport stream", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 256_000,
         maxTokens: 16_384,
+        compat: {
+          supportsReasoningEffort: true,
+        },
       } satisfies Model<"openai-completions">;
       const stream = createOpenAICompletionsTransportStreamFn()(
         model,
@@ -1302,7 +1309,7 @@ describe("openai transport stream", () => {
           messages: [{ role: "user", content: "Reply live-ok", timestamp: Date.now() }],
           tools: [],
         } as never,
-        { apiKey: "test-key" } as never,
+        { apiKey: "test-key", reasoningEffort: "high" } as never,
       );
 
       let doneReason: string | undefined;
@@ -1333,6 +1340,140 @@ describe("openai transport stream", () => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
     }
+  });
+
+  it("emits Qwen thinking streams when enabled without reasoning_effort support", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedPayload = JSON.parse(body) as Record<string, unknown>;
+        res.writeHead(200, {
+          "content-type": "application/json; charset=utf-8",
+        });
+        res.end(
+          JSON.stringify({
+            id: "chatcmpl-qwen-thinking",
+            object: "chat.completion",
+            model: "qwen3.5-32b",
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: "assistant",
+                  reasoning_content: "Need a Qwen answer.",
+                  content: "qwen-ok",
+                },
+                finish_reason: "stop",
+              },
+            ],
+          }),
+        );
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        id: "qwen3.5-32b",
+        name: "Qwen 3.5 32B",
+        api: "openai-completions",
+        provider: "qwen",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+        compat: {
+          thinkingFormat: "qwen",
+          supportsReasoningEffort: false,
+        },
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply qwen-ok", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key", reasoning: "medium" } as never,
+      );
+
+      let thinking = "";
+      let text = "";
+      for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
+        if (event.type === "thinking_delta") {
+          thinking += event.delta ?? "";
+        }
+        if (event.type === "text_delta") {
+          text += event.delta ?? "";
+        }
+      }
+
+      expect(capturedPayload?.enable_thinking).toBe(true);
+      expect(capturedPayload).not.toHaveProperty("reasoning_effort");
+      expect(thinking).toBe("Need a Qwen answer.");
+      expect(text).toBe("qwen-ok");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("does not emit thinking streams when reasoning is disabled", () => {
+    const model = {
+      id: "grok-4.20-beta-latest-reasoning",
+      name: "Grok 4.20 Beta Latest (Reasoning)",
+      api: "openai-completions",
+      provider: "xai",
+      baseUrl: "https://api.x.ai/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 2_000_000,
+      maxTokens: 30_000,
+    } satisfies Model<"openai-completions">;
+
+    expect(
+      testing.shouldEmitOpenAICompletionsReasoningForModel(model, {
+        apiKey: "test-key",
+        reasoning: "off",
+      } as never),
+    ).toBe(false);
+  });
+
+  it("emits Z.ai thinking streams when enabled without reasoning_effort support", () => {
+    const model = {
+      id: "glm-4.7",
+      name: "GLM 4.7",
+      api: "openai-completions",
+      provider: "zai",
+      baseUrl: "",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    expect(
+      testing.shouldEmitOpenAICompletionsReasoningForModel(model, {
+        apiKey: "test-key",
+        reasoning: "medium",
+      } as never),
+    ).toBe(true);
   });
 
   it("preserves OpenAI-compatible error metadata on failed chat requests", async () => {
@@ -1546,6 +1687,125 @@ describe("openai transport stream", () => {
       cacheRead: 0,
       totalTokens: 18,
     });
+  });
+
+  it("emits reasoning activity for OpenAI-compatible usage-only reasoning chunks", async () => {
+    const model = {
+      id: "google/gemini-2.5-flash",
+      name: "Gemini 2.5 Flash",
+      api: "openai-completions",
+      provider: "vertex-ai",
+      baseUrl: "http://127.0.0.1:8787/v1beta1/projects/test/locations/us/endpoints/openapi",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-vertex",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [],
+          usage: {
+            prompt_tokens: 8,
+            completion_tokens: 23,
+            total_tokens: 31,
+            completion_tokens_details: { reasoning_tokens: 23 },
+          },
+        },
+        {
+          id: "chatcmpl-vertex",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant" as const, content: "Hi" },
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "thinking_start",
+      "thinking_delta",
+      "text_start",
+      "text_delta",
+    ]);
+    expect(events[1]).toHaveProperty("delta", "");
+    expect(output.content).toEqual([
+      { type: "thinking", thinking: "" },
+      { type: "text", text: "Hi" },
+    ]);
+  });
+
+  it("does not add trailing reasoning activity after visible OpenAI-compatible text", async () => {
+    const model = {
+      id: "google/gemini-2.5-flash",
+      name: "Gemini 2.5 Flash",
+      api: "openai-completions",
+      provider: "vertex-ai",
+      baseUrl: "http://127.0.0.1:8787/v1beta1/projects/test/locations/us/endpoints/openapi",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-vertex",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant" as const, content: "Hi" },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-vertex",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [],
+          usage: {
+            prompt_tokens: 8,
+            completion_tokens: 25,
+            total_tokens: 33,
+            completion_tokens_details: { reasoning_tokens: 23 },
+          },
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(events.map((event) => event.type)).toEqual(["text_start", "text_delta"]);
+    expect(output.content).toEqual([{ type: "text", text: "Hi" }]);
   });
 
   it("yields to aborts during bursty OpenAI-compatible streams", async () => {
@@ -5444,6 +5704,41 @@ describe("openai transport stream", () => {
     expect(defaultRetention).not.toHaveProperty("prompt_cache_retention");
   });
 
+  it("keeps Mistral prompt cache keys without unsupported long retention", () => {
+    const model = {
+      id: "mistral-large-latest",
+      name: "Mistral Large",
+      api: "openai-completions",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+      compat: {
+        supportsPromptCacheKey: true,
+        supportsLongCacheRetention: false,
+        supportsStore: false,
+        supportsReasoningEffort: false,
+        maxTokensField: "max_tokens",
+      },
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 8192,
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const params = buildOpenAICompletionsParams(model, context, {
+      sessionId: "session-123",
+      cacheRetention: "long",
+    }) as { prompt_cache_key?: string; prompt_cache_retention?: string };
+
+    expect(params.prompt_cache_key).toBe("session-123");
+    expect(params).not.toHaveProperty("prompt_cache_retention");
+  });
+
   it("sorts Chat Completions tools by function name for stable prompt-cache payloads", () => {
     const model = {
       id: "custom-model",
@@ -7394,6 +7689,73 @@ describe("openai transport stream", () => {
     expect(visibleText).not.toContain("private reasoning");
     expect(thinkingText).toBe("private reasoning");
     expect(events.filter((event) => event.type === "thinking_delta")).toHaveLength(1);
+  });
+
+  it("drops mirrored reasoning when disabled without recovering hidden reasoning tags", async () => {
+    const model = {
+      id: "MiniMax-M2.7",
+      name: "MiniMax M2.7",
+      api: "openai-completions",
+      provider: "minimax",
+      baseUrl: "https://api.minimax.test/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-reasoning-disabled",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "<think>private reasoning",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-reasoning-disabled",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                reasoning_content: "private reasoning",
+              },
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      { emitReasoning: false },
+    );
+
+    const visibleText = output.content
+      .filter((block): block is { type: "text"; text: string } => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+
+    expect(visibleText).toBe("");
+    expect(output.content.some((block) => block.type === "thinking")).toBe(false);
+    expect(events.some((event) => event.type === "thinking_delta")).toBe(false);
   });
 
   it("keeps literal reasoning tag examples visible without mirrored reasoning", async () => {
@@ -9738,5 +10100,38 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
 
     const assistant = getAssistantMessage(params);
     expect(assistant.reasoning_details).toEqual([reasoningDetail]);
+  });
+
+  // issue #89660: a custom OpenAI-compatible proxy (not auto-detected as DeepSeek/
+  // Xiaomi/Kimi) can opt into the DeepSeek reasoning-content replay contract by
+  // setting compat.requiresReasoningContentOnAssistantMessages in config. getCompat
+  // must resolve `compat.X ?? detected.X` (matching every sibling field) instead of
+  // using `detected.X` alone, so the explicit config flag is honored in this transport.
+  const customReasoningProxyModel = {
+    id: "my-proxy/r1-pro",
+    name: "Custom Reasoning Proxy",
+    api: "openai-completions",
+    provider: "custom-openai-proxy",
+    baseUrl: "https://my-proxy.example.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8_192,
+  } satisfies Model<"openai-completions">;
+
+  it("honors compat.requiresReasoningContentOnAssistantMessages from config on a custom provider (#89660)", () => {
+    const resolved = testing.getCompat({
+      ...customReasoningProxyModel,
+      compat: { requiresReasoningContentOnAssistantMessages: true },
+    } as never);
+
+    expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(true);
+  });
+
+  it("falls back to detection (false) for the same custom provider when the flag is absent", () => {
+    const resolved = testing.getCompat(customReasoningProxyModel as never);
+
+    expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(false);
   });
 });

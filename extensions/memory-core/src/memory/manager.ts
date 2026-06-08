@@ -1,6 +1,8 @@
+// Memory Core plugin module implements manager behavior.
 import type { DatabaseSync } from "node:sqlite";
 import type { FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
 import {
   createSubsystemLogger,
   resolveAgentDir,
@@ -20,9 +22,11 @@ import {
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createEmbeddingProvider,
+  resolveEmbeddingProviderAdapterTransport,
   type EmbeddingProvider,
   type EmbeddingProviderId,
   type EmbeddingProviderRequest,
@@ -69,6 +73,11 @@ const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCa
 export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
 type MemoryIndexManagerPurpose = "default" | "status" | "cli";
+type MemoryEmbeddingProviderRequirement = {
+  mode: "fts-only" | "optional" | "required";
+  provider: string;
+  configuredProvider?: string;
+};
 
 const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
   resolveSingletonManagedCache<MemoryIndexManager>(MEMORY_INDEX_MANAGER_CACHE_KEY);
@@ -96,34 +105,129 @@ export async function closeMemoryIndexManagersForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): Promise<void> {
-  const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
-  if (!settings) {
-    return;
-  }
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  const key = `${params.agentId}:${workspaceDir}:${JSON.stringify(settings)}:default`;
-  const pending = INDEX_CACHE_PENDING.get(key);
-  if (pending) {
-    await Promise.allSettled([pending]);
+  await closeMemoryIndexManagersForScope({
+    agentId: params.agentId,
+    workspaceDir,
+    purpose: "default",
+  });
+}
+
+function resolveEffectiveMemorySearchSettings(
+  settings: ResolvedMemorySearchConfig,
+): ResolvedMemorySearchConfig {
+  if (settings.provider !== "none" || !settings.store.vector.enabled) {
+    return settings;
   }
-  const manager = INDEX_CACHE.get(key);
-  if (!manager) {
-    return;
+  return {
+    ...settings,
+    store: {
+      ...settings.store,
+      vector: {
+        ...settings.store.vector,
+        enabled: false,
+      },
+    },
+  };
+}
+
+function resolveConfiguredMemoryEmbeddingProvider(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): string | undefined {
+  const normalizedAgentId = normalizeAgentId(params.agentId);
+  const agentEntry = params.cfg.agents?.list?.find(
+    (entry) => entry && normalizeAgentId(entry.id) === normalizedAgentId,
+  );
+  return agentEntry?.memorySearch?.provider ?? params.cfg.agents?.defaults?.memorySearch?.provider;
+}
+
+function resolveMemoryEmbeddingProviderRequirement(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  settings: ResolvedMemorySearchConfig;
+}): MemoryEmbeddingProviderRequirement {
+  const configuredProvider = resolveConfiguredMemoryEmbeddingProvider(params)?.trim();
+  if (params.settings.provider === "none" || configuredProvider === "none") {
+    return { mode: "fts-only", provider: params.settings.provider };
   }
-  INDEX_CACHE.delete(key);
-  try {
-    await manager.close();
-  } catch (err) {
-    log.warn(`failed to close memory index manager for agent ${params.agentId}: ${String(err)}`);
+  const adapterTransport = resolveEmbeddingProviderAdapterTransport(
+    params.settings.provider,
+    params.cfg,
+  );
+  if (!configuredProvider || configuredProvider === "auto" || adapterTransport === "local") {
+    return { mode: "optional", provider: params.settings.provider };
+  }
+  return {
+    mode: "required",
+    provider: params.settings.provider,
+    configuredProvider,
+  };
+}
+
+function resolveMemoryIndexManagerCacheKey(params: {
+  agentId: string;
+  workspaceDir: string;
+  settings: ResolvedMemorySearchConfig;
+  providerRequirement: MemoryEmbeddingProviderRequirement;
+  purpose: MemoryIndexManagerPurpose;
+}): string {
+  return [
+    params.agentId,
+    params.workspaceDir,
+    JSON.stringify(params.settings),
+    JSON.stringify(params.providerRequirement),
+    params.purpose,
+  ].join(":");
+}
+
+function isMemoryIndexManagerCacheKeyInScope(
+  key: string,
+  params: {
+    agentId: string;
+    workspaceDir: string;
+    purpose: MemoryIndexManagerPurpose;
+  },
+): boolean {
+  return (
+    key.startsWith(`${params.agentId}:${params.workspaceDir}:`) &&
+    key.endsWith(`:${params.purpose}`)
+  );
+}
+
+async function closeMemoryIndexManagersForScope(params: {
+  agentId: string;
+  workspaceDir: string;
+  purpose: MemoryIndexManagerPurpose;
+  exceptKey?: string;
+}): Promise<void> {
+  const isScopedKey = (key: string) =>
+    key !== params.exceptKey && isMemoryIndexManagerCacheKeyInScope(key, params);
+  const pending = Array.from(INDEX_CACHE_PENDING.entries())
+    .filter(([key]) => isScopedKey(key))
+    .map(([, value]) => value);
+  if (pending.length > 0) {
+    await Promise.allSettled(pending);
+  }
+  const entries = Array.from(INDEX_CACHE.entries()).filter(([key]) => isScopedKey(key));
+  for (const [key, manager] of entries) {
+    INDEX_CACHE.delete(key);
+    try {
+      await manager.close();
+    } catch (err) {
+      log.warn(`failed to close memory index manager for agent ${params.agentId}: ${String(err)}`);
+    }
   }
 }
 
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
+  private readonly purpose: MemoryIndexManagerPurpose;
   protected readonly cfg: OpenClawConfig;
   protected readonly agentId: string;
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
+  private readonly providerRequirement: MemoryEmbeddingProviderRequirement;
   protected override provider: EmbeddingProvider | null;
   private readonly requestedProvider: EmbeddingProviderRequest;
   private providerInitPromise: Promise<void> | null = null;
@@ -167,6 +271,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected override sessionWatchTimer: NodeJS.Timeout | null = null;
   protected override sessionUnsubscribe: (() => void) | null = null;
   protected override intervalTimer: NodeJS.Timeout | null = null;
+  protected override memoryWatchPressureStartupTimer: NodeJS.Timeout | null = null;
   protected override closed = false;
   protected override dirty = false;
   protected override sessionsDirty = false;
@@ -215,8 +320,27 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const purpose =
       params.purpose === "status" || params.purpose === "cli" ? params.purpose : "default";
-    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}:${purpose}`;
+    const providerRequirement = resolveMemoryEmbeddingProviderRequirement({
+      cfg,
+      agentId,
+      settings,
+    });
+    const key = resolveMemoryIndexManagerCacheKey({
+      agentId,
+      workspaceDir,
+      settings,
+      providerRequirement,
+      purpose,
+    });
     const transient = purpose === "status" || purpose === "cli";
+    if (!transient) {
+      await closeMemoryIndexManagersForScope({
+        agentId,
+        workspaceDir,
+        purpose,
+        exceptKey: key,
+      });
+    }
     return await getOrCreateManagedCacheEntry({
       cache: INDEX_CACHE,
       pending: INDEX_CACHE_PENDING,
@@ -229,6 +353,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           agentId,
           workspaceDir,
           settings,
+          providerRequirement,
           purpose: params.purpose,
         }),
     });
@@ -240,34 +365,39 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     agentId: string;
     workspaceDir: string;
     settings: ResolvedMemorySearchConfig;
+    providerRequirement: MemoryEmbeddingProviderRequirement;
     providerResult?: EmbeddingProviderResult;
     purpose?: MemoryIndexManagerPurpose;
   }) {
     super();
+    const effectiveSettings = resolveEffectiveMemorySearchSettings(params.settings);
     this.cacheKey = params.cacheKey;
+    this.purpose =
+      params.purpose === "status" || params.purpose === "cli" ? params.purpose : "default";
     this.cfg = params.cfg;
     this.agentId = params.agentId;
     this.workspaceDir = params.workspaceDir;
-    this.settings = params.settings;
+    this.settings = effectiveSettings;
+    this.providerRequirement = params.providerRequirement;
     this.provider = null;
-    this.requestedProvider = params.settings.provider;
+    this.requestedProvider = effectiveSettings.provider;
     this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
     if (params.providerResult) {
       this.applyProviderResult(params.providerResult);
     }
-    this.sources = new Set(params.settings.sources);
+    this.sources = new Set(effectiveSettings.sources);
     this.db = this.openDatabase();
     this.providerKey = this.computeProviderKey();
     this.cache = {
-      enabled: params.settings.cache.enabled,
-      maxEntries: params.settings.cache.maxEntries,
+      enabled: effectiveSettings.cache.enabled,
+      maxEntries: effectiveSettings.cache.maxEntries,
     };
-    this.fts = { enabled: params.settings.query.hybrid.enabled, available: false };
+    this.fts = { enabled: effectiveSettings.query.hybrid.enabled, available: false };
     this.ensureSchema();
     this.vector = {
-      enabled: params.settings.store.vector.enabled,
+      enabled: effectiveSettings.store.vector.enabled,
       available: null,
-      extensionPath: params.settings.store.vector.extensionPath,
+      extensionPath: effectiveSettings.store.vector.extensionPath,
     };
     const meta = this.readMeta();
     if (meta?.vectorDims) {
@@ -311,6 +441,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   private async ensureProviderInitialized(): Promise<void> {
     if (this.providerInitialized) {
+      return;
+    }
+    if (this.settings.provider === "none") {
+      this.applyProviderResult({
+        provider: null,
+        requestedProvider: "none",
+        providerUnavailableReason: "No embedding provider available (FTS-only mode)",
+      });
+      this.providerKey = this.computeProviderKey();
+      this.batch = this.resolveBatchConfig();
       return;
     }
     if (!this.providerInitPromise) {
@@ -375,6 +515,37 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     });
   }
 
+  protected isRequiredProviderUnavailable(): boolean {
+    return this.providerRequirement.mode === "required" && !this.provider;
+  }
+
+  protected buildRequiredProviderUnavailableError(operation: "search" | "sync"): Error {
+    const registeredProviderIds = listRegisteredMemoryEmbeddingProviderAdapters()
+      .map((adapter) => adapter.id)
+      .toSorted();
+    const registeredProviders =
+      registeredProviderIds.length > 0 ? registeredProviderIds.join(",") : "none";
+    const reason =
+      this.providerUnavailableReason ??
+      (this.providerLifecycle.mode === "fts-only"
+        ? this.providerLifecycle.reason
+        : "provider is unavailable");
+    return new Error(
+      `Memory ${operation} unavailable: embedding provider "${this.settings.provider}" is configured but unavailable. ` +
+        `Reason: ${reason}. ` +
+        `agentId=${this.agentId} purpose=${this.purpose} lifecycle=${JSON.stringify(this.providerLifecycle)} ` +
+        `registeredMemoryEmbeddingProviders=${registeredProviders}`,
+    );
+  }
+
+  protected assertRequiredProviderAvailable(operation: "search" | "sync"): void {
+    if (this.isRequiredProviderUnavailable()) {
+      const error = this.buildRequiredProviderUnavailableError(operation);
+      this.resetProviderInitializationForRetry();
+      throw error;
+    }
+  }
+
   async warmSession(sessionKey?: string): Promise<void> {
     if (!this.settings.sync.onSessionStart) {
       return;
@@ -392,11 +563,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean }) {
-    const provider = this.providerInitialized
-      ? this.provider
-        ? { id: this.provider.id, model: this.provider.model }
-        : null
-      : undefined;
+    const provider =
+      this.settings.provider === "none"
+        ? null
+        : this.providerInitialized
+          ? this.provider
+            ? { id: this.provider.id, model: this.provider.model }
+            : null
+          : undefined;
     const state = this.resolveCurrentIndexIdentityState({
       ...(provider !== undefined ? { provider } : {}),
       providerKeyKnown: params?.providerKeyKnown,
@@ -421,6 +595,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     },
   ): Promise<MemorySearchResult[]> {
     opts?.onDebug?.({ backend: "builtin" });
+    if (this.providerRequirement.mode === "required") {
+      await this.ensureProviderInitialized();
+      this.assertRequiredProviderAvailable("search");
+    }
     let hasIndexedContent = this.hasIndexedContent();
     if (!hasIndexedContent) {
       try {
@@ -453,6 +631,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     });
     if (preflight.shouldInitializeProvider) {
       await this.ensureProviderInitialized();
+      this.assertRequiredProviderAvailable("search");
     }
     if (!this.provider && this.providerLifecycle.mode === "degraded") {
       const activatedFallback = await this.activateFallbackProvider(
@@ -497,6 +676,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
     // FTS-only mode: no embedding provider available
     if (!this.provider) {
+      this.assertRequiredProviderAvailable("search");
       if (!this.fts.enabled || !this.fts.available) {
         log.warn("memory search: no provider and FTS unavailable");
         return [];
@@ -1087,6 +1267,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.intervalTimer) {
       clearInterval(this.intervalTimer);
       this.intervalTimer = null;
+    }
+    if (this.memoryWatchPressureStartupTimer) {
+      clearTimeout(this.memoryWatchPressureStartupTimer);
+      this.memoryWatchPressureStartupTimer = null;
     }
     if (this.watcher) {
       await this.watcher.close();

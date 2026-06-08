@@ -1,3 +1,5 @@
+// Config gateway methods expose config get/set/patch/apply/schema operations
+// with validation, redaction restoration, secret prep, and reload planning.
 import { execFile } from "node:child_process";
 import {
   asDateTimestampMs,
@@ -23,9 +25,7 @@ import {
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
-  validateConfigObjectRawWithPlugins,
-  validateConfigObjectWithPlugins,
-} from "../../config/config.js";
+} from "../../config/io.js";
 import { createMergePatch, projectSourceOntoRuntimeShape } from "../../config/io.write-prepare.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -37,6 +37,10 @@ import {
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  validateConfigObjectRawWithPlugins,
+  validateConfigObjectWithPlugins,
+} from "../../config/validation.js";
 import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
