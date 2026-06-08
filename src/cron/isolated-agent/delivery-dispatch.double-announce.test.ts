@@ -202,11 +202,13 @@ function makeBaseParams(overrides: {
   runStartedAt?: number;
   sessionTarget?: string;
   deliveryBestEffort?: boolean;
+  deliveryChannel?: string;
   runSessionKey?: string;
   resolvedDeliveryMode?: "explicit" | "implicit";
 }): Parameters<typeof dispatchCronDelivery>[0] {
   const resolvedDelivery = {
     ...makeResolvedDelivery(),
+    channel: overrides.deliveryChannel ?? "telegram",
     mode: overrides.resolvedDeliveryMode ?? "explicit",
   } satisfies Extract<DeliveryTargetResolution, { ok: true }>;
   const runStartedAt = overrides.runStartedAt ?? Date.now();
@@ -1768,6 +1770,40 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     ).toBe(false);
   });
 
+  it("suppresses NO_SUBPROCESS_STARTED diagnostics in Matrix text delivery and skips cron main summary", async () => {
+    const diagnostic = "NO_SUBPROCESS_STARTED: missing shell/exec/command-runner execution surface";
+    const params = makeBaseParams({ deliveryChannel: "matrix", synthesizedText: diagnostic });
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expectResultFields(state.result, {
+      status: "ok",
+      delivered: false,
+      deliveryAttempted: true,
+    });
+
+    expect(
+      shouldEnqueueCronMainSummary({
+        summaryText: diagnostic,
+        deliveryRequested: true,
+        delivered: state.result?.delivered,
+        deliveryAttempted: state.result?.deliveryAttempted,
+        suppressMainSummary: false,
+        isCronSystemEvent: () => true,
+      }),
+    ).toBe(false);
+  });
+
+  it("delivers NO_SUBPROCESS_STARTED diagnostics outside Matrix delivery", async () => {
+    const diagnostic = "NO_SUBPROCESS_STARTED: missing shell/exec/command-runner execution surface";
+    const params = makeBaseParams({ deliveryChannel: "telegram", synthesizedText: diagnostic });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
   it("cleans up the direct cron session after a structured silent reply when deleteAfterRun is enabled", async () => {
     const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
     params.agentSessionKey = "agent:main:cron:test-job";
@@ -1840,6 +1876,18 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const params = makeBaseParams({
       synthesizedText:
         "The NO_REPLY sentinel tells the agent to skip delivery when nothing changes.",
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers substantive text that mentions NO_SUBPROCESS_STARTED away from the lead", async () => {
+    const params = makeBaseParams({
+      synthesizedText:
+        "The prior cron emitted NO_SUBPROCESS_STARTED because it lacked an exec surface.",
     });
     const state = await dispatchCronDelivery(params);
 

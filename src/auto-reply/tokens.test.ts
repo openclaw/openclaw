@@ -1,6 +1,7 @@
 /** Tests silent-reply and heartbeat token parsing helpers. */
 import { describe, it, expect } from "vitest";
 import {
+  isControlDiagnosticReplyText,
   isSilentReplyPrefixText,
   isSilentReplyPayloadText,
   isSilentReplyText,
@@ -98,6 +99,28 @@ describe("isSilentReplyPayloadText", () => {
       isSilentReplyPayloadText(
         "<think>internal reasoning</think>\nHere is the answer: I will stay quiet in the meeting, but you should still send the agenda.NO_REPLY",
       ),
+    ).toBe(false);
+  });
+});
+
+describe("isControlDiagnosticReplyText", () => {
+  it("matches cron routing diagnostic replies", () => {
+    expect(
+      isControlDiagnosticReplyText(
+        "NO_SUBPROCESS_STARTED: missing shell/exec/command-runner execution surface",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match substantive mentions of diagnostic tokens", () => {
+    expect(
+      isControlDiagnosticReplyText(
+        "The prior cron emitted NO_SUBPROCESS_STARTED because it lacked exec.",
+      ),
+    ).toBe(false);
+    expect(isControlDiagnosticReplyText("NO_SUBPROCESS_STARTEDness is not a token")).toBe(false);
+    expect(
+      isControlDiagnosticReplyText("NO_REQUIRED_TOOL_AVAILABLE for missing non-shell tool routing"),
     ).toBe(false);
   });
 });

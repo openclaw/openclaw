@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
+  isControlDiagnosticReplyText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
   startsWithSilentToken,
@@ -59,9 +60,21 @@ type NormalizedSilentReplyText = {
   strippedTrailingSilentToken: boolean;
 };
 
-function normalizeSilentReplyText(text: string | undefined): NormalizedSilentReplyText {
+function shouldSuppressControlDiagnosticRepliesForDelivery(
+  delivery: SuccessfulDeliveryTarget,
+): boolean {
+  return delivery.channel.trim().toLowerCase() === "matrix";
+}
+
+function normalizeSilentReplyText(
+  text: string | undefined,
+  options?: { suppressControlDiagnostics?: boolean },
+): NormalizedSilentReplyText {
   if (!text) {
     return { text, strippedTrailingSilentToken: false };
+  }
+  if (options?.suppressControlDiagnostics === true && isControlDiagnosticReplyText(text)) {
+    return { text: undefined, strippedTrailingSilentToken: false };
   }
   if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
     return { text: undefined, strippedTrailingSilentToken: false };
@@ -845,7 +858,9 @@ export async function dispatchCronDelivery(
           if (!p.text) {
             return p;
           }
-          const normalized = normalizeSilentReplyText(p.text);
+          const normalized = normalizeSilentReplyText(p.text, {
+            suppressControlDiagnostics: shouldSuppressControlDiagnosticRepliesForDelivery(delivery),
+          });
           return Object.assign({}, p, {
             text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
           });
@@ -1196,7 +1211,9 @@ export async function dispatchCronDelivery(
         ...params.telemetry,
       });
     }
-    const normalizedSynthesizedText = normalizeSilentReplyText(synthesizedText);
+    const normalizedSynthesizedText = normalizeSilentReplyText(synthesizedText, {
+      suppressControlDiagnostics: shouldSuppressControlDiagnosticRepliesForDelivery(delivery),
+    });
     if (
       normalizedSynthesizedText.text === undefined ||
       normalizedSynthesizedText.strippedTrailingSilentToken

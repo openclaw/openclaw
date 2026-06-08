@@ -5,6 +5,7 @@ import { escapeRegExp } from "../shared/regexp.js";
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 /** Token that marks an auto-reply response as intentionally silent. */
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
+export const CONTROL_DIAGNOSTIC_REPLY_TOKENS = ["NO_SUBPROCESS_STARTED"] as const;
 
 const silentExactRegexByToken = new Map<string, RegExp>();
 const silentTrailingRegexByToken = new Map<string, RegExp>();
@@ -185,6 +186,20 @@ export function isSilentReplyPayloadText(
     isSilentReplyEnvelopeText(text, token) ||
     isReasoningPrefixedSilentReplyText(text, token)
   );
+}
+
+export function isControlDiagnosticReplyText(text: string | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return CONTROL_DIAGNOSTIC_REPLY_TOKENS.some((token) => {
+    const escaped = escapeRegExp(token);
+    return new RegExp(`^${escaped}(?:\\s|:|$)`, "i").test(trimmed);
+  });
 }
 
 /**
