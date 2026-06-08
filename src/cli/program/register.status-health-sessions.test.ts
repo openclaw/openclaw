@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   sessionsCommand: vi.fn(),
   sessionsCleanupCommand: vi.fn(),
   sessionsTailCommand: vi.fn(),
+  sessionsCompactCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
   commitmentsListCommand: vi.fn(),
   commitmentsDismissCommand: vi.fn(),
@@ -34,6 +35,7 @@ const healthCommand = mocks.healthCommand;
 const sessionsCommand = mocks.sessionsCommand;
 const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
 const sessionsTailCommand = mocks.sessionsTailCommand;
+const sessionsCompactCommand = mocks.sessionsCompactCommand;
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
 const commitmentsListCommand = mocks.commitmentsListCommand;
 const commitmentsDismissCommand = mocks.commitmentsDismissCommand;
@@ -95,6 +97,10 @@ vi.mock("../../commands/sessions-tail.js", () => ({
   sessionsTailCommand: mocks.sessionsTailCommand,
 }));
 
+vi.mock("../../commands/sessions-compact.js", () => ({
+  sessionsCompactCommand: mocks.sessionsCompactCommand,
+}));
+
 vi.mock("../../commands/export-trajectory.js", () => ({
   exportTrajectoryCommand: mocks.exportTrajectoryCommand,
 }));
@@ -142,6 +148,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     sessionsCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
     sessionsTailCommand.mockResolvedValue(undefined);
+    sessionsCompactCommand.mockResolvedValue(undefined);
     exportTrajectoryCommand.mockResolvedValue(undefined);
     commitmentsListCommand.mockResolvedValue(undefined);
     commitmentsDismissCommand.mockResolvedValue(undefined);
@@ -286,6 +293,33 @@ describe("registerStatusHealthSessionsCommands", () => {
       allAgents: true,
       active: "120",
       limit: "25",
+    });
+  });
+
+  it("inherits the parent sessions --agent for compact (regression #91378: wrong-agent compaction)", async () => {
+    await runCli(["sessions", "--agent", "work", "compact", "agent:work:main"]);
+
+    expectCommandOptions(sessionsCompactCommand, {
+      key: "agent:work:main",
+      agent: "work",
+    });
+  });
+
+  it("inherits the parent sessions --json for compact", async () => {
+    await runCli(["sessions", "--json", "compact", "agent:work:main"]);
+
+    expectCommandOptions(sessionsCompactCommand, {
+      key: "agent:work:main",
+      json: true,
+    });
+  });
+
+  it("prefers the compact-level --agent over the parent sessions --agent", async () => {
+    await runCli(["sessions", "--agent", "main", "compact", "agent:work:main", "--agent", "work"]);
+
+    expectCommandOptions(sessionsCompactCommand, {
+      key: "agent:work:main",
+      agent: "work",
     });
   });
 
