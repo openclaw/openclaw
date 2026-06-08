@@ -124,10 +124,20 @@ export function resolveSessionDeliveryTarget(params: {
         ? requested
         : undefined;
 
-  const rawExplicitTo =
+  let rawExplicitTo =
     typeof params.explicitTo === "string" && params.explicitTo.trim()
       ? params.explicitTo.trim()
       : undefined;
+
+  // Reject reserved meta-strings that cannot be literal delivery targets.
+  // Meta-strings like "current", "self", "this", "me" are sometimes leaked
+  // by sub-agent or plugin code that intends to refer to "the current session"
+  // but end up as literal channel lookups, which can route messages to
+  // unintended recipients (see openclaw/openclaw#91372).
+  const RESERVED_TARGET_META_STRINGS = new Set(["current", "self", "this", "me"]);
+  if (rawExplicitTo && RESERVED_TARGET_META_STRINGS.has(rawExplicitTo.toLowerCase())) {
+    rawExplicitTo = undefined;
+  }
 
   const explicitPrefixedChannel =
     requestedChannel === "last" ? resolveTargetPrefixedChannel(rawExplicitTo) : undefined;
