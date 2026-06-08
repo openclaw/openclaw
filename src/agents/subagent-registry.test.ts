@@ -2432,6 +2432,69 @@ describe("subagent registry seam flow", () => {
     expect(run?.outcome?.error).toBe("subagent run lost active execution context");
   });
 
+  it("keeps lost-context error when child history only contains tool calls without visible assistant text", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "tool_use", id: "t1", name: "read", input: {} }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: 1,
+        status: "running",
+      },
+    });
+
+    const createdAt = Date.parse("2026-03-24T11:00:00Z");
+    vi.setSystemTime(createdAt);
+    mod.registerSubagentRun({
+      runId: "run-lost-context-tool-only",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "tool-only subagent",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    vi.setSystemTime(createdAt + 65_000);
+    await mod.testing.sweepOnceForTests();
+
+    await waitForFast(() => {
+      const announceParams = findRecordCallArg(
+        mocks.runSubagentAnnounceFlow,
+        0,
+        "lost context tool-only announce",
+        (record) => record.childRunId === "run-lost-context-tool-only",
+      );
+      expectRecordFields(
+        announceParams.outcome,
+        {
+          status: "error",
+          error: "subagent run lost active execution context",
+        },
+        "lost context tool-only announce outcome",
+      );
+    });
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-lost-context-tool-only");
+    expect(run?.outcome?.status).toBe("error");
+  });
+
   it("completes a registered run across timing persistence, lifecycle status, and announce cleanup", async () => {
     mod.registerSubagentRun({
       runId: "run-1",
