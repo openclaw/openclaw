@@ -17,16 +17,6 @@ import { createChannelPluginBase as createChannelPluginBaseFromCore } from "./co
 export const createChannelPluginBase: typeof createChannelPluginBaseFromCore = (params) =>
   createChannelPluginBaseFromCore(params);
 
-export type {
-  DirectPeerConversationMatch,
-  DirectPeerConversationRef,
-  NormalizePeerId,
-} from "../channels/plugins/direct-peer-binding.js";
-export {
-  compileDirectPeerConversation,
-  isDirectPeerBinding,
-  matchDirectPeerConversation,
-} from "../channels/plugins/direct-peer-binding.js";
 export {
   buildChannelConfigSchema,
   buildChannelOutboundSessionRoute,

@@ -2,7 +2,7 @@ import {
   compileDirectPeerConversation,
   isDirectPeerBinding,
   matchDirectPeerConversation,
-} from "openclaw/plugin-sdk/channel-core";
+} from "openclaw/plugin-sdk/direct-peer-binding";
 import { parseTelegramDirectConversation } from "./direct-conversation.js";
 import { parseTelegramTopicConversation } from "./topic-conversation.js";
 

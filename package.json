@@ -489,6 +489,10 @@
       "types": "./dist/plugin-sdk/conversation-runtime.d.ts",
       "default": "./dist/plugin-sdk/conversation-runtime.js"
     },
+    "./plugin-sdk/direct-peer-binding": {
+      "types": "./dist/plugin-sdk/direct-peer-binding.d.ts",
+      "default": "./dist/plugin-sdk/direct-peer-binding.js"
+    },
     "./plugin-sdk/thread-bindings-runtime": {
       "types": "./dist/plugin-sdk/thread-bindings-runtime.d.ts",
       "default": "./dist/plugin-sdk/thread-bindings-runtime.js"

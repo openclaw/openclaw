@@ -86,6 +86,7 @@
   "media-generation-runtime",
   "conversation-binding-runtime",
   "conversation-runtime",
+  "direct-peer-binding",
   "thread-bindings-runtime",
   "thread-bindings-session-runtime",
   "text-runtime",
