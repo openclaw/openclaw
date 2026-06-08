@@ -164,6 +164,10 @@
     "target": "Journalisation"
   },
   {
+    "source": "troubleshooting",
+    "target": "Dépannage"
+  },
+  {
     "source": "Settings",
     "target": "Paramètres"
   },
