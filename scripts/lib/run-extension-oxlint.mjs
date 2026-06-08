@@ -59,28 +59,41 @@ export function runExtensionOxlint(params) {
 
     writeTempOxlintConfig(repoRoot, tempConfigPath);
 
-    const baseArgs = ["-c", tempConfigPath, ...process.argv.slice(2), ...extensionFiles];
-    const { args: finalArgs, env } = applyLocalOxlintPolicy(baseArgs, process.env);
-    if (env.GITHUB_ACTIONS === "true" && !hasOxlintFormatArg(finalArgs)) {
-      addOxlintFormatArg(finalArgs, "stylish");
-    }
-    const oxlint = createManagedCommandInvocation({
-      args: finalArgs,
-      bin: oxlintPath,
-      env,
-    });
-    const result = spawnSync(oxlint.command, oxlint.args, {
-      stdio: "inherit",
-      env,
-      shell: oxlint.shell,
-      windowsVerbatimArguments: oxlint.windowsVerbatimArguments,
-    });
-
-    if (result.error) {
-      throw result.error;
+    const chunkSize = 100;
+    const chunks = [];
+    for (let i = 0; i < extensionFiles.length; i += chunkSize) {
+      chunks.push(extensionFiles.slice(i, i + chunkSize));
     }
 
-    exitCode = result.status ?? 1;
+    let overallStatus = 0;
+    for (const chunk of chunks) {
+      const baseArgs = ["-c", tempConfigPath, ...process.argv.slice(2), ...chunk];
+      const { args: finalArgs, env } = applyLocalOxlintPolicy(baseArgs, process.env);
+      if (env.GITHUB_ACTIONS === "true" && !hasOxlintFormatArg(finalArgs)) {
+        addOxlintFormatArg(finalArgs, "stylish");
+      }
+      const oxlint = createManagedCommandInvocation({
+        args: finalArgs,
+        bin: oxlintPath,
+        env,
+      });
+      const result = spawnSync(oxlint.command, oxlint.args, {
+        stdio: "inherit",
+        env,
+        shell: oxlint.shell,
+        windowsVerbatimArguments: oxlint.windowsVerbatimArguments,
+      });
+
+      if (result.error) {
+        throw result.error;
+      }
+
+      if (result.status !== 0) {
+        overallStatus = result.status ?? 1;
+      }
+    }
+
+    exitCode = overallStatus;
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
     releaseLock();

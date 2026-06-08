@@ -21,7 +21,12 @@ export function collectSourceFiles(root: string, options: SourceFileCollectionOp
   if (options.shouldSkipRepoPath?.(repoPath)) {
     return [];
   }
-  const stats = statSync(root);
+  let stats;
+  try {
+    stats = statSync(root);
+  } catch {
+    return [];
+  }
   if (stats.isFile()) {
     return options.sourceExtensions.some((extension) => repoPath.endsWith(extension))
       ? [repoPath]
