@@ -1946,7 +1946,7 @@ async function runEmbeddedAgentInternal(
             ...(params.fastMode === "auto"
               ? {
                   fastModeStartedAtMs: fastModeStarted,
-                  fastModeAutoOnSeconds: fastModeAutoOnSeconds,
+                  fastModeAutoOnSeconds,
                   fastModeAutoProgressState,
                 }
               : {}),
