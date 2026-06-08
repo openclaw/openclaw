@@ -1,3 +1,4 @@
+// Resolves ClawHub plugin catalog entries and install metadata.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

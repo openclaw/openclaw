@@ -1,3 +1,4 @@
+// Build All tests cover build all script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -171,6 +172,12 @@ describe("resolveBuildAllStep", () => {
     expect(step.cache?.inputs).toEqual(expect.arrayContaining(["packages/memory-host-sdk/src"]));
     expect(step.cache?.inputs).toEqual(expect.arrayContaining(["npm-shrinkwrap.json"]));
     expect(step.cache?.outputs).toEqual(expect.arrayContaining(["dist/plugin-sdk/packages"]));
+  });
+
+  it("keeps export-html build output aligned with runtime template lookup", () => {
+    const step = getBuildAllStep("copy-export-html-templates");
+
+    expect(step.cache?.outputs).toEqual(["dist/export-html"]);
   });
 });
 

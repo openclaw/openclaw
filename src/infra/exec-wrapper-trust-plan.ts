@@ -1,3 +1,4 @@
+// Builds the trust plan for exec wrappers before commands are launched.
 import {
   MAX_DISPATCH_WRAPPER_DEPTH,
   resolveDispatchWrapperTrustPlan,

@@ -1,3 +1,4 @@
+// Verifies memory-search config resolution across providers, sync, and batching.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -10,6 +11,8 @@ import { resolveMemorySearchConfig, resolveMemorySearchSyncConfig } from "./memo
 const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
 
 function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolean }): void {
+  // Register provider contracts locally so config tests do not depend on the
+  // plugin loader or live embedding backends.
   registerMemoryEmbeddingProvider({
     id: "openai",
     defaultModel: "text-embedding-3-small",
@@ -84,6 +87,8 @@ describe("memory search config", () => {
   }
 
   function expectDefaultRemoteBatch(resolved: ReturnType<typeof resolveMemorySearchConfig>): void {
+    // Remote providers default to non-batch mode; explicit batch config must
+    // opt in so memory search does not introduce hidden async polling.
     expect(resolved?.remote?.batch).toEqual({
       enabled: false,
       wait: true,
@@ -208,7 +213,27 @@ describe("memory search config", () => {
     expect(resolved?.model).toBe("text-embedding-3-small");
   });
 
+  it("resolves explicit concrete providers", () => {
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("openai"), "main");
+
+    expect(resolved?.provider).toBe("openai");
+  });
+
+  it("resolves explicit local providers", () => {
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("local"), "main");
+
+    expect(resolved?.provider).toBe("local");
+  });
+
+  it("resolves explicit provider-none", () => {
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("none"), "main");
+
+    expect(resolved?.provider).toBe("none");
+  });
+
   it("resolves custom provider ids through their configured api owner", () => {
+    // Workspace provider aliases inherit embedding defaults from their API
+    // owner while keeping the configured provider id for auth/routing.
     const cfg = asConfig({
       models: {
         providers: {

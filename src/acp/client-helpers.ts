@@ -1,3 +1,4 @@
+/** Permission, environment, and spawn helpers for the standalone ACP client. */
 import * as readline from "node:readline";
 import type { RequestPermissionRequest, RequestPermissionResponse } from "@agentclientprotocol/sdk";
 import {
@@ -101,6 +102,7 @@ function promptUserPermission(toolName: string | undefined, toolTitle?: string):
   });
 }
 
+/** Converts an ACP permission request into a selected allow/reject option or cancellation. */
 export async function resolvePermissionRequest(
   params: RequestPermissionRequest,
   deps: PermissionResolverDeps = {},
@@ -164,6 +166,7 @@ export function resolveAcpClientSpawnEnv(
   return env;
 }
 
+/** Returns true when the client should hide provider credentials from the spawned server. */
 export function shouldStripProviderAuthEnvVarsForAcpServer(
   params: {
     serverCommand?: string;
@@ -188,6 +191,7 @@ export function shouldStripProviderAuthEnvVarsForAcpServer(
   );
 }
 
+/** Builds the exact environment variable denylist used for ACP client subprocesses. */
 export function buildAcpClientStripKeys(params: {
   stripProviderAuthEnvVars?: boolean;
   activeSkillEnvKeys?: Iterable<string>;
@@ -213,6 +217,7 @@ const DEFAULT_ACP_SPAWN_RUNTIME: AcpSpawnRuntime = {
   execPath: process.execPath,
 };
 
+/** Resolves the executable/args used to spawn an ACP server, including Windows shims. */
 export function resolveAcpClientSpawnInvocation(
   params: { serverCommand: string; serverArgs: string[] },
   runtime: AcpSpawnRuntime = DEFAULT_ACP_SPAWN_RUNTIME,

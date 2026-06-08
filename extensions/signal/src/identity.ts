@@ -1,3 +1,4 @@
+// Signal plugin module implements identity behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isStrictUuid as isStrictUuidValue, looksLikeUuid } from "./uuid.js";

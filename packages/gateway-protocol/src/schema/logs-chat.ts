@@ -1,3 +1,4 @@
+// Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
@@ -91,6 +92,7 @@ export const ChatSendParamsSchema = Type.Object(
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     systemInputProvenance: Type.Optional(InputProvenanceSchema),
     systemProvenanceReceipt: Type.Optional(Type.String()),
+    suppressCommandInterpretation: Type.Optional(Type.Boolean()),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },

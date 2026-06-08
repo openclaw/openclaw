@@ -1,3 +1,4 @@
+// Shares provider registry normalization helpers across plugin paths.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
 /** Normalizes provider ids used by capability-provider registries. */

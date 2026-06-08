@@ -1,3 +1,4 @@
+// Assertion helpers for inspecting Vitest mock call payloads.
 import { expect } from "vitest";
 
 /** Returns a mock call with a useful failure when the call is missing. */

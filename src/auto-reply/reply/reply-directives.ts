@@ -1,3 +1,4 @@
+/** Parses inline reply directives such as media, reply targets, audio, and silence. */
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../tokens.js";

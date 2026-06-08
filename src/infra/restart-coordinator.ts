@@ -1,3 +1,4 @@
+// Coordinates restart requests around active embedded agent runs.
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
@@ -163,6 +164,7 @@ export function requestSafeGatewayRestart(
   const restart = scheduleGatewaySigusr1Restart({
     delayMs: opts.delayMs ?? 0,
     reason: opts.reason ?? "gateway.restart.safe",
+    ...(skipDeferral ? { preservePendingEmitHooksOnDeferralBypass: true } : {}),
     ...(skipDeferral ? { skipDeferral: true } : {}),
   });
   const status = restart.coalesced

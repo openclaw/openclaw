@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Builds an HTML/manifest evidence bundle from Telegram QA scenario summaries.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -88,6 +89,9 @@ function renderObservedMessages(observedMessages) {
     .join("\n");
 }
 
+/**
+ * Renders a self-contained Telegram evidence HTML report.
+ */
 export function renderTelegramEvidenceHtml({ observedMessages, summary }) {
   const counts = summary.counts ?? {};
   const pass = counts.failed === 0 && Number(counts.total ?? 0) > 0;
@@ -368,11 +372,14 @@ export function writeTelegramEvidence(rawArgs = process.argv.slice(2)) {
   if (!existsSync(observedPath)) {
     throw new Error(`Missing Telegram observed messages: ${observedPath}`);
   }
+  const summary = readJson(summaryPath);
+  const pass = summary.counts?.failed === 0 && Number(summary.counts?.total ?? 0) > 0;
   if (!existsSync(reportPath)) {
+    if (pass) {
+      throw new Error(`Missing Telegram QA report for passing summary: ${reportPath}`);
+    }
     writeFileSync(reportPath, "# Mantis Telegram Live QA\n\nTelegram QA report was unavailable.\n");
   }
-
-  const summary = readJson(summaryPath);
   const observedMessages = readJson(observedPath);
   const transcriptHtml = renderTelegramEvidenceHtml({ observedMessages, summary });
   writeFileSync(path.join(outputDir, "telegram-live-transcript.html"), transcriptHtml, "utf8");

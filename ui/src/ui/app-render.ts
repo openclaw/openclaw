@@ -1,3 +1,4 @@
+// Control UI module implements app render behavior.
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { styleMap } from "lit/directives/style-map.js";
@@ -399,7 +400,7 @@ async function resolveSkillWorkshopRevisionSessionKey(
 
 async function sendSkillWorkshopRevisionRequest(
   state: AppViewState,
-  message: string,
+  instructions: string,
   proposal: { key: string; slug: string; origin?: { agentId?: string; sessionKey?: string } },
 ): Promise<void> {
   if (!state.client || !state.connected) {
@@ -417,7 +418,14 @@ async function sendSkillWorkshopRevisionRequest(
   } else {
     await switchChatSessionAndWait(state, sessionKey);
   }
-  await state.handleSendChat(message, { restoreDraft: true });
+  const proposalAgentId = proposal.origin?.agentId?.trim();
+  await state.handleSendChat(instructions, {
+    restoreDraft: true,
+    skillWorkshopRevision: {
+      proposalId: proposal.key,
+      ...(proposalAgentId ? { agentId: proposalAgentId } : {}),
+    },
+  });
 }
 
 function renderSettingsSectionNav(state: AppViewState) {

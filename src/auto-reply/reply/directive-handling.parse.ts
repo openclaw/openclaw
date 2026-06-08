@@ -1,3 +1,4 @@
+// Parses inline reply directives into typed execution and routing options.
 import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
 import { extractModelDirective } from "../model.js";
 import { isSessionDefaultDirectiveValue } from "../thinking.js";

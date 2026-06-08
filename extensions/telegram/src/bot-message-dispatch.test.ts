@@ -1,9 +1,11 @@
+// Telegram tests cover bot message dispatch plugin behavior.
 import type { Bot } from "grammy";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -69,7 +71,11 @@ const createChannelMessageReplyPipeline = vi.hoisted(() =>
 );
 const wasSentByBot = vi.hoisted(() => vi.fn(() => false));
 const appendSessionTranscriptMessage = vi.hoisted(() =>
-  vi.fn(async (_params: { message?: unknown }) => ({ messageId: "m1" })),
+  vi.fn(async ({ message }: { message?: unknown }) => ({
+    messageId: "m1",
+    message,
+    appended: true,
+  })),
 );
 const emitSessionTranscriptUpdate = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
@@ -100,6 +106,7 @@ const resolveSessionStoreEntry = vi.hoisted(() =>
     existing: store[sessionKey],
   })),
 );
+const updateSessionStoreEntry = vi.hoisted(() => vi.fn(async () => null));
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
@@ -154,6 +161,7 @@ vi.mock("./bot-message-dispatch.runtime.js", () => ({
   resolveMarkdownTableMode,
   resolveSessionStoreEntry,
   resolveStorePath,
+  updateSessionStoreEntry,
 }));
 
 vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
@@ -267,11 +275,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     loadSessionStore.mockReset();
     resolveStorePath.mockReset();
     resolveAndPersistSessionFile.mockReset();
+    updateSessionStoreEntry.mockReset();
     generateTopicLabel.mockReset();
     getAgentScopedMediaLocalRoots.mockClear();
     resolveChunkMode.mockClear();
     resolveMarkdownTableMode.mockClear();
     resolveSessionStoreEntry.mockClear();
+    updateSessionStoreEntry.mockClear();
     describeStickerImage.mockReset();
     loadModelCatalog.mockReset();
     findModelInCatalog.mockReset();
@@ -1444,6 +1454,29 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 
+  it("advances the session marker after mirroring preview-finalized finals", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context });
+
+    const markerUpdateCall = expectRecordFields(mockCallArg(updateSessionStoreEntry), {
+      storePath: "/tmp/sessions.json",
+      sessionKey: "agent:default:telegram:direct:123",
+    });
+    const update = markerUpdateCall.update as (entry: { sessionId?: string }) => unknown;
+    expect(update({ sessionId: "s1" })).toEqual({ updatedAt: expect.any(Number) });
+    expect(update({ sessionId: "new-session" })).toBeNull();
+  });
+
   it("does not mirror non-final tool progress into the session transcript", async () => {
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
@@ -1544,6 +1577,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     appendSessionTranscriptMessage.mockImplementationOnce(async ({ message }) => ({
       messageId: "m1",
+      appended: true,
       message: {
         ...(message as Record<string, unknown>),
         content: [{ type: "text", text: "Final sk-abc…0xyz" }],
@@ -2577,6 +2611,73 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(answerDraftStream.clear).toHaveBeenCalled();
     expectDeliveredReply(0, { text: "Boom" });
+  });
+
+  it("suppresses failed tool payloads after the final reply", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      await dispatcherOptions.deliver(
+        { text: "Tool failed after final", isError: true },
+        { kind: "tool" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expectDeliveredReply(0, { text: "Final answer" });
+  });
+
+  it("preserves final error warnings after the final reply", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      await dispatcherOptions.deliver({ text: "Write failed", isError: true }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expectDeliveredReply(0, { text: "Final answer" });
+    expectDeliveredReply(0, { text: "Write failed", isError: true }, 1);
+  });
+
+  it("suppresses non-terminal final error warnings after the final reply", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      await dispatcherOptions.deliver(
+        setReplyPayloadMetadata(
+          { text: "Post-processing failed", isError: true },
+          { nonTerminalToolErrorWarning: true },
+        ),
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expectDeliveredReply(0, { text: "Final answer" });
+  });
+
+  it("preserves non-terminal final error warnings before any final reply is delivered", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        setReplyPayloadMetadata(
+          { text: "Post-processing failed", isError: true },
+          { nonTerminalToolErrorWarning: true },
+        ),
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expectDeliveredReply(0, { text: "Post-processing failed", isError: true });
   });
 
   it("streams button-bearing text into the same message", async () => {

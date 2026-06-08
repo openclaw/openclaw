@@ -1,3 +1,4 @@
+// Exposes root-scoped file open helpers with fs-safe defaults.
 import "./fs-safe-defaults.js";
 
 // Root-scoped file open helpers. Use these for user paths that must stay under
