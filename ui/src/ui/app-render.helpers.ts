@@ -696,7 +696,15 @@ export function dismissChatError(state: AppViewState) {
   }
 }
 
-export async function createChatSession(state: AppViewState): Promise<boolean> {
+export type CreateChatSessionIntent = { source: "user" };
+
+export async function createChatSession(
+  state: AppViewState,
+  intent?: CreateChatSessionIntent,
+): Promise<boolean> {
+  if (intent?.source !== "user") {
+    return false;
+  }
   if (!state.client || !state.connected) {
     return false;
   }

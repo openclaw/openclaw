@@ -784,6 +784,17 @@ describe("handleChatManualRefresh", () => {
 });
 
 describe("createChatSession", () => {
+  it("does not create a session without explicit user intent", async () => {
+    const state = createChatSessionState();
+    createSessionAndRefreshMock.mockResolvedValue("agent:ops:dashboard:new-chat");
+
+    await expect(createChatSession(state)).resolves.toBe(false);
+
+    expect(createSessionAndRefreshMock).not.toHaveBeenCalled();
+    expect(state.sessionKey).toBe("agent:ops:main");
+    expect(state.chatMessages).toEqual([{ role: "assistant", content: "old" }]);
+  });
+
   it("creates a dashboard session, switches to it, and preserves the current composer", async () => {
     const state = createChatSessionState();
     createSessionAndRefreshMock.mockResolvedValue("agent:ops:dashboard:new-chat");
@@ -792,7 +803,7 @@ describe("createChatSession", () => {
     loadChatHistoryMock.mockResolvedValue(undefined);
     loadSessionsMock.mockResolvedValue(undefined);
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
       state,
@@ -838,7 +849,7 @@ describe("createChatSession", () => {
     loadChatHistoryMock.mockResolvedValue(undefined);
     loadSessionsMock.mockResolvedValue(undefined);
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
       state,
@@ -874,7 +885,7 @@ describe("createChatSession", () => {
     loadChatHistoryMock.mockResolvedValue(undefined);
     loadSessionsMock.mockResolvedValue(undefined);
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
     expect(state.chatMessage).toBe("updated draft");
@@ -889,7 +900,7 @@ describe("createChatSession", () => {
       return "agent:ops:dashboard:new-chat";
     });
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(state.sessionKey).toBe("agent:ops:other");
     expect(state.chatMessage).toBe("draft prompt");
@@ -903,7 +914,7 @@ describe("createChatSession", () => {
       chatQueue: [{ id: "queued-1", text: "follow up", createdAt: 1 }],
     });
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(createSessionAndRefreshMock).not.toHaveBeenCalled();
     expect(state.sessionKey).toBe("agent:ops:main");
@@ -920,7 +931,7 @@ describe("createChatSession", () => {
       lastError: "previous error",
     });
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(createSessionAndRefreshMock).not.toHaveBeenCalled();
     expect(state.sessionKey).toBe("agent:ops:main");
@@ -934,7 +945,7 @@ describe("createChatSession", () => {
     const state = createChatSessionState({ lastError: "previous error" });
     createSessionAndRefreshMock.mockResolvedValue(null);
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(createSessionAndRefreshMock).toHaveBeenCalledTimes(1);
     expect(state.sessionKey).toBe("agent:ops:main");
@@ -951,7 +962,7 @@ describe("createChatSession", () => {
       return null;
     });
 
-    await createChatSession(state);
+    await createChatSession(state, { source: "user" });
 
     expect(createSessionAndRefreshMock).toHaveBeenCalledTimes(1);
     expect(state.sessionKey).toBe("agent:ops:main");

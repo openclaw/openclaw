@@ -560,7 +560,7 @@ function renderSidebarSessions(state: AppViewState) {
           if (newSessionDisabled) {
             return;
           }
-          if (await createChatSession(state)) {
+          if (await createChatSession(state, { source: "user" })) {
             state.setTab("chat" as import("./navigation.ts").Tab);
           }
         }}
@@ -3572,7 +3572,7 @@ export function renderApp(state: AppViewState) {
                   onDismissSideResult: () => {
                     state.chatSideResult = null;
                   },
-                  onNewSession: () => void createChatSession(state),
+                  onNewSession: () => void createChatSession(state, { source: "user" }),
                   onClearHistory: runUiTask(async () => {
                     if (!state.client || !state.connected) {
                       return;
