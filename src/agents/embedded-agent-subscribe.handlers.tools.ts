@@ -1418,7 +1418,7 @@ export async function handleToolExecutionEnd(
     result,
     sanitizedResult,
   });
-  void Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
+  await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
     ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
   });
 

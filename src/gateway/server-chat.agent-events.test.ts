@@ -3796,6 +3796,51 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("sends non-control-UI-visible status item events to exact session message subscribers", () => {
+    const { broadcast, broadcastToConnIds, nodeSendToSession, sessionMessageSubscribers, handler } =
+      createHarness({
+        resolveSessionKeyForRun: () => "session-hidden",
+      });
+    sessionMessageSubscribers.subscribe("conn-selected", "session-hidden");
+    sessionMessageSubscribers.subscribe("conn-other", "session-other");
+    registerAgentRunContext("run-hidden", {
+      sessionKey: "session-hidden",
+      isControlUiVisible: false,
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-hidden",
+      seq: 1,
+      stream: "item",
+      ts: Date.now(),
+      data: {
+        kind: "status",
+        title: "Fast",
+        phase: "update",
+        summary: "💨Fast: auto-off(8s>=5s)",
+      },
+    });
+
+    expect(agentBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(nodeSendToSession).not.toHaveBeenCalled();
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "hidden status item event")).toBe("agent");
+    const payload = requireMockPayload(broadcastToConnIds, 0, 1, "hidden status item payload");
+    expectPayloadFields(payload, {
+      runId: "run-hidden",
+      sessionKey: "session-hidden",
+      stream: "item",
+    });
+    expectPayloadDataFields(payload, {
+      kind: "status",
+      title: "Fast",
+      summary: "💨Fast: auto-off(8s>=5s)",
+    });
+    expect(requireMockArg(broadcastToConnIds, 0, 2, "hidden status item recipients")).toEqual(
+      new Set(["conn-selected"]),
+    );
+  });
+
   it("uses agent event sessionKey when run-context lookup cannot resolve", () => {
     const { broadcast, handler } = createHarness({
       resolveSessionKeyForRun: () => undefined,
