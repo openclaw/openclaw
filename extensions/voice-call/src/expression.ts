@@ -22,6 +22,10 @@ const HAPPY_WORDS =
 /**
  * Map reply text to an {@link AvatarEmotion}. Surprise wins over sad over happy (a strong "wow!"
  * shouldn't be masked by a polite "thanks"); empty/neutral text → "neutral".
+ *
+ * Known limitation: this is first-match priority, not sentiment scoring — a mixed reply like
+ * "Unfortunately I'm glad I could help!" resolves to "sad" (the higher-priority match wins). That's an
+ * acceptable trade-off for a cheap cosmetic cue; the realtime path also re-cues as more text arrives.
  */
 export function inferEmotion(text: string | null | undefined): AvatarEmotion {
   const raw = (text ?? "").trim();
