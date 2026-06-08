@@ -392,10 +392,41 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .action(async (key: string, opts, command) => {
       // Sibling `sessions` subcommands inherit parent options (see list/cleanup
       // above): `--agent`/`--json` may be supplied on the parent `sessions`
-      // command, e.g. `openclaw sessions --agent work compact <key>`. Merge them
+      // command, e.g. `openclaw sessions --agent work compact <key>`. Merge those
       // so a parent `--agent` is not silently dropped and the wrong agent's
       // session compacted.
-      const parentOpts = command.parent?.opts() as { agent?: string; json?: boolean } | undefined;
+      //
+      // The parent also defines list-only options (`--store`/`--all-agents`/
+      // `--active`/`--limit`). `compact` mutates the single session the gateway
+      // resolves from <key> + --agent, so it cannot honor a parent `--store`
+      // (the gateway picks the store) and the rest are meaningless here.
+      // Silently dropping `--store` is the dangerous case — the user could
+      // believe they targeted one store while the gateway compacts another — so
+      // reject any unsupported inherited option instead of ignoring it.
+      const parentOpts = command.parent?.opts() as
+        | {
+            agent?: string;
+            json?: boolean;
+            store?: string;
+            allAgents?: boolean;
+            active?: string;
+            limit?: string;
+          }
+        | undefined;
+      const unsupportedParentOptions = [
+        parentOpts?.store !== undefined ? "--store" : undefined,
+        parentOpts?.allAgents ? "--all-agents" : undefined,
+        parentOpts?.active !== undefined ? "--active" : undefined,
+        parentOpts?.limit !== undefined ? "--limit" : undefined,
+      ].filter((flag): flag is string => flag !== undefined);
+      if (unsupportedParentOptions.length > 0) {
+        const plural = unsupportedParentOptions.length > 1 ? "options" : "option";
+        defaultRuntime.error(
+          `\`sessions compact\` does not support the parent \`sessions\` ${plural} ${unsupportedParentOptions.join(", ")}; the gateway resolves the target store from <key> and --agent.`,
+        );
+        defaultRuntime.exit(1);
+        return;
+      }
       const maxLines = parseStrictPositiveIntOrUndefined(opts.maxLines);
       if (opts.maxLines !== undefined && maxLines === undefined) {
         defaultRuntime.error("--max-lines must be a positive integer.");
