@@ -147,8 +147,7 @@ workloads unless you explicitly need a Grok 4.20 beta alias.
 
 The bundled plugin maps xAI's current public API surface onto OpenClaw's shared
 provider and tool contracts. Capabilities that don't fit the shared contract
-(for example streaming TTS and realtime voice) are not exposed - see the table
-below.
+(for example streaming TTS) are not exposed - see the table below.
 
 | xAI capability             | OpenClaw surface                          | Status                                                              |
 | -------------------------- | ----------------------------------------- | ------------------------------------------------------------------- |
@@ -162,16 +161,14 @@ below.
 | Streaming TTS              | -                                         | Not exposed; OpenClaw's TTS contract returns complete audio buffers |
 | Batch speech-to-text       | `tools.media.audio` / media understanding | Yes                                                                 |
 | Streaming speech-to-text   | Voice Call `streaming.provider: "xai"`    | Yes                                                                 |
-| Realtime voice             | -                                         | Not exposed yet; different session/WebSocket contract               |
+| Realtime voice             | Talk `realtime.provider: "xai"`           | Yes; Gateway relay bridge                                           |
 | Files / batches            | Generic model API compatibility only      | Not a first-class OpenClaw tool                                     |
 
 <Note>
 OpenClaw uses xAI's REST image/video/TTS/STT APIs for media generation,
 speech, and batch transcription, xAI's streaming STT WebSocket for live
-voice-call transcription, and the Responses API for model, search, and
-code-execution tools. Features that need different OpenClaw contracts, such as
-Realtime voice sessions, are documented here as upstream capabilities rather
-than hidden plugin behavior.
+voice-call transcription, xAI's Realtime voice WebSocket for Talk Gateway relay
+sessions, and the Responses API for model, search, and code-execution tools.
 </Note>
 
 ### Fast-mode mappings
@@ -423,6 +420,61 @@ Legacy aliases still normalize to the canonical bundled ids:
 
   </Accordion>
 
+  <Accordion title="Realtime voice">
+    The bundled `xai` plugin registers a realtime voice provider for Talk
+    Gateway relay sessions.
+
+    - Provider id: `xai`
+    - Transport: `gateway-relay`
+    - Default model: `grok-voice-think-fast-1.0`
+    - Models: `grok-voice-think-fast-1.0`, `grok-voice-latest`,
+      `grok-voice-fast-1.0`
+    - Default voice: `eve`
+    - Voices: `eve`, `ara`, `rex`, `sal`, `leo`, or another xAI voice id
+    - Audio formats: PCM16 24 kHz or G.711 µ-law 8 kHz
+    - Inbound speech transcripts: xAI's cumulative
+      `conversation.item.input_audio_transcription.updated` event is exposed as
+      user transcript updates, so Talk and meeting surfaces can consume live
+      inbound speech content.
+
+    ```json5
+    {
+      talk: {
+        realtime: {
+          provider: "xai",
+          model: "grok-voice-think-fast-1.0",
+          speakerVoice: "leo",
+          mode: "realtime",
+          transport: "gateway-relay",
+          brain: "agent-consult",
+          providers: {
+            xai: {
+              apiKey: "${XAI_API_KEY}",
+              vadThreshold: 0.85,
+              silenceDurationMs: 500,
+              prefixPaddingMs: 333,
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Provider-owned config lives under `talk.realtime.providers.xai`. Supported
+    keys are `apiKey`, `baseUrl`, `model`, `voice`, `speakerVoice`,
+    `voiceId`, `speakerVoiceId`, `vadThreshold`, `silenceDurationMs`,
+    `prefixPaddingMs`, `interruptResponseOnInputAudio`, and
+    `minBargeInAudioEndMs`. When `apiKey` is omitted, OpenClaw tries
+    `XAI_API_KEY` and then the configured xAI auth profile.
+
+    <Note>
+    xAI Realtime voice is exposed through Gateway relay so credentials and the
+    vendor WebSocket remain server-side. Browser-owned provider-WebSocket
+    sessions for xAI are not exposed yet.
+    </Note>
+
+  </Accordion>
+
   <Accordion title="x_search configuration">
     The bundled xAI plugin exposes `x_search` as an OpenClaw tool for searching
     X (formerly Twitter) content via Grok.
@@ -507,9 +559,8 @@ Legacy aliases still normalize to the canonical bundled ids:
     - `grok-4.20-multi-agent-experimental-beta-0304` is not supported on the
       normal xAI provider path because it requires a different upstream API
       surface than the standard OpenClaw xAI transport.
-    - xAI Realtime voice is not registered as an OpenClaw provider yet. It
-      needs a different bidirectional voice session contract than batch STT or
-      streaming transcription.
+    - xAI Realtime voice uses Talk Gateway relay. Browser-owned
+      provider-WebSocket sessions for xAI are not exposed yet.
     - xAI image `quality`, image `mask`, and extra native-only aspect ratios are
       not exposed until the shared `image_generate` tool has corresponding
       cross-provider controls.
