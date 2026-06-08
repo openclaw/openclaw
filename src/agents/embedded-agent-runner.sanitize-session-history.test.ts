@@ -2348,6 +2348,35 @@ describe("sanitizeSessionHistory", () => {
     expect((textBlocks[0] as { text?: string }).text).toBe("result");
   });
 
+  it("strips reasoning_content placeholder signatures from prior assistant turns for native Anthropic replay", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("first"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "xai private reasoning",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "text", text: "xai answer" },
+      ]),
+      makeUserMessage("second"),
+    ]);
+
+    const result = await sanitizeAnthropicHistory({
+      messages,
+      preserveLatestAssistantThinking: false,
+    });
+
+    const assistant = getAssistantMessage(result);
+    const thinkingBlocks = assistant.content.filter(
+      (b: { type: string }) => b.type === "thinking" || b.type === "redacted_thinking",
+    );
+    expect(thinkingBlocks).toHaveLength(0);
+    expect(assistant.content).toEqual([{ type: "text", text: "xai answer" }]);
+  });
+
   it("preserves unsigned thinking blocks for kimi coding with anthropic-messages transport", async () => {
     setNonGoogleModelApi();
 

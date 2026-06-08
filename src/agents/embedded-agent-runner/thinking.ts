@@ -228,7 +228,12 @@ function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
       ? [record.data, record.signature, record.thinkingSignature, record.thought_signature]
       : [record.signature, record.thinkingSignature, record.thought_signature];
   return candidates.some((signature) => {
-    return typeof signature === "string" && signature.trim().length > 0;
+    // "reasoning_content" is an OpenAI-compat placeholder, not a valid Anthropic signature.
+    return (
+      typeof signature === "string" &&
+      signature.trim().length > 0 &&
+      signature !== "reasoning_content"
+    );
   });
 }
 
