@@ -256,7 +256,24 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
+} & Partial<
+  Omit<
+    CronAgentTurnPayloadFields,
+    | "allowUnsafeExternalContent"
+    | "fallbacks"
+    | "lightContext"
+    | "model"
+    | "thinking"
+    | "timeoutSeconds"
+    | "toolsAllow"
+  >
+> & {
+    model?: string | null;
+    fallbacks?: string[] | null;
+    thinking?: string | null;
+    timeoutSeconds?: number | null;
+    allowUnsafeExternalContent?: boolean | null;
+    lightContext?: boolean | null;
     toolsAllow?: string[] | null;
   };
 

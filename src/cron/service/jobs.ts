@@ -923,9 +923,13 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   }
   if (typeof patch.model === "string") {
     next.model = patch.model;
+  } else if (patch.model === null) {
+    delete next.model;
   }
   if (Array.isArray(patch.fallbacks)) {
     next.fallbacks = patch.fallbacks;
+  } else if (patch.fallbacks === null) {
+    delete next.fallbacks;
   }
   if (Array.isArray(patch.toolsAllow)) {
     next.toolsAllow = patch.toolsAllow;
@@ -934,15 +938,23 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   }
   if (typeof patch.thinking === "string") {
     next.thinking = patch.thinking;
+  } else if (patch.thinking === null) {
+    delete next.thinking;
   }
   if (typeof patch.timeoutSeconds === "number") {
     next.timeoutSeconds = patch.timeoutSeconds;
+  } else if (patch.timeoutSeconds === null) {
+    delete next.timeoutSeconds;
   }
   if (typeof patch.lightContext === "boolean") {
     next.lightContext = patch.lightContext;
+  } else if (patch.lightContext === null) {
+    delete next.lightContext;
   }
   if (typeof patch.allowUnsafeExternalContent === "boolean") {
     next.allowUnsafeExternalContent = patch.allowUnsafeExternalContent;
+  } else if (patch.allowUnsafeExternalContent === null) {
+    delete next.allowUnsafeExternalContent;
   }
   return next;
 }

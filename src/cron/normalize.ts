@@ -173,6 +173,8 @@ function coercePayload(payload: UnknownRecord) {
     const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
     if (model !== undefined) {
       next.model = model;
+    } else if (next.model === null) {
+      next.model = null;
     } else {
       delete next.model;
     }
@@ -181,6 +183,8 @@ function coercePayload(payload: UnknownRecord) {
     const thinking = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.thinking);
     if (thinking !== undefined) {
       next.thinking = thinking;
+    } else if (next.thinking === null) {
+      next.thinking = null;
     } else {
       delete next.thinking;
     }
@@ -189,12 +193,14 @@ function coercePayload(payload: UnknownRecord) {
     const timeoutSeconds = parseOptionalField(TimeoutSecondsFieldSchema, next.timeoutSeconds);
     if (timeoutSeconds !== undefined) {
       next.timeoutSeconds = timeoutSeconds;
+    } else if (next.timeoutSeconds === null) {
+      next.timeoutSeconds = null;
     } else {
       delete next.timeoutSeconds;
     }
   }
   if ("fallbacks" in next) {
-    const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
+    const fallbacks = normalizeTrimmedStringArray(next.fallbacks, { allowNull: true });
     if (fallbacks !== undefined) {
       next.fallbacks = fallbacks;
     } else {
@@ -257,9 +263,17 @@ function coercePayload(payload: UnknownRecord) {
   }
   if (
     "allowUnsafeExternalContent" in next &&
-    typeof next.allowUnsafeExternalContent !== "boolean"
+    typeof next.allowUnsafeExternalContent !== "boolean" &&
+    next.allowUnsafeExternalContent !== null
   ) {
     delete next.allowUnsafeExternalContent;
+  }
+  if (
+    "lightContext" in next &&
+    typeof next.lightContext !== "boolean" &&
+    next.lightContext !== null
+  ) {
+    delete next.lightContext;
   }
   if (next.kind === "systemEvent") {
     delete next.message;
