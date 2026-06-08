@@ -308,7 +308,10 @@ export async function runSubagentAnnounceFlow(params: {
     if (failedTerminalOutcome) {
       reply = undefined;
     }
-    // sessions_yield resume turn handles delivery — don't run the announce agent.
+    // sessions_yield: parent resume turn owns delivery through its own session output path.
+    // Returning true tells the lifecycle "announce done"; the subagent run delivery state
+    // (pendingFinalDelivery) is separate from the parent session's delivery tracking, so
+    // clearing it here does not remove any retry path for the parent's resume reply.
     if (params.requesterPausedForYield) {
       return true;
     }
