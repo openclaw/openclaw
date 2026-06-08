@@ -447,6 +447,19 @@ const readPackageJsonPluginSdkAliasFileNames = (deps) => {
   return fileNames.size > 0 ? fileNames : null;
 };
 
+const listRequiredPluginSdkDistOutputs = (deps) => {
+  const fileNames = readPackageJsonPluginSdkAliasFileNames(deps);
+  if (!fileNames) {
+    return [];
+  }
+  return [...fileNames]
+    .map((fileName) => path.join(deps.distRoot, "plugin-sdk", fileName))
+    .toSorted((left, right) => left.localeCompare(right));
+};
+
+const hasMissingRequiredPluginSdkDistOutput = (deps) =>
+  listRequiredPluginSdkDistOutputs(deps).some((filePath) => statMtime(filePath, deps.fs) == null);
+
 const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
   const distRoot = resolveRuntimePostBuildDistRoot(deps);
   const distExtensionsRoot = path.join(distRoot, "extensions");
@@ -536,6 +549,9 @@ export const resolveBuildRequirement = (deps) => {
   }
   if (statMtime(deps.distEntry, deps.fs) == null) {
     return { shouldBuild: true, reason: "missing_dist_entry" };
+  }
+  if (hasMissingRequiredPluginSdkDistOutput(deps)) {
+    return { shouldBuild: true, reason: "missing_plugin_sdk_dist_entry" };
   }
 
   for (const filePath of deps.configFiles) {
@@ -634,6 +650,7 @@ const BUILD_REASON_LABELS = {
   git_head_changed: "git head changed",
   dirty_watched_tree: "dirty watched source tree",
   missing_bundled_plugin_dist_entry: "bundled plugin dist entry missing",
+  missing_plugin_sdk_dist_entry: "plugin SDK dist entry missing",
   source_mtime_newer: "source mtime newer than build stamp",
   missing_private_qa_dist: "private QA dist entry missing",
   clean: "clean",
