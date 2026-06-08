@@ -762,12 +762,20 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
   }
-  if (resolvedAuthMode === "none") {
+  const healthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
+  const gatewayHasConfiguredExposure =
+    effectiveTailscaleMode !== "off" ||
+    (cfg.gateway?.trustedProxies?.length ?? 0) > 0 ||
+    (cfg.gateway?.controlUi?.allowedOrigins?.length ?? 0) > 0 ||
+    cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true ||
+    cfg.gateway?.auth?.trustedProxy !== undefined;
+  const shouldWarnForNoAuth =
+    resolvedAuthMode === "none" && (!isLoopbackHost(healthHost) || gatewayHasConfiguredExposure);
+  if (shouldWarnForNoAuth) {
     gatewayLog.warn(
       "Gateway auth mode=none explicitly configured; all gateway connections are unauthenticated.",
     );
   }
-  const healthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
   if (
     shouldBlockGatewayBindWithoutExplicitAuth({
       bindHost: healthHost,

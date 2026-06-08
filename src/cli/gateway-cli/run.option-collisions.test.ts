@@ -266,6 +266,12 @@ describe("gateway run option collisions", () => {
     };
   }
 
+  function hasNoAuthStartupWarning() {
+    return gatewayLogMessages.includes(
+      "Gateway auth mode=none explicitly configured; all gateway connections are unauthenticated.",
+    );
+  }
+
   function expectAuthOverrideMode(mode: string) {
     expect(gatewayStartOptions().auth?.mode).toBe(mode);
   }
@@ -392,6 +398,85 @@ describe("gateway run option collisions", () => {
     expect(options.bind).toBe("auto");
   });
 
+  it.each([
+    {
+      name: "strictly local loopback gateway binds",
+      config: { gateway: { bind: "loopback", auth: { mode: "none" } } },
+      argv: ["gateway", "run", "--allow-unconfigured"],
+      expectedWarning: false,
+    },
+    {
+      name: "Tailscale exposure",
+      config: { gateway: { bind: "loopback", auth: { mode: "none" } } },
+      argv: ["gateway", "run", "--tailscale", "serve", "--allow-unconfigured"],
+      expectedWarning: true,
+    },
+    {
+      name: "configured proxy exposure",
+      config: {
+        gateway: {
+          bind: "loopback",
+          trustedProxies: ["10.0.0.2"],
+          auth: { mode: "none" },
+        },
+      },
+      argv: ["gateway", "run", "--allow-unconfigured"],
+      expectedWarning: true,
+    },
+    {
+      name: "configured Control UI origins",
+      config: {
+        gateway: {
+          bind: "loopback",
+          controlUi: { allowedOrigins: ["https://control.example.com"] },
+          auth: { mode: "none" },
+        },
+      },
+      argv: ["gateway", "run", "--allow-unconfigured"],
+      expectedWarning: true,
+    },
+    {
+      name: "Host-header origin fallback",
+      config: {
+        gateway: {
+          bind: "loopback",
+          controlUi: { dangerouslyAllowHostHeaderOriginFallback: true },
+          auth: { mode: "none" },
+        },
+      },
+      argv: ["gateway", "run", "--allow-unconfigured"],
+      expectedWarning: true,
+    },
+    {
+      name: "trusted-proxy auth config",
+      config: {
+        gateway: {
+          bind: "loopback",
+          auth: {
+            mode: "none",
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+        },
+      },
+      argv: ["gateway", "run", "--allow-unconfigured"],
+      expectedWarning: true,
+    },
+  ])("handles the no-auth startup warning for $name", async ({ config, argv, expectedWarning }) => {
+    configState.cfg = config;
+    configState.snapshot = {
+      exists: true,
+      valid: true,
+      config,
+    };
+
+    await withEnvAsync(withoutGatewayAuthEnv, async () => {
+      await runGatewayCli(argv);
+    });
+
+    expect(gatewayStartOptions().bind).toBe("loopback");
+    expect(hasNoAuthStartupWarning()).toBe(expectedWarning);
+  });
+
   it("blocks container auto startup without explicit gateway auth", async () => {
     netState.autoBindHost = "0.0.0.0";
     netState.container = true;
@@ -407,12 +492,20 @@ describe("gateway run option collisions", () => {
   });
 
   it("blocks non-loopback startup without explicit gateway auth", async () => {
+    configState.cfg = { gateway: { auth: { mode: "none" } } };
+    configState.snapshot = {
+      exists: true,
+      valid: true,
+      config: configState.cfg,
+    };
+
     await withEnvAsync(withoutGatewayAuthEnv, async () => {
       await expect(
         runGatewayCli(["gateway", "run", "--bind", "lan", "--allow-unconfigured"]),
       ).rejects.toThrow("__exit__:78");
     });
 
+    expect(hasNoAuthStartupWarning()).toBe(true);
     expect(runtimeErrors.join("\n")).toContain("Refusing to bind gateway to lan without auth.");
     expect(startGatewayServer).not.toHaveBeenCalled();
   });
