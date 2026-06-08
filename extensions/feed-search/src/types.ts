@@ -48,12 +48,6 @@ export type FeedRow = [
   Date | null, // eventDate
 ];
 
-/** Topic resolution result */
-export interface TopicResolution {
-  topicId: number | null;
-  useSlaveTopic: boolean;
-}
-
 /** MySQL connection config */
 export interface MySqlConfig {
   host: string;
