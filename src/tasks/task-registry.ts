@@ -1968,7 +1968,7 @@ export async function cancelTaskById(params: {
   }
   const childSessionKey = task.childSessionKey?.trim();
   try {
-    if (task.runtime !== "cli") {
+    if (task.runtime !== "cli" && task.runtime !== "cron") {
       if (!childSessionKey) {
         if (!isChildlessCodexNativeSubagentTask(task)) {
           return {
