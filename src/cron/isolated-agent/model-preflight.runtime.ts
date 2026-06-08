@@ -181,7 +181,13 @@ function sleepMs(delayMs: number): Promise<void> {
   if (delayMs <= 0) {
     return Promise.resolve();
   }
-  return new Promise((resolve) => setTimeout(resolve, delayMs));
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+
+function resolveRemainingBudgetMs(deadlineMs: number | undefined): number | undefined {
+  return deadlineMs === undefined ? undefined : Math.max(0, deadlineMs - Date.now());
 }
 
 async function probeLocalProviderEndpoint(params: {
@@ -212,6 +218,7 @@ export async function preflightCronModelProvider(params: {
   provider: string;
   model: string;
   nowMs?: number;
+  deadlineMs?: number;
 }): Promise<CronModelProviderPreflightResult> {
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
   if (!providerConfig) {
@@ -253,23 +260,48 @@ export async function preflightCronModelProvider(params: {
     });
   }
 
-  let result: EndpointPreflightResult;
   let lastError: unknown;
   let attempts = 0;
-  for (attempts = 1; attempts <= maxAttempts; attempts += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const remainingBudgetMs = resolveRemainingBudgetMs(params.deadlineMs);
+    if (remainingBudgetMs !== undefined && remainingBudgetMs <= 0) {
+      lastError = new Error("cron model preflight chain budget exhausted");
+      break;
+    }
+    attempts = attempt;
     try {
-      await probeLocalProviderEndpoint({ api, baseUrl, timeoutMs });
-      result = { status: "available" };
+      await probeLocalProviderEndpoint({
+        api,
+        baseUrl,
+        timeoutMs:
+          remainingBudgetMs === undefined ? timeoutMs : Math.min(timeoutMs, remainingBudgetMs),
+      });
+      const result: EndpointPreflightResult = { status: "available" };
       preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
       return { status: "available" };
     } catch (error) {
       lastError = error;
-      if (attempts < maxAttempts) {
-        await sleepMs(retryDelayMs);
+      if (attempt < maxAttempts) {
+        const remainingDelayBudgetMs = resolveRemainingBudgetMs(params.deadlineMs);
+        if (remainingDelayBudgetMs !== undefined && remainingDelayBudgetMs <= 0) {
+          lastError = new Error(
+            `cron model preflight chain budget exhausted after ${attempts} attempt${attempts === 1 ? "" : "s"}`,
+          );
+          break;
+        }
+        await sleepMs(
+          remainingDelayBudgetMs === undefined
+            ? retryDelayMs
+            : Math.min(retryDelayMs, remainingDelayBudgetMs),
+        );
       }
     }
   }
-  result = { status: "unavailable", error: lastError, attempts: maxAttempts };
+  const result: EndpointPreflightResult = {
+    status: "unavailable",
+    error: lastError ?? new Error("cron model preflight chain budget exhausted"),
+    attempts,
+  };
   preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
   return buildUnavailableResult({
     provider: params.provider,

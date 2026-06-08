@@ -1,5 +1,5 @@
 // Runtime model preflight tests cover provider/model checks before cron execution.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -39,6 +39,10 @@ describe("preflightCronModelProvider", () => {
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
     resetCronModelProviderPreflightCacheForTest();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("skips network checks for cloud provider URLs", async () => {
@@ -204,6 +208,55 @@ describe("preflightCronModelProvider", () => {
     }
     expect(result.reason).toContain("after 2 preflight attempts");
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not probe a second local candidate after the shared chain deadline expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("first endpoint unavailable"));
+
+    const cfg = {
+      models: {
+        providers: {
+          first: {
+            api: "openai-completions" as const,
+            baseUrl: "http://127.0.0.1:18001/v1",
+            models: [],
+          },
+          second: {
+            api: "openai-completions" as const,
+            baseUrl: "http://127.0.0.1:18002/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    const deadlineMs = 1_200;
+
+    const first = await preflightCronModelProvider({
+      cfg,
+      provider: "first",
+      model: "local-one",
+      deadlineMs,
+    });
+    expect(first.status).toBe("unavailable");
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    expect(requireFetchPreflightRequest().timeoutMs).toBe(200);
+
+    vi.setSystemTime(deadlineMs);
+    const second = await preflightCronModelProvider({
+      cfg,
+      provider: "second",
+      model: "local-two",
+      deadlineMs,
+    });
+
+    expect(second.status).toBe("unavailable");
+    if (second.status !== "unavailable") {
+      throw new Error(`expected second preflight unavailable, got ${second.status}`);
+    }
+    expect(second.reason).toContain("chain budget exhausted");
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
   });
 
   it("retries an unavailable endpoint after the cache ttl", async () => {

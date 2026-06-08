@@ -1724,7 +1724,7 @@ export const FIELD_HELP: Record<string, string> = {
   "cron.runLog.keepLines":
     "How many trailing run-history rows to retain per cron job (default `2000`). Increase for longer forensic history or lower for smaller disks.",
   "cron.modelPreflight":
-    "Controls the lightweight local model-provider preflight used before isolated cron agent turns. Tune this when local or LAN providers such as Ollama need a few seconds to wake before /api/tags or /models responds. The total retry window is capped at 55s to stay below cron's setup watchdog.",
+    "Controls the lightweight local model-provider preflight used before isolated cron agent turns. Tune this when local or LAN providers such as Ollama need a few seconds to wake before /api/tags or /models responds. Each configured endpoint window and the complete fallback candidate chain are capped at 55s to stay below cron's setup watchdog.",
   "cron.modelPreflight.timeoutMs":
     "Per-attempt timeout in milliseconds for local model-provider preflight probes (default: 2500). Increase for slow LAN or cold-starting providers while keeping the total retry window <= 55s.",
   "cron.modelPreflight.maxAttempts":

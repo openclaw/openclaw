@@ -270,8 +270,9 @@ configure
 `cron.modelPreflight.maxAttempts`, `cron.modelPreflight.retryDelayMs`, and/or
 `cron.modelPreflight.timeoutMs` to give it a short wake-up window before cron
 advances to a fallback or marks the run skipped. Keep the worst-case window at
-or below 55s; OpenClaw validates this so local-provider preflight stays below
-cron's isolated-agent setup watchdog.
+or below 55s; OpenClaw validates the configured endpoint window and enforces one
+shared 55s deadline across the full fallback candidate chain so local-provider
+preflight stays below cron's isolated-agent setup watchdog.
 
 Live-verify the local text path, native stream path, and embeddings against
 local Ollama with:

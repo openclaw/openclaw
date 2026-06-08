@@ -121,6 +121,7 @@ const cronDeliveryRuntimeLoader = createLazyImportLoader(() => import("./run-del
 const cronModelPreflightRuntimeLoader = createLazyImportLoader(
   () => import("./model-preflight.runtime.js"),
 );
+const CRON_MODEL_PREFLIGHT_CHAIN_BUDGET_MS = 55_000;
 const runtimePluginsLoader = createLazyImportLoader(
   () => import("../../plugins/runtime-plugins.runtime.js"),
 );
@@ -685,6 +686,7 @@ async function prepareCronRunContext(params: {
     useSubagentFallbacks,
     inheritDefaultFallbacksForAgentStringModel,
   });
+  const preflightDeadlineMs = Date.now() + CRON_MODEL_PREFLIGHT_CHAIN_BUDGET_MS;
   let selectedPreflightCandidate: { provider: string; model: string } | undefined;
   let selectedPreflightCandidateIndex = -1;
   let firstUnavailablePreflight:
@@ -695,6 +697,7 @@ async function prepareCronRunContext(params: {
       cfg: cfgWithAgentDefaults,
       provider: candidate.provider,
       model: candidate.model,
+      deadlineMs: preflightDeadlineMs,
     });
     if (candidatePreflight.status === "available") {
       selectedPreflightCandidate = candidate;
