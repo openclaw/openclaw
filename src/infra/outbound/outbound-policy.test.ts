@@ -93,8 +93,9 @@ const richChatConfig = {
 function expectCrossContextPolicyResult(params: {
   cfg: OpenClawConfig;
   channel: string;
-  action: "send" | "upload-file";
-  to: string;
+  action: "send" | "upload-file" | "list-reply";
+  to?: string;
+  args?: Record<string, unknown>;
   currentChannelId: string;
   currentChannelProvider: string;
   agentId?: string;
@@ -105,7 +106,7 @@ function expectCrossContextPolicyResult(params: {
       cfg: params.cfg,
       channel: params.channel,
       action: params.action,
-      args: { to: params.to },
+      args: params.args ?? (params.to !== undefined ? { to: params.to } : {}),
       toolContext: {
         currentChannelId: params.currentChannelId,
         currentChannelProvider: params.currentChannelProvider,
@@ -211,6 +212,86 @@ describe("outbound policy helpers", () => {
       agentId: "sandbox",
       expected: /target="C999" while bound to "C123"/,
     },
+    {
+      // list-reply: same-provider cross-target with allowWithinProvider=false → blocked.
+      cfg: {
+        ...workspaceConfig,
+        tools: {
+          message: { crossContext: { allowWithinProvider: false } },
+        },
+      } as OpenClawConfig,
+      channel: "workspace",
+      action: "list-reply" as const,
+      to: "C999",
+      currentChannelId: "C123",
+      currentChannelProvider: "workspace",
+      expected: /action=list-reply target="C999" while bound to "C123"/,
+    },
+    {
+      // list-reply: chatJid alias must also be guarded; agents commonly call with chatJid.
+      cfg: {
+        ...workspaceConfig,
+        tools: {
+          message: { crossContext: { allowWithinProvider: false } },
+        },
+      } as OpenClawConfig,
+      channel: "workspace",
+      action: "list-reply" as const,
+      args: { chatJid: "C999" },
+      currentChannelId: "C123",
+      currentChannelProvider: "workspace",
+      expected: /action=list-reply target="C999" while bound to "C123"/,
+    },
+    {
+      // list-reply: chatId alias is also guarded.
+      cfg: {
+        ...workspaceConfig,
+        tools: {
+          message: { crossContext: { allowWithinProvider: false } },
+        },
+      } as OpenClawConfig,
+      channel: "workspace",
+      action: "list-reply" as const,
+      args: { chatId: "C999" },
+      currentChannelId: "C123",
+      currentChannelProvider: "workspace",
+      expected: /action=list-reply target="C999" while bound to "C123"/,
+    },
+    {
+      // list-reply: same target is allowed regardless of allowWithinProvider.
+      cfg: {
+        ...workspaceConfig,
+        tools: {
+          message: { crossContext: { allowWithinProvider: false } },
+        },
+      } as OpenClawConfig,
+      channel: "workspace",
+      action: "list-reply" as const,
+      to: "C123",
+      currentChannelId: "C123",
+      currentChannelProvider: "workspace",
+      expected: "allow" as const,
+    },
+    {
+      // list-reply: default policy (allowWithinProvider undefined → true) allows cross-target.
+      cfg: workspaceConfig,
+      channel: "workspace",
+      action: "list-reply" as const,
+      to: "C999",
+      currentChannelId: "C123",
+      currentChannelProvider: "workspace",
+      expected: "allow" as const,
+    },
+    {
+      // list-reply: cross-provider denied even when within-provider would be allowed.
+      cfg: workspaceConfig,
+      channel: "forum",
+      action: "list-reply" as const,
+      to: "forum:@ops",
+      currentChannelId: "C12345678",
+      currentChannelProvider: "workspace",
+      expected: /target provider "forum" while bound to "workspace"/,
+    },
   ])("enforces cross-context policy for %j", (params) => {
     expectCrossContextPolicyResult(params);
   });
@@ -265,6 +346,9 @@ describe("outbound policy helpers", () => {
     { action: "upload-file", expected: true },
     { action: "thread-reply", expected: true },
     { action: "thread-create", expected: false },
+    // list-reply payload is a fixed row title plus selectedRowId; injecting a "[from #ops]"
+    // text marker would corrupt the visible button label, so the action is guarded but unmarked.
+    { action: "list-reply", expected: false },
   ] satisfies Array<{ action: ChannelMessageActionName; expected: boolean }>)(
     "marks supported cross-context action %j",
     ({ action, expected }) => {
