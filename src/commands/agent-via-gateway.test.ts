@@ -1122,6 +1122,11 @@ describe("agentCliCommand", () => {
       const abortListenerAttached = createDeferredVoid();
       agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
         expect(opts.abortSignal).toBeInstanceOf(AbortSignal);
+        if (opts.abortSignal?.aborted) {
+          const err = new Error("local agent aborted");
+          err.name = "AbortError";
+          throw err;
+        }
         return await new Promise((_, reject) => {
           opts.abortSignal?.addEventListener(
             "abort",
@@ -1144,6 +1149,7 @@ describe("agentCliCommand", () => {
       signals.emit("SIGTERM");
 
       await run;
+      expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(callGateway).not.toHaveBeenCalled();
       expect(runtime.exit).toHaveBeenCalledWith(143);
       expect(signals.listenerCount("SIGTERM")).toBe(0);
@@ -1156,6 +1162,12 @@ describe("agentCliCommand", () => {
       const signals = createSignalProcess();
       const abortListenerAttached = createDeferredVoid();
       agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
+        if (opts.abortSignal?.aborted) {
+          return {
+            payloads: [],
+            meta: { aborted: true },
+          } as unknown as Awaited<ReturnType<typeof AgentCommand>>;
+        }
         return await new Promise((resolve) => {
           opts.abortSignal?.addEventListener(
             "abort",
@@ -1179,6 +1191,7 @@ describe("agentCliCommand", () => {
       signals.emit("SIGTERM");
 
       await expect(run).resolves.toBeUndefined();
+      expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(callGateway).not.toHaveBeenCalled();
       expect(runtime.exit).toHaveBeenCalledWith(143);
     });
