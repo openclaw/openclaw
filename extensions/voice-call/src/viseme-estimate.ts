@@ -78,3 +78,42 @@ export function estimateVisemes(text: string | null | undefined, durationMs: num
   }
   return marks;
 }
+
+/** Map one grapheme to its viseme id (space → 0 silence; unmapped → undefined). Shared by both paths. */
+function visemeForChar(ch: string): number | undefined {
+  if (ch === " " || ch === "\n" || ch === "\t" || ch === "\r") {
+    return 0;
+  }
+  return CHAR_VISEME[ch.toLowerCase()];
+}
+
+/**
+ * Real-timing viseme marks from an ElevenLabs `/with-timestamps` character alignment (the full pass):
+ * `characters[i]` is voiced starting at `startTimesSeconds[i]`, so each character's ACTUAL start time
+ * becomes a mark instead of an even spread. Same char→viseme map as the estimator; consecutive identical
+ * visemes are collapsed, unmapped chars skipped, and an all-silence result returns [].
+ */
+export function visemesFromAlignment(
+  characters: readonly string[],
+  startTimesSeconds: readonly number[],
+): VisemeMark[] {
+  const n = Math.min(characters.length, startTimesSeconds.length);
+  const marks: VisemeMark[] = [];
+  let last = -1;
+  let sawVoiced = false;
+  for (let i = 0; i < n; i++) {
+    const v = visemeForChar(characters[i] ?? "");
+    if (v === undefined) {
+      continue; // punctuation / digit — no mark
+    }
+    if (v !== 0) {
+      sawVoiced = true;
+    }
+    if (v === last) {
+      continue; // collapse runs — emit only on change
+    }
+    marks.push({ tMs: Math.max(0, Math.round((startTimesSeconds[i] ?? 0) * 1000)), visemeId: v });
+    last = v;
+  }
+  return sawVoiced ? marks : [];
+}

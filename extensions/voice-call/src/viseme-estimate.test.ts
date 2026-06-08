@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estimateVisemes } from "./viseme-estimate.js";
+import { estimateVisemes, visemesFromAlignment } from "./viseme-estimate.js";
 
 describe("estimateVisemes", () => {
   it("returns nothing for empty text or non-positive duration", () => {
@@ -44,5 +44,35 @@ describe("estimateVisemes", () => {
     for (let i = 1; i < marks.length; i++) {
       expect(marks[i].tMs).toBeGreaterThanOrEqual(marks[i - 1].tMs);
     }
+  });
+});
+
+describe("visemesFromAlignment", () => {
+  it("returns nothing for empty input or all-silence/punctuation", () => {
+    expect(visemesFromAlignment([], [])).toEqual([]);
+    expect(visemesFromAlignment([" ", " "], [0, 0.1])).toEqual([]);
+    expect(visemesFromAlignment(["1", "?", "!"], [0, 0.1, 0.2])).toEqual([]);
+  });
+
+  it("uses each character's REAL start time as the mark time", () => {
+    // "ma" → m(21) at 0.10s, a(2) at 0.30s
+    const marks = visemesFromAlignment(["m", "a"], [0.1, 0.3]);
+    expect(marks).toEqual([
+      { tMs: 100, visemeId: 21 },
+      { tMs: 300, visemeId: 2 },
+    ]);
+  });
+
+  it("collapses consecutive identical visemes to the first occurrence's time", () => {
+    const marks = visemesFromAlignment(["m", "m", "a"], [0, 0.05, 0.2]);
+    expect(marks).toEqual([
+      { tMs: 0, visemeId: 21 },
+      { tMs: 200, visemeId: 2 },
+    ]);
+  });
+
+  it("tolerates ragged arrays and skips unmapped chars", () => {
+    // '1' skipped; 'o' round(8) at 0.5s; extra time entry ignored.
+    expect(visemesFromAlignment(["1", "o"], [0, 0.5, 0.9])).toEqual([{ tMs: 500, visemeId: 8 }]);
   });
 });
