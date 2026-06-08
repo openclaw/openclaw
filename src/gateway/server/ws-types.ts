@@ -2,6 +2,7 @@
 import type { WebSocket } from "ws";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
+import type { KeepAliveHandle } from "./ws-connection.keepalive.js";
 
 /**
  * Runtime WebSocket client state tracked by the gateway server.
@@ -23,4 +24,5 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   canvasCapabilityExpiresAtMs?: number;
   invalidated?: boolean;
   invalidatedReason?: string;
+  keepalive?: KeepAliveHandle;
 };
