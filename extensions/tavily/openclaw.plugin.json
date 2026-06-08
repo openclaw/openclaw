@@ -1,7 +1,7 @@
 {
   "id": "tavily",
   "activation": {
-    "onStartup": false
+    "onStartup": true
   },
   "skills": ["./skills"],
   "setup": {
