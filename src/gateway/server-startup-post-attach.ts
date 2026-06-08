@@ -224,7 +224,7 @@ export async function startGatewaySidecars(params: {
   }
 
   void startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }).catch((err) => {
-    params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
+    params.log.warn(`memory startup initialization failed: ${String(err)}`);
   });
 
   if (shouldWakeFromRestartSentinel()) {

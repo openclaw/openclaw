@@ -12,7 +12,7 @@ export type GatewayAgentListRow = {
   name?: string;
 };
 
-function listExistingAgentIdsFromDisk(): string[] {
+export function listExistingAgentIdsFromDisk(): string[] {
   const root = resolveStateDir();
   const agentsDir = path.join(root, "agents");
   try {
