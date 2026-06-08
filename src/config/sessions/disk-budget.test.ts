@@ -606,6 +606,32 @@ describe("pruneUnreferencedSessionArtifacts", () => {
     });
   });
 
+  it("preserves reset archives within resetArchiveRetention even when pruneAfter is shorter", async () => {
+    await withTempDir({ prefix: "openclaw-prune-reset-retention-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const resetArchivePath = path.join(
+        dir,
+        `old-session.jsonl.reset.${formatSessionArchiveTimestamp(
+          Date.now() - 10 * 24 * 60 * 60 * 1000,
+        )}`,
+      );
+      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf-8");
+      await fs.writeFile(resetArchivePath, "reset archive", "utf-8");
+      const old = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+      await fs.utimes(resetArchivePath, old, old);
+
+      const result = await pruneUnreferencedSessionArtifacts({
+        store: {},
+        storePath,
+        olderThanMs: 24 * 60 * 60 * 1000,
+        resetArchiveRetentionMs: 30 * 24 * 60 * 60 * 1000,
+      });
+
+      await expectPathExists(resetArchivePath);
+      expect(result.removedFiles).toBe(0);
+    });
+  });
+
   it("reclaims unreferenced skills prompt blobs during normal artifact cleanup", async () => {
     await withTempDir({ prefix: "openclaw-prune-prompt-blob-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
