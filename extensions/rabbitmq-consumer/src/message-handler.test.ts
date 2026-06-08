@@ -42,7 +42,9 @@ describe("parseMessage", () => {
   });
 
   it("falls back to a top-level template_id when body omits it (old format)", () => {
-    const msg = parseMessage(buf({ id: 9, template_id: 3, body: { message: "周报", user_id: 42 } }));
+    const msg = parseMessage(
+      buf({ id: 9, template_id: 3, body: { message: "周报", user_id: 42 } }),
+    );
     expect(msg?.templateId).toBe(3);
   });
 });
