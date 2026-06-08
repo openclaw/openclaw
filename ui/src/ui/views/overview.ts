@@ -95,6 +95,7 @@ export function renderOverview(props: OverviewProps) {
     | {
         uptimeMs?: number;
         authMode?: "none" | "token" | "password" | "trusted-proxy";
+        configPath?: string;
       }
     | undefined;
   const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : t("common.na");
@@ -440,8 +441,18 @@ export function renderOverview(props: OverviewProps) {
             </div>
           </div>
         </div>
-        ${props.lastError
-          ? html`<div class="callout danger" style="margin-top: 14px;">
+        ${
+          snapshot?.configPath
+            ? html`
+                <div class="muted" style="margin-top: 14px">
+                  ${t("overview.snapshot.configPath")}: <span class="mono">${snapshot.configPath}</span>
+                </div>
+              `
+            : nothing
+        }
+        ${
+          props.lastError
+            ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${props.lastError}</div>
               ${pairingHint ?? ""} ${authHint ?? ""} ${insecureContextHint ?? ""}
               ${queryTokenHint ?? ""}
