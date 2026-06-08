@@ -14,6 +14,7 @@ const loadConfig = vi.hoisted(() => vi.fn());
 const loadConfigWithShellEnvFallback = vi.hoisted(() => vi.fn());
 const loadRuntimeConfig = vi.hoisted(() => vi.fn());
 const callGateway = vi.hoisted(() => vi.fn());
+const ensureSessionStateMigratedForCommand = vi.hoisted(() => vi.fn(async () => undefined));
 const isGatewayCredentialsRequiredError = vi.hoisted(() =>
   vi.fn(
     (value: unknown) => value instanceof Error && value.name === "GatewayCredentialsRequiredError",
@@ -155,17 +156,11 @@ function createSignalProcess() {
 }
 
 async function waitForAgentCommandCall(expectedCalls = 1) {
-  await vi.waitFor(() =>
-    expect(agentCommand.mock.calls.length).toBeGreaterThanOrEqual(expectedCalls),
-  );
-  expect(agentCommand).toHaveBeenCalledTimes(expectedCalls);
+  await vi.waitFor(() => expect(agentCommand).toHaveBeenCalledTimes(expectedCalls));
 }
 
 async function waitForGatewayCall(expectedCalls = 1) {
-  await vi.waitFor(() =>
-    expect(callGateway.mock.calls.length).toBeGreaterThanOrEqual(expectedCalls),
-  );
-  expect(callGateway).toHaveBeenCalledTimes(expectedCalls);
+  await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(expectedCalls));
 }
 
 function mockMessages(mock: unknown): string[] {
@@ -229,6 +224,9 @@ vi.mock("../gateway/call.js", () => ({
   isGatewayExplicitAuthRequiredError,
   isGatewayTransportError,
   randomIdempotencyKey: () => "idem-1",
+}));
+vi.mock("./session-state-migration.js", () => ({
+  ensureSessionStateMigratedForCommand,
 }));
 vi.mock("./agent.js", () => {
   agentModuleLoadCount();
