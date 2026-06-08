@@ -313,6 +313,12 @@ describe("stripReasoningTagsFromText", () => {
         opts: { mode: "strict" as const },
       },
       {
+        name: "preserves visible prose mentioning namespaced reasoning tags",
+        input: "Use <antml:reasoning> tag for this example.",
+        expected: "Use <antml:reasoning> tag for this example.",
+        opts: { mode: "strict" as const },
+      },
+      {
         name: "keeps visible prefix but hides unclosed reasoning tag prose",
         input: "Visible prefix <reasoning> tag should be hidden",
         expected: "Visible prefix",
