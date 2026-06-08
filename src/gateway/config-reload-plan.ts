@@ -234,10 +234,13 @@ function listReloadRules(): ReloadRule[] {
  * a specific prefix like `channels.telegram.botToken` takes priority over a
  * wildcard like `channels.telegram.*.botToken`.
  *
- * The wildcard matches exactly one dot-separated segment, so an account-scoped
- * pattern `channels.telegram.accounts.*.dmPolicy` matches
- * `channels.telegram.accounts.mybot.dmPolicy` but not
- * `channels.telegram.accounts.mybot.sub.dmPolicy`.
+ * The `*` matches exactly one dot-separated segment, but a wildcard rule still
+ * matches deeper subtree paths the same way a plain prefix does. So
+ * `channels.telegram.accounts.*.groups` covers both
+ * `channels.telegram.accounts.mybot.groups` and the nested
+ * `channels.telegram.accounts.mybot.groups.-100.dmPolicy`; without this a nested
+ * account-scoped policy edit would fall through to the broad
+ * `channels.telegram.accounts` restart rule and discard live session state.
  */
 function matchRule(path: string): ReloadRule | null {
   const pathSegments = path.split(".");
@@ -256,8 +259,10 @@ function matchRule(path: string): ReloadRule | null {
         }
       }
     } else {
-      // Wildcard: must have enough segments and match before and after the `*`.
-      if (pathSegments.length !== prefixSegments.length) {
+      // Wildcard: the path must have at least as many segments as the pattern so
+      // the wildcard binds one segment; extra trailing segments are a subtree
+      // match (e.g. accounts.<id>.groups also covers accounts.<id>.groups.<gid>.x).
+      if (pathSegments.length < prefixSegments.length) {
         continue;
       }
       let matches = true;

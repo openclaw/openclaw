@@ -308,6 +308,21 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
+  it("keeps nested account-scoped group/topic runtime-only changes as hot no-ops (subtree wildcard, no restart)", () => {
+    // Regression: a per-group/topic policy edit nested under an account must not
+    // fall through to the broad channels.telegram.accounts restart rule, which
+    // would discard live Telegram session state.
+    for (const path of [
+      "channels.telegram.accounts.mybot.groups.-1001234567.dmPolicy",
+      "channels.telegram.accounts.mybot.groups.-1001234567.topics.42.groupPolicy",
+    ]) {
+      const plan = buildGatewayReloadPlan([path]);
+      expect(plan.restartGateway, path).toBe(false);
+      expect(plan.restartChannels, path).toEqual(new Set());
+      expect(plan.noopPaths, path).toContain(path);
+    }
+  });
+
   it("refreshes channel reload rules when only the tracked channel registry changes", () => {
     const activeOnlyRegistry = createTestRegistry([]);
     const channelOnlyRegistry = createTestRegistry([
