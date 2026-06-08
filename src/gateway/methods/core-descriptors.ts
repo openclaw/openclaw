@@ -1,3 +1,4 @@
+// Core gateway method descriptors keep handler names, auth scopes, startup availability, and write policy in one table.
 import type { OperatorScope } from "../operator-scopes.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
@@ -124,6 +125,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "skills.proposals.create", scope: "operator.admin" },
   { name: "skills.proposals.update", scope: "operator.admin" },
   { name: "skills.proposals.revise", scope: "operator.admin" },
+  { name: "skills.proposals.requestRevision", scope: "operator.admin" },
   { name: "skills.proposals.apply", scope: "operator.admin" },
   { name: "skills.proposals.reject", scope: "operator.admin" },
   { name: "skills.proposals.quarantine", scope: "operator.admin" },

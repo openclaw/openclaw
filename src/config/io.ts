@@ -1,3 +1,4 @@
+// Loads, validates, migrates, snapshots, and writes OpenClaw config files.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -19,7 +20,7 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
-import { createConfigValidationMetadataPluginIdScope } from "../plugins/channel-plugin-ids.js";
+import { createConfigValidationMetadataPluginIdScope } from "../plugins/gateway-startup-plugin-ids.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
   writePersistedInstalledPluginIndexInstallRecordsSync,

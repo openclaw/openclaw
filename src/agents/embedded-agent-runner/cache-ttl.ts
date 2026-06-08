@@ -1,3 +1,6 @@
+/**
+ * Resolves cache-TTL eligibility and session markers for prompt-cache retention.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -24,6 +27,7 @@ type CacheTtlContext = {
   modelId?: string;
 };
 
+/** Returns whether this provider/model pair supports cache-TTL session markers. */
 export function isCacheTtlEligibleProvider(
   provider: string,
   modelId: string,
@@ -75,6 +79,7 @@ function matchesCacheTtlContext(
   return true;
 }
 
+/** Reads the most recent cache-TTL marker that matches the optional provider/model context. */
 export function readLastCacheTtlTimestamp(
   sessionManager: unknown,
   context?: CacheTtlContext,

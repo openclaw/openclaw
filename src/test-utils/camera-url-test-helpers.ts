@@ -1,3 +1,4 @@
+// Test helpers for camera URL fixtures and temporary media files.
 import * as fs from "node:fs/promises";
 import { vi } from "vitest";
 import { withFetchPreconnect } from "./fetch-mock.js";

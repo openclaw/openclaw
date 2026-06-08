@@ -1,3 +1,4 @@
+// Control UI module implements ui types behavior.
 export type ChatAttachment = {
   id: string;
   dataUrl?: string;
@@ -5,6 +6,11 @@ export type ChatAttachment = {
   mimeType: string;
   fileName?: string;
   sizeBytes?: number;
+};
+
+export type ChatQueueSkillWorkshopRevision = {
+  proposalId: string;
+  agentId?: string;
 };
 
 export type ChatQueueItem = {
@@ -25,6 +31,7 @@ export type ChatQueueItem = {
   sendRequestStartedAtMs?: number;
   sessionKey?: string;
   agentId?: string;
+  skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
 };
 
 export type ChatSessionRefreshTarget = {

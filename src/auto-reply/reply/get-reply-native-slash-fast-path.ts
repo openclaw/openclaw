@@ -1,3 +1,4 @@
+// Handles native slash commands before full get-reply pipeline execution.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
@@ -12,6 +13,10 @@ import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../thinking.js";
+import {
+  takeCommandSessionMetadataChangesFromTargets,
+  type CommandSessionMetadataChange,
+} from "./command-session-metadata.js";
 import { buildCommandContext } from "./commands-context.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -22,6 +27,9 @@ import type { createTypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
 type SkillCommandsRuntime = typeof import("../../skills/discovery/chat-commands.runtime.js");
+type InternalGetReplyOptions = GetReplyOptions & {
+  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
+};
 
 const commandsRuntimeLoader = createLazyImportLoader(() => import("./commands.runtime.js"));
 const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
@@ -197,6 +205,15 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     loadSkillCommands: loadNativeSkillCommands,
     typing: params.typing,
   });
+  const commandSessionMetadataChanges = takeCommandSessionMetadataChangesFromTargets([
+    sessionState.sessionCtx,
+    params.ctx,
+  ]);
+  if (commandSessionMetadataChanges) {
+    (params.opts as InternalGetReplyOptions | undefined)?.onSessionMetadataChanges?.(
+      commandSessionMetadataChanges,
+    );
+  }
   if (!commandResult.shouldContinue) {
     return { handled: true, reply: commandResult.reply };
   }

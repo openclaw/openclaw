@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 
+// Runs the Vitest plan for one bundled plugin by id or path.
 import { formatErrorMessage } from "./lib/error-format.mjs";
 import { resolveExtensionTestPlan } from "./lib/extension-test-plan.mjs";
+import {
+  relativizeExtensionVitestArgs,
+  relativizeExtensionVitestPath,
+} from "./lib/extension-vitest-paths.mjs";
 import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mjs";
 
 const ALLOW_NO_TESTS_FLAG = "--allow-no-tests";
@@ -53,10 +58,10 @@ async function run() {
 
   console.log(`[test-extension] Running ${plan.testFileCount} test files for ${plan.extensionId}`);
   const exitCode = await runVitestBatch({
-    args: passthroughArgs,
+    args: relativizeExtensionVitestArgs(passthroughArgs),
     config: plan.config,
     env: process.env,
-    targets: plan.roots,
+    targets: plan.roots.map((target) => relativizeExtensionVitestPath(target)),
   });
   process.exit(exitCode);
 }

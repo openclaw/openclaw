@@ -1,3 +1,4 @@
+// Resolves native module require paths for plugin runtime loading.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import Module from "node:module";

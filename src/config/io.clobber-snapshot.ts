@@ -1,3 +1,4 @@
+// Detects suspicious config clobbers and finds recovery snapshots.
 import path from "node:path";
 
 /** Maximum retained clobbered-config snapshots per config file. */

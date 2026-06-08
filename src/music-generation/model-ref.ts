@@ -1,3 +1,4 @@
+// Parses model references for music generation requests.
 import { parseGenerationModelRef } from "../../packages/media-generation-core/src/model-ref.js";
 
 /**

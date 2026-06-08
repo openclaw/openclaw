@@ -1,3 +1,4 @@
+// Shares plugin runtime workspace state across module reloads.
 const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 
 type GlobalRegistryWorkspaceState = typeof globalThis & {

@@ -1,3 +1,4 @@
+/** Formats and appends token/cost usage lines to reply payloads. */
 import {
   estimateUsageCost,
   formatTokenCount,

@@ -1,3 +1,4 @@
+/** Lazy fallback provider discovery for web-tool secret metadata. */
 import { resolvePluginWebFetchProviders } from "../plugins/web-fetch-providers.runtime.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 

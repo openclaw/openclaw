@@ -1,3 +1,4 @@
+// Provides schema hint metadata for config docs and UI labels.
 import {
   isSensitiveUrlConfigPath,
   SENSITIVE_URL_HINT_TAG,

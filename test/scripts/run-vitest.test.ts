@@ -1,3 +1,4 @@
+// Run Vitest tests cover run vitest script behavior.
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
@@ -420,34 +421,34 @@ describe("scripts/run-vitest", () => {
   it("defaults direct non-watch runs to the stall watchdog", () => {
     expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run"])).toEqual({
       PATH: "/usr/bin",
-      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
     });
     expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", "-t", "watch"])).toEqual({
       PATH: "/usr/bin",
-      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
     });
     expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch=false"])).toEqual({
       PATH: "/usr/bin",
-      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
     });
     expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch", "false"])).toEqual({
       PATH: "/usr/bin",
-      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
     });
     expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--no-watch"])).toEqual({
       PATH: "/usr/bin",
-      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
     });
     expect(resolveRunVitestSpawnEnv({ CI: "true", PATH: "/usr/bin" }, ["src/foo.test.ts"])).toEqual(
       {
         CI: "true",
         PATH: "/usr/bin",
-        OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+        OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
         OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
       },
     );
@@ -466,16 +467,24 @@ describe("scripts/run-vitest", () => {
 
     for (const configArg of [
       "--config=test/vitest/vitest.e2e.config.ts",
+      "--config=test/vitest/vitest.gateway.config.ts",
       "--config=./test/vitest/vitest.ui-e2e.config.ts",
       "--config=test/vitest/vitest.full-agentic.config.ts",
       "--config=test/vitest/vitest.full-core-contracts.config.ts",
     ]) {
       expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", configArg])).toEqual({
         PATH: "/usr/bin",
-        OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+        OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
         OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
       });
     }
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "-c",
+        "/repo/test/vitest/vitest.gateway.config.ts",
+      ]),
+    ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
     expect(
       resolveDefaultVitestNoOutputTimeoutMs([
         "run",

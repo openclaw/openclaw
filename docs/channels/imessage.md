@@ -205,11 +205,24 @@ Treat this as a deliberate operational choice, not a default. If your threat mod
 
    The `imsg status --json` output reports `bridge_version`, `rpc_methods`, and per-method `selectors` so you can see what the current build supports before you start.
 
-2. **Disable System Integrity Protection.** This is macOS-version-specific because the underlying Apple requirement depends on the OS and hardware:
-   - **macOS 10.13–10.15 (Sierra–Catalina):** disable Library Validation via Terminal, reboot to Recovery Mode, run `csrutil disable`, restart.
+2. **Disable System Integrity Protection, and (on modern macOS) Library Validation.** Injecting a non-Apple helper dylib into the Apple-signed `Messages.app` needs SIP off **and** library validation relaxed. The Recovery-mode SIP step is macOS-version-specific:
+   - **macOS 10.13-10.15 (Sierra-Catalina):** disable Library Validation via Terminal, reboot to Recovery Mode, run `csrutil disable`, restart.
    - **macOS 11+ (Big Sur and later), Intel:** Recovery Mode (or Internet Recovery), `csrutil disable`, restart.
-   - **macOS 11+, Apple Silicon:** power-button startup sequence to enter Recovery; on recent macOS versions hold the **Left Shift** key when you click Continue, then `csrutil disable`. Virtual-machine setups follow a separate flow — take a VM snapshot first.
-   - **macOS 26 / Tahoe:** library-validation policies and `imagent` private-entitlement checks have tightened further; `imsg` may need an updated build to keep up. If `imsg launch` injection or specific `selectors` start returning false after a macOS major upgrade, check `imsg`'s release notes before assuming the SIP step succeeded.
+   - **macOS 11+, Apple Silicon:** power-button startup sequence to enter Recovery; on recent macOS versions hold the **Left Shift** key when you click Continue, then `csrutil disable`. Virtual-machine setups follow a separate flow, so take a VM snapshot first.
+
+   **On macOS 11 and later, `csrutil disable` alone is usually not enough.** Apple still enforces library validation against `Messages.app` as a platform binary, so an adhoc-signed helper is rejected (`Library Validation failed: ... platform binary, but mapped file is not`) even with SIP off. After disabling SIP, also disable library validation and reboot:
+
+   ```bash
+   sudo defaults write /Library/Preferences/com.apple.security.libraryvalidation.plist DisableLibraryValidation -bool true
+   ```
+
+   **macOS 26 (Tahoe), verified on 26.5.1:** SIP off **plus** the `DisableLibraryValidation` command above is sufficient to inject the helper across 26.0 through 26.5.x. **No boot-args are required.** The plist is the decisive factor and the most common missing step when injection fails on Tahoe:
+   - **With the plist:** `imsg launch` injects and `imsg status` reports `advanced_features: true`.
+   - **Without the plist (even with SIP off):** `imsg launch` fails with `Failed to launch: Timeout waiting for Messages.app to initialize`. AMFI rejects the adhoc helper at load, so the bridge never becomes ready and the launch times out. That timeout is the symptom most people hit on Tahoe, and the fix is the plist above, not anything more drastic.
+
+   This was confirmed with a controlled before/after on macOS 26.5.1 (Apple Silicon): with the plist, the dylib maps into `Messages.app` and the bridge comes up; remove the plist and reboot, and `imsg launch` produces the timeout failure above with the dylib not mapped.
+
+   If `imsg launch` injection or specific `selectors` start returning false after a macOS upgrade, this gate is the usual cause. Check your SIP and library-validation state before assuming the SIP step itself failed. If those settings are correct and the bridge still cannot inject, collect `imsg status --json` plus the `imsg launch` output and report it to the `imsg` project instead of weakening additional system-wide security controls.
 
    Follow Apple's Recovery-mode flow for your Mac to disable SIP before running `imsg launch`.
 
@@ -641,14 +654,14 @@ When a user types a command and a URL together — e.g. `Dump https://example.co
 
 The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalescing, the agent receives the command alone on turn 1, replies (often "send me the URL"), and only sees the URL on turn 2 — at which point the command context is already lost. This is Apple's send pipeline, not anything OpenClaw or `imsg` introduces.
 
-`channels.imessage.coalesceSameSenderDms` opts a DM into merging consecutive same-sender rows into a single agent turn. Group chats continue to dispatch per-message so multi-user turn structure is preserved.
+`channels.imessage.coalesceSameSenderDms` opts a DM into buffering consecutive same-sender rows. When `imsg` exposes the structural URL-preview marker `balloon_bundle_id: "com.apple.messages.URLBalloonProvider"` on one of the source rows, OpenClaw merges only that real split-send and keeps any other buffered rows as separate turns. On older `imsg` builds that emit no balloon metadata at all, OpenClaw cannot tell a split-send from separate sends, so it falls back to merging the bucket. That preserves the pre-metadata behavior rather than regressing `Dump <url>` split-sends into two turns. Group chats continue to dispatch per-message so multi-user turn structure is preserved.
 
 <Tabs>
   <Tab title="When to enable">
     Enable when:
 
     - You ship skills that expect `command + payload` in one message (dump, paste, save, queue, etc.).
-    - Your users paste URLs, images, or long content alongside commands.
+    - Your users paste URLs alongside commands.
     - You can accept the added DM turn latency (see below).
 
     Leave disabled when:
@@ -689,7 +702,8 @@ The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalesc
 
   </Tab>
   <Tab title="Trade-offs">
-    - **Added latency for DM messages.** With the flag on, every DM (including standalone control commands and single-text follow-ups) waits up to the debounce window before dispatching, in case a payload row is coming. Group-chat messages keep instant dispatch.
+    - **Precise merging needs current `imsg` payload metadata.** When the URL row includes `balloon_bundle_id`, only that real split-send merges and other buffered rows stay separate. On older `imsg` builds that expose no balloon metadata, OpenClaw falls back to merging the buffered bucket so `Dump <url>` split-sends are not regressed into two turns (interim back-compat, removed once `imsg` coalesces split-sends upstream).
+    - **Added latency for DM messages.** With the flag on, every DM (including standalone control commands and single-text follow-ups) waits up to the debounce window before dispatching, in case a URL-preview row is coming. Group-chat messages keep instant dispatch.
     - **Merged output is bounded.** Merged text caps at 4000 chars with an explicit `…[truncated]` marker; attachments cap at 20; source entries cap at 10 (first-plus-latest retained beyond that). Every source GUID is tracked in `coalescedMessageGuids` for downstream telemetry.
     - **DM-only.** Group chats fall through to per-message dispatch so the bot stays responsive when multiple people are typing.
     - **Opt-in, per-channel.** Other channels (Telegram, WhatsApp, Slack, …) are unaffected. Legacy BlueBubbles configs that set `channels.bluebubbles.coalesceSameSenderDms` should migrate that value to `channels.imessage.coalesceSameSenderDms`.
@@ -699,15 +713,17 @@ The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalesc
 
 ### Scenarios and what the agent sees
 
-| User composes                                                      | `chat.db` produces    | Flag off (default)                      | Flag on + 2500 ms window                                                |
-| ------------------------------------------------------------------ | --------------------- | --------------------------------------- | ----------------------------------------------------------------------- |
-| `Dump https://example.com` (one send)                              | 2 rows ~1 s apart     | Two agent turns: "Dump" alone, then URL | One turn: merged text `Dump https://example.com`                        |
-| `Save this 📎image.jpg caption` (attachment + text)                | 2 rows                | Two turns (attachment dropped on merge) | One turn: text + image preserved                                        |
-| `/status` (standalone command)                                     | 1 row                 | Instant dispatch                        | **Wait up to window, then dispatch**                                    |
-| URL pasted alone                                                   | 1 row                 | Instant dispatch                        | Instant dispatch (only one entry in bucket)                             |
-| Text + URL sent as two deliberate separate messages, minutes apart | 2 rows outside window | Two turns                               | Two turns (window expires between them)                                 |
-| Rapid flood (>10 small DMs inside window)                          | N rows                | N turns                                 | One turn, bounded output (first + latest, text/attachment caps applied) |
-| Two people typing in a group chat                                  | N rows from M senders | M+ turns (one per sender bucket)        | M+ turns — group chats are not coalesced                                |
+The "Flag on" column shows behavior on an `imsg` build that emits `balloon_bundle_id`. On older `imsg` builds that emit no balloon metadata at all, the rows below marked "Two turns" / "N turns" instead fall back to a legacy merge (one turn): OpenClaw cannot structurally tell a split-send from separate sends, so it preserves the pre-metadata merge. Precise separation activates once the build emits balloon metadata.
+
+| User composes                                                      | `chat.db` produces                  | Flag off (default)                      | Flag on + window (imsg emits balloon metadata)   |
+| ------------------------------------------------------------------ | ----------------------------------- | --------------------------------------- | ------------------------------------------------ |
+| `Dump https://example.com` (one send)                              | 2 rows ~1 s apart                   | Two agent turns: "Dump" alone, then URL | One turn: merged text `Dump https://example.com` |
+| `Save this 📎image.jpg caption` (attachment + text)                | 2 rows without URL balloon metadata | Two turns                               | Two turns (legacy merge on metadata-less builds) |
+| `/status` (standalone command)                                     | 1 row                               | Instant dispatch                        | **Wait up to window, then dispatch**             |
+| URL pasted alone                                                   | 1 row                               | Instant dispatch                        | Wait up to window, then dispatch                 |
+| Text + URL sent as two deliberate separate messages, minutes apart | 2 rows outside window               | Two turns                               | Two turns (window expires between them)          |
+| Rapid flood (>10 small DMs inside window)                          | N rows without URL balloon metadata | N turns                                 | N turns (legacy merge on metadata-less builds)   |
+| Two people typing in a group chat                                  | N rows from M senders               | M+ turns (one per sender bucket)        | M+ turns — group chats are not coalesced         |
 
 ## Catching up after gateway downtime
 

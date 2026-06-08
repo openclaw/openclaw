@@ -1,3 +1,4 @@
+// Resolves provider thinking-level policy from plugin metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import type {

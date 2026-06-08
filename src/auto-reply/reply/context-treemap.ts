@@ -1,3 +1,4 @@
+// Builds deterministic compact treemaps for context file summaries.
 import crypto from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";

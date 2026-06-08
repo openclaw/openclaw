@@ -1,3 +1,4 @@
+// Configures SQLite WAL and related pragmas for local stores.
 import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 

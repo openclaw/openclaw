@@ -1,3 +1,4 @@
+/** Shared parsing and file helpers for secrets migration/runtime code. */
 import fs from "node:fs";
 import path from "node:path";
 import { privateFileStoreSync } from "../infra/private-file-store.js";

@@ -1,3 +1,4 @@
+// Normalizes env flag values and logs env warnings lazily.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 
