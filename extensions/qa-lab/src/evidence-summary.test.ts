@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   QA_EVIDENCE_SUMMARY_KIND,
+  QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   buildLiveTransportEvidenceSummary,
   buildQaSuiteEvidenceSummary,
   validateQaEvidenceSummaryJson,
@@ -21,6 +22,7 @@ describe("evidence summary", () => {
             primary: ["channels.dm"],
             secondary: ["channels.qa-channel"],
           },
+          runtimeParityTier: "standard",
           docsRefs: ["docs/channels/qa-channel.md"],
           codeRefs: ["extensions/qa-channel/src/gateway.ts"],
         },
@@ -38,12 +40,13 @@ describe("evidence summary", () => {
 
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
     expect(evidence.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
+    expect(evidence.schemaVersion).toBe(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION);
     expect(evidence.entries).toHaveLength(1);
-    expect(evidence.entries[0]).not.toHaveProperty("tier");
     expect(evidence.entries[0]).toMatchObject({
       scenarioId: "dm-chat-baseline",
       coverageIds: ["channels.dm", "channels.qa-channel"],
       sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
+      runtimeParity: "standard",
       scorecard: {
         surfaceIds: ["dm"],
         categoryIds: ["channels.dm"],
@@ -51,18 +54,16 @@ describe("evidence summary", () => {
       profile: "smoke-ci",
       provider: {
         id: "openai",
-        live: false,
         modelName: "gpt-5.5",
         modelRef: "mock-openai/gpt-5.5",
-        fixture: "mock-openai",
       },
+      model_live: false,
+      provider_fixture: "mock-openai",
       channel: {
         id: "qa-channel",
-        live: false,
       },
-      channelDriver: {
-        id: "multipass",
-      },
+      channel_live: false,
+      channel_driver: "multipass",
       runner: "host",
       packageSource: {
         kind: "source-checkout",
@@ -121,18 +122,16 @@ describe("evidence summary", () => {
         profile: "release",
         provider: {
           id: "openai",
-          live: true,
           modelName: "gpt-5.5",
           modelRef: "openai/gpt-5.5",
-          profile: "live-frontier",
         },
+        model_live: true,
+        provider_auth: "live-frontier",
         channel: {
           id: "telegram",
-          live: true,
         },
-        channelDriver: {
-          id: "native",
-        },
+        channel_live: true,
+        channel_driver: "native",
         runner: "crabbox",
         artifactPaths: [
           "telegram-qa-summary.json",
@@ -167,7 +166,7 @@ describe("evidence summary", () => {
       channelId: "telegram",
       generatedAt: "2026-06-07T12:08:00.000Z",
       primaryModel: "mock-openai/gpt-5.5",
-      profile: "advisory",
+      profile: "smoke-ci",
       providerMode: "mock-openai",
       runner: "host",
       scenarios: [{ id: "telegram-sdk-smoke", status: "pass" }],
@@ -175,16 +174,42 @@ describe("evidence summary", () => {
 
     expect(evidence.entries[0]).toMatchObject({
       scenarioId: "telegram-sdk-smoke",
-      profile: "advisory",
+      profile: "smoke-ci",
+      model_live: false,
+      provider_fixture: "mock-openai",
       channel: {
         id: "telegram",
-        live: false,
       },
-      channelDriver: {
-        id: "multipass",
-      },
+      channel_live: false,
+      channel_driver: "multipass",
       runner: "host",
     });
+  });
+
+  it("normalizes old profile env aliases into the current evidence schema", () => {
+    const evidence = buildQaSuiteEvidenceSummary({
+      artifactPaths: ["qa-suite-summary.json"],
+      catalogScenarios: [
+        {
+          id: "dm-chat-baseline",
+          title: "DM baseline conversation",
+          surface: "dm",
+          coverage: {
+            primary: ["channels.dm"],
+          },
+        },
+      ],
+      channelId: "qa-channel",
+      env: {
+        OPENCLAW_QA_PROFILE: "advisory",
+      } as NodeJS.ProcessEnv,
+      generatedAt: "2026-06-07T12:09:00.000Z",
+      primaryModel: "mock-openai/gpt-5.5",
+      providerMode: "mock-openai",
+      scenarios: [{ name: "DM baseline conversation", status: "pass" }],
+    });
+
+    expect(evidence.entries[0]?.profile).toBe("smoke-ci");
   });
 
   it("keeps mock non-OpenAI model refs attributed to their model provider", () => {
@@ -209,10 +234,12 @@ describe("evidence summary", () => {
 
     expect(evidence.entries[0]?.provider).toMatchObject({
       id: "anthropic",
-      live: false,
-      fixture: "mock-openai",
       modelName: "claude-opus-4-8",
       modelRef: "anthropic/claude-opus-4-8",
+    });
+    expect(evidence.entries[0]).toMatchObject({
+      model_live: false,
+      provider_fixture: "mock-openai",
     });
   });
 

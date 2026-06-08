@@ -4,38 +4,27 @@ import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
 
 export const QA_EVIDENCE_SUMMARY_KIND = "openclaw.qa.evidence-summary";
-export const QA_EVIDENCE_SUMMARY_SCHEMA_VERSION = 1;
+export const QA_EVIDENCE_SUMMARY_SCHEMA_VERSION = 2;
 
-const qaEvidenceProfileSchema = z.enum([
-  "smoke-ci",
-  "extended",
-  "release",
-  "soak",
-  "advisory",
-  "manual",
-]);
+const qaEvidenceProfileSchema = z.enum(["smoke-ci", "release"]);
 const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
+const legacyQaEvidenceProfileEnvAliases: Record<string, QaEvidenceProfile> = {
+  advisory: "smoke-ci",
+  extended: "smoke-ci",
+  manual: "smoke-ci",
+  soak: "release",
+};
 
 const qaEvidenceProviderSchema = z
   .object({
     id: nonEmptyStringSchema,
-    live: z.boolean(),
     modelName: nonEmptyStringSchema.nullable(),
     modelRef: nonEmptyStringSchema.nullable(),
-    fixture: nonEmptyStringSchema.optional(),
-    profile: nonEmptyStringSchema.optional(),
   })
   .strict();
 
 const qaEvidenceChannelSchema = z
-  .object({
-    id: nonEmptyStringSchema,
-    live: z.boolean(),
-  })
-  .strict();
-
-const qaEvidenceChannelDriverSchema = z
   .object({
     id: nonEmptyStringSchema,
   })
@@ -82,7 +71,7 @@ export const qaEvidenceSummaryEntrySchema = z
     sourcePath: nonEmptyStringSchema.optional(),
     docsRefs: z.array(nonEmptyStringSchema).optional(),
     codeRefs: z.array(nonEmptyStringSchema).optional(),
-    runtimeParityTier: nonEmptyStringSchema.optional(),
+    runtimeParity: nonEmptyStringSchema.optional(),
     scorecard: z
       .object({
         surfaceIds: z.array(nonEmptyStringSchema),
@@ -91,8 +80,12 @@ export const qaEvidenceSummaryEntrySchema = z
       .strict(),
     profile: qaEvidenceProfileSchema,
     provider: qaEvidenceProviderSchema,
+    model_live: z.boolean(),
+    provider_fixture: nonEmptyStringSchema.optional(),
+    provider_auth: nonEmptyStringSchema.optional(),
     channel: qaEvidenceChannelSchema.optional(),
-    channelDriver: qaEvidenceChannelDriverSchema.optional(),
+    channel_live: z.boolean().optional(),
+    channel_driver: nonEmptyStringSchema.optional(),
     surfaceId: nonEmptyStringSchema.optional(),
     runner: nonEmptyStringSchema,
     packageSource: qaEvidencePackageSourceSchema,
@@ -132,6 +125,7 @@ type QaEvidenceCatalogScenarioInput = {
     secondary?: readonly string[];
   };
   runtimeParityTier?: string;
+  runtimeParity?: string;
   docsRefs?: readonly string[];
   codeRefs?: readonly string[];
 };
@@ -165,11 +159,23 @@ function uniqueSortedStrings(values: readonly (string | undefined)[]) {
   );
 }
 
-function normalizeQaEvidenceProfile(value: string | undefined): QaEvidenceProfile | undefined {
+function parseQaEvidenceProfileEnv(
+  source: string,
+  value: string | undefined,
+): QaEvidenceProfile | undefined {
   const normalized = value?.trim();
-  return qaEvidenceProfileSchema.safeParse(normalized).success
-    ? (normalized as QaEvidenceProfile)
-    : undefined;
+  if (!normalized) {
+    return undefined;
+  }
+  const parsed = qaEvidenceProfileSchema.safeParse(normalized);
+  if (parsed.success) {
+    return parsed.data;
+  }
+  const alias = legacyQaEvidenceProfileEnvAliases[normalized];
+  if (alias) {
+    return alias;
+  }
+  throw new Error(`${source} must be one of smoke-ci, release, got "${normalized}".`);
 }
 
 function resolveQaEvidenceProfile(params: {
@@ -179,8 +185,8 @@ function resolveQaEvidenceProfile(params: {
 }) {
   return (
     params.explicit ??
-    normalizeQaEvidenceProfile(params.env?.OPENCLAW_E2E_PROFILE) ??
-    normalizeQaEvidenceProfile(params.env?.OPENCLAW_QA_PROFILE) ??
+    parseQaEvidenceProfileEnv("OPENCLAW_E2E_PROFILE", params.env?.OPENCLAW_E2E_PROFILE) ??
+    parseQaEvidenceProfileEnv("OPENCLAW_QA_PROFILE", params.env?.OPENCLAW_QA_PROFILE) ??
     params.fallback
   );
 }
@@ -233,13 +239,16 @@ function resolveQaEvidencePackageSource(env: NodeJS.ProcessEnv | undefined) {
 function buildQaEvidenceProvider(params: { providerMode: QaProviderMode; primaryModel: string }) {
   const provider = getQaProvider(params.providerMode);
   const split = splitQaModelRef(params.primaryModel);
+  const providerShape = {
+    id: split?.provider ?? params.providerMode,
+    modelName: split?.model ?? null,
+    modelRef: params.primaryModel || null,
+  };
   if (provider.kind === "live") {
     return {
-      id: split?.provider ?? params.providerMode,
-      live: true,
-      modelName: split?.model ?? null,
-      modelRef: params.primaryModel || null,
-      profile: params.providerMode,
+      provider: providerShape,
+      model_live: true,
+      provider_auth: params.providerMode,
     };
   }
   const mockProviderId =
@@ -249,11 +258,12 @@ function buildQaEvidenceProvider(params: { providerMode: QaProviderMode; primary
         ? "openai"
         : (split?.provider ?? params.providerMode);
   return {
-    id: mockProviderId,
-    live: false,
-    modelName: split?.model ?? null,
-    modelRef: params.primaryModel || null,
-    fixture: params.providerMode,
+    provider: {
+      ...providerShape,
+      id: mockProviderId,
+    },
+    model_live: false,
+    provider_fixture: params.providerMode,
   };
 }
 
@@ -300,7 +310,7 @@ export function buildQaSuiteEvidenceSummary(
   const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
   const profile = resolveQaEvidenceProfile({
     env: params.env,
-    fallback: provider.live ? "release" : "smoke-ci",
+    fallback: provider.model_live ? "release" : "smoke-ci",
     explicit: params.profile,
   });
   const channelDriver = resolveQaEvidenceChannelDriver({
@@ -315,6 +325,7 @@ export function buildQaSuiteEvidenceSummary(
       ...(scenario?.coverage?.secondary ?? []),
     ]);
     const surfaceIds = uniqueSortedStrings([...(scenario?.surfaces ?? []), scenario?.surface]);
+    const runtimeParity = scenario?.runtimeParity ?? scenario?.runtimeParityTier;
     return {
       scenarioId: scenario?.id ?? result.id ?? result.name ?? `scenario-${index + 1}`,
       scenarioTitle: scenario?.title ?? result.title ?? result.name ?? `Scenario ${index + 1}`,
@@ -322,18 +333,18 @@ export function buildQaSuiteEvidenceSummary(
       ...(scenario?.sourcePath ? { sourcePath: scenario.sourcePath } : {}),
       ...(scenario?.docsRefs ? { docsRefs: [...scenario.docsRefs] } : {}),
       ...(scenario?.codeRefs ? { codeRefs: [...scenario.codeRefs] } : {}),
-      ...(scenario?.runtimeParityTier ? { runtimeParityTier: scenario.runtimeParityTier } : {}),
+      ...(runtimeParity ? { runtimeParity } : {}),
       scorecard: {
         surfaceIds,
         categoryIds: uniqueSortedStrings([scenario?.category, ...primaryCoverageIds]),
       },
       profile,
-      provider,
+      ...provider,
       channel: {
         id: params.channelId,
-        live: false,
       },
-      ...(channelDriver ? { channelDriver } : {}),
+      channel_live: false,
+      ...(channelDriver ? { channel_driver: channelDriver.id } : {}),
       surfaceId: surfaceIds[0],
       runner,
       packageSource,
@@ -370,7 +381,7 @@ export function buildLiveTransportEvidenceSummary(
   const channelDriver = resolveQaEvidenceChannelDriver({
     env: params.env,
     fallback: params.channelDriver ?? "native",
-  });
+  }) ?? { id: "native" };
   const definitionsById = new Map(
     params.scenarioDefinitions.map((definition) => [definition.id, definition]),
   );
@@ -389,12 +400,12 @@ export function buildLiveTransportEvidenceSummary(
         categoryIds: [`channels.${params.transportId}.live`],
       },
       profile,
-      provider,
+      ...provider,
       channel: {
         id: params.transportId,
-        live: true,
       },
-      channelDriver,
+      channel_live: true,
+      channel_driver: channelDriver.id,
       runner,
       packageSource,
       environment,
