@@ -10,18 +10,39 @@ import { NonEmptyString } from "./primitives.js";
  */
 
 /** Builds create/patch payload variants while preserving per-call field optionality. */
-function cronAgentTurnPayloadSchema(params: { message: TSchema; toolsAllow: TSchema }) {
+function cronAgentTurnPayloadSchema(params: {
+  message: TSchema;
+  model: TSchema;
+  toolsAllow: TSchema;
+}) {
   return Type.Object(
     {
       kind: Type.Literal("agentTurn"),
       message: params.message,
-      model: Type.Optional(Type.String()),
+      model: Type.Optional(params.model),
       fallbacks: Type.Optional(Type.Array(Type.String())),
       thinking: Type.Optional(Type.String()),
       timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       lightContext: Type.Optional(Type.Boolean()),
       toolsAllow: Type.Optional(params.toolsAllow),
+    },
+    { additionalProperties: false },
+  );
+}
+
+/** Builds command payload variants while preserving create/patch argv optionality. */
+function cronCommandPayloadSchema(params: { argv: TSchema }) {
+  return Type.Object(
+    {
+      kind: Type.Literal("command"),
+      argv: params.argv,
+      cwd: Type.Optional(Type.String({ minLength: 1 })),
+      env: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.String())),
+      input: Type.Optional(Type.String()),
+      timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+      noOutputTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+      outputMaxBytes: Type.Optional(Type.Integer({ minimum: 1 })),
     },
     { additionalProperties: false },
   );
@@ -210,7 +231,11 @@ export const CronPayloadSchema = Type.Union([
   ),
   cronAgentTurnPayloadSchema({
     message: NonEmptyString,
+    model: Type.String(),
     toolsAllow: Type.Array(Type.String()),
+  }),
+  cronCommandPayloadSchema({
+    argv: Type.Array(NonEmptyString, { minItems: 1 }),
   }),
 ]);
 
@@ -225,7 +250,11 @@ export const CronPayloadPatchSchema = Type.Union([
   ),
   cronAgentTurnPayloadSchema({
     message: Type.Optional(NonEmptyString),
+    model: Type.Union([Type.String(), Type.Null()]),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
+  }),
+  cronCommandPayloadSchema({
+    argv: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
   }),
 ]);
 

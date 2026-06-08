@@ -2001,7 +2001,7 @@ describe("gateway agent handler", () => {
     expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({ dropIfSlow: true });
   });
 
-  it("injects a timestamp into the message passed to agentCommand", async () => {
+  it("passes the raw user message to agentCommand for LLM-boundary timestamping", async () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
 
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });
@@ -2017,7 +2017,7 @@ describe("gateway agent handler", () => {
     );
 
     const callArgs = await waitForAgentCommandCall<{ message?: string }>();
-    expect(callArgs.message).toBe("[Wed 2026-01-28 20:30 EST] Is it the weekend?");
+    expect(callArgs.message).toBe("Is it the weekend?");
 
     resetTimeConfig();
   });
@@ -3006,6 +3006,63 @@ describe("gateway agent handler", () => {
     expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore);
     expectRespondError(respond, {
       message: "exec approval followup idempotency keys are reserved for backend callers.",
+    });
+  });
+
+  it("drops a stale exec approval followup at preflight without touching the rebound session (#59349)", async () => {
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    const registration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-rebound-followup",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    if (!registration) {
+      throw new Error("expected runtime handoff id");
+    }
+    // Session was rebound by /new or /reset: current sessionId differs from the
+    // approval-time sessionId carried on the request.
+    mockMainSessionEntry({
+      sessionId: "current-session-after-reset",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    const context = makeContext();
+    const updateSessionStoreCallsBefore = mocks.updateSessionStore.mock.calls.length;
+    const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
+
+    const respond = await invokeAgent(
+      {
+        message: "exec followup",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: registration.idempotencyKey,
+        internalRuntimeHandoffId: registration.handoffId,
+        execApprovalFollowupExpectedSessionId: "approval-time-session-id",
+      },
+      {
+        reqId: "exec-followup-rebound-drop",
+        client: backendGatewayClient(),
+        context,
+        flushDispatch: false,
+      },
+    );
+
+    expect(mockCallArg(respond, 0, 1)).toMatchObject({
+      runId: registration.idempotencyKey,
+      status: "ok",
+      summary: expect.stringContaining("exec approval followup dropped"),
+    });
+    expect(mocks.updateSessionStore.mock.calls.length).toBe(updateSessionStoreCallsBefore);
+    expect(mocks.agentCommand.mock.calls.length).toBe(agentCommandCallsBefore);
+    const dedupeEntry = context.dedupe.get("agent:exec-approval-followup:req-rebound-followup");
+    expect(dedupeEntry?.ok).toBe(true);
+    expect(dedupeEntry?.payload).toMatchObject({
+      status: "ok",
+      summary: expect.stringContaining("exec approval followup dropped"),
     });
   });
 
@@ -4994,7 +5051,7 @@ describe("gateway agent handler", () => {
     expect(result.meta?.agentMeta?.sessionId).toBe("global-work-reset-session");
   });
 
-  it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {
+  it("uses /reset suffix as the post-reset message for LLM-boundary timestamping", async () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
     mockSessionResetSuccess({ reason: "reset" });
     mocks.performGatewaySessionReset.mockClear();
@@ -5015,7 +5072,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const call = await expectResetCall("[Wed 2026-01-28 20:30 EST] check status");
+    const call = await expectResetCall("check status");
     expect(call?.sessionId).toBe("reset-session-id");
 
     resetTimeConfig();

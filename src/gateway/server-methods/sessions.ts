@@ -100,7 +100,6 @@ import {
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
-  loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   readRecentSessionMessagesWithStatsAsync,
@@ -124,6 +123,7 @@ import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
+import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
