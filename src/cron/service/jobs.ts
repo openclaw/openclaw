@@ -982,8 +982,8 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
   return {
     kind: "agentTurn",
     message: patch.message,
-    model: patch.model,
-    fallbacks: patch.fallbacks,
+    model: typeof patch.model === "string" ? patch.model : undefined,
+    fallbacks: Array.isArray(patch.fallbacks) ? patch.fallbacks : undefined,
     toolsAllow: Array.isArray(patch.toolsAllow) ? patch.toolsAllow : undefined,
     thinking: patch.thinking,
     timeoutSeconds: patch.timeoutSeconds,
