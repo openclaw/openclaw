@@ -18,6 +18,11 @@ describe("normalizeQueryPlan", () => {
     });
   });
 
+  it("keeps the author and label data-table dimensions", () => {
+    const plan = normalizeQueryPlan({ aggregations: ["author", "label", "platform"] });
+    expect(plan.aggregations).toEqual(["author", "label", "platform"]);
+  });
+
   it("drops hallucinated dimensions and dedupes", () => {
     const plan = normalizeQueryPlan({
       aggregations: ["platform", "platform", "sentiment_score", "author_rank", "day"],

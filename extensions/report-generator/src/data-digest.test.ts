@@ -87,6 +87,45 @@ describe("buildStatsDigest", () => {
     expect(digest).toContain("每日走势：2026-05-01(700)，2026-05-02(500)");
   });
 
+  it("renders the author and label aggregation labels", () => {
+    const digest = buildStatsDigest(
+      stats({
+        total: 5,
+        aggregations: [
+          {
+            dimension: "author",
+            buckets: [
+              { key: "@张三", count: 3 },
+              { key: "@李四", count: 2 },
+            ],
+          },
+          { dimension: "label", buckets: [{ key: "拖欠工资", count: 4 }] },
+        ],
+      }),
+    );
+
+    expect(digest).toContain("作者/账号分布：@张三 3 条，@李四 2 条");
+    expect(digest).toContain("事件标签分布：拖欠工资 4 条");
+  });
+
+  it("includes the source link in high-influence and detail items", () => {
+    const digest = buildStatsDigest(
+      stats({
+        total: 1,
+        topN: {
+          metric: "fansNumber",
+          records: [
+            topRecord({ title: "指控拖欠", link: "https://weibo.com/x", metricValue: 100 }),
+          ],
+        },
+        details: [record({ title: "考勤表质疑", link: "https://weibo.com/y" })],
+      }),
+    );
+
+    expect(digest).toContain("链接:https://weibo.com/x");
+    expect(digest).toContain("链接:https://weibo.com/y");
+  });
+
   it("derives negative and high-risk counts from emotion/level buckets", () => {
     const digest = buildStatsDigest(
       stats({

@@ -2,6 +2,7 @@ import mysql from "mysql2/promise";
 import type { PluginLogger } from "../api.js";
 import {
   AGGREGATION_DIMENSIONS,
+  DATA_JOIN_DIMENSIONS,
   TOPN_METRICS,
   type AggregationResult,
   type CollectedStats,
@@ -79,9 +80,14 @@ export class FeedCollector {
       if (!expr) {
         continue; // defensive: plan is pre-validated upstream
       }
+      // author/label live in feed_monitor_item_data — JOIN only when needed so
+      // the common f-only dimensions keep their lighter single-table query.
+      const join = DATA_JOIN_DIMENSIONS.has(dimension)
+        ? "JOIN feed_monitor_item_data d ON f.id = d.id"
+        : "";
       const order = dimension === "day" ? "k ASC" : "cnt DESC";
       const [rows] = await pool.execute<mysql.RowDataPacket[]>(
-        `SELECT ${expr} AS k, COUNT(*) AS cnt FROM feed_monitor_item f ${where} GROUP BY k ORDER BY ${order} LIMIT 100`,
+        `SELECT ${expr} AS k, COUNT(*) AS cnt FROM feed_monitor_item f ${join} ${where} GROUP BY k ORDER BY ${order} LIMIT 100`,
         params,
       );
       aggregations.push({

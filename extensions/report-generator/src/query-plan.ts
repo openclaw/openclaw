@@ -20,7 +20,11 @@ export interface QueryPlan {
   detailLimit: number;
 }
 
-/** dimension name -> safe SQL expression (feed_monitor_item alias f). */
+/**
+ * dimension name -> safe SQL expression. `f` is feed_monitor_item; `d` is
+ * feed_monitor_item_data (joined only when a `d.*` dimension is selected — see
+ * DATA_JOIN_DIMENSIONS).
+ */
 export const AGGREGATION_DIMENSIONS: Record<string, string> = {
   platform: "f.platform",
   emotion: "f.emotion",
@@ -29,7 +33,16 @@ export const AGGREGATION_DIMENSIONS: Record<string, string> = {
   city: "f.city",
   contentType: "f.contentType",
   day: "DATE(f.date)",
+  author: "d.author",
+  label: "d.label",
 };
+
+/**
+ * Dimensions whose SQL expression lives in feed_monitor_item_data, so the
+ * aggregation query must JOIN that table. Kept as a set (not a flag on each
+ * entry) so the common f-only path stays JOIN-free.
+ */
+export const DATA_JOIN_DIMENSIONS = new Set<string>(["author", "label"]);
 
 /** metric name -> safe SQL expression for top-N ordering. */
 export const TOPN_METRICS: Record<string, string> = {
@@ -138,6 +151,8 @@ export function buildPlanPrompt(template: string): string {
 - city：城市分布
 - contentType：内容类型分布（Article/Video/Comment）
 - day：每日数据量走势
+- author：作者/账号分布（哪些账号在发声）
+- label：事件标签分布（按内容标签聚类）
 
 ## 可用的排序指标（topN.by，选一个）
 fansNumber（粉丝量）、readCount（阅读量）、comments（评论量）、forwardNumber（转发量）、praiseNum（点赞量）、topicInteractionCount（互动量）

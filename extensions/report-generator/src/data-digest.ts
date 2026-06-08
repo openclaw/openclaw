@@ -12,6 +12,8 @@ const DIMENSION_LABELS: Record<string, string> = {
   city: "城市分布",
   contentType: "内容类型分布",
   day: "每日走势",
+  author: "作者/账号分布",
+  label: "事件标签分布",
 };
 
 const METRIC_LABELS: Record<string, string> = {
@@ -58,6 +60,11 @@ function detailLine(record: FeedRecord, index: number, metricSuffix = ""): strin
   }
   if (metricSuffix) {
     parts.push(metricSuffix);
+  }
+  // Source URL so the report can cite "相关链接". Without it in the digest the
+  // writer LLM has no URL and (under the no-fabrication rule) omits links.
+  if (record.link) {
+    parts.push(`链接:${record.link}`);
   }
   const head = parts.join(" | ");
   const body = excerpt(record);
