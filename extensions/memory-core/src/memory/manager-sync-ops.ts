@@ -1785,13 +1785,9 @@ export abstract class MemoryManagerSyncOps {
             } catch {}
           }
           deleteChunksByPathAndSource.run(stale.path, "sessions");
-          if (deleteFtsRowsByPathSourceAndModel) {
+          if (deleteFtsRowsByPathAndSource) {
             try {
-              deleteFtsRowsByPathSourceAndModel.run(
-                stale.path,
-                "sessions",
-                this.provider?.model ?? "fts-only",
-              );
+              deleteFtsRowsByPathAndSource.run(stale.path, "sessions");
             } catch {}
           }
         } finally {
