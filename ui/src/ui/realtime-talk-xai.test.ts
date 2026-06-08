@@ -1,5 +1,6 @@
 // Control UI tests cover xAI realtime Talk behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { bytesToBase64 } from "./chat/realtime-talk-audio.ts";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "./chat/realtime-talk-shared.ts";
 import type {
   RealtimeTalkJsonPcmWebSocketSessionResult,
@@ -17,6 +18,12 @@ type MockWebSocketEventType = "close" | "error" | "message" | "open";
 
 const wsInstances: MockXaiRealtimeWebSocket[] = [];
 const createdSources: MockAudioBufferSource[] = [];
+let mockAudioCurrentTime = 0;
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 class MockXaiRealtimeWebSocket {
   static OPEN = 1;
@@ -72,13 +79,16 @@ class MockAudioBufferSource {
 }
 
 class MockAudioContext {
-  readonly currentTime = 0;
   readonly destination = {};
   readonly sampleRate: number;
   readonly close = vi.fn(async () => undefined);
 
   constructor(options?: { sampleRate?: number }) {
     this.sampleRate = options?.sampleRate ?? 24000;
+  }
+
+  get currentTime() {
+    return mockAudioCurrentTime;
   }
 
   createMediaStreamSource() {
@@ -174,10 +184,15 @@ function encodeJsonFrame(value: unknown): ArrayBuffer {
   return new TextEncoder().encode(JSON.stringify(value)).buffer;
 }
 
+function pcm16Base64(sampleCount: number): string {
+  return bytesToBase64(new Uint8Array(sampleCount * 2));
+}
+
 describe("XaiRealtimeTalkTransport", () => {
   beforeEach(() => {
     wsInstances.length = 0;
     createdSources.length = 0;
+    mockAudioCurrentTime = 0;
     vi.stubGlobal("WebSocket", MockXaiRealtimeWebSocket);
     vi.stubGlobal("AudioContext", MockAudioContext);
     vi.stubGlobal("navigator", {
@@ -190,6 +205,7 @@ describe("XaiRealtimeTalkTransport", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -315,7 +331,20 @@ describe("XaiRealtimeTalkTransport", () => {
         payload: { runId: "run-1", state: "final", message: { text: "done" } },
       });
     }
-    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThanOrEqual(2));
+    await vi.waitFor(() =>
+      expect(
+        ws.sent.some((payload) => JSON.parse(payload).type === "conversation.item.create"),
+      ).toBe(true),
+    );
+    expect(ws.sent.map((payload) => JSON.parse(payload))).not.toContainEqual({
+      type: "response.create",
+    });
+    ws.emitMessage(encodeJsonFrame({ type: "response.done" }));
+    await vi.waitFor(() =>
+      expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+        type: "response.create",
+      }),
+    );
     const sent = ws.sent.map((payload) => JSON.parse(payload));
     expect(sent.slice(-2)).toEqual([
       {
@@ -328,6 +357,135 @@ describe("XaiRealtimeTalkTransport", () => {
       },
       { type: "response.create" },
     ]);
+  });
+
+  it("waits for queued audio playback before continuing after an xAI tool result", async () => {
+    vi.useFakeTimers();
+    const transport = createTransport();
+
+    await transport.start();
+    const ws = latestWebSocket();
+    ws.emitMessage(
+      encodeJsonFrame({
+        type: "response.output_audio.delta",
+        delta: pcm16Base64(24_000),
+      }),
+    );
+    await flushMicrotasks();
+    expect(createdSources).toHaveLength(1);
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        type: "response.function_call_arguments.done",
+        item_id: "item-1",
+        call_id: "call-1",
+        name: "unknown_tool",
+        arguments: "{}",
+      }),
+    );
+    await flushMicrotasks();
+    ws.emitMessage(encodeJsonFrame({ type: "response.done" }));
+    await flushMicrotasks();
+
+    const sentBeforePlaybackDrain = ws.sent.map((payload) => JSON.parse(payload));
+    expect(sentBeforePlaybackDrain).toContainEqual({
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: "call-1",
+        output: JSON.stringify({ error: 'Tool "unknown_tool" not available in browser Talk' }),
+      },
+    });
+    expect(sentBeforePlaybackDrain).not.toContainEqual({ type: "response.create" });
+
+    await vi.advanceTimersByTimeAsync(949);
+    expect(ws.sent.map((payload) => JSON.parse(payload))).not.toContainEqual({
+      type: "response.create",
+    });
+
+    mockAudioCurrentTime = 0.951;
+    await vi.advanceTimersByTimeAsync(1);
+    await flushMicrotasks();
+    expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      type: "response.create",
+    });
+  });
+
+  it("waits for all xAI function outputs before sending one continuation", async () => {
+    const listeners = new Set<(event: GatewayEventFrame) => void>();
+    const client = createClient();
+    vi.mocked(client["addEventListener"]).mockImplementation(
+      (listener: (event: GatewayEventFrame) => void) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+    );
+    vi.mocked(client["request"]).mockImplementation(async (method, params) => {
+      expect(method).toBe("talk.client.toolCall");
+      const callId =
+        params && typeof params === "object" && "callId" in params
+          ? String(params.callId)
+          : "missing";
+      return { runId: `run-${callId}` };
+    });
+    const transport = createTransport({}, client);
+
+    await transport.start();
+    const ws = latestWebSocket();
+    for (const callId of ["call-1", "call-2"]) {
+      ws.emitMessage(
+        encodeJsonFrame({
+          type: "response.function_call_arguments.done",
+          item_id: `item-${callId}`,
+          call_id: callId,
+          name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+          arguments: JSON.stringify({ question: callId }),
+        }),
+      );
+      await flushMicrotasks();
+    }
+
+    await vi.waitFor(() => expect(client["request"]).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(listeners.size).toBe(2));
+    ws.emitMessage(encodeJsonFrame({ type: "response.done" }));
+    for (const listener of listeners) {
+      listener({
+        type: "event",
+        event: "chat",
+        payload: { runId: "run-call-1", state: "final", message: { text: "one" } },
+      });
+    }
+    await vi.waitFor(() =>
+      expect(
+        ws.sent
+          .map((payload) => JSON.parse(payload))
+          .filter((message) => message.type === "conversation.item.create"),
+      ).toHaveLength(1),
+    );
+    expect(ws.sent.map((payload) => JSON.parse(payload))).not.toContainEqual({
+      type: "response.create",
+    });
+
+    for (const listener of listeners) {
+      listener({
+        type: "event",
+        event: "chat",
+        payload: { runId: "run-call-2", state: "final", message: { text: "two" } },
+      });
+    }
+    await vi.waitFor(() =>
+      expect(
+        ws.sent
+          .map((payload) => JSON.parse(payload))
+          .filter((message) => message.type === "conversation.item.create"),
+      ).toHaveLength(2),
+    );
+    const responseCreates = ws.sent
+      .map((payload) => JSON.parse(payload))
+      .filter((message) => message.type === "response.create");
+    expect(responseCreates).toHaveLength(1);
   });
 
   it("rejects untrusted xAI realtime websocket URLs", () => {

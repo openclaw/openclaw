@@ -40,6 +40,7 @@ type PendingFunctionCall = {
   args: unknown;
 };
 
+const XAI_TOOL_CONTINUATION_PLAYBACK_SETTLE_MS = 50;
 const XAI_REALTIME_WEBSOCKET_HOST = "api.x.ai";
 const XAI_REALTIME_WEBSOCKET_PATH = "/v1/realtime";
 const XAI_REALTIME_PROTOCOL = "xai-realtime";
@@ -78,6 +79,9 @@ export class XaiRealtimeTalkTransport implements RealtimeTalkTransport {
   private pendingCallArgs = new Map<string, { name: string; callId: string; args: string }>();
   private pendingCalls = new Map<string, PendingFunctionCall>();
   private deliveredToolCallKeys = new Set<string>();
+  private toolCallBatchOpen = false;
+  private responseCreatePending = false;
+  private responseCreateTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly consultAbortControllers = new Set<AbortController>();
   private readonly outputQueue = new RealtimeTalkPcmOutputQueue();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
@@ -143,6 +147,8 @@ export class XaiRealtimeTalkTransport implements RealtimeTalkTransport {
     this.pendingCallArgs.clear();
     this.pendingCalls.clear();
     this.deliveredToolCallKeys.clear();
+    this.toolCallBatchOpen = false;
+    this.clearPendingResponseCreate();
     this.inputProcessor?.disconnect();
     this.inputProcessor = null;
     this.inputSource?.disconnect();
@@ -249,6 +255,8 @@ export class XaiRealtimeTalkTransport implements RealtimeTalkTransport {
         void this.handleOutputItemDone(event);
         return;
       case "response.cancelled":
+        this.toolCallBatchOpen = false;
+        this.clearPendingResponseCreate();
         this.stopOutput();
         this.emitTalkEvent({
           type: "turn.cancelled",
@@ -257,8 +265,10 @@ export class XaiRealtimeTalkTransport implements RealtimeTalkTransport {
         });
         return;
       case "response.done":
+        this.toolCallBatchOpen = false;
         this.outputStarted = false;
         this.emitTalkEvent({ type: "turn.ended", final: true });
+        this.flushPendingResponseCreate();
         return;
       case "error":
         this.ctx.callbacks.onStatus?.("error", readXaiRealtimeErrorDetail(event.error));
@@ -393,6 +403,7 @@ export class XaiRealtimeTalkTransport implements RealtimeTalkTransport {
       args = JSON.parse(fields.rawArgs || "{}");
     } catch {}
     this.pendingCalls.set(callId, { name, args });
+    this.toolCallBatchOpen = true;
     this.emitTalkEvent({ type: "tool.call", callId, payload: { name, args } });
     if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
       await submitRealtimeTalkAgentControl({
@@ -465,7 +476,7 @@ export class XaiRealtimeTalkTransport implements RealtimeTalkTransport {
         ),
       },
     });
-    this.send({ type: "response.create" });
+    this.requestResponseCreate();
   }
 
   private sendControlSpeechMessage(message: string): void {
@@ -492,6 +503,56 @@ export class XaiRealtimeTalkTransport implements RealtimeTalkTransport {
     ) {
       this.stopOutput();
     }
+  }
+
+  private requestResponseCreate(): void {
+    this.responseCreatePending = true;
+    this.flushPendingResponseCreate();
+  }
+
+  private flushPendingResponseCreate(): void {
+    if (!this.responseCreatePending || this.closed) {
+      return;
+    }
+    if (this.toolCallBatchOpen || this.pendingCalls.size > 0) {
+      return;
+    }
+    const delayMs = this.responseCreatePlaybackDelayMs();
+    if (delayMs > 0) {
+      this.scheduleResponseCreate(delayMs);
+      return;
+    }
+    this.clearResponseCreateTimer();
+    this.responseCreatePending = false;
+    this.send({ type: "response.create" });
+  }
+
+  private responseCreatePlaybackDelayMs(): number {
+    const currentTime = this.outputContext?.currentTime ?? 0;
+    const queuedUntil = this.outputQueue.queuedUntil || currentTime;
+    const remainingMs = Math.ceil(Math.max(0, (queuedUntil - currentTime) * 1000));
+    return Math.max(0, remainingMs - XAI_TOOL_CONTINUATION_PLAYBACK_SETTLE_MS);
+  }
+
+  private scheduleResponseCreate(delayMs: number): void {
+    this.clearResponseCreateTimer();
+    this.responseCreateTimer = setTimeout(() => {
+      this.responseCreateTimer = null;
+      this.flushPendingResponseCreate();
+    }, delayMs);
+  }
+
+  private clearPendingResponseCreate(): void {
+    this.responseCreatePending = false;
+    this.clearResponseCreateTimer();
+  }
+
+  private clearResponseCreateTimer(): void {
+    if (this.responseCreateTimer === null) {
+      return;
+    }
+    clearTimeout(this.responseCreateTimer);
+    this.responseCreateTimer = null;
   }
 }
 
