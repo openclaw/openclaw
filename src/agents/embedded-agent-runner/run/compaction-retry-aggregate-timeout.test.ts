@@ -127,6 +127,10 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       now += 10 * 60_000;
 
       let compactionInFlight = true;
+      let resolveHeartbeat: (() => void) | undefined;
+      const heartbeatSeen = new Promise<void>((resolve) => {
+        resolveHeartbeat = resolve;
+      });
       const resultPromise = waitForCompactionRetryWithAggregateTimeout({
         waitForCompactionRetry: async () => {
           await delay(500);
@@ -143,10 +147,16 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
             sessionKey,
             reason: "compaction_retry:active",
           });
+          resolveHeartbeat?.();
         },
       });
 
-      await delay(15);
+      await Promise.race([
+        heartbeatSeen,
+        delay(1_000).then(() => {
+          throw new Error("timed out waiting for compaction retry heartbeat");
+        }),
+      ]);
       await waitForDiagnosticEventsDrained();
       const activity = getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }, now);
 
