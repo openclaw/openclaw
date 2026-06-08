@@ -53,6 +53,51 @@ Only `pending` proposals can be revised, applied, rejected, or quarantined.
 Ask the agent for the skill you want. The agent calls `skill_workshop` and
 returns a proposal id.
 
+Tool-profile note: `tools.profile: "coding"` already includes
+`skill_workshop`. If you use `minimal`, `messaging`, or another agent/provider
+profile that does not expose it, add `skill_workshop` at the profile stage:
+
+```json5
+{
+  tools: {
+    profile: "minimal",
+    alsoAllow: ["skill_workshop"],
+  },
+}
+```
+
+Use `alsoAllow: ["skill_workshop"]` to add only Skill Workshop to the selected
+restrictive profile. If a provider-specific profile filters tools, add the same
+entry in that provider scope:
+
+```json5
+{
+  tools: {
+    byProvider: {
+      openai: {
+        profile: "minimal",
+        alsoAllow: ["skill_workshop"],
+      },
+    },
+  },
+}
+```
+
+Sandboxed agent runs do not expose `skill_workshop`. If sandbox mode applies to
+the run, use a non-sandboxed run for chat-managed proposals, or use the CLI and
+Gateway methods below. Sandbox tool policy cannot re-add `skill_workshop`
+because the tool is not constructed for sandboxed runs.
+
+If you need an exact single-tool allowlist, remove the restrictive profile or
+set `profile: "full"`, then use `allow: ["skill_workshop"]`. `allow` cannot add
+a tool that an earlier profile already filtered out. If the same scope already
+uses `allow`, include `skill_workshop` in `allow` instead of setting
+`alsoAllow`, and make sure the profile in that scope is unset or includes
+`skill_workshop`. Then check later policy gates such as `tools.deny`,
+agent-specific tool policy, sandbox tool policy, and subagent tool policy. See
+[Tools and custom providers](/gateway/config-tools#tool-profiles) for the full
+profile and group list.
+
 Create:
 
 ```text
@@ -248,6 +293,15 @@ Default state directory: `~/.openclaw`.
   (default 50).
 
 ## Troubleshooting
+
+If `skill_workshop` is missing from agent tools, remember that
+`tools.profile: "coding"` should include it. Check restrictive
+`tools.allow`/`tools.deny`, provider, agent, sender, sandbox, and subagent
+policy. For `minimal`, `messaging`, or another restrictive profile, add
+`alsoAllow: ["skill_workshop"]` in the same scope that sets that profile, then
+start a fresh run. If that scope uses exact `allow`, remove or relax the
+restrictive profile because `allow` cannot widen it. If the run is sandboxed,
+use a non-sandboxed run, CLI, or Gateway method instead.
 
 | Problem                                        | Resolution                                                                                   |
 | ---------------------------------------------- | -------------------------------------------------------------------------------------------- |
