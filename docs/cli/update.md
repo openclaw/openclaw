@@ -155,21 +155,23 @@ When a local managed Gateway service is installed and restart is enabled,
 package-manager and git-checkout updates stop the running service before
 replacing the package tree or mutating the checkout/build output. The updater
 then refreshes the service metadata from the updated install, restarts the
-service, and verifies the restarted Gateway reports the expected version before
-reporting `Gateway: restarted and verified.`. On macOS, the post-update check
-also verifies the LaunchAgent is loaded/running for the active profile and the
-configured loopback port is healthy. If the plist is installed but launchd is
-not supervising it, OpenClaw re-bootstraps the LaunchAgent automatically, then
-reruns the health/version/channel readiness checks. A fresh bootstrap loads the
-RunAtLoad job directly, so update recovery does not immediately `kickstart -k`
-the newly spawned Gateway. If the Gateway still does not become healthy, the
-command exits non-zero and prints the restart log path plus explicit restart,
-reinstall, and package rollback instructions. If restart cannot run, the command
-prints `Gateway: restart skipped (...)` or `Gateway: restart failed: ...` with a
-manual `openclaw gateway restart` hint. With `--no-restart`, package
-replacement or git rebuild still runs but the managed service is not stopped or
-restarted, so the running Gateway may keep old code until you restart it
-manually.
+service, and verifies the restarted Gateway before reporting
+`Gateway: restarted and verified.`. Package-manager updates additionally verify
+the restarted Gateway reports the expected package version; git-checkout updates
+verify gateway health and service readiness after the rebuild. On macOS, the
+post-update check also verifies the LaunchAgent is loaded/running for the active
+profile and the configured loopback port is healthy. If the plist is installed
+but launchd is not supervising it, OpenClaw re-bootstraps the LaunchAgent
+automatically, then reruns the health/version/channel readiness checks. A fresh
+bootstrap loads the RunAtLoad job directly, so update recovery does not
+immediately `kickstart -k` the newly spawned Gateway. If the Gateway still does
+not become healthy, the command exits non-zero and prints the restart log path
+plus explicit restart, reinstall, and package rollback instructions. If restart
+cannot run, the command prints `Gateway: restart skipped (...)` or
+`Gateway: restart failed: ...` with a manual `openclaw gateway restart` hint.
+With `--no-restart`, package replacement or git rebuild still runs but the
+managed service is not stopped or restarted, so the running Gateway may keep old
+code until you restart it manually.
 
 ### Control-plane response shape
 
