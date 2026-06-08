@@ -33,6 +33,7 @@ import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
+import { VisionBudget } from "./vision-budget.js";
 import {
   isProviderUnreachableWebhookUrl,
   providerRequiresPublicWebhook,
@@ -591,6 +592,8 @@ export async function createVoiceCallRuntime(params: {
           suppressInputDuringPlayback: config.realtime.suppressInputDuringPlayback,
           // Group-call "speak only when addressed" gate (instruction-based on the realtime path).
           groupCallGate: resolveGroupCallGateConfig(config.msteams?.groupCall),
+          // CVI #4 vision spend cap for look_at_screen (0 = unlimited).
+          visionBudget: new VisionBudget(config.msteams?.maxVisionPerMinute ?? 30),
           agentRuntime,
           voiceConfig: config,
           logger: log,

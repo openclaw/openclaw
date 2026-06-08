@@ -48,6 +48,7 @@ import { describeMsteamsVideoFrameOwner, type MsteamsVideoFrame } from "./msteam
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 import { readArgText } from "./utils.js";
+import type { VisionBudget } from "./vision-budget.js";
 
 /** Teams bridge wire format. */
 const MSTEAMS_SAMPLE_RATE_HZ = MSTEAMS_PCM_SAMPLE_RATE_HZ;
@@ -126,6 +127,11 @@ const MSTEAMS_LOOK_TOOL: RealtimeVoiceTool = {
     },
     required: ["question"],
   },
+};
+
+/** Returned when look_at_screen is over the per-call vision budget (cost cap). */
+const MSTEAMS_LOOK_BUDGETED = {
+  text: "I've been looking quite a lot in the last minute — give me a few seconds and ask again.",
 };
 
 /** Returned when the caller asks the agent to look but no video frame has arrived yet. */
@@ -234,6 +240,9 @@ export interface MsteamsRealtimeDeps {
    * addressed by name. Undefined / requireAddress=false ⇒ respond normally.
    */
   groupCallGate?: GroupCallGateConfig;
+
+  /** Per-call vision spend cap shared across calls (look_at_screen). Undefined = unlimited. */
+  visionBudget?: VisionBudget;
 
   logger?: MsteamsLogger;
 }
@@ -554,6 +563,13 @@ export function createMsteamsRealtimeCall(params: {
     if (lastLookData === frame.dataBase64 && lastLookText) {
       logger?.debug?.(`MsteamsRealtime: look cache hit for ${callId} (unchanged frame)`);
       rtSession.submitToolResult(event.callId, { text: lastLookText });
+      return;
+    }
+
+    // Cost cap: a changed frame means a fresh (expensive) vision run — gate it on the vision budget.
+    if (deps.visionBudget && !deps.visionBudget.tryConsume(callId, Date.now())) {
+      logger?.debug?.(`MsteamsRealtime: look over vision budget for ${callId}`);
+      rtSession.submitToolResult(event.callId, MSTEAMS_LOOK_BUDGETED);
       return;
     }
 
