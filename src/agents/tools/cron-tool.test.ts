@@ -1,3 +1,5 @@
+// Cron tool tests cover schedule guidance, scoped job operations, delivery
+// context inheritance, session routing, and agent id ownership.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { callGatewayMock, extractDeliveryInfoMock } = vi.hoisted(() => ({
@@ -177,6 +179,8 @@ describe("cron tool", () => {
   });
 
   it("allows scoped isolated cron runs to remove the current job", async () => {
+    // Self-removal scope lets a cron-triggered run clean up its own schedule
+    // without granting broad cron mutation access.
     const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
 
     await tool.execute("call-self-remove", {
@@ -631,6 +635,23 @@ describe("cron tool", () => {
       | { failureAlert?: unknown }
       | undefined;
     expect(params?.failureAlert).toBe(false);
+  });
+
+  it("rejects command payloads from the agent cron tool on add", async () => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-command-add", {
+        action: "add",
+        job: {
+          name: "command",
+          schedule: { at: new Date(123).toISOString() },
+          sessionTarget: "isolated",
+          payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+        },
+      }),
+    ).rejects.toThrow("cron command payloads cannot be created or edited");
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1452,6 +1473,21 @@ describe("cron tool", () => {
       | undefined;
     expect(params?.id).toBe("job-4");
     expect(params?.patch?.failureAlert).toBe(false);
+  });
+
+  it("rejects command payloads from the agent cron tool on update", async () => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-command-update", {
+        action: "update",
+        id: "job-4",
+        patch: {
+          payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+        },
+      }),
+    ).rejects.toThrow("cron command payloads cannot be created or edited");
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("recovers flattened payload patch params for update action", async () => {

@@ -1,3 +1,4 @@
+// Memory Wiki tests cover cli plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +13,7 @@ import {
   runWikiStatus,
 } from "./cli.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
+import { resolveMemoryWikiImportRunRecordPath } from "./import-runs-state.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
 import type { MemoryWikiDoctorReport, MemoryWikiStatus } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -571,6 +573,9 @@ cli note
     });
     expect(applied.runId).toMatch(/^chatgpt-[a-f0-9]{12}$/u);
     expect(applied.createdCount).toBe(1);
+    await expect(
+      fs.stat(resolveMemoryWikiImportRunRecordPath(rootDir, applied.runId ?? "")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     const sourceFiles = (await fs.readdir(path.join(rootDir, "sources"))).filter(
       (entry) => entry !== "index.md",
     );

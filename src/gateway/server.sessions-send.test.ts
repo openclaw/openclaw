@@ -1,3 +1,5 @@
+// sessions_send tests cover tool-driven agent-to-agent delivery, transcript
+// updates, gateway auth, plugin routing, and emitted agent events.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +15,7 @@ import {
   agentCommand,
   getFreePort,
   installGatewayTestHooks,
+  readSessionStore,
   startGatewayServer,
   setTestPluginRegistry,
   testState,
@@ -74,13 +77,7 @@ async function emitLifecycleAssistantReply(params: {
   const runId = commandParams.runId ?? sessionId;
   let sessionFile = resolveSessionTranscriptPath(sessionId);
   if (testState.sessionStorePath && commandParams.sessionKey) {
-    const rawStore = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
-      string,
-      {
-        sessionId?: string;
-        sessionFile?: string;
-      }
-    >;
+    const rawStore = readSessionStore(testState.sessionStorePath);
     const entry = rawStore[commandParams.sessionKey];
     if (entry?.sessionId === sessionId && entry.sessionFile) {
       sessionFile = entry.sessionFile;
@@ -425,14 +422,7 @@ describe("sessions_send agent targeting", () => {
         expect(orionCall).toBeDefined();
         expect(orionCall?.sessionId).toBeTypeOf("string");
 
-        const rawStore = JSON.parse(
-          await fs.readFile(testState.sessionStorePath, "utf-8"),
-        ) as Record<
-          string,
-          {
-            sessionId?: string;
-          }
-        >;
+        const rawStore = readSessionStore(testState.sessionStorePath);
         expect(rawStore["agent:orion:main"]?.sessionId).toBe(orionCall?.sessionId);
       } finally {
         testState.agentsConfig = undefined;

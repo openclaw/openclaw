@@ -1,3 +1,4 @@
+// Msteams plugin module implements pending uploads fs behavior.
 import { createHash } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getMSTeamsRuntime } from "./runtime.js";

@@ -1,3 +1,4 @@
+// Control UI module implements ui types behavior.
 export type ChatAttachment = {
   id: string;
   dataUrl?: string;
@@ -60,6 +61,7 @@ export type CronFormState = {
   sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
   wakeMode: "next-heartbeat" | "now";
   payloadKind: "systemEvent" | "agentTurn";
+  payloadLocked: boolean;
   payloadText: string;
   payloadModel: string;
   payloadThinking: string;

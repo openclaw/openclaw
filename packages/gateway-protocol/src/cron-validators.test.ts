@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover cron validators behavior.
 import { describe, expect, it } from "vitest";
 import {
   validateCronAddParams,
@@ -49,6 +50,36 @@ describe("cron protocol validators", () => {
       validateCronUpdateParams({
         id: "job-1",
         patch: { sessionTarget: "session:project-alpha" },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts command cron payloads", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        sessionTarget: "isolated",
+        payload: {
+          kind: "command",
+          argv: ["sh", "-lc", "echo ok"],
+          cwd: "/srv/example",
+          env: { FOO: "bar" },
+          input: "stdin",
+          timeoutSeconds: 30,
+          noOutputTimeoutSeconds: 5,
+          outputMaxBytes: 4096,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "command",
+            argv: ["sh", "-lc", "echo updated"],
+          },
+        },
       }),
     ).toBe(true);
   });

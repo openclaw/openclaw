@@ -1,6 +1,8 @@
+// Qa Lab plugin module implements runtime parity behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber as readFiniteNumber,
@@ -133,6 +135,7 @@ const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
 const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
+const TOOL_RESULT_MISSING_ERROR_CLASS = "tool-result-missing";
 const BOOT_STATE_LINE_RE =
   /\b(?:FailoverError|No API key found|Codex app-server|auth profile|runtime policy|restart mode:|plugin|doctor)\b/i;
 const TOOL_RESULT_ERROR_RE = /\b(?:error|failed|failure|timeout|denied|enoent|not found)\b/i;
@@ -392,6 +395,17 @@ function classifyToolResultError(params: {
   return undefined;
 }
 
+function finalizeToolCallOrder(ordered: RuntimeParityPendingToolCall[]): RuntimeParityToolCall[] {
+  return ordered.map(({ _resolved, ...toolCall }) =>
+    _resolved
+      ? toolCall
+      : {
+          ...toolCall,
+          errorClass: toolCall.errorClass ?? TOOL_RESULT_MISSING_ERROR_CLASS,
+        },
+  );
+}
+
 function resolveToolCallOrder(records: RuntimeParityTranscriptRecord[]): RuntimeParityToolCall[] {
   const ordered: RuntimeParityPendingToolCall[] = [];
   const byId = new Map<string, number>();
@@ -480,7 +494,7 @@ function resolveToolCallOrder(records: RuntimeParityTranscriptRecord[]): Runtime
     }
   }
 
-  return ordered.map(({ _resolved: _ignored, ...toolCall }) => toolCall);
+  return finalizeToolCallOrder(ordered);
 }
 
 function resolveToolCallOrderFromMockRequests(
@@ -544,7 +558,7 @@ function resolveToolCallOrderFromMockRequests(
     enqueueUnresolved(ordered.length - 1);
   }
 
-  return ordered.map(({ _resolved: _ignored, ...toolCall }) => toolCall);
+  return finalizeToolCallOrder(ordered);
 }
 
 function classifyScenarioError(details: string | undefined): string | undefined {
@@ -749,6 +763,10 @@ function isHardFailureRuntimeError(errorClass: string | undefined) {
   );
 }
 
+function hasMissingToolResult(toolCalls: readonly RuntimeParityToolCall[]) {
+  return toolCalls.some((toolCall) => toolCall.errorClass === TOOL_RESULT_MISSING_ERROR_CLASS);
+}
+
 function summarizeSentinelErrorClass(findings: readonly GatewayLogSentinelFinding[]) {
   if (findings.length === 0) {
     return undefined;
@@ -777,6 +795,16 @@ function classifyRuntimeParityCells(params: {
         params.openclaw.transportErrorClass || params.codex.transportErrorClass
           ? "at least one runtime hit a transport failure"
           : "at least one runtime hit a hard runtime failure",
+    };
+  }
+
+  if (
+    hasMissingToolResult(params.openclaw.toolCalls) ||
+    hasMissingToolResult(params.codex.toolCalls)
+  ) {
+    return {
+      drift: "failure-mode",
+      driftDetails: "at least one runtime planned a tool call without a tool result",
     };
   }
 
@@ -878,16 +906,14 @@ async function readRuntimeParitySessionEntries(params: {
     "sessions",
     "sessions.json",
   );
-  try {
-    const raw = await fs.readFile(storePath, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, RuntimeParitySessionEntry>;
-    const entries = Object.values(parsed).filter((entry) => readNonEmptyString(entry?.sessionId));
-    const rootEntries = entries.filter(isRuntimeParityRootSession);
-    const candidates = rootEntries.length > 0 ? rootEntries : entries;
-    return candidates.toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
-  } catch {
-    return [];
-  }
+  const parsed = loadSessionStore(storePath, { skipCache: true }) as Record<
+    string,
+    RuntimeParitySessionEntry
+  >;
+  const entries = Object.values(parsed).filter((entry) => readNonEmptyString(entry?.sessionId));
+  const rootEntries = entries.filter(isRuntimeParityRootSession);
+  const candidates = rootEntries.length > 0 ? rootEntries : entries;
+  return candidates.toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
 }
 
 async function loadRuntimeParityTranscripts(params: {
@@ -1024,3 +1050,10 @@ export async function runRuntimeParityScenario(params: {
     ...(drift.driftDetails ? { driftDetails: drift.driftDetails } : {}),
   };
 }
+
+export const testing = {
+  classifyRuntimeParityCells,
+  resolveToolCallOrderFromMockRequests,
+};
+
+export { testing as __testing };
