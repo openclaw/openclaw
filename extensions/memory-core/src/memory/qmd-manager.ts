@@ -654,10 +654,40 @@ export class QmdMemoryManager implements MemorySearchManager {
       for (const [name, details] of parsed) {
         existing.set(name, details);
       }
+      await this.enrichListedCollectionsBestEffort(existing);
     } catch {
       // ignore; older qmd versions might not support list --json.
     }
     return existing;
+  }
+
+  private async enrichListedCollectionsBestEffort(
+    existing: Map<string, ListedCollection>,
+  ): Promise<void> {
+    for (const [name, details] of existing) {
+      if (details.path && typeof details.pattern === "string") {
+        continue;
+      }
+      const described = await this.describeCollectionBestEffort(name);
+      if (!described) {
+        continue;
+      }
+      existing.set(name, {
+        path: described.path ?? details.path,
+        pattern: described.pattern ?? details.pattern,
+      });
+    }
+  }
+
+  private async describeCollectionBestEffort(name: string): Promise<ListedCollection | null> {
+    try {
+      const result = await this.runQmd(["collection", "show", name], {
+        timeoutMs: this.qmd.update.commandTimeoutMs,
+      });
+      return this.parseCollectionDetails(result.stdout);
+    } catch {
+      return null;
+    }
   }
 
   private findCollectionByPathPattern(
@@ -979,6 +1009,43 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
     }
     return listed;
+  }
+
+  private parseCollectionDetails(output: string): ListedCollection | null {
+    const trimmed = output.trim();
+    if (!trimmed) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (parsed && typeof parsed === "object") {
+        const path = (parsed as { path?: unknown }).path;
+        const pattern = (parsed as { pattern?: unknown; mask?: unknown }).pattern;
+        const mask = (parsed as { mask?: unknown }).mask;
+        return {
+          path: typeof path === "string" ? path : undefined,
+          pattern:
+            typeof pattern === "string" ? pattern : typeof mask === "string" ? mask : undefined,
+        };
+      }
+    } catch {
+      // fall through to text parsing
+    }
+
+    const details: ListedCollection = {};
+    for (const rawLine of output.split(/\r?\n/)) {
+      const line = rawLine.trimEnd();
+      const pathLine = /^\s*path\s*:\s*(.+?)\s*$/i.exec(line);
+      if (pathLine) {
+        details.path = pathLine[1].trim();
+        continue;
+      }
+      const patternLine = /^\s*(?:pattern|mask)\s*:\s*(.+?)\s*$/i.exec(line);
+      if (patternLine) {
+        details.pattern = patternLine[1].trim();
+      }
+    }
+    return details.path || details.pattern ? details : null;
   }
 
   private shouldRebindCollection(collection: ManagedCollection, listed: ListedCollection): boolean {

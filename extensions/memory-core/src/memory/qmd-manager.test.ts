@@ -899,6 +899,66 @@ describe("QmdMemoryManager", () => {
     expect(addCalls).toHaveLength(0);
   });
 
+  it("rebinds collection when qmd collection show reveals a stale path", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const sessionCollectionName = `sessions-${agentId}`;
+    const wrongSessionsPath = path.join(stateDir, "agents", "other-agent", "qmd", "sessions");
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", JSON.stringify([sessionCollectionName]));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "show" && args[2] === sessionCollectionName) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          [
+            `Collection: ${sessionCollectionName}`,
+            `Path: ${wrongSessionsPath}`,
+            "Pattern: **/*.md",
+          ].join("\n"),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    const commands = spawnMock.mock.calls.map((call: unknown[]) => call[1] as string[]);
+    const removeSessions = commands.find(
+      (args) =>
+        args[0] === "collection" && args[1] === "remove" && args[2] === sessionCollectionName,
+    );
+    requireValue(removeSessions, "sessions collection remove command missing");
+
+    const addSessions = commands.find((args) => {
+      if (args[0] !== "collection" || args[1] !== "add") {
+        return false;
+      }
+      const nameIdx = args.indexOf("--name");
+      return nameIdx >= 0 && args[nameIdx + 1] === sessionCollectionName;
+    });
+    expect(requireValue(addSessions, "sessions collection add command missing")[2]).toBe(
+      path.join(stateDir, "agents", agentId, "qmd", "sessions"),
+    );
+  });
+
   it("rebinds collection when qmd text output exposes a changed pattern without a path", async () => {
     cfg = {
       ...cfg,
