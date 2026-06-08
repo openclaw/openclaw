@@ -18,6 +18,7 @@ const BUNDLED_LEGACY_WEB_SEARCH_OWNERS = new Map<string, string>([
   ["gemini", "google"],
   ["grok", "xai"],
   ["kimi", "moonshot"],
+  ["liner", "liner"],
   ["minimax", "minimax"],
   ["ollama", "ollama"],
   ["parallel", "parallel"],
@@ -27,9 +28,11 @@ const BUNDLED_LEGACY_WEB_SEARCH_OWNERS = new Map<string, string>([
   ["tavily", "tavily"],
 ]);
 
-// Tavily and Parallel (paid + free) only ever used the plugin-owned config path,
-// so there is no legacy `tools.web.search.<id>.*` shape to migrate for them.
+// Tavily, Parallel (paid + free), and Liner only ever used the plugin-owned
+// config path, so there is no legacy `tools.web.search.<id>.*` shape to migrate
+// for them.
 const NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS = new Set([
+  "liner",
   "parallel",
   "parallel-free",
   "tavily",

@@ -21,6 +21,7 @@ for (const providerId of [
   "exa",
   "firecrawl",
   "google",
+  "liner",
   "minimax",
   "moonshot",
   "parallel",

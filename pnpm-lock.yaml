@@ -917,6 +917,12 @@ importers:
         specifier: 2026.5.28
         version: 2026.5.28
 
+  extensions/liner:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/litellm:
     devDependencies:
       '@openclaw/plugin-sdk':

@@ -1,0 +1,50 @@
+{
+  "id": "liner",
+  "activation": {
+    "onStartup": false
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "liner",
+        "envVars": ["LINER_API_KEY"]
+      }
+    ]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Liner API Key",
+      "help": "Liner Search API key from https://platform.liner.com (fallback: LINER_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "sk_live_..."
+    },
+    "webSearch.baseUrl": {
+      "label": "Liner Search Base URL",
+      "help": "Optional Liner API base URL override. OpenClaw appends /api/v1/search/web when the URL does not already end there."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["liner"]
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1329,6 +1329,7 @@
                       "tools/gemini-search",
                       "tools/grok-search",
                       "tools/kimi-search",
+                      "tools/liner-search",
                       "tools/minimax-search",
                       "tools/ollama-search",
                       "tools/parallel-search",

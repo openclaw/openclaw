@@ -398,6 +398,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/kilocode/**"
+"extensions: liner":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/liner/**"
 "extensions: lmstudio":
   - changed-files:
       - any-glob-to-any-file:

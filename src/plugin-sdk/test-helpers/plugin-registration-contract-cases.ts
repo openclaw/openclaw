@@ -185,6 +185,10 @@ export const pluginRegistrationContractCases = {
     requireGenerateImage: true,
     requireGenerateVideo: true,
   },
+  liner: {
+    pluginId: "liner",
+    webSearchProviderIds: ["liner"],
+  },
   parallel: {
     pluginId: "parallel",
     webSearchProviderIds: ["parallel", "parallel-free"],

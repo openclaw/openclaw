@@ -81,6 +81,9 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
   <Card title="MiniMax Search" icon="globe" href="/tools/minimax-search">
     Structured results via the MiniMax Token Plan search API.
   </Card>
+  <Card title="Liner" icon="magnifying-glass" href="/tools/liner-search">
+    Source-grounded AI search results with per-result excerpts (`LINER_API_KEY`).
+  </Card>
   <Card title="Ollama Web Search" icon="globe" href="/tools/ollama-search">
     Search via a signed-in local Ollama host or the hosted Ollama API.
   </Card>
@@ -112,6 +115,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 | [Gemini](/tools/gemini-search)                   | AI-synthesized + citations                                     | --                                               | `GEMINI_API_KEY`                                                                        |
 | [Grok](/tools/grok-search)                       | AI-synthesized + citations                                     | --                                               | xAI OAuth, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey`              |
 | [Kimi](/tools/kimi-search)                       | AI-synthesized + citations; fails on ungrounded chat fallbacks | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`                                                     |
+| [Liner](/tools/liner-search)                     | Source-grounded results with excerpts                          | --                                               | `LINER_API_KEY`                                                                         |
 | [MiniMax Search](/tools/minimax-search)          | Structured snippets                                            | Region (`global` / `cn`)                         | `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY` / `MINIMAX_OAUTH_TOKEN`              |
 | [Ollama Web Search](/tools/ollama-search)        | Structured snippets                                            | --                                               | None for signed-in local hosts; `OLLAMA_API_KEY` for direct `https://ollama.com` search |
 | [Parallel](/tools/parallel-search)               | Dense excerpts ranked for LLM context                          | --                                               | `PARALLEL_API_KEY` (paid)                                                               |
@@ -193,13 +197,14 @@ API-backed providers first:
 8. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`; optional `plugins.entries.exa.config.webSearch.baseUrl` overrides the Exa endpoint (order 65)
 9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
 10. **Parallel** -- paid Parallel Search API via `PARALLEL_API_KEY` or `plugins.entries.parallel.config.webSearch.apiKey`; optional `plugins.entries.parallel.config.webSearch.baseUrl` overrides the endpoint (order 75)
+11. **Liner** -- `LINER_API_KEY` or `plugins.entries.liner.config.webSearch.apiKey`; optional `plugins.entries.liner.config.webSearch.baseUrl` overrides the endpoint (order 80)
 
 Key-free fallbacks after that:
 
-11. **Parallel Search (Free)** -- the zero-config default: works with no account or API key via Parallel's free hosted [Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) (order 76)
-12. **DuckDuckGo** -- key-free HTML fallback with no account or API key (order 100)
-13. **Ollama Web Search** -- key-free fallback via your configured local Ollama host when it is reachable and signed in with `ollama signin`; can reuse Ollama provider bearer auth when the host needs it, and can call direct `https://ollama.com` search when configured with `OLLAMA_API_KEY` (order 110)
-14. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
+12. **Parallel Search (Free)** -- the zero-config default: works with no account or API key via Parallel's free hosted [Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) (order 76)
+13. **DuckDuckGo** -- key-free HTML fallback with no account or API key (order 100)
+14. **Ollama Web Search** -- key-free fallback via your configured local Ollama host when it is reachable and signed in with `ollama signin`; can reuse Ollama provider bearer auth when the host needs it, and can call direct `https://ollama.com` search when configured with `OLLAMA_API_KEY` (order 110)
+15. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
 
 When no API-backed provider is configured, OpenClaw defaults to **Parallel
 Search (Free)**, so `web_search` works without an API key.
@@ -213,7 +218,7 @@ to route them through the managed path.
   All provider key fields support SecretRef objects. Plugin-scoped SecretRefs
   under `plugins.entries.<plugin>.config.webSearch.apiKey` are resolved for the
   bundled API-backed web search providers, including Brave, Exa, Firecrawl,
-  Gemini, Grok, Kimi, MiniMax, Parallel, Perplexity, and Tavily,
+  Gemini, Grok, Kimi, Liner, MiniMax, Parallel, Perplexity, and Tavily,
   whether the provider is picked explicitly via `tools.web.search.provider` or
   selected through auto-detect. In auto-detect mode, OpenClaw resolves only the
   selected provider key -- non-selected SecretRefs stay inactive, so you can
