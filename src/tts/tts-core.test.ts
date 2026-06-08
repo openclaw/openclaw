@@ -178,6 +178,14 @@ describe("TTS core", () => {
         expected: inlineTagSummary,
       },
       {
+        content: [{ type: "text", text: "The docs mention <text_to_summarize>." }],
+        expected: "The docs mention <text_to_summarize>.",
+      },
+      {
+        content: [{ type: "text", text: "The docs mention <text_to_summarize>" }],
+        expected: "The docs mention <text_to_summarize>",
+      },
+      {
         content: [
           {
             type: "text",
@@ -208,6 +216,24 @@ describe("TTS core", () => {
       },
       {
         content: [{ type: "text", text: "Deploy Friday <text_to_summarize>Do not speak this." }],
+        expected: "Deploy Friday",
+      },
+      {
+        content: [
+          {
+            type: "text",
+            text: "Deploy Friday <text_to_summarize>As discussed, do not speak this.",
+          },
+        ],
+        expected: "Deploy Friday",
+      },
+      {
+        content: [
+          {
+            type: "text",
+            text: "Deploy Friday <text_to_summarize>In yesterday's meeting, do not speak this.",
+          },
+        ],
         expected: "Deploy Friday",
       },
       {
