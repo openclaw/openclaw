@@ -33,6 +33,7 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
+import { RequestError } from "@agentclientprotocol/sdk";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
@@ -1422,8 +1423,16 @@ export class AcpGatewayAgent implements Agent {
     }
     if (state === "error") {
       const errorKind = payload.errorKind as string | undefined;
-      const stopReason: StopReason = errorKind === "refusal" ? "refusal" : "end_turn";
-      void this.finishPrompt(pending.sessionId, pending, stopReason);
+      const errorMessage = (payload.errorMessage as string | undefined) || "Unknown error";
+      if (errorKind === "refusal") {
+        void this.finishPrompt(pending.sessionId, pending, "refusal");
+      } else if (errorKind === "context_length") {
+        void this.finishPrompt(pending.sessionId, pending, "max_tokens");
+      } else {
+        const code = errorKind === "timeout" ? -32001 : errorKind === "rate_limit" ? -32002 : -32603;
+        const error = new RequestError(code, errorMessage, { errorKind });
+        this.rejectPendingPrompt(pending, error);
+      }
     }
   }
 
@@ -1699,7 +1708,9 @@ export class AcpGatewayAgent implements Agent {
       return false;
     }
     if (result?.status === "error") {
-      void this.finishPrompt(sessionId, currentPending, "end_turn");
+      const errorMessage = result.error || "Unknown error";
+      const error = new RequestError(-32603, errorMessage);
+      this.rejectPendingPrompt(currentPending, error);
       return false;
     }
     if (deadlineExpired) {
