@@ -10,6 +10,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isInboundCallAllowed } from "../allowlist.js";
 import { resolveVoiceCallEffectiveConfig, type VoiceCallConfig } from "../config.js";
 import type { CoreAgentDeps, CoreConfig } from "../core-bridge.js";
+import { inferEmotion } from "../expression.js";
 import {
   type GroupCallGateConfig,
   resolveGroupCallGateConfig,
@@ -1155,6 +1156,15 @@ export class MsteamsProvider implements VoiceCallProvider {
     const abort = new AbortController();
     state.ttsAbort = abort;
     state.turnId += 1;
+
+    // CVI Phase 6b: cue the avatar's emotion from the reply text before audio starts, so the face
+    // shapes its mouth (smile/frown/surprise) as it begins talking. Best-effort — the worker ignores
+    // an unknown tag, and a failed send must never block playback.
+    try {
+      state.session.send({ type: "expression", emotion: inferEmotion(input.text) });
+    } catch {
+      // non-fatal: expression is a cosmetic cue
+    }
 
     // msteams-tts.ts synthesizes and resamples to PCM 16 kHz mono.
     const pcm16k = await this.ttsProvider.synthesizePcm16k(input.text);
