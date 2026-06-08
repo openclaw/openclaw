@@ -61,10 +61,16 @@ function migrateLegacyCatchupCursor(accountId: string): number | null {
 }
 
 /** Last dispatched rowid for this account, or null when none is recorded yet. */
-export function loadIMessageRecoveryCursor(accountId: string): number | null {
+export function loadIMessageRecoveryCursor(
+  accountId: string,
+  options: { migrateLegacyCatchup?: boolean } = {},
+): number | null {
   const current = readRecoveryCursor(accountId);
   if (current !== null) {
     return current;
+  }
+  if (options.migrateLegacyCatchup === false) {
+    return null;
   }
   return migrateLegacyCatchupCursor(accountId);
 }

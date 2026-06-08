@@ -70,7 +70,8 @@ function isLegacyTelegramStateFile(name: string): boolean {
 function hasLegacyIMessageStateFiles(stateDir: string): boolean {
   return (
     fileOrDirExists(path.join(stateDir, "imessage", "reply-cache.jsonl")) ||
-    fileOrDirExists(path.join(stateDir, "imessage", "sent-echoes.jsonl"))
+    fileOrDirExists(path.join(stateDir, "imessage", "sent-echoes.jsonl")) ||
+    dirHasFile(path.join(stateDir, "imessage", "catchup"), (name) => name.endsWith(".json"))
   );
 }
 

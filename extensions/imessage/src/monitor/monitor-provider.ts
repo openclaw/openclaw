@@ -64,6 +64,8 @@ import {
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
+import { runIMessageCatchup } from "./catchup-bridge.js";
+import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
 import {
   combineIMessagePayloads,
   hasIMessageBalloonMetadata,
@@ -319,6 +321,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     log: (message) => runtime.log?.(warn(message)),
   });
   const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
+  const catchupCfg = resolveCatchupConfig(imessageCfg.catchup);
   const includeAttachments = opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
   const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
   const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";
@@ -358,12 +361,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   // replay aggressively without the old catchup cursor/retry bookkeeping.
   const inboundReplayGuard = createIMessageInboundReplayGuard();
   let staleBacklogSuppressed = 0;
-  // Lowest rowid whose dispatch was released (failed) this session. The recovery
-  // cursor must never advance past it, or the failed row would sit below the
-  // next startup's since_rowid and never be replayed again (downtime message
-  // loss). A failed row keeps its dedupe claim released, so once replayed it
-  // retries; this floor guarantees it is replayed.
-  let recoveryHeldFloorRowid = Number.POSITIVE_INFINITY;
 
   // Downtime recovery. We pass the persisted recovery cursor (the last
   // dispatched rowid) to watch.subscribe as since_rowid so imsg replays the rows
@@ -384,9 +381,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const recoveryBoundaryRowid = watchSourceDbPath
     ? await resolveIMessageStartupRowidWatermark(watchSourceDbPath)
     : null;
-  const recoveryCursorRowid = loadIMessageRecoveryCursor(accountInfo.accountId);
-  const watchSinceRowid =
-    recoveryCursorRowid !== null
+  const recoveryCursorRowid = loadIMessageRecoveryCursor(accountInfo.accountId, {
+    migrateLegacyCatchup: !catchupCfg.enabled,
+  });
+  const watchSinceRowid = catchupCfg.enabled
+    ? null
+    : recoveryCursorRowid !== null
       ? recoveryBoundaryRowid !== null
         ? Math.max(recoveryCursorRowid, recoveryBoundaryRowid - IMESSAGE_RECOVERY_MAX_ROWS)
         : recoveryCursorRowid
@@ -410,6 +410,111 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   // (not per-bucket) signal because imsg omits `balloon_bundle_id` for plain
   // rows, so a bucket of plain text looks identical on old and new builds.
   let imsgEmitsBalloonMetadata = false;
+  let recoveryCursorHoldBeforeRowid: number | null = null;
+  let latestAdvancedRecoveryCursorRowid = recoveryCursorRowid ?? -1;
+  const pendingRecoveryReplayRowids = new Set<number>();
+  const handledRecoveryCursorRowids = new Set<number>();
+
+  function collectFiniteRowids(
+    entries: readonly { message: Pick<IMessagePayload, "id"> }[],
+  ): number[] {
+    const rowids: number[] = [];
+    for (const entry of entries) {
+      if (typeof entry.message.id === "number" && Number.isFinite(entry.message.id)) {
+        rowids.push(entry.message.id);
+      }
+    }
+    return rowids;
+  }
+
+  function holdRecoveryCursorBeforeFailedRows(
+    entries: readonly { message: Pick<IMessagePayload, "id"> }[],
+  ): void {
+    if (catchupCfg.enabled || recoveryCursorRowid === null) {
+      return;
+    }
+    if (recoveryBoundaryRowid === null) {
+      return;
+    }
+    const failedReplayRowids = collectFiniteRowids(entries).filter(
+      (rowid) => rowid <= recoveryBoundaryRowid,
+    );
+    if (failedReplayRowids.length === 0) {
+      return;
+    }
+
+    const firstFailedRowid = Math.min(...failedReplayRowids);
+    for (const rowid of failedReplayRowids) {
+      pendingRecoveryReplayRowids.delete(rowid);
+    }
+    recoveryCursorHoldBeforeRowid =
+      recoveryCursorHoldBeforeRowid === null
+        ? firstFailedRowid
+        : Math.min(recoveryCursorHoldBeforeRowid, firstFailedRowid);
+  }
+
+  function trackPendingRecoveryReplayRow(message: Pick<IMessagePayload, "id">): void {
+    if (catchupCfg.enabled || recoveryCursorRowid === null || recoveryBoundaryRowid === null) {
+      return;
+    }
+    if (
+      typeof message.id === "number" &&
+      Number.isFinite(message.id) &&
+      message.id <= recoveryBoundaryRowid
+    ) {
+      pendingRecoveryReplayRowids.add(message.id);
+    }
+  }
+
+  function minSetValue(values: ReadonlySet<number>): number | null {
+    let min: number | null = null;
+    for (const value of values) {
+      min = min === null ? value : Math.min(min, value);
+    }
+    return min;
+  }
+
+  function resolveRecoveryCursorHoldFloor(): number | null {
+    const pendingFloor = minSetValue(pendingRecoveryReplayRowids);
+    if (pendingFloor === null) {
+      return recoveryCursorHoldBeforeRowid;
+    }
+    if (recoveryCursorHoldBeforeRowid === null) {
+      return pendingFloor;
+    }
+    return Math.min(pendingFloor, recoveryCursorHoldBeforeRowid);
+  }
+
+  function advanceRecoveryCursorAfterHandled(
+    entries: readonly { message: Pick<IMessagePayload, "id"> }[],
+  ): void {
+    if (catchupCfg.enabled) {
+      return;
+    }
+    const rowids = collectFiniteRowids(entries);
+    if (rowids.length === 0) {
+      return;
+    }
+    for (const rowid of rowids) {
+      pendingRecoveryReplayRowids.delete(rowid);
+      handledRecoveryCursorRowids.add(rowid);
+    }
+
+    const maxHandledRowid = Math.max(...handledRecoveryCursorRowids);
+    const holdFloor = resolveRecoveryCursorHoldFloor();
+    const nextCursorRowid =
+      holdFloor !== null && maxHandledRowid >= holdFloor ? holdFloor - 1 : maxHandledRowid;
+
+    if (nextCursorRowid >= 0 && nextCursorRowid > latestAdvancedRecoveryCursorRowid) {
+      advanceIMessageRecoveryCursor(accountInfo.accountId, nextCursorRowid);
+      latestAdvancedRecoveryCursorRowid = nextCursorRowid;
+      for (const rowid of handledRecoveryCursorRowids) {
+        if (rowid <= nextCursorRowid) {
+          handledRecoveryCursorRowids.delete(rowid);
+        }
+      }
+    }
+  }
 
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<{
     message: IMessagePayload;
@@ -492,25 +597,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             accountId: accountInfo.accountId,
             keys,
           });
-          // Advance the recovery cursor past every handled row, but never past a
-          // row that failed this session (recoveryHeldFloorRowid) so a held
-          // failure is still replayed next startup. Dedupe backstops imprecision.
-          let maxRowid = -Infinity;
-          for (const entry of unitEntries) {
-            if (typeof entry.message.id === "number" && Number.isFinite(entry.message.id)) {
-              maxRowid = Math.max(maxRowid, entry.message.id);
-            }
-          }
-          const advanceTo = Math.min(maxRowid, recoveryHeldFloorRowid - 1);
-          if (Number.isFinite(advanceTo)) {
-            advanceIMessageRecoveryCursor(accountInfo.accountId, advanceTo);
-          }
+          advanceRecoveryCursorAfterHandled(unitEntries);
         } catch (err) {
-          for (const entry of unitEntries) {
-            if (typeof entry.message.id === "number" && Number.isFinite(entry.message.id)) {
-              recoveryHeldFloorRowid = Math.min(recoveryHeldFloorRowid, entry.message.id);
-            }
-          }
+          holdRecoveryCursorBeforeFailedRows(unitEntries);
           releaseIMessageInboundReplay({
             guard: inboundReplayGuard,
             accountId: accountInfo.accountId,
@@ -550,6 +639,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
   let client: IMessageRpcClient | undefined;
   let detachAbortHandler = () => {};
+  let liveCatchupCursorAdvanceEnabled = false;
+  let startupCatchupInProgress = false;
+  const pendingLiveCatchupCursorAdvances: Array<{ lastSeenMs: number; lastSeenRowid: number }> = [];
   const getActiveClient = () => {
     if (!client) {
       throw new Error("imessage monitor client not initialized");
@@ -567,8 +659,72 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
   }
 
-  async function handleMessageNow(message: IMessagePayload) {
+  function resolveLiveCatchupCursor(
+    message: IMessagePayload,
+  ): { lastSeenMs: number; lastSeenRowid: number } | null {
+    const coalescedCursor = (
+      message as {
+        coalescedCatchupCursor?: { lastSeenMs?: unknown; lastSeenRowid?: unknown };
+      }
+    ).coalescedCatchupCursor;
+    const rowid =
+      typeof coalescedCursor?.lastSeenRowid === "number" &&
+      Number.isFinite(coalescedCursor.lastSeenRowid)
+        ? coalescedCursor.lastSeenRowid
+        : typeof message.id === "number" && Number.isFinite(message.id)
+          ? message.id
+          : null;
+    const dateMs =
+      typeof coalescedCursor?.lastSeenMs === "number" && Number.isFinite(coalescedCursor.lastSeenMs)
+        ? coalescedCursor.lastSeenMs
+        : typeof message.created_at === "string"
+          ? Date.parse(message.created_at)
+          : Number.NaN;
+    if (rowid === null || !Number.isFinite(dateMs)) {
+      return null;
+    }
+    return { lastSeenMs: dateMs, lastSeenRowid: rowid };
+  }
+
+  async function maybeAdvanceLiveCatchupCursor(message: IMessagePayload): Promise<void> {
+    if (!catchupCfg.enabled) {
+      return;
+    }
+    const cursor = resolveLiveCatchupCursor(message);
+    if (!cursor) {
+      return;
+    }
+    if (!liveCatchupCursorAdvanceEnabled) {
+      if (startupCatchupInProgress) {
+        pendingLiveCatchupCursorAdvances.push(cursor);
+      }
+      return;
+    }
+    try {
+      await advanceIMessageCatchupCursor(accountInfo.accountId, cursor, catchupCfg);
+    } catch (err) {
+      runtime.error?.(`imessage catchup: failed to advance live cursor: ${String(err)}`);
+    }
+  }
+
+  async function flushPendingLiveCatchupCursorAdvances(): Promise<void> {
+    for (const cursor of pendingLiveCatchupCursorAdvances.splice(0)) {
+      try {
+        await advanceIMessageCatchupCursor(accountInfo.accountId, cursor, catchupCfg);
+      } catch (err) {
+        runtime.error?.(`imessage catchup: failed to advance pending live cursor: ${String(err)}`);
+      }
+    }
+  }
+
+  async function handleMessageNow(
+    message: IMessagePayload,
+    options: { advanceCatchupCursor?: boolean } = {},
+  ) {
     await handleMessageNowInner(message);
+    if (options.advanceCatchupCursor !== false) {
+      await maybeAdvanceLiveCatchupCursor(message);
+    }
   }
 
   async function handleMessageNowInner(rawMessage: IMessagePayload) {
@@ -1094,6 +1250,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     //    fresh rowid) appears.
     // Logged at default level so suppressed traffic is never silent (#89237).
     const isRecoveryReplay =
+      recoveryCursorRowid !== null &&
       recoveryBoundaryRowid !== null &&
       typeof message.id === "number" &&
       message.id <= recoveryBoundaryRowid;
@@ -1149,6 +1306,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       );
       return;
     }
+    trackPendingRecoveryReplayRow(repairedMessage);
     await inboundDebouncer.enqueue({ message: repairedMessage, replayKey: replay.key });
   };
 
@@ -1325,6 +1483,35 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     void pollApprovalReactions(true);
   }, APPROVAL_REACTION_DISCOVERY_INTERVAL_MS);
   void pollApprovalReactions(true);
+
+  // Legacy opt-in catchup remains the compatibility path for users who
+  // explicitly enabled it, including remote SSH setups where the gateway
+  // cannot read chat.db for the always-on local startup cursor.
+  if (catchupCfg.enabled && !abort?.aborted) {
+    startupCatchupInProgress = true;
+    try {
+      const catchupSummary = await runIMessageCatchup({
+        client: activeClient,
+        accountId: accountInfo.accountId,
+        config: catchupCfg,
+        includeAttachments,
+        dispatchPayload: (message) => handleMessageNow(message, { advanceCatchupCursor: false }),
+        runtime,
+      });
+      liveCatchupCursorAdvanceEnabled =
+        catchupSummary.querySucceeded && catchupSummary.fullyCaughtUp;
+      if (liveCatchupCursorAdvanceEnabled) {
+        await flushPendingLiveCatchupCursorAdvances();
+      } else {
+        pendingLiveCatchupCursorAdvances.length = 0;
+      }
+    } catch (err) {
+      pendingLiveCatchupCursorAdvances.length = 0;
+      runtime.error?.(`imessage catchup: pass failed: ${String(err)}`);
+    } finally {
+      startupCatchupInProgress = false;
+    }
+  }
 
   try {
     await activeClient.waitForClose();

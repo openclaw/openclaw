@@ -68,59 +68,14 @@ type AllowedValuesCollection = {
 };
 type JsonSchemaLike = Record<string, unknown>;
 
-// Drop the retired `channels.imessage.catchup` block (and its per-account
-// copies) before strict validation so an existing config that still carries it
-// loads instead of hard-failing. `openclaw doctor --fix` removes it from disk.
-function stripDeprecatedIMessageCatchup(raw: unknown): unknown {
-  if (!isRecord(raw) || !isRecord(raw.channels) || !isRecord(raw.channels.imessage)) {
-    return raw;
-  }
-  const imessage = raw.channels.imessage;
-  const stripAccountCatchup = (accounts: unknown): unknown => {
-    if (!isRecord(accounts)) {
-      return accounts;
-    }
-    let changed = false;
-    const nextAccounts: Record<string, unknown> = { ...accounts };
-    for (const [id, account] of Object.entries(accounts)) {
-      if (isRecord(account) && Object.hasOwn(account, "catchup")) {
-        const nextAccount = { ...account };
-        delete nextAccount.catchup;
-        nextAccounts[id] = nextAccount;
-        changed = true;
-      }
-    }
-    return changed ? nextAccounts : accounts;
-  };
-  const nextAccounts = stripAccountCatchup(imessage.accounts);
-  const hasTopCatchup = Object.hasOwn(imessage, "catchup");
-  if (!hasTopCatchup && nextAccounts === imessage.accounts) {
-    return raw;
-  }
-  const nextImessage = { ...imessage };
-  delete nextImessage.catchup;
-  if (nextAccounts !== imessage.accounts) {
-    nextImessage.accounts = nextAccounts;
-  }
-  return {
-    ...raw,
-    channels: { ...raw.channels, imessage: nextImessage },
-  };
-}
-
 function stripDeprecatedValidationKeys(raw: unknown): unknown {
-  const withoutCatchup = stripDeprecatedIMessageCatchup(raw);
-  if (
-    !isRecord(withoutCatchup) ||
-    !isRecord(withoutCatchup.commands) ||
-    !Object.hasOwn(withoutCatchup.commands, "modelsWrite")
-  ) {
-    return withoutCatchup;
+  if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
+    return raw;
   }
-  const commands = { ...withoutCatchup.commands };
+  const commands = { ...raw.commands };
   delete commands.modelsWrite;
   return {
-    ...withoutCatchup,
+    ...raw,
     commands,
   };
 }

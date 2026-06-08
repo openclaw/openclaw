@@ -5,20 +5,23 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
-// `channels.imessage.catchup` was retired: iMessage now recovers messages
-// missed during downtime automatically (since_rowid replay on the always-on
-// inbound dedupe), so the opt-in catchup replay subsystem and its config no
-// longer exist. Detect the stale key so doctor reports it, and strip it in
-// normalizeCompatibilityConfig so `openclaw doctor --fix` removes it from disk.
+// Disabled `channels.imessage.catchup` blocks are retired. Enabled blocks stay
+// as a compatibility contract: older configs that opted into replay still get
+// downtime recovery, while new/default installs use the always-on recovery
+// cursor plus stale-backlog fence.
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function imessageEntryHasCatchup(entry: unknown): boolean {
+function isEnabledCatchup(value: unknown): boolean {
+  return isRecord(value) && value.enabled === true;
+}
+
+function imessageEntryHasRetiredCatchup(entry: unknown): boolean {
   if (!isRecord(entry)) {
     return false;
   }
-  if (Object.hasOwn(entry, "catchup")) {
+  if (Object.hasOwn(entry, "catchup") && !isEnabledCatchup(entry.catchup)) {
     return true;
   }
   const accounts = entry.accounts;
@@ -26,7 +29,8 @@ function imessageEntryHasCatchup(entry: unknown): boolean {
     return false;
   }
   return Object.values(accounts).some(
-    (account) => isRecord(account) && Object.hasOwn(account, "catchup"),
+    (account) =>
+      isRecord(account) && Object.hasOwn(account, "catchup") && !isEnabledCatchup(account.catchup),
   );
 }
 
@@ -34,9 +38,9 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "imessage"],
     message:
-      "channels.imessage.catchup is retired; iMessage now recovers missed messages automatically (no config). " +
-      'Run "openclaw doctor --fix" to remove the stale key.',
-    match: (value) => imessageEntryHasCatchup(value),
+      "disabled channels.imessage.catchup config is retired; iMessage now recovers via always-on inbound dedupe and a stale-backlog age fence. " +
+      'Run "openclaw doctor --fix" to remove disabled catchup blocks.',
+    match: (value) => imessageEntryHasRetiredCatchup(value),
   },
 ];
 
@@ -47,25 +51,29 @@ export function normalizeCompatibilityConfig({
 }): ChannelDoctorConfigMutation {
   const channels = cfg.channels as Record<string, unknown> | undefined;
   const imessage = channels?.imessage;
-  if (!imessageEntryHasCatchup(imessage) || !isRecord(imessage)) {
+  if (!imessageEntryHasRetiredCatchup(imessage) || !isRecord(imessage)) {
     return { config: cfg, changes: [] };
   }
   const changes: string[] = [];
   const nextImessage: Record<string, unknown> = { ...imessage };
-  if (Object.hasOwn(nextImessage, "catchup")) {
+  if (Object.hasOwn(nextImessage, "catchup") && !isEnabledCatchup(nextImessage.catchup)) {
     delete nextImessage.catchup;
-    changes.push("Removed retired channels.imessage.catchup.");
+    changes.push("Removed disabled retired channels.imessage.catchup.");
   }
   if (isRecord(nextImessage.accounts)) {
     let accountsChanged = false;
     const nextAccounts: Record<string, unknown> = { ...nextImessage.accounts };
     for (const [id, account] of Object.entries(nextImessage.accounts)) {
-      if (isRecord(account) && Object.hasOwn(account, "catchup")) {
+      if (
+        isRecord(account) &&
+        Object.hasOwn(account, "catchup") &&
+        !isEnabledCatchup(account.catchup)
+      ) {
         const nextAccount = { ...account };
         delete nextAccount.catchup;
         nextAccounts[id] = nextAccount;
         accountsChanged = true;
-        changes.push(`Removed retired channels.imessage.accounts.${id}.catchup.`);
+        changes.push(`Removed disabled retired channels.imessage.accounts.${id}.catchup.`);
       }
     }
     if (accountsChanged) {

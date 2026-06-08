@@ -57,6 +57,12 @@ describe("iMessage recovery cursor", () => {
     expect(loadIMessageRecoveryCursor("default")).toBe(4321);
   });
 
+  it("can skip legacy catchup cursor migration when compatibility catchup still owns it", () => {
+    writeLegacyCatchupCursor("default", 4321);
+    expect(loadIMessageRecoveryCursor("default", { migrateLegacyCatchup: false })).toBeNull();
+    expect(loadIMessageRecoveryCursor("default")).toBe(4321);
+  });
+
   it("prefers an existing recovery cursor over the legacy catchup cursor", () => {
     advanceIMessageRecoveryCursor("default", 9000);
     writeLegacyCatchupCursor("default", 10);

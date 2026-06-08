@@ -638,6 +638,61 @@ describe("iMessage monitor last-route updates", () => {
     );
   });
 
+  it("preserves enabled legacy catchup as the startup replay path", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-catchup-window-"));
+    tempDirs.push(stateDir);
+    const dbPath = path.join(stateDir, "chat.db");
+    const { DatabaseSync } = await import("node:sqlite");
+    const database = new DatabaseSync(dbPath);
+    try {
+      database.exec("CREATE TABLE message (text TEXT);");
+      database.prepare("INSERT INTO message(rowid, text) VALUES (?, ?)").run(5000, "boundary");
+    } finally {
+      database.close();
+    }
+    const client = {
+      request: vi.fn(async (method: string) => {
+        if (method === "watch.subscribe") {
+          return { subscription: 1 };
+        }
+        if (method === "chats.list") {
+          return { chats: [] };
+        }
+        throw new Error(`unexpected request ${method}`);
+      }),
+      waitForClose: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async () => client as never);
+
+    await monitorIMessageProvider({
+      config: {
+        channels: {
+          imessage: {
+            dbPath,
+            catchup: { enabled: true, perRunLimit: 25, maxAgeMinutes: 60 },
+            dmPolicy: "allowlist",
+            allowFrom: ["+15550001111"],
+          },
+        },
+        messages: { inbound: { debounceMs: 0 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      { attachments: false, include_reactions: true },
+      { timeoutMs: 10_000 },
+    );
+    expect(client.request).toHaveBeenCalledWith(
+      "chats.list",
+      { limit: 200 },
+      { timeoutMs: 30_000 },
+    );
+  });
+
   it("recovers downtime messages: replays from the cursor and delivers replay rows older than the live fence", async () => {
     advanceIMessageRecoveryCursor("default", 4990);
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-recovery-"));
@@ -726,6 +781,71 @@ describe("iMessage monitor last-route updates", () => {
     });
   });
 
+  it("does not treat startup-boundary rows as recovery replay without a prior cursor", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-first-run-boundary-"));
+    tempDirs.push(stateDir);
+    const dbPath = path.join(stateDir, "chat.db");
+    const { DatabaseSync } = await import("node:sqlite");
+    const database = new DatabaseSync(dbPath);
+    try {
+      database.exec("CREATE TABLE message (text TEXT);");
+      database.prepare("INSERT INTO message(rowid, text) VALUES (?, ?)").run(5000, "boundary");
+    } finally {
+      database.close();
+    }
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    const client = {
+      request: vi.fn(async () => ({ subscription: 1 })),
+      waitForClose: vi.fn(async () => {
+        onNotification?.({
+          method: "message",
+          params: {
+            message: {
+              id: 4995,
+              guid: "FIRST-RUN-HISTORY-GUID-4995",
+              chat_id: 123,
+              sender: "+15550001111",
+              is_from_me: false,
+              text: "already existed before first monitor start",
+              is_group: false,
+              created_at: thirtyMinAgo,
+            },
+          },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (!params?.onNotification) {
+        throw new Error("expected iMessage notification handler");
+      }
+      onNotification = params.onNotification;
+      return client as never;
+    });
+
+    await monitorIMessageProvider({
+      config: {
+        channels: { imessage: { dbPath, dmPolicy: "allowlist", allowFrom: ["+15550001111"] } },
+        messages: { inbound: { debounceMs: 0 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      { attachments: false, include_reactions: true, since_rowid: 5000 },
+      { timeoutMs: 10_000 },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
   it("records a suppressed live row so a later replay of the same row is deduped, not delivered", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-suppress-record-"));
     tempDirs.push(stateDir);
@@ -805,9 +925,10 @@ describe("iMessage monitor last-route updates", () => {
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 
-  it("holds the recovery cursor below a failed replay row so it is replayed next startup", async () => {
+  it("does not advance the recovery cursor past a failed replay row", async () => {
     advanceIMessageRecoveryCursor("default", 4990);
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-floor-"));
+    debouncerControl.holdEntries = true;
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-recovery-failed-"));
     tempDirs.push(stateDir);
     const dbPath = path.join(stateDir, "chat.db");
     const { DatabaseSync } = await import("node:sqlite");
@@ -818,11 +939,10 @@ describe("iMessage monitor last-route updates", () => {
     } finally {
       database.close();
     }
-    // Row 4995 fails dispatch; row 4996 succeeds. Both are recovery replay rows.
-    dispatchInboundMessageMock.mockImplementationOnce(async () => {
-      throw new Error("transient dispatch failure");
-    });
-    const fresh = new Date().toISOString();
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    dispatchInboundMessageMock
+      .mockRejectedValueOnce(new Error("dispatch failed"))
+      .mockResolvedValue({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
 
     let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
     const client = {
@@ -834,19 +954,18 @@ describe("iMessage monitor last-route updates", () => {
             params: {
               message: {
                 id,
-                guid: `FLOOR-GUID-${id}`,
+                guid: `FAILED-REPLAY-GUID-${id}`,
                 chat_id: 123,
                 sender: "+15550001111",
                 is_from_me: false,
-                text: `row ${id}`,
+                text: `missed during downtime ${id}`,
                 is_group: false,
-                created_at: fresh,
+                balloon_bundle_id: "com.apple.messages.Handwriting",
+                created_at: thirtyMinAgo,
               },
             },
           });
         }
-        await Promise.resolve();
-        await Promise.resolve();
       }),
       stop: vi.fn(async () => {}),
     };
@@ -867,11 +986,88 @@ describe("iMessage monitor last-route updates", () => {
       runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
     });
 
-    // 4995 failed, 4996 succeeded; the cursor must stay below 4995 (held at
-    // 4994) so the failed row is replayed on the next startup.
+    expect(client.request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      { attachments: false, include_reactions: true, since_rowid: 4990 },
+      { timeoutMs: 10_000 },
+    );
     await vi.waitFor(() => {
-      expect(loadIMessageRecoveryCursor("default")).toBe(4994);
+      expect(debouncerControl.entries).toHaveLength(2);
     });
+    await debouncerControl.flush?.();
+    await vi.waitFor(() => {
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+    });
+    expect(loadIMessageRecoveryCursor("default")).toBe(4994);
+  });
+
+  it("advances the recovery cursor after lower pending replay rows complete", async () => {
+    advanceIMessageRecoveryCursor("default", 4990);
+    debouncerControl.holdEntries = true;
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-recovery-ordered-"));
+    tempDirs.push(stateDir);
+    const dbPath = path.join(stateDir, "chat.db");
+    const { DatabaseSync } = await import("node:sqlite");
+    const database = new DatabaseSync(dbPath);
+    try {
+      database.exec("CREATE TABLE message (text TEXT);");
+      database.prepare("INSERT INTO message(rowid, text) VALUES (?, ?)").run(5000, "boundary");
+    } finally {
+      database.close();
+    }
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    const client = {
+      request: vi.fn(async () => ({ subscription: 1 })),
+      waitForClose: vi.fn(async () => {
+        for (const id of [4995, 4996]) {
+          onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                id,
+                guid: `OUT-OF-ORDER-REPLAY-GUID-${id}`,
+                chat_id: 123,
+                sender: "+15550001111",
+                is_from_me: false,
+                text: `missed during downtime ${id}`,
+                is_group: false,
+                balloon_bundle_id: "com.apple.messages.Handwriting",
+                created_at: thirtyMinAgo,
+              },
+            },
+          });
+        }
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (!params?.onNotification) {
+        throw new Error("expected iMessage notification handler");
+      }
+      onNotification = params.onNotification;
+      return client as never;
+    });
+
+    await monitorIMessageProvider({
+      config: {
+        channels: { imessage: { dbPath, dmPolicy: "allowlist", allowFrom: ["+15550001111"] } },
+        messages: { inbound: { debounceMs: 0 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    await vi.waitFor(() => {
+      expect(debouncerControl.entries).toHaveLength(2);
+    });
+    debouncerControl.entries.reverse();
+    await debouncerControl.flush?.();
+    await vi.waitFor(() => {
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+    });
+    expect(loadIMessageRecoveryCursor("default")).toBe(4996);
   });
 
   it("repairs anchorless group watch payloads before routing or cursor updates", async () => {
