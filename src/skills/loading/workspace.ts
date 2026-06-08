@@ -1274,6 +1274,44 @@ export function formatSkillsCompact(skills: Skill[]): string {
   return lines.join("\n");
 }
 
+/**
+ * Workspace-specific skill formatter with per-skill version for change detection.
+ * Adds <version> element per skill when mtimeMs is available.
+ * Separate from SDK formatter to preserve byte-for-byte alignment contract.
+ */
+function formatSkillsWithVersion(skills: Skill[], compact: boolean): string {
+  if (skills.length === 0) {
+    return "";
+  }
+  const lines = [
+    "\n\nThe following skills provide specialized instructions for specific tasks.",
+    compact
+      ? "Use the read tool to load a skill's file when the task matches its name."
+      : "Use the read tool to load a skill's file when the task matches its description.",
+    "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
+    "",
+    "<available_skills>",
+  ];
+  for (const skill of skills) {
+    lines.push("  <skill>");
+    lines.push(`    <name>${escapeXml(skill.name)}</name>`);
+    if (!compact) {
+      lines.push(`    <description>${escapeXml(skill.description)}</description>`);
+    }
+    lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+    if (skill.mtimeMs !== undefined) {
+      lines.push(`    <version>${Math.floor(skill.mtimeMs)}</version>`);
+    }
+    lines.push("  </skill>");
+  }
+  lines.push("</available_skills>");
+  return lines.join("\n");
+}
+
+/** Guidance for version change detection. */
+const VERSION_GUIDANCE =
+  "When a skill's version differs from a previous turn, that skill has been updated. Re-read its SKILL.md before executing it.";
+
 // Budget reserved for the compact-mode warning line prepended by the caller.
 const COMPACT_WARNING_OVERHEAD = 150;
 
@@ -1421,11 +1459,9 @@ function resolveWorkspaceSkillPromptState(
     : compact
       ? `⚠️ Skills catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.`
       : "";
-  const prompt = [
-    remoteNote,
-    truncationNote,
-    compact ? formatSkillsCompact(skillsForPrompt) : formatSkillsForPrompt(skillsForPrompt),
-  ]
+  // Use workspace-specific formatter with per-skill version for change detection
+  const skillPrompt = formatSkillsWithVersion(skillsForPrompt, compact);
+  const prompt = [remoteNote, truncationNote, skillPrompt, VERSION_GUIDANCE]
     .filter(Boolean)
     .join("\n");
   return { eligible, prompt, resolvedSkills };

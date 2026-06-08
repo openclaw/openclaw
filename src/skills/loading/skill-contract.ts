@@ -13,6 +13,8 @@ export interface Skill {
   disableModelInvocation: boolean;
   // Preserve legacy source reads while keeping the canonical upstream shape.
   source: string;
+  /** SKILL.md file modification timestamp (ms) for per-skill change detection. */
+  mtimeMs?: number;
 }
 
 export function createSyntheticSourceInfo(

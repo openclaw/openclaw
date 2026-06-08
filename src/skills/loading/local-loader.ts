@@ -67,6 +67,14 @@ function loadSingleSkillDirectory(params: {
   const filePath = path.resolve(skillFilePath);
   const baseDir = path.resolve(params.skillDir);
 
+  // Get mtimeMs for per-skill change detection
+  let mtimeMs: number | undefined;
+  try {
+    mtimeMs = fs.statSync(filePath).mtimeMs;
+  } catch {
+    // Ignore stat errors; mtimeMs will be undefined
+  }
+
   return {
     skill: {
       name,
@@ -81,6 +89,7 @@ function loadSingleSkillDirectory(params: {
         origin: "top-level",
       }),
       disableModelInvocation: invocation.disableModelInvocation,
+      mtimeMs,
     },
     frontmatter,
   };

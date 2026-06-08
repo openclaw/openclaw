@@ -311,3 +311,55 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     }
   });
 });
+
+describe("per-skill version for change detection", () => {
+  it("includes version element when skill has mtimeMs", () => {
+    const skill = createCanonicalFixtureSkill({
+      name: "weather",
+      description: "Get weather data",
+      filePath: "/skills/weather/SKILL.md",
+      baseDir: "/skills/weather",
+      source: "workspace",
+      mtimeMs: 1749300250123,
+    });
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries: [makeEntry(skill)],
+    });
+    expect(prompt).toContain("<version>1749300250</version>");
+    expect(prompt).toContain("version differs from a previous turn");
+  });
+
+  it("omits version when skill has no mtimeMs", () => {
+    const skill = makeSkill("weather", "Get weather data");
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries: [makeEntry(skill)],
+    });
+    expect(prompt).not.toContain("<version>");
+  });
+
+  it("version guidance is always included", () => {
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries: [makeEntry(makeSkill("weather"))],
+    });
+    expect(prompt).toContain("Re-read its SKILL.md before executing");
+  });
+
+  it("compact format also includes version when mtimeMs present", () => {
+    const skill = createCanonicalFixtureSkill({
+      name: "weather",
+      description: "Get weather data",
+      filePath: "/skills/weather/SKILL.md",
+      baseDir: "/skills/weather",
+      source: "workspace",
+      mtimeMs: 1749300250123,
+    });
+    // Force compact format via low char limit
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries: [makeEntry(skill)],
+      config: { skills: { limits: { maxSkillsPromptChars: 200 } } } satisfies OpenClawConfig,
+    });
+    expect(prompt).toContain("<version>1749300250</version>");
+    // Compact format omits description
+    expect(prompt).not.toContain("Get weather data");
+  });
+});
