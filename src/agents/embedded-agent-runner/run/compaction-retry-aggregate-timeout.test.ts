@@ -2,12 +2,9 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
-  emitTrustedDiagnosticEvent,
-  waitForDiagnosticEventsDrained,
-} from "../../../infra/diagnostic-events.js";
-import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunStarted,
+  markDiagnosticRunProgress,
 } from "../../../logging/diagnostic-run-activity.js";
 import { classifySessionAttention } from "../../../logging/diagnostic-session-attention.js";
 import { resetDiagnosticStateForTest } from "../../../logging/diagnostic.js";
@@ -140,24 +137,34 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
         aggregateTimeoutMs: 10,
         isCompactionStillInFlight: () => compactionInFlight,
         onHeartbeat: () => {
-          emitTrustedDiagnosticEvent({
-            type: "run.progress",
+          markDiagnosticRunProgress({
             runId: "run-heartbeat",
             sessionId,
             sessionKey,
             reason: "compaction_retry:active",
           });
-          resolveHeartbeat?.();
+          const resolve = resolveHeartbeat;
+          resolveHeartbeat = undefined;
+          resolve?.();
         },
       });
 
-      await Promise.race([
-        heartbeatSeen,
-        delay(1_000).then(() => {
-          throw new Error("timed out waiting for compaction retry heartbeat");
-        }),
-      ]);
-      await waitForDiagnosticEventsDrained();
+      let heartbeatTimeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          heartbeatSeen,
+          new Promise<never>((_, reject) => {
+            heartbeatTimeout = setTimeout(
+              () => reject(new Error("timed out waiting for compaction retry heartbeat")),
+              1_000,
+            );
+          }),
+        ]);
+      } finally {
+        if (heartbeatTimeout !== undefined) {
+          clearTimeout(heartbeatTimeout);
+        }
+      }
       const activity = getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }, now);
 
       expect(activity.activeWorkKind).toBe("embedded_run");
