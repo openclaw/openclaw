@@ -1061,6 +1061,7 @@ export function createSubagentRegistryLifecycleController(params: {
         spawnMode: pendingPayload.spawnMode,
         expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
         wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
+        requesterPausedForYield: entry.completedFromYieldPause === true,
         onDeliveryResult: (delivery) => {
           recordAnnounceDeliveryResult(entry, delivery);
           if (delivery.delivered) {
@@ -1193,7 +1194,11 @@ export function createSubagentRegistryLifecycleController(params: {
       entry.endedReason = completionReason;
       mutated = true;
     }
-    if (entry.pauseReason !== undefined) {
+    if (entry.pauseReason === "sessions_yield") {
+      entry.completedFromYieldPause = true;
+      entry.pauseReason = undefined;
+      mutated = true;
+    } else if (entry.pauseReason !== undefined) {
       entry.pauseReason = undefined;
       mutated = true;
     }

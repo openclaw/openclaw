@@ -555,4 +555,25 @@ describe("subagent announce seam flow", () => {
     );
     logSpy.mockRestore();
   });
+
+  it("skips announce agent for sessions_yield completions and returns true (#90944)", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:child",
+      childRunId: "run-yield-complete",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "yield task",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      expectsCompletionMessage: true,
+      requesterPausedForYield: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).not.toHaveBeenCalled();
+  });
 });

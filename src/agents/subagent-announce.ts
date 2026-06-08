@@ -254,6 +254,7 @@ export async function runSubagentAnnounceFlow(params: {
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
+  requesterPausedForYield?: boolean;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
@@ -306,6 +307,10 @@ export async function runSubagentAnnounceFlow(params: {
       !failedTerminalOutcome || (!params.roundOneReply && !params.fallbackReply);
     if (failedTerminalOutcome) {
       reply = undefined;
+    }
+    // sessions_yield resume turn handles delivery — don't run the announce agent.
+    if (params.requesterPausedForYield) {
+      return true;
     }
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
     const requesterIsInternalSession = () =>

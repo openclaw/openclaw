@@ -547,6 +547,31 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
+  it("passes requesterPausedForYield=true to announce flow when run had sessions_yield pause (#90944)", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+      pauseReason: "sessions_yield",
+    });
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+
+    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: true,
+    });
+
+    expectFields(firstCallArg(runSubagentAnnounceFlow), {
+      requesterPausedForYield: true,
+    });
+    expect(entry.pauseReason).toBeUndefined();
+    expect(entry.completedFromYieldPause).toBe(true);
+  });
+
   it("records completion announcement timestamps from transcript delivery", async () => {
     const persist = vi.fn();
     const entry = createRunEntry({
