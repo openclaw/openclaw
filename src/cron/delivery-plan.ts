@@ -126,6 +126,12 @@ export type CronFailureDeliveryPlan = {
   accountId?: string;
 };
 
+/** Failure destination resolution plus why an explicit destination was not returned. */
+export type CronFailureDestinationResolution = {
+  plan: CronFailureDeliveryPlan | null;
+  dedupedToPrimaryTarget: boolean;
+};
+
 /** Job-level failure destination override fields before global defaults are merged. */
 export type CronFailureDestinationInput = {
   channel?: CronMessageChannel;
@@ -143,10 +149,10 @@ function normalizeFailureMode(value: unknown): "announce" | "webhook" | undefine
 }
 
 /** Resolves job-level failure notification routing layered over global defaults. */
-export function resolveFailureDestination(
+export function resolveFailureDestinationResolution(
   job: CronJob,
   globalConfig?: CronFailureDestinationConfig,
-): CronFailureDeliveryPlan | null {
+): CronFailureDestinationResolution {
   const delivery = job.delivery;
   const jobFailureDest = delivery?.failureDestination as CronFailureDestinationInput | undefined;
   const hasJobFailureDest = jobFailureDest && typeof jobFailureDest === "object";
@@ -196,13 +202,13 @@ export function resolveFailureDestination(
   }
 
   if (!channel && !to && !accountId && !mode) {
-    return null;
+    return { plan: null, dedupedToPrimaryTarget: false };
   }
 
   const resolvedMode = mode ?? "announce";
   if (resolvedMode === "webhook" && !to) {
     // Webhook failure destinations are only useful with a concrete URL/target.
-    return null;
+    return { plan: null, dedupedToPrimaryTarget: false };
   }
 
   const result: CronFailureDeliveryPlan = {
@@ -214,10 +220,18 @@ export function resolveFailureDestination(
 
   if (delivery && isSameDeliveryTarget(delivery, result)) {
     // Avoid sending the same failure text through the primary delivery route twice.
-    return null;
+    return { plan: null, dedupedToPrimaryTarget: true };
   }
 
-  return result;
+  return { plan: result, dedupedToPrimaryTarget: false };
+}
+
+/** Resolves job-level failure notification routing layered over global defaults. */
+export function resolveFailureDestination(
+  job: CronJob,
+  globalConfig?: CronFailureDestinationConfig,
+): CronFailureDeliveryPlan | null {
+  return resolveFailureDestinationResolution(job, globalConfig).plan;
 }
 
 function isSameDeliveryTarget(

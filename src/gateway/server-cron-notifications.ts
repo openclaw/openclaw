@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveCronDeliveryPlan,
   resolveFailureDestination,
+  resolveFailureDestinationResolution,
   sendCronAnnouncePayloadStrict,
   sendFailureNotificationAnnounce,
 } from "../cron/delivery.js";
@@ -303,7 +304,11 @@ function dispatchCronFailureDestinationNotifications(params: {
   }
 
   const failureMessage = `Cron job "${params.job.name}" failed: ${params.evt.error ?? "unknown error"}`;
-  const failureDest = resolveFailureDestination(params.job, params.globalFailureDestination);
+  const failureDestinationResolution = resolveFailureDestinationResolution(
+    params.job,
+    params.globalFailureDestination,
+  );
+  const failureDest = failureDestinationResolution.plan;
   const deliverySessionKey = resolveCronDeliverySessionKey(params.job);
 
   if (failureDest) {
@@ -365,7 +370,10 @@ function dispatchCronFailureDestinationNotifications(params: {
     return;
   }
 
-  if (isToolExecutionStartedTimeoutError(params.evt.error)) {
+  if (
+    isToolExecutionStartedTimeoutError(params.evt.error) &&
+    !failureDestinationResolution.dedupedToPrimaryTarget
+  ) {
     return;
   }
 

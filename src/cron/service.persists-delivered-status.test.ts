@@ -8,6 +8,7 @@ import {
   createNoopLogger,
   installCronTestHooks,
 } from "./service.test-harness.js";
+import type { CronConfig } from "../config/types.cron.js";
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
@@ -33,6 +34,22 @@ function buildAnnounceIsolatedAgentTurnJob(name: string): CronAddInput {
   return {
     ...buildIsolatedAgentTurnJob(name),
     delivery: { mode: "announce", channel: "forum", to: "123" },
+  };
+}
+
+function buildAnnounceWithSameTargetFailureDestinationJob(name: string): CronAddInput {
+  return {
+    ...buildIsolatedAgentTurnJob(name),
+    delivery: {
+      mode: "announce",
+      channel: "forum",
+      to: "123",
+      failureDestination: {
+        mode: "announce",
+        channel: "forum",
+        to: "123",
+      },
+    },
   };
 }
 
@@ -94,6 +111,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
   status?: "ok" | "error";
   delivered?: boolean;
   error?: string;
+  cronConfig?: CronConfig;
   onFinished?: (evt: {
     jobId: string;
     delivered?: boolean;
@@ -109,6 +127,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
   const cron = new CronService({
     storePath: params.storePath,
     cronEnabled: true,
+    ...(params.cronConfig ? { cronConfig: params.cronConfig } : {}),
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
@@ -192,6 +211,7 @@ async function runIsolatedJobAndReadState(params: {
   status?: "ok" | "error";
   delivered?: boolean;
   error?: string;
+  cronConfig?: CronConfig;
   onFinished?: (evt: {
     jobId: string;
     delivered?: boolean;
@@ -210,6 +230,7 @@ async function runIsolatedJobAndReadState(params: {
     ...(params.status !== undefined ? { status: params.status } : {}),
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
     ...(params.error !== undefined ? { error: params.error } : {}),
+    ...(params.cronConfig !== undefined ? { cronConfig: params.cronConfig } : {}),
     onFinished: (evt) => {
       params.onFinished?.(evt);
       finishedEvents.get(evt.jobId)?.(evt);
@@ -388,6 +409,67 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("not-requested");
     expect(capturedEvent?.deliveryStatus).toBe("unknown");
     expect(capturedEvent?.failureNotificationDelivery).toBeUndefined();
+  });
+
+  it("preserves job-level same-target failure destination state for tool-execution-started timeouts", async () => {
+    let capturedEvent:
+      | {
+          deliveryStatus?: string;
+          failureNotificationDelivery?: {
+            status: string;
+          };
+        }
+      | undefined;
+    const updated = await runIsolatedJobAndReadState({
+      job: buildAnnounceWithSameTargetFailureDestinationJob("same-target-tool-execution-timeout"),
+      status: "error",
+      error: TOOL_EXECUTION_STARTED_TIMEOUT,
+      onFinished: (evt) => {
+        capturedEvent = evt;
+      },
+    });
+
+    expect(updated?.state.lastRunStatus).toBe("error");
+    expect(updated?.state.lastError).toBe(TOOL_EXECUTION_STARTED_TIMEOUT);
+    expect(updated?.state.lastDeliveryStatus).toBe("unknown");
+    expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
+    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("unknown");
+    expect(capturedEvent?.deliveryStatus).toBe("unknown");
+    expect(capturedEvent?.failureNotificationDelivery).toEqual({ status: "unknown" });
+  });
+
+  it("preserves global same-target failure destination state for tool-execution-started timeouts", async () => {
+    let capturedEvent:
+      | {
+          deliveryStatus?: string;
+          failureNotificationDelivery?: {
+            status: string;
+          };
+        }
+      | undefined;
+    const updated = await runIsolatedJobAndReadState({
+      job: buildAnnounceIsolatedAgentTurnJob("global-same-target-tool-execution-timeout"),
+      status: "error",
+      error: TOOL_EXECUTION_STARTED_TIMEOUT,
+      cronConfig: {
+        failureDestination: {
+          mode: "announce",
+          channel: "forum",
+          to: "123",
+        },
+      },
+      onFinished: (evt) => {
+        capturedEvent = evt;
+      },
+    });
+
+    expect(updated?.state.lastRunStatus).toBe("error");
+    expect(updated?.state.lastError).toBe(TOOL_EXECUTION_STARTED_TIMEOUT);
+    expect(updated?.state.lastDeliveryStatus).toBe("unknown");
+    expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
+    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("unknown");
+    expect(capturedEvent?.deliveryStatus).toBe("unknown");
+    expect(capturedEvent?.failureNotificationDelivery).toEqual({ status: "unknown" });
   });
 
   it("suppresses failure notification state for delivered tool-execution-started timeouts", async () => {

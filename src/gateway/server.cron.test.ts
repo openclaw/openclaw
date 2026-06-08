@@ -369,7 +369,7 @@ function expectFailureAnnounceCall(params: {
   jobId: string;
   channel: string;
   to?: string;
-  sessionKey: string;
+  sessionKey?: string;
   message: string;
 }) {
   expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledTimes(1);
@@ -1665,6 +1665,101 @@ describe("gateway server cron", () => {
         'Cron job "explicit failure destination timeout" failed: cron: job execution timed out (last phase: tool-execution-started)',
       );
       expect(sendFailureNotificationAnnounceMock).not.toHaveBeenCalled();
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  }, 45_000);
+
+  test("preserves job-level same-target failure destinations for tool-execution-started cron watchdog timeouts", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-tool-timeout-same-target-job-failure-destination-",
+      cronEnabled: false,
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "error",
+        error: TOOL_EXECUTION_STARTED_TIMEOUT,
+        summary: "timed out while tool call was pending",
+      });
+      const jobId = await addWebhookCronJob({
+        ws,
+        name: "same target failure destination timeout",
+        sessionTarget: "isolated",
+        delivery: {
+          mode: "announce",
+          channel: "matrix",
+          to: "!same-target:example.invalid",
+          failureDestination: {
+            mode: "announce",
+            channel: "matrix",
+            to: "!same-target:example.invalid",
+          },
+        },
+      });
+
+      await runCronJobAndWaitForFinished(ws, jobId);
+
+      expectFailureAnnounceCall({
+        jobId,
+        channel: "matrix",
+        to: "!same-target:example.invalid",
+        message:
+          '⚠️ Cron job "same target failure destination timeout" failed: cron: job execution timed out (last phase: tool-execution-started)',
+      });
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  }, 45_000);
+
+  test("preserves global same-target failure destinations for tool-execution-started cron watchdog timeouts", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-tool-timeout-same-target-global-failure-destination-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      cron: {
+        failureDestination: {
+          mode: "announce",
+          channel: "matrix",
+          to: "!same-target-global:example.invalid",
+        },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "error",
+        error: TOOL_EXECUTION_STARTED_TIMEOUT,
+        summary: "timed out while tool call was pending",
+      });
+      const jobId = await addWebhookCronJob({
+        ws,
+        name: "global same target failure destination timeout",
+        sessionTarget: "isolated",
+        delivery: {
+          mode: "announce",
+          channel: "matrix",
+          to: "!same-target-global:example.invalid",
+        },
+      });
+
+      await runCronJobAndWaitForFinished(ws, jobId);
+
+      expectFailureAnnounceCall({
+        jobId,
+        channel: "matrix",
+        to: "!same-target-global:example.invalid",
+        message:
+          '⚠️ Cron job "global same target failure destination timeout" failed: cron: job execution timed out (last phase: tool-execution-started)',
+      });
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }

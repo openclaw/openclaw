@@ -9,8 +9,10 @@ import { buildOutboundSessionContext } from "../infra/outbound/session-context.j
 import { getChildLogger } from "../logging.js";
 import {
   resolveFailureDestination,
+  resolveFailureDestinationResolution,
   type CronFailureDeliveryPlan,
   type CronFailureDestinationInput,
+  type CronFailureDestinationResolution,
   type CronDeliveryPlan,
   resolveCronDeliveryPlan,
 } from "./delivery-plan.js";
@@ -24,9 +26,11 @@ import type { CronMessageChannel } from "./types.js";
 export {
   resolveCronDeliveryPlan,
   resolveFailureDestination,
+  resolveFailureDestinationResolution,
   type CronDeliveryPlan,
   type CronFailureDeliveryPlan,
   type CronFailureDestinationInput,
+  type CronFailureDestinationResolution,
 };
 
 const FAILURE_NOTIFICATION_TIMEOUT_MS = 30_000;

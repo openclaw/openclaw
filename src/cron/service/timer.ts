@@ -16,7 +16,10 @@ import {
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
-import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
+import {
+  resolveCronDeliveryPlan,
+  resolveFailureDestinationResolution,
+} from "../delivery-plan.js";
 import { resolveCronExecutionRetryHint } from "../retry-hint.js";
 import {
   createCronRunDiagnosticsFromError,
@@ -316,13 +319,18 @@ function resolveDeliveryState(params: {
   const primaryDeliveryRequested = resolveCronDeliveryPlan(params.job).requested;
   // Failure destinations can receive alerts even when the primary delivery
   // path was disabled or failed before direct delivery produced an ack.
+  const failureDestinationResolution =
+    params.runStatus === "error" && params.job.delivery?.bestEffort !== true
+      ? resolveFailureDestinationResolution(params.job, params.globalFailureDestination)
+      : { plan: null, dedupedToPrimaryTarget: false };
   const alternateFailureNotificationRequested =
     params.runStatus === "error" &&
     params.job.delivery?.bestEffort !== true &&
-    resolveFailureDestination(params.job, params.globalFailureDestination) !== null;
+    failureDestinationResolution.plan !== null;
   const failureNotificationSuppressed =
     params.runStatus === "error" &&
     !alternateFailureNotificationRequested &&
+    !failureDestinationResolution.dedupedToPrimaryTarget &&
     isToolExecutionStartedTimeoutError(params.error);
   if (!primaryDeliveryRequested) {
     return {
