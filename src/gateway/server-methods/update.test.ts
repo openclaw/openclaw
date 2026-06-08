@@ -462,8 +462,19 @@ describe("update.run restart scheduling", () => {
   it("hands supervised git/dev updates to the CLI path instead of rebuilding live dist in-process", async () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     mockGitInstallSurface("/tmp/openclaw-git");
+    const previousLaunchdLabel = process.env.OPENCLAW_LAUNCHD_LABEL;
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
 
-    const payload = await captureUpdateRunPayload();
+    let payload: UpdateRunPayload | undefined;
+    try {
+      payload = await captureUpdateRunPayload();
+    } finally {
+      if (previousLaunchdLabel === undefined) {
+        delete process.env.OPENCLAW_LAUNCHD_LABEL;
+      } else {
+        process.env.OPENCLAW_LAUNCHD_LABEL = previousLaunchdLabel;
+      }
+    }
 
     expect(runGatewayUpdateMock).not.toHaveBeenCalled();
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
@@ -509,6 +520,45 @@ describe("update.run restart scheduling", () => {
     expect(payload?.result?.mode).toBe("git");
     expect(payload?.handoff).toBeUndefined();
     expect(readCapturedPayload().status).toBe("ok");
+  });
+
+  it("hands systemd-supervised git/dev updates to handoff from systemd markers", async () => {
+    const previousSystemdUnit = process.env.OPENCLAW_SYSTEMD_UNIT;
+    const previousInvocationId = process.env.INVOCATION_ID;
+    delete process.env.OPENCLAW_SYSTEMD_UNIT;
+    process.env.INVOCATION_ID = "8a77e69a8f604bf0b7984879b9f17a7c";
+    detectRespawnSupervisorMock.mockReturnValueOnce("systemd");
+    mockGitInstallSurface("/tmp/openclaw-git");
+
+    let payload: UpdateRunPayload | undefined;
+    try {
+      payload = await captureUpdateRunPayload();
+    } finally {
+      if (previousSystemdUnit === undefined) {
+        delete process.env.OPENCLAW_SYSTEMD_UNIT;
+      } else {
+        process.env.OPENCLAW_SYSTEMD_UNIT = previousSystemdUnit;
+      }
+      if (previousInvocationId === undefined) {
+        delete process.env.INVOCATION_ID;
+      } else {
+        process.env.INVOCATION_ID = previousInvocationId;
+      }
+    }
+
+    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: "/tmp/openclaw",
+        supervisor: "systemd",
+      }),
+    );
+    expect(payload?.ok).toBe(true);
+    expect(payload?.result?.status).toBe("skipped");
+    expect(payload?.result?.reason).toBe("managed-service-handoff-started");
+    expect(payload?.result?.mode).toBe("git");
+    expect(payload?.handoff?.status).toBe("started");
   });
 
   it("returns a safe command when package updates cannot be handed off", async () => {

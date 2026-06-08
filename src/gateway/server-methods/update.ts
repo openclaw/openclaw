@@ -8,6 +8,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { type RestartSentinelPayload, writeRestartSentinel } from "../../infra/restart-sentinel.js";
@@ -64,6 +65,36 @@ function resolveManagedServiceHandoffRestartDelayMs(
     restartDelayMs ?? SYSTEMD_HANDOFF_RESTART_GRACE_MS,
     SYSTEMD_HANDOFF_RESTART_GRACE_MS,
   );
+}
+
+function hasManagedServiceHandoffContext(
+  env: NodeJS.ProcessEnv,
+  supervisor: ReturnType<typeof detectRespawnSupervisor>,
+): boolean {
+  if (supervisor === "launchd") {
+    return Boolean(
+      env.OPENCLAW_LAUNCHD_LABEL?.trim() ||
+      env.LAUNCH_JOB_LABEL?.trim() ||
+      env.LAUNCH_JOB_NAME?.trim() ||
+      env.XPC_SERVICE_NAME?.trim(),
+    );
+  }
+  if (supervisor === "systemd") {
+    return Boolean(
+      env.OPENCLAW_SYSTEMD_UNIT?.trim() ||
+      env.INVOCATION_ID?.trim() ||
+      env.SYSTEMD_EXEC_PID?.trim() ||
+      env.JOURNAL_STREAM?.trim(),
+    );
+  }
+  if (supervisor === "schtasks") {
+    return Boolean(
+      env.OPENCLAW_WINDOWS_TASK_NAME?.trim() ||
+      (env.OPENCLAW_SERVICE_MARKER?.trim() === GATEWAY_SERVICE_MARKER &&
+        env.OPENCLAW_SERVICE_KIND?.trim() === GATEWAY_SERVICE_KIND),
+    );
+  }
+  return false;
 }
 
 export const updateHandlers: GatewayRequestHandlers = {
@@ -147,7 +178,9 @@ export const updateHandlers: GatewayRequestHandlers = {
         };
       } else if (
         installSurface.kind === "global" ||
-        (installSurface.kind === "git" && supervisor)
+        (installSurface.kind === "git" &&
+          supervisor &&
+          hasManagedServiceHandoffContext(process.env, supervisor))
       ) {
         const command = formatManagedServiceUpdateCommand({
           timeoutMs,

@@ -130,12 +130,14 @@ install method aligned:
   missing or older than the current stable release.
 
 The Gateway core auto-updater (when enabled via config) launches the CLI update path
-outside the live Gateway request handler. Control-plane `update.run` package-manager
-updates also use a managed-service handoff instead of replacing the package tree
-inside the live Gateway process. The Gateway starts a detached helper, exits,
-and the helper runs the normal `openclaw update --yes --json` CLI path from
-outside the Gateway process tree. If that handoff is unavailable, `update.run`
-returns a structured response with the safe shell command to run manually.
+outside the live Gateway request handler. Control-plane `update.run`
+package-manager updates and supervised git-checkout updates also use a
+managed-service handoff instead of replacing the package tree or rebuilding
+`dist/` inside the live Gateway process. The Gateway starts a detached helper,
+exits, and the helper runs the normal `openclaw update --yes --json` CLI path
+from outside the Gateway process tree. If that handoff is unavailable,
+`update.run` returns a structured response with the safe shell command to run
+manually.
 
 For package-manager installs, `openclaw update` resolves the target package
 version before invoking the package manager. npm global installs use a staged
@@ -150,9 +152,10 @@ installed OpenClaw build while leaving full plugin-command completion rebuilds t
 explicit `openclaw completion --write-state` runs.
 
 When a local managed Gateway service is installed and restart is enabled,
-package-manager updates stop the running service before replacing the package
-tree, then refresh the service metadata from the updated install, restart the
-service, and verify the restarted Gateway reports the expected version before
+package-manager and git-checkout updates stop the running service before
+replacing the package tree or mutating the checkout/build output. The updater
+then refreshes the service metadata from the updated install, restarts the
+service, and verifies the restarted Gateway reports the expected version before
 reporting `Gateway: restarted and verified.`. On macOS, the post-update check
 also verifies the LaunchAgent is loaded/running for the active profile and the
 configured loopback port is healthy. If the plist is installed but launchd is
@@ -163,16 +166,17 @@ the newly spawned Gateway. If the Gateway still does not become healthy, the
 command exits non-zero and prints the restart log path plus explicit restart,
 reinstall, and package rollback instructions. If restart cannot run, the command
 prints `Gateway: restart skipped (...)` or `Gateway: restart failed: ...` with a
-manual `openclaw gateway restart` hint. With `--no-restart`,
-package replacement still runs but the managed service is not stopped or
+manual `openclaw gateway restart` hint. With `--no-restart`, package
+replacement or git rebuild still runs but the managed service is not stopped or
 restarted, so the running Gateway may keep old code until you restart it
 manually.
 
 ### Control-plane response shape
 
 When `update.run` is invoked through the Gateway control plane on a
-package-manager install, the handler reports the handoff initiation separately
-from the CLI update that continues after the Gateway exits:
+package-manager install or supervised git checkout, the handler reports the
+handoff initiation separately from the CLI update that continues after the
+Gateway exits:
 
 - `ok: true`, `result.status: "skipped"`,
   `result.reason: "managed-service-handoff-started"`, and

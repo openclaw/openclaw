@@ -629,8 +629,12 @@ export function shouldPrepareUpdatedInstallRestart(params: {
   updateMode: UpdateRunResult["mode"];
   serviceInstalled: boolean;
   serviceLoaded: boolean;
+  serviceStoppedForUpdate?: boolean;
 }): boolean {
   if (isPackageManagerUpdateMode(params.updateMode)) {
+    return params.serviceInstalled;
+  }
+  if (params.updateMode === "git" && params.serviceStoppedForUpdate) {
     return params.serviceInstalled;
   }
   return params.serviceLoaded;
@@ -769,7 +773,7 @@ export function formatPostUpdateGatewayRecoveryInstructions(
   return lines;
 }
 
-type PrePackageServiceStop = {
+type PreManagedServiceStop = {
   stopped: boolean;
   inspected: boolean;
   runtimeInspected: boolean;
@@ -833,10 +837,11 @@ function serviceControlStdoutForMode(jsonMode: boolean): NodeJS.WritableStream {
   return jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout;
 }
 
-async function maybeStopManagedServiceBeforePackageUpdate(params: {
+async function maybeStopManagedServiceBeforeMutableUpdate(params: {
+  updateInstallKind: "git" | "package";
   shouldRestart: boolean;
   jsonMode: boolean;
-}): Promise<PrePackageServiceStop> {
+}): Promise<PreManagedServiceStop> {
   let service: ReturnType<typeof resolveGatewayService>;
   let serviceState: Awaited<ReturnType<typeof readGatewayServiceState>>;
   try {
@@ -862,7 +867,7 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
     if (!params.jsonMode && serviceState.running) {
       defaultRuntime.log(
         theme.warn(
-          "--no-restart is set while the managed gateway service is running; the package update will not stop or restart that process.",
+          `--no-restart is set while the managed gateway service is running; the ${params.updateInstallKind} update will not stop or restart that process.`,
         ),
       );
     }
@@ -908,7 +913,9 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
   }
 
   if (!params.jsonMode) {
-    defaultRuntime.log(theme.muted("Stopping managed gateway service before package update..."));
+    defaultRuntime.log(
+      theme.muted(`Stopping managed gateway service before ${params.updateInstallKind} update...`),
+    );
   }
   await service.stop({
     env: serviceState.env,
@@ -923,16 +930,16 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
   };
 }
 
-async function maybeRestartServiceAfterFailedPackageUpdate(params: {
-  prePackageServiceStop: PrePackageServiceStop | undefined;
+async function maybeRestartServiceAfterFailedMutableUpdate(params: {
+  preManagedServiceStop: PreManagedServiceStop | undefined;
   jsonMode: boolean;
 }): Promise<void> {
-  if (!params.prePackageServiceStop?.stopped || !params.prePackageServiceStop.serviceEnv) {
+  if (!params.preManagedServiceStop?.stopped || !params.preManagedServiceStop.serviceEnv) {
     return;
   }
   try {
     await resolveGatewayService().restart({
-      env: params.prePackageServiceStop.serviceEnv,
+      env: params.preManagedServiceStop.serviceEnv,
       stdout: serviceControlStdoutForMode(params.jsonMode),
     });
     if (!params.jsonMode) {
@@ -958,13 +965,13 @@ function isRunningInsideGatewayService(
   return !serviceKind || serviceKind === GATEWAY_SERVICE_KIND;
 }
 
-function shouldBlockPackageUpdateFromGatewayServiceEnv(params: {
-  prePackageServiceStop: PrePackageServiceStop | undefined;
+function shouldBlockMutableUpdateFromGatewayServiceEnv(params: {
+  preManagedServiceStop: PreManagedServiceStop | undefined;
 }): boolean {
   if (!isRunningInsideGatewayService()) {
     return false;
   }
-  const stopState = params.prePackageServiceStop;
+  const stopState = params.preManagedServiceStop;
   if (!stopState?.inspected) {
     return true;
   }
@@ -1127,10 +1134,16 @@ export function resolveUpdatedGatewayRestartPort(params: {
 export function resolvePostUpdateServiceStateReadEnv(params: {
   updateMode: UpdateRunResult["mode"];
   processEnv?: NodeJS.ProcessEnv;
+  preManagedServiceEnv?: NodeJS.ProcessEnv;
   prePackageServiceEnv?: NodeJS.ProcessEnv;
 }): NodeJS.ProcessEnv {
-  if (isPackageManagerUpdateMode(params.updateMode) && params.prePackageServiceEnv) {
-    return params.prePackageServiceEnv;
+  if (params.updateMode === "git" && params.preManagedServiceEnv) {
+    return params.preManagedServiceEnv;
+  }
+  if (isPackageManagerUpdateMode(params.updateMode)) {
+    return (
+      params.preManagedServiceEnv ?? params.prePackageServiceEnv ?? params.processEnv ?? process.env
+    );
   }
   return params.processEnv ?? process.env;
 }
@@ -3415,10 +3428,11 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   const startedAt = Date.now();
   const preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
 
-  let prePackageServiceStop: PrePackageServiceStop | undefined;
-  if (updateInstallKind === "package") {
+  let preManagedServiceStop: PreManagedServiceStop | undefined;
+  if (updateInstallKind === "package" || updateInstallKind === "git") {
     try {
-      prePackageServiceStop = await maybeStopManagedServiceBeforePackageUpdate({
+      preManagedServiceStop = await maybeStopManagedServiceBeforeMutableUpdate({
+        updateInstallKind,
         shouldRestart,
         jsonMode: Boolean(opts.json),
       });
@@ -3429,18 +3443,19 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       return;
     }
 
-    if (prePackageServiceStop?.blockMessage) {
+    if (preManagedServiceStop?.blockMessage) {
       stop();
-      defaultRuntime.error(prePackageServiceStop.blockMessage);
+      defaultRuntime.error(preManagedServiceStop.blockMessage);
       defaultRuntime.exit(1);
       return;
     }
 
-    if (shouldBlockPackageUpdateFromGatewayServiceEnv({ prePackageServiceStop })) {
+    if (shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop })) {
       stop();
+      const updateLabel = updateInstallKind === "git" ? "Git updates" : "Package updates";
       defaultRuntime.error(
         [
-          "Package updates cannot run from inside the gateway service process.",
+          `${updateLabel} cannot run from inside the gateway service process.`,
           "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
           `Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`,
         ].join("\n"),
@@ -3462,7 +3477,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
             startedAt,
             progress,
             jsonMode: Boolean(opts.json),
-            managedServiceEnv: prePackageServiceStop?.serviceEnv,
+            managedServiceEnv: preManagedServiceStop?.serviceEnv,
             invocationCwd,
             honorPackageRoot:
               managedServiceRootRedirect !== null || managedServiceNodeRunner !== undefined,
@@ -3484,8 +3499,8 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
           });
   } catch (err) {
     stop();
-    await maybeRestartServiceAfterFailedPackageUpdate({
-      prePackageServiceStop,
+    await maybeRestartServiceAfterFailedMutableUpdate({
+      preManagedServiceStop,
       jsonMode: Boolean(opts.json),
     });
     throw err;
@@ -3502,8 +3517,8 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       result,
       jsonMode: Boolean(opts.json),
     });
-    await maybeRestartServiceAfterFailedPackageUpdate({
-      prePackageServiceStop,
+    await maybeRestartServiceAfterFailedMutableUpdate({
+      preManagedServiceStop,
       jsonMode: Boolean(opts.json),
     });
     defaultRuntime.exit(1);
@@ -3516,8 +3531,8 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       result,
       jsonMode: Boolean(opts.json),
     });
-    await maybeRestartServiceAfterFailedPackageUpdate({
-      prePackageServiceStop,
+    await maybeRestartServiceAfterFailedMutableUpdate({
+      preManagedServiceStop,
       jsonMode: Boolean(opts.json),
     });
     if (result.reason === "dirty") {
@@ -3704,7 +3719,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
         env: resolvePostUpdateServiceStateReadEnv({
           updateMode: resultWithPostUpdate.mode,
           processEnv: process.env,
-          prePackageServiceEnv: prePackageServiceStop?.serviceEnv,
+          preManagedServiceEnv: preManagedServiceStop?.serviceEnv,
         }),
       });
       if (
@@ -3712,6 +3727,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
           updateMode: resultWithPostUpdate.mode,
           serviceInstalled: serviceState.installed,
           serviceLoaded: serviceState.loaded,
+          serviceStoppedForUpdate: preManagedServiceStop?.stopped,
         })
       ) {
         gatewayServiceEnv = serviceState.env;

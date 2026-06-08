@@ -95,6 +95,17 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
       }),
     ).toBe(true);
   });
+
+  it("prepares git restart when this update stopped the managed service", () => {
+    expect(
+      shouldPrepareUpdatedInstallRestart({
+        updateMode: "git",
+        serviceInstalled: true,
+        serviceLoaded: false,
+        serviceStoppedForUpdate: true,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("resolveUpdatedGatewayRestartPort", () => {
@@ -150,6 +161,19 @@ describe("resolvePostUpdateServiceStateReadEnv", () => {
         prePackageServiceEnv,
       }),
     ).toBe(processEnv);
+  });
+
+  it("uses the managed service environment for git updates stopped by this updater", () => {
+    const processEnv = { OPENCLAW_STATE_DIR: "/source/state" } as NodeJS.ProcessEnv;
+    const preManagedServiceEnv = { OPENCLAW_STATE_DIR: "/managed/state" } as NodeJS.ProcessEnv;
+
+    expect(
+      resolvePostUpdateServiceStateReadEnv({
+        updateMode: "git",
+        processEnv,
+        preManagedServiceEnv,
+      }),
+    ).toBe(preManagedServiceEnv);
   });
 });
 

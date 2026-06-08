@@ -2840,6 +2840,41 @@ describe("update-cli", () => {
     expect(requiredServiceStopCallOrder).toBeLessThan(requiredNpmInstallCallOrder);
   });
 
+  it("stops a running managed gateway before git checkout rebuild", async () => {
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    vi.mocked(runGatewayUpdate).mockResolvedValueOnce(makeOkUpdateResult({ mode: "git" }));
+
+    await updateCommand({ yes: true });
+
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
+    const serviceStopCall = serviceStop.mock.calls[0]?.[0] as
+      | { env?: NodeJS.ProcessEnv }
+      | undefined;
+    expect(serviceStopCall?.env?.OPENCLAW_SERVICE_MARKER).toBe("openclaw");
+    expect(serviceStopCall?.env?.OPENCLAW_SERVICE_KIND).toBe("gateway");
+    expect(
+      requireValue(serviceStop.mock.invocationCallOrder[0], "service stop call order"),
+    ).toBeLessThan(
+      requireValue(
+        vi.mocked(runGatewayUpdate).mock.invocationCallOrder[0],
+        "git update call order",
+      ),
+    );
+  });
+
   it("keeps managed service stop output off stdout during json package updates", async () => {
     const tempDir = await createTrackedTempDir("openclaw-update-json-stop-service-");
     const nodeModules = path.join(tempDir, "node_modules");
