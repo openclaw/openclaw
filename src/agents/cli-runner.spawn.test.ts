@@ -2022,6 +2022,166 @@ ${JSON.stringify({
     expect(parsed.response.response.toolUseID).toBe("tool-default-allow-1");
   });
 
+  it("answers Claude live control_request can_use_tool with allow when session exec policy overrides config to full/no-ask", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const writes: string[] = [];
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        writes.push(data);
+        if (writes.length === 1) {
+          stdoutListener?.(
+            `${JSON.stringify({
+              type: "control_request",
+              request_id: "req-session-yolo-allow",
+              request: {
+                subtype: "can_use_tool",
+                tool_name: "Bash",
+                tool_use_id: "tool-session-yolo-allow-1",
+                input: { command: "ls" },
+              },
+            })}
+${JSON.stringify({
+  type: "system",
+  subtype: "init",
+  session_id: "live-control-session-yolo-allow",
+})}
+${JSON.stringify({
+  type: "result",
+  session_id: "live-control-session-yolo-allow",
+  result: "ok",
+})}
+`,
+          );
+        }
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-session-yolo-allow",
+        pid: 3007,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-control-session-yolo-allow",
+        prompt: "hello",
+        backend: {
+          liveSession: "claude-stdio",
+          args: ["-p", "--output-format", "stream-json", "--permission-mode", "default"],
+        },
+        config: {
+          tools: { exec: { security: "deny", ask: "always" } },
+        } as PreparedCliRunContext["params"]["config"],
+        sessionEntry: {
+          execSecurity: "full",
+          execAsk: "off",
+        } as PreparedCliRunContext["params"]["sessionEntry"],
+      }),
+    );
+    expect(result.text).toBe("ok");
+    const controlResponse = writes.find((entry) => entry.includes('"control_response"'));
+    expect(controlResponse, "control_response written to stdin").toBeDefined();
+    const parsed = JSON.parse((controlResponse ?? "").trim()) as {
+      response: {
+        response: { behavior: string; toolUseID?: string };
+      };
+    };
+    expect(parsed.response.response.behavior).toBe("allow");
+    expect(parsed.response.response.toolUseID).toBe("tool-session-yolo-allow-1");
+    const spawnArg = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
+    expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("bypassPermissions");
+  });
+
+  it("answers Claude live control_request can_use_tool with deny when session exec security is restrictive", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const writes: string[] = [];
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        writes.push(data);
+        if (writes.length === 1) {
+          stdoutListener?.(
+            `${JSON.stringify({
+              type: "control_request",
+              request_id: "req-session-security-deny",
+              request: {
+                subtype: "can_use_tool",
+                tool_name: "Bash",
+                tool_use_id: "tool-session-security-deny-1",
+                input: { command: "ls" },
+              },
+            })}
+${JSON.stringify({
+  type: "system",
+  subtype: "init",
+  session_id: "live-control-session-security-deny",
+})}
+${JSON.stringify({
+  type: "result",
+  session_id: "live-control-session-security-deny",
+  result: "ok",
+})}
+`,
+          );
+        }
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-session-security-deny",
+        pid: 3008,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-control-session-security-deny",
+        prompt: "hello",
+        backend: {
+          liveSession: "claude-stdio",
+          args: ["-p", "--output-format", "stream-json", "--permission-mode", "bypassPermissions"],
+        },
+        sessionEntry: {
+          execSecurity: "deny",
+          execAsk: "off",
+        } as PreparedCliRunContext["params"]["sessionEntry"],
+      }),
+    );
+    expect(result.text).toBe("ok");
+    const controlResponse = writes.find((entry) => entry.includes('"control_response"'));
+    expect(controlResponse, "control_response written to stdin").toBeDefined();
+    const parsed = JSON.parse((controlResponse ?? "").trim()) as {
+      response: {
+        response: { behavior: string; message: string; decisionClassification: string };
+      };
+    };
+    expect(parsed.response.response.behavior).toBe("deny");
+    expect(parsed.response.response.decisionClassification).toBe("user_reject");
+    expect(parsed.response.response.message).toContain("security=deny");
+    const spawnArg = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
+    expect(spawnArg.argv).not.toContain("--permission-mode");
+  });
+
   it("answers Claude live control_request can_use_tool with deny when approval defaults are restrictive", async () => {
     await withTempExecApprovalsFile(
       {

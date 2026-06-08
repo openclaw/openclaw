@@ -16,6 +16,7 @@ import {
   maxAsk,
   minSecurity,
   normalizeExecAsk,
+  normalizeExecSecurity,
   resolveExecApprovalsFromFile,
   type ExecAsk,
   type ExecSecurity,
@@ -783,14 +784,15 @@ function readConfiguredExecPolicy(context: PreparedCliRunContext): {
   const agentExec = context.params.config?.agents?.list?.find((agent) => agent.id === agentId)
     ?.tools?.exec;
   const exec = agentExec ?? context.params.config?.tools?.exec;
-  const security = exec?.security ?? "full";
+  const sessionSecurity = normalizeExecSecurity(context.params.sessionEntry?.execSecurity);
+  const security = sessionSecurity ?? exec?.security ?? "full";
   const configuredAsk = exec?.ask ?? "off";
   const sessionAsk = normalizeExecAsk(context.params.sessionEntry?.execAsk);
   return {
     agentId,
     security,
-    ask: sessionAsk ? maxAsk(configuredAsk, sessionAsk) : configuredAsk,
-    explicitExecPolicy: Boolean(exec),
+    ask: sessionAsk ?? configuredAsk,
+    explicitExecPolicy: Boolean(exec) || sessionSecurity !== null || sessionAsk !== null,
   };
 }
 
