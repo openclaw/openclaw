@@ -1,4 +1,6 @@
 // Telegram plugin module implements bot handlers behavior.
+import { unlink } from "node:fs/promises";
+import { InputFile } from "grammy";
 import type { Message, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -40,6 +42,7 @@ import {
   resolveSessionStoreEntry,
   updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramMediaRuntimeOptions } from "./accounts.js";
@@ -79,6 +82,7 @@ import {
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
+import { sendTelegramWithThreadFallback } from "./bot/delivery.send.js";
 import {
   getTelegramTextParts,
   hasBotMention,
@@ -145,6 +149,31 @@ import {
 } from "./model-buttons.js";
 import { parseTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import { buildInlineKeyboard } from "./send.js";
+import {
+  generateSpeakeasyVoiceNote,
+  isSpeakeasyVoiceCallbackData,
+  prepareSpeakeasyGeneratedVoiceNoteOutput,
+  releaseSpeakeasyVoiceGenerationReservation,
+  reserveSpeakeasyVoiceGeneration,
+} from "./speakeasy-voice.js";
+
+const VOICE_MESSAGES_FORBIDDEN_MARKER = "VOICE_MESSAGES_FORBIDDEN";
+const SPEAKEASY_VOICE_FALLBACK_TEXT =
+  "Telegram could not deliver that voice note. The original text is still available above.";
+
+function isTelegramVoiceMessagesForbidden(err: unknown): boolean {
+  return formatErrorMessage(err).includes(VOICE_MESSAGES_FORBIDDEN_MARKER);
+}
+
+async function cleanupSpeakeasyAudioPath(audioPath: string): Promise<void> {
+  try {
+    await unlink(audioPath);
+  } catch (err) {
+    if (!err || typeof err !== "object" || !("code" in err) || err.code !== "ENOENT") {
+      logVerbose(`telegram speakeasy audio cleanup failed: ${String(err)}`);
+    }
+  }
+}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -1958,20 +1987,34 @@ export const registerTelegramHandlers = ({
     if (shouldSkipUpdate(ctx)) {
       return;
     }
+    const data = (callback.data ?? "").trim();
+    const callbackMessage = callback.message;
+    const isSpeakeasyVoiceCallback = isSpeakeasyVoiceCallbackData(data);
     const answerCallbackQuery =
       typeof (ctx as { answerCallbackQuery?: unknown }).answerCallbackQuery === "function"
         ? () => ctx.answerCallbackQuery()
         : () => bot.api.answerCallbackQuery(callback.id);
-    // Answer immediately to prevent Telegram from retrying while we process
-    await withTelegramApiErrorLogging({
-      operation: "answerCallbackQuery",
-      runtime,
-      fn: answerCallbackQuery,
-    }).catch(() => {});
+    const answerSpeakeasyCallback = async (text: string) => {
+      await bot.api
+        .answerCallbackQuery(callback.id, {
+          text,
+          show_alert: false,
+        })
+        .catch(() => {});
+    };
+    if (!isSpeakeasyVoiceCallback) {
+      // Answer immediately to prevent Telegram from retrying while we process.
+      await withTelegramApiErrorLogging({
+        operation: "answerCallbackQuery",
+        runtime,
+        fn: answerCallbackQuery,
+      }).catch(() => {});
+    }
     try {
-      const data = (callback.data ?? "").trim();
-      const callbackMessage = callback.message;
       if (!data || !callbackMessage) {
+        if (isSpeakeasyVoiceCallback) {
+          await answerSpeakeasyCallback("Voice note expired. Ask the assistant to resend it.");
+        }
         return;
       }
       const editCallbackMessage = async (
@@ -2073,12 +2116,21 @@ export const registerTelegramHandlers = ({
         });
       if (!execApprovalButtonsEnabled) {
         if (inlineButtonsScope === "off") {
+          if (isSpeakeasyVoiceCallback) {
+            await answerSpeakeasyCallback("Voice note is not enabled here.");
+          }
           return;
         }
         if (inlineButtonsScope === "dm" && isGroup) {
+          if (isSpeakeasyVoiceCallback) {
+            await answerSpeakeasyCallback("Voice note is not enabled here.");
+          }
           return;
         }
         if (inlineButtonsScope === "group" && !isGroup) {
+          if (isSpeakeasyVoiceCallback) {
+            await answerSpeakeasyCallback("Voice note is not enabled here.");
+          }
           return;
         }
       }
@@ -2107,6 +2159,9 @@ export const registerTelegramHandlers = ({
         logVerbose(
           `Blocked telegram callback in DM ${chatId}: requireTopic=true but no topic present`,
         );
+        if (isSpeakeasyVoiceCallback) {
+          await answerSpeakeasyCallback("Voice note is not enabled here.");
+        }
         return;
       }
       const authorizationMode: TelegramEventAuthorizationMode =
@@ -2123,12 +2178,122 @@ export const registerTelegramHandlers = ({
         context: eventAuthContext,
       });
       if (!senderAuthorization) {
+        if (isSpeakeasyVoiceCallback) {
+          await answerSpeakeasyCallback("Voice note is not enabled for this sender.");
+        }
         return;
       }
 
       const callbackThreadId = resolvedThreadId ?? dmThreadId;
       const callbackConversationId =
         callbackThreadId != null ? `${chatId}:topic:${callbackThreadId}` : String(chatId);
+      const runtimeCfg = telegramDeps.getRuntimeConfig();
+      if (isSpeakeasyVoiceCallback) {
+        let reserved: ReturnType<typeof reserveSpeakeasyVoiceGeneration>;
+        try {
+          reserved = reserveSpeakeasyVoiceGeneration({
+            cfg: runtimeCfg,
+            data,
+            chatId: String(chatId),
+          });
+        } catch (err) {
+          logVerbose(`Speakeasy voice reservation failed: ${String(err)}`);
+          await answerSpeakeasyCallback("Voice note is temporarily unavailable. Please try again.");
+          return;
+        }
+        if (!reserved.ok) {
+          await answerSpeakeasyCallback(
+            reserved.reason === "disabled"
+              ? "Voice note is not enabled here."
+              : reserved.reason === "limit"
+                ? "Daily voice-note tap limit reached."
+                : "Voice note expired. Ask the assistant to resend it.",
+          );
+          return;
+        }
+        let audioPath: string;
+        try {
+          await answerSpeakeasyCallback("Generating voice note…");
+          audioPath = await (telegramDeps.generateSpeakeasyVoiceNote ?? generateSpeakeasyVoiceNote)(
+            {
+              cfg: runtimeCfg,
+              text: reserved.text,
+            },
+          );
+          audioPath = prepareSpeakeasyGeneratedVoiceNoteOutput({
+            cfg: runtimeCfg,
+            outputPath: audioPath,
+          });
+        } catch (err) {
+          try {
+            releaseSpeakeasyVoiceGenerationReservation({
+              cfg: runtimeCfg,
+              chatId: String(chatId),
+            });
+          } catch (rollbackErr) {
+            logVerbose(`telegram speakeasy quota rollback failed: ${String(rollbackErr)}`);
+          }
+          logVerbose(`telegram speakeasy TTS failed: ${String(err)}`);
+          throw new TelegramRetryableCallbackError(err);
+        }
+        try {
+          const requestParams = {
+            ...(messageThreadId != null ? { message_thread_id: messageThreadId } : {}),
+            reply_parameters: {
+              message_id: callbackMessage.message_id,
+              allow_sending_without_reply: true,
+            },
+          };
+          await sendTelegramWithThreadFallback({
+            operation: "sendVoice",
+            runtime,
+            requestParams,
+            shouldLog: (err) => !isTelegramVoiceMessagesForbidden(err),
+            send: (effectiveParams) =>
+              bot.api.sendVoice(callbackMessage.chat.id, new InputFile(audioPath), {
+                ...effectiveParams,
+              }),
+          });
+        } catch (err) {
+          if (isTelegramVoiceMessagesForbidden(err)) {
+            logVerbose(
+              "telegram speakeasy sendVoice forbidden (recipient has voice messages blocked); falling back to text",
+            );
+            try {
+              await sendTelegramWithThreadFallback({
+                operation: "sendMessage",
+                runtime,
+                requestParams: {
+                  ...(messageThreadId != null ? { message_thread_id: messageThreadId } : {}),
+                  reply_parameters: {
+                    message_id: callbackMessage.message_id,
+                    allow_sending_without_reply: true,
+                  },
+                },
+                send: (effectiveParams) =>
+                  bot.api.sendMessage(callbackMessage.chat.id, SPEAKEASY_VOICE_FALLBACK_TEXT, {
+                    ...effectiveParams,
+                  }),
+              });
+            } catch (fallbackErr) {
+              try {
+                releaseSpeakeasyVoiceGenerationReservation({
+                  cfg: runtimeCfg,
+                  chatId: String(chatId),
+                });
+              } catch (rollbackErr) {
+                logVerbose(`telegram speakeasy quota rollback failed: ${String(rollbackErr)}`);
+              }
+              throw new TelegramRetryableCallbackError(fallbackErr);
+            }
+            return;
+          }
+          throw new TelegramRetryableCallbackError(err);
+        } finally {
+          await cleanupSpeakeasyAudioPath(audioPath);
+        }
+        return;
+      }
       const pluginBindingApproval = parsePluginBindingApprovalCustomId(data);
       if (pluginBindingApproval) {
         let resolved: Awaited<ReturnType<typeof resolvePluginConversationBindingApproval>>;
@@ -2145,7 +2310,6 @@ export const registerTelegramHandlers = ({
         await replyToCallbackChat(buildPluginBindingResolvedText(resolved));
         return;
       }
-      const runtimeCfg = telegramDeps.getRuntimeConfig();
       const pluginCallback = await dispatchTelegramPluginInteractiveHandler({
         data: pluginCallbackData,
         callbackId: callback.id,

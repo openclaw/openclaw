@@ -276,6 +276,10 @@ const execApprovalHoisted = vi.hoisted(() => ({
   resolveExecApprovalSpy: vi.fn(async () => undefined),
 }));
 export const resolveExecApprovalSpy = execApprovalHoisted.resolveExecApprovalSpy;
+const speakeasyVoiceHoisted = vi.hoisted(() => ({
+  generateSpeakeasyVoiceNoteSpy: vi.fn(async () => "/tmp/speakeasy.ogg"),
+}));
+export const generateSpeakeasyVoiceNoteSpy = speakeasyVoiceHoisted.generateSpeakeasyVoiceNoteSpy;
 
 const sentMessageCacheHoisted = vi.hoisted(() => ({
   wasSentByBot: vi.fn(() => false),
@@ -312,6 +316,7 @@ const grammySpies = vi.hoisted(() => ({
   })) as AnyAsyncMock,
   getChatSpy: vi.fn(async () => undefined) as AnyAsyncMock,
   sendMessageSpy: vi.fn(async () => ({ message_id: 77 })) as AnyAsyncMock,
+  sendVoiceSpy: vi.fn(async () => ({ message_id: 80 })) as AnyAsyncMock,
   sendAnimationSpy: vi.fn(async () => ({ message_id: 78 })) as AnyAsyncMock,
   sendPhotoSpy: vi.fn(async () => ({ message_id: 79 })) as AnyAsyncMock,
   getFileSpy: vi.fn(async () => ({ file_path: "media/file.jpg" })) as AnyAsyncMock,
@@ -334,6 +339,7 @@ export const setMyCommandsSpy: AnyAsyncMock = grammySpies.setMyCommandsSpy;
 export const getMeSpy: AnyAsyncMock = grammySpies.getMeSpy;
 export const getChatSpy: AnyAsyncMock = grammySpies.getChatSpy;
 export const sendMessageSpy: AnyAsyncMock = grammySpies.sendMessageSpy;
+export const sendVoiceSpy: AnyAsyncMock = grammySpies.sendVoiceSpy;
 export const sendAnimationSpy: AnyAsyncMock = grammySpies.sendAnimationSpy;
 export const sendPhotoSpy: AnyAsyncMock = grammySpies.sendPhotoSpy;
 export const getFileSpy: AnyAsyncMock = grammySpies.getFileSpy;
@@ -363,6 +369,7 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
       getMe: grammySpies.getMeSpy,
       getChat: grammySpies.getChatSpy,
       sendMessage: grammySpies.sendMessageSpy,
+      sendVoice: grammySpies.sendVoiceSpy,
       sendAnimation: grammySpies.sendAnimationSpy,
       sendPhoto: grammySpies.sendPhotoSpy,
       getFile: grammySpies.getFileSpy,
@@ -420,6 +427,9 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
   resolveExecApproval: resolveExecApprovalSpy as NonNullable<
     TelegramBotDeps["resolveExecApproval"]
+  >,
+  generateSpeakeasyVoiceNote: generateSpeakeasyVoiceNoteSpy as NonNullable<
+    TelegramBotDeps["generateSpeakeasyVoiceNote"]
   >,
 };
 
@@ -537,6 +547,8 @@ beforeEach(() => {
   });
   resolveExecApprovalSpy.mockReset();
   resolveExecApprovalSpy.mockResolvedValue(undefined);
+  generateSpeakeasyVoiceNoteSpy.mockReset();
+  generateSpeakeasyVoiceNoteSpy.mockResolvedValue("/tmp/speakeasy.ogg");
   dispatchReplyWithBufferedBlockDispatcher.mockReset();
   dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
     async (params: DispatchReplyHarnessParams) =>
@@ -555,6 +567,8 @@ beforeEach(() => {
   sendPhotoSpy.mockResolvedValue({ message_id: 79 });
   sendMessageSpy.mockReset();
   sendMessageSpy.mockResolvedValue({ message_id: 77 });
+  sendVoiceSpy.mockReset();
+  sendVoiceSpy.mockResolvedValue({ message_id: 80 });
   getFileSpy.mockReset();
   getFileSpy.mockResolvedValue({ file_path: "media/file.jpg" });
 

@@ -1,4 +1,7 @@
 // Telegram tests cover outbound adapter plugin behavior.
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { verifyDurableFinalCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { adaptMessagePresentationForChannel } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -155,6 +158,82 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-buttons", chatId: "12345" });
   });
 
+  it("does not add Speakeasy buttons to group topic payload targets", async () => {
+    const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-outbound-"));
+    const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
+    await mkdir(path.join(workspaceDir, "config"), { recursive: true });
+    await writeFile(
+      path.join(workspaceDir, "config", "speakeasy-chats.json"),
+      JSON.stringify({ enabled: ["telegram:-100123"] }),
+    );
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-group-topic",
+      chatId: "-100123",
+    });
+
+    try {
+      await telegramOutbound.sendPayload!({
+        cfg: { agents: { defaults: { workspace: workspaceDir } } } as never,
+        to: "-100123:topic:7",
+        text: "",
+        payload: {
+          text: "This group topic payload is long enough but must not get a voice button.",
+        },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      });
+
+      const options = callOptionsAt(
+        sendMessageTelegramMock,
+        0,
+        "-100123:topic:7",
+        "This group topic payload is long enough but must not get a voice button.",
+      );
+      expect(options.buttons).toBeUndefined();
+    } finally {
+      process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not add Speakeasy buttons to unresolved handle targets", async () => {
+    const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-outbound-"));
+    const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
+    await mkdir(path.join(workspaceDir, "config"), { recursive: true });
+    await writeFile(
+      path.join(workspaceDir, "config", "speakeasy-chats.json"),
+      JSON.stringify({ enabled: ["telegram:@cameron_handle"] }),
+    );
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-handle",
+      chatId: "437286129",
+    });
+
+    try {
+      await telegramOutbound.sendPayload!({
+        cfg: { agents: { defaults: { workspace: workspaceDir } } } as never,
+        to: "@cameron_handle",
+        text: "",
+        payload: {
+          text: "This handle target payload is long enough but must not get a voice button.",
+        },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      });
+
+      const options = callOptionsAt(
+        sendMessageTelegramMock,
+        0,
+        "@cameron_handle",
+        "This handle target payload is long enough but must not get a voice button.",
+      );
+      expect(options.buttons).toBeUndefined();
+    } finally {
+      process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses presentation button labels as fallback text for presentation-only payloads", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({
       messageId: "tg-presentation-buttons",
@@ -180,6 +259,59 @@ describe("telegramOutbound", () => {
       messageId: "tg-presentation-buttons",
       chatId: "12345",
     });
+  });
+
+  it("adds Speakeasy to eligible presentation fallback text without dropping presentation buttons", async () => {
+    const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-outbound-"));
+    const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
+    await mkdir(path.join(workspaceDir, "config"), { recursive: true });
+    await writeFile(
+      path.join(workspaceDir, "config", "speakeasy-chats.json"),
+      JSON.stringify({ enabled: ["telegram:12345"] }),
+    );
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-presentation-speakeasy",
+      chatId: "12345",
+    });
+
+    try {
+      const result = await telegramOutbound.sendPayload!({
+        cfg: { agents: { defaults: { workspace: workspaceDir } } } as never,
+        to: "12345",
+        text: "",
+        payload: {
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Read the detailed update", value: "cmd:details" }],
+              },
+            ],
+          },
+        },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      });
+
+      const options = callOptionsAt(
+        sendMessageTelegramMock,
+        0,
+        "12345",
+        "- Read the detailed update",
+      );
+      expect(options.buttons).toEqual([
+        [{ text: "Read the detailed update", callback_data: "cmd:details" }],
+        [{ text: "🔊 Voice note", callback_data: expect.stringMatching(/^tts:speakeasy:/) }],
+      ]);
+      expect(result).toEqual({
+        channel: "telegram",
+        messageId: "tg-presentation-speakeasy",
+        chatId: "12345",
+      });
+    } finally {
+      process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("renders presentation web app buttons for payload sends", async () => {

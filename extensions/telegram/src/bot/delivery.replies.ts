@@ -38,8 +38,10 @@ import {
   renderTelegramHtmlText,
   wrapFileReferencesInHtml,
 } from "../format.js";
+import { resolveTelegramInlineButtonsScope } from "../inline-buttons.js";
 import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { buildInlineKeyboard } from "../send.js";
+import { withSpeakeasyVoiceButton } from "../speakeasy-voice.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramSendParams,
@@ -846,14 +848,38 @@ export async function deliverReplies(params: {
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
+      const telegramDataBeforeSpeakeasy = reply.channelData?.telegram as
+        | TelegramReplyChannelData
+        | undefined;
+      const existingButtons = resolveTelegramInlineButtons({
+        buttons: telegramDataBeforeSpeakeasy?.buttons,
+        presentation,
+        interactive,
+      });
+      if (existingButtons) {
+        reply = {
+          ...reply,
+          channelData: {
+            ...reply.channelData,
+            telegram: {
+              ...telegramDataBeforeSpeakeasy,
+              buttons: existingButtons,
+            },
+          },
+        };
+      }
+      reply = withSpeakeasyVoiceButton({
+        reply,
+        cfg: params.cfg,
+        chatId: params.chatId,
+        isGroup: params.mirrorIsGroup,
+        hasMedia,
+        inlineButtonsScope: params.cfg
+          ? resolveTelegramInlineButtonsScope({ cfg: params.cfg, accountId: params.accountId })
+          : undefined,
+      });
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
-      const replyMarkup = buildInlineKeyboard(
-        resolveTelegramInlineButtons({
-          buttons: telegramData?.buttons,
-          presentation,
-          interactive,
-        }),
-      );
+      const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
       let firstDeliveredMessageId: number | undefined;
       if (mediaList.length === 0) {
         firstDeliveredMessageId = await deliverTextReply({

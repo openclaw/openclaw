@@ -21,9 +21,15 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks, splitTelegramHtmlChunks } from "./format.js";
+import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
-import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
+import { withSpeakeasyVoiceButton } from "./speakeasy-voice.js";
+import {
+  isNumericTelegramChatId,
+  normalizeTelegramOutboundTarget,
+  parseTelegramTarget,
+} from "./targets.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 export const TELEGRAM_POLL_OPTION_LIMIT = 10;
@@ -134,8 +140,43 @@ export async function sendTelegramPayloadMessages(params: {
       presentation,
     }) ?? "";
   const mediaUrls = resolvePayloadMediaUrls(params.payload);
-  const buttons = resolveTelegramInlineButtons({
+  const target = parseTelegramTarget(params.to);
+  const baseButtons = resolveTelegramInlineButtons({
     buttons: telegramData?.buttons,
+    presentation,
+    interactive: params.payload.interactive,
+  });
+  const enrichedPayload = withSpeakeasyVoiceButton({
+    reply: {
+      ...params.payload,
+      text,
+      channelData: {
+        ...params.payload.channelData,
+        telegram: {
+          ...telegramData,
+          buttons: baseButtons,
+        },
+      },
+    },
+    cfg: params.baseOpts.cfg,
+    chatId:
+      target.chatType === "direct" && isNumericTelegramChatId(target.chatId)
+        ? target.chatId
+        : undefined,
+    isGroup: target.chatType === "group",
+    hasMedia: mediaUrls.length > 0,
+    inlineButtonsScope: params.baseOpts.cfg
+      ? resolveTelegramInlineButtonsScope({
+          cfg: params.baseOpts.cfg,
+          accountId: params.baseOpts.accountId,
+        })
+      : undefined,
+  });
+  const enrichedTelegramData = enrichedPayload.channelData?.telegram as
+    | { buttons?: TelegramInlineButtons; quoteText?: string }
+    | undefined;
+  const buttons = resolveTelegramInlineButtons({
+    buttons: enrichedTelegramData?.buttons,
     presentation,
     interactive: params.payload.interactive,
   });
