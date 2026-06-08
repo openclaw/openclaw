@@ -28,6 +28,7 @@ export type ControlUiBootstrapState = {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
   settings?: { token?: string | null } | null;
   password?: string | null;
+  mathRendering?: "off" | "katex";
 };
 
 function resolveActiveAgentId(state: ControlUiBootstrapState): string | null {
@@ -136,6 +137,7 @@ export async function loadControlUiBootstrapConfig(
       typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
         ? parsed.chatMessageMaxWidth
         : null;
+    state.mathRendering = parsed.mathRendering === "katex" ? "katex" : "off";
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
   }

@@ -699,6 +699,7 @@ export const OpenClawSchema = z
     ui: z
       .object({
         seamColor: HexColorSchema.optional(),
+        mathRendering: z.enum(["off", "katex"]).default("off").optional(),
         assistant: z
           .object({
             name: z.string().max(50).optional(),

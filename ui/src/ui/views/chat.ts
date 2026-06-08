@@ -56,6 +56,8 @@ import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-e
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
+import { preloadKatex, loadKatexCss } from "../katex-renderer.ts";
+import { clearMarkdownCache } from "../markdown.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type {
@@ -182,6 +184,7 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  mathRendering?: "off" | "katex";
   basePath?: string;
   composerControls?: TemplateResult | typeof nothing | ReturnType<typeof guard>;
   workspaceFiles?: {
@@ -1525,7 +1528,28 @@ function renderSlashMenu(
   `;
 }
 
+let katexPreloadTriggered = false;
+
 export function renderChat(props: ChatProps) {
+  // Preload KaTeX when math rendering is enabled (one-shot guard to prevent infinite render loop)
+  if (props.mathRendering === "katex") {
+    // One-shot JS preload guard prevents infinite render loop on cache clear + requestUpdate
+    if (!katexPreloadTriggered) {
+      katexPreloadTriggered = true;
+      void preloadKatex()
+        .then(() => {
+          clearMarkdownCache();
+          const requestUpdate = props.onRequestUpdate ?? (() => {});
+          requestUpdate();
+        })
+        .catch(() => {
+          katexPreloadTriggered = false;
+        });
+    }
+    // CSS load is guarded internally by cssLoaded, so it retries on transient failures
+    loadKatexCss();
+  }
+
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
@@ -1686,6 +1710,7 @@ export function renderChat(props: ChatProps) {
             props.canvasPluginSurfaceUrl,
             props.embedSandboxMode ?? "scripts",
             props.allowExternalEmbedUrls ?? false,
+            props.mathRendering,
             threadContextWindow,
           ],
           () =>
@@ -1743,6 +1768,7 @@ export function renderChat(props: ChatProps) {
                     assistantIdentity,
                     props.basePath,
                     props.assistantAttachmentAuthToken ?? null,
+                    props.mathRendering,
                   );
                 }
                 if (item.kind === "group") {
@@ -1778,6 +1804,7 @@ export function renderChat(props: ChatProps) {
                     canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
                     embedSandboxMode: props.embedSandboxMode ?? "scripts",
                     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                    mathRendering: props.mathRendering,
                     contextWindow: threadContextWindow,
                     onDelete: () => {
                       deleted.delete(item.key);

@@ -472,6 +472,7 @@ See [Inferred commitments](/concepts/commitments).
 {
   ui: {
     seamColor: "#FF4500",
+    mathRendering: "off",
     assistant: {
       name: "OpenClaw",
       avatar: "CB", // emoji, short text, image URL, or data URI
@@ -481,6 +482,7 @@ See [Inferred commitments](/concepts/commitments).
 ```
 
 - `seamColor`: accent color for native app UI chrome (Talk Mode bubble tint, etc.).
+- `mathRendering`: math rendering mode for chat messages (`"off"` or `"katex"`). Defaults to `"off"`.
 - `assistant`: Control UI identity override. Falls back to active agent identity.
 
 ---
