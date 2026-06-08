@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
-import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
 import type {
@@ -300,27 +299,19 @@ export function renderSkills(props: SkillsProps) {
           `
         : html`
             <div class="agent-skills-groups" style="margin-top: 16px;">
-              ${repeat(
-                groups,
-                (group) => group.id,
-                (group) => {
-                  return html`
-                    <details class="agent-skills-group" open>
-                      <summary class="agent-skills-header">
-                        <span>${group.label}</span>
-                        <span class="muted">${group.skills.length}</span>
-                      </summary>
-                      <div class="list skills-grid">
-                        ${repeat(
-                          group.skills,
-                          (skill) => skill.skillKey,
-                          (skill) => renderSkill(skill, props),
-                        )}
-                      </div>
-                    </details>
-                  `;
-                },
-              )}
+              ${groups.map((group) => {
+                return html`
+                  <details class="agent-skills-group" open>
+                    <summary class="agent-skills-header">
+                      <span>${group.label}</span>
+                      <span class="muted">${group.skills.length}</span>
+                    </summary>
+                    <div class="list skills-grid">
+                      ${group.skills.map((skill) => renderSkill(skill, props))}
+                    </div>
+                  </details>
+                `;
+              })}
             </div>
           `}
     </section>

@@ -356,6 +356,102 @@ describe("renderSkills", () => {
     expect(normalizeText(container)).toContain("AgentReceipt Local trust card.");
   });
 
+  it("preserves checkbox state per skill when skills reorder across status tabs", async () => {
+    // Regression test for #89661: when skills shift between status tabs
+    // (e.g. Ready → Disabled after toggle), Array.map() reuses DOM elements
+    // and the checkbox .checked state bleeds into the next skill row.
+    // repeat() with a stable skill.skillKey prevents this.
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    const skillA = createSkill({
+      skillKey: "skill-a",
+      name: "Alpha",
+      disabled: false,
+      eligible: true,
+    });
+    const skillB = createSkill({
+      skillKey: "skill-b",
+      name: "Beta",
+      disabled: true,
+      eligible: true,
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [skillA, skillB],
+    };
+
+    // Initial render: "all" tab shows both skills
+    const toggleCalls: Array<{ key: string; enabled: boolean }> = [];
+    const onToggle = (key: string, enabled: boolean) => {
+      toggleCalls.push({ key, enabled });
+    };
+
+    render(
+      renderSkills(
+        createProps({
+          report,
+          statusFilter: "all",
+          onToggle,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const checkboxes = container.querySelectorAll<HTMLInputElement>(".skill-toggle");
+    expect(checkboxes.length).toBe(2);
+    // skill-a is enabled → checkbox checked
+    expect(checkboxes[0].checked).toBe(true);
+    // skill-b is disabled → checkbox unchecked
+    expect(checkboxes[1].checked).toBe(false);
+
+    // Simulate toggle: disable skill-a → it moves from "Ready" to "Disabled"
+    skillA.disabled = true;
+    render(
+      renderSkills(
+        createProps({
+          report: { ...report, skills: [skillA, skillB] },
+          statusFilter: "all",
+          onToggle,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const checkboxesAfter = container.querySelectorAll<HTMLInputElement>(".skill-toggle");
+    expect(checkboxesAfter.length).toBe(2);
+    // skill-a now disabled → unchecked
+    expect(checkboxesAfter[0].checked).toBe(false);
+    // skill-b still disabled → still unchecked (no bleed from old skill-a state)
+    expect(checkboxesAfter[1].checked).toBe(false);
+
+    // Filter to "disabled" tab — only disabled skills shown
+    render(
+      renderSkills(
+        createProps({
+          report: { ...report, skills: [skillA, skillB] },
+          statusFilter: "disabled",
+          onToggle,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const disabledCheckboxes = container.querySelectorAll<HTMLInputElement>(".skill-toggle");
+    expect(disabledCheckboxes.length).toBe(2);
+    // Both disabled → both unchecked
+    for (const cb of disabledCheckboxes) {
+      expect(cb.checked).toBe(false);
+    }
+    // No unexpected toggle events fired during re-render
+    expect(toggleCalls.length).toBe(0);
+  });
+
   it("fails closed for inconsistent ClawHub verdict envelopes", async () => {
     const container = document.createElement("div");
     document.body.append(container);
