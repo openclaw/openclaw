@@ -374,6 +374,33 @@ describe("doctor health contributions", () => {
     expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
   });
 
+  it("passes daemon-context plugin drift when gateway version used the fallback", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    const pluginVersionDrift = {
+      gatewayVersion: "2026.5.2-test",
+      drifts: [
+        {
+          pluginId: "codex",
+          installedVersion: "2026.5.30-beta.1",
+          gatewayVersion: "2026.5.2-test",
+          source: "npm",
+        },
+      ],
+    };
+    mocks.gatherDaemonStatus.mockResolvedValueOnce({
+      gateway: { version: null },
+      pluginVersionDrift,
+    });
+    const cfg = { plugins: { entries: { codex: { enabled: true } } } };
+
+    await contribution.run({
+      cfg,
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0]);
+
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
+  });
+
   it("omits daemon-context plugin drift when probe auth was skipped", async () => {
     const contribution = requireDoctorContribution("doctor:workspace-status");
     const pluginVersionDrift = {
@@ -422,8 +449,22 @@ describe("doctor health contributions", () => {
     });
   });
 
-  it("disables exec SecretRef materialization for daemon-context plugin drift probes by default", async () => {
+  it("uses non-probing daemon status for exec SecretRefs by default", async () => {
     const contribution = requireDoctorContribution("doctor:workspace-status");
+    const pluginVersionDrift = {
+      gatewayVersion: "2026.5.2-test",
+      drifts: [
+        {
+          pluginId: "codex",
+          installedVersion: "2026.5.30-beta.1",
+          gatewayVersion: "2026.5.2-test",
+          source: "npm",
+        },
+      ],
+    };
+    mocks.gatherDaemonStatus.mockResolvedValueOnce({
+      pluginVersionDrift,
+    });
     const cfg = {
       gateway: {
         auth: {
@@ -447,14 +488,12 @@ describe("doctor health contributions", () => {
         timeout: "3000",
         json: true,
       },
-      probe: true,
+      probe: false,
       requireRpc: false,
       deep: false,
       allowExecSecretRefs: false,
     });
-    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
-      pluginVersionDrift: undefined,
-    });
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
   });
 
   it("uses the read-only model catalog for hooks.gmail.model warnings", async () => {
