@@ -1,0 +1,16 @@
+{
+  "gateway": {
+    "mode": "local",
+    "agent": {
+      "provider": "ollama",
+      "model": "llama3.2"
+    }
+  },
+  "plugins": {
+    "entries": {
+      "workboard": {
+        "enabled": true
+      }
+    }
+  }
+}
