@@ -664,7 +664,25 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Each topic then has its own session key: `agent:zu:telegram:group:-1001234567890:topic:3`
 
-    **Persistent ACP topic binding**: Forum topics can pin ACP harness sessions through top-level typed ACP bindings (`bindings[]` with `type: "acp"` and `match.channel: "telegram"`, `peer.kind: "group"`, and a topic-qualified id like `-1001234567890:topic:42`). Currently scoped to forum topics in groups/supergroups. See [ACP Agents](/tools/acp-agents).
+    **Persistent ACP topic binding**: Forum topics can pin ACP harness sessions through top-level typed ACP bindings (`bindings[]` with `type: "acp"` and `match.channel: "telegram"`, `peer.kind: "group"`, and a topic-qualified id like `-1001234567890:topic:42`). See [ACP Agents](/tools/acp-agents).
+
+    **Direct-peer ACP binding**: A `type: "acp"` binding can also target a 1:1 DM peer with `match.peer.kind: "direct"` (legacy alias `"dm"`). Use the bare positive peer id (`8517390162`) or the explicit `direct:<id>` form; both normalize to the same id the inbound DM route produces, so matching DMs route to the configured ACP backend. Example:
+
+    ```json5
+    {
+      channels: {
+        telegram: {
+          bindings: [
+            {
+              type: "acp",
+              agentId: "coder",
+              match: { channel: "telegram", peer: { kind: "direct", id: "8517390162" } },
+            },
+          ],
+        },
+      },
+    }
+    ```
 
     **Thread-bound ACP spawn from chat**: `/acp spawn <agent> --thread here|auto` binds the current topic to a new ACP session; follow-ups route there directly. OpenClaw pins the spawn confirmation in-topic. Requires `channels.telegram.threadBindings.spawnSessions` to remain enabled (default: `true`).
 
