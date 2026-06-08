@@ -41,7 +41,9 @@ function expectClearedTimeoutState(onTimeout: TimeoutCallbackMock, timedOut: boo
 }
 
 async function delay(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function buildAggregateTimeoutParams(
@@ -131,7 +133,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
           compactionInFlight = false;
         },
         abortable: async (promise) => await promise,
-        aggregateTimeoutMs: 10,
+        aggregateTimeoutMs: 1,
         isCompactionStillInFlight: () => compactionInFlight,
         onHeartbeat: () => {
           emitTrustedDiagnosticEvent({
