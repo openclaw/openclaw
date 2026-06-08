@@ -24,7 +24,14 @@ export const formatDuration = (ms: number | null | undefined) => {
 export const formatTokensCompact = (
   sess: Pick<
     SessionStatus,
-    "inputTokens" | "totalTokens" | "contextTokens" | "percentUsed" | "cacheRead" | "cacheWrite"
+    | "inputTokens"
+    | "totalTokens"
+    | "contextTokens"
+    | "percentUsed"
+    | "cacheRead"
+    | "cacheWrite"
+    | "realConversationMessages"
+    | "totalTranscriptMessages"
   >,
 ) => {
   const used = sess.totalTokens;
@@ -43,6 +50,12 @@ export const formatTokensCompact = (
   const cacheStats = resolvePromptCacheStats(sess);
   if (cacheStats && cacheStats.cacheRead > 0) {
     result += ` · 🗄️ ${cacheStats.hitRate}% cached`;
+  }
+
+  // Surface compactable transcript counts so operators can distinguish prompt/cache
+  // usage from compactable conversation content (see #91150).
+  if (typeof sess.realConversationMessages === "number") {
+    result += ` · 💬 ${sess.realConversationMessages} real msg${sess.realConversationMessages === 1 ? "" : "s"}`;
   }
 
   return result;

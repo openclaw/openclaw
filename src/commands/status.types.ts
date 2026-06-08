@@ -39,6 +39,10 @@ export type SessionStatus = {
   runtime?: string | null;
   contextTokens: number | null;
   flags: string[];
+  /** Number of transcript messages that count as real conversation (compactable). */
+  realConversationMessages?: number;
+  /** Total transcript messages for the session. */
+  totalTranscriptMessages?: number;
 };
 
 /** Heartbeat schedule state for one agent. */

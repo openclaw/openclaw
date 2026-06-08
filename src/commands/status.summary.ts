@@ -1,8 +1,10 @@
 // Builds the status summary used by human and JSON status output.
 // It aggregates sessions, tasks, heartbeat, channel summary, and model/runtime metadata.
 
+import { isRealConversationMessage } from "../agents/compaction-real-conversation.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
+import type { AgentMessage } from "../agents/runtime/index.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
@@ -12,6 +14,7 @@ import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { readSessionMessages } from "../gateway/session-utils.fs.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -274,9 +277,38 @@ export async function getStatusSummary(
   };
   const buildSessionRows = (
     candidates: SessionCandidate[],
-    opts: { agentIdOverride?: string } = {},
-  ) =>
-    candidates.map(({ key, entry, updatedAt }) => {
+    opts: { agentIdOverride?: string; storePath?: string } = {},
+  ) => {
+    const resolveCompactableCounts = (
+      entry: SessionEntry | undefined,
+    ): { realConversationMessages?: number; totalTranscriptMessages?: number } => {
+      const sessionId = entry?.sessionId?.trim();
+      if (!sessionId) {
+        return {};
+      }
+      try {
+        const messages = readSessionMessages(
+          sessionId,
+          opts.storePath,
+          entry?.sessionFile,
+        ) as AgentMessage[];
+        if (!messages.length) {
+          return {};
+        }
+        const realConversationMessages = messages.reduce(
+          (count, msg, idx) => count + (isRealConversationMessage(msg, messages, idx) ? 1 : 0),
+          0,
+        );
+        return {
+          realConversationMessages,
+          totalTranscriptMessages: messages.length,
+        };
+      } catch {
+        return {};
+      }
+    };
+
+    return candidates.map(({ key, entry, updatedAt }) => {
       const age = updatedAt ? now - updatedAt : null;
       const parsedAgentId = parseAgentSessionKey(key)?.agentId;
       const agentId = opts.agentIdOverride ?? parsedAgentId;
@@ -325,6 +357,8 @@ export async function getStatusSummary(
         sessionKey: key,
       });
 
+      const compactableCounts = resolveCompactableCounts(entry);
+
       return {
         agentId,
         key,
@@ -355,8 +389,10 @@ export async function getStatusSummary(
         runtime,
         contextTokens,
         flags: buildFlags(entry),
+        ...compactableCounts,
       } satisfies SessionStatus;
     });
+  };
 
   const paths = new Set<string>();
   const byAgent = agentList.agents.map((agent) => {
@@ -365,6 +401,7 @@ export async function getStatusSummary(
     const candidates = loadSessionCandidates(storePath);
     const sessions = buildSessionRows(candidates.slice(0, RECENT_SESSION_LIMIT), {
       agentIdOverride: agent.id,
+      storePath,
     });
     return {
       agentId: agent.id,
