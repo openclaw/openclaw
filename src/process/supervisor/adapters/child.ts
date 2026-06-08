@@ -14,7 +14,7 @@ const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 function resolveCommand(command: string): string {
   return resolveWindowsCommandShim({
     command,
-    cmdCommands: ["npm", "pnpm", "yarn", "npx"],
+    cmdCommands: ["npm", "pnpm", "yarn", "npx", "claude"],
   });
 }
 
@@ -46,6 +46,12 @@ export async function createChildAdapter(params: {
   // existing POSIX detached behavior.
   const useDetached = process.platform !== "win32" && !isServiceManagedRuntime();
 
+  // On Windows, npm-style shims resolve to .cmd/.bat files. These cannot be
+  // launched directly by child_process.spawn without a shell (EINVAL on recent
+  // Node.js), so enable shell mode for batch-file commands.
+  const resolvedCmd = resolvedArgv[0] ?? "";
+  const useShell = /\.(cmd|bat)$/i.test(resolvedCmd);
+
   const options: SpawnOptions = {
     cwd: params.cwd,
     env: preparedSpawn.env,
@@ -53,6 +59,7 @@ export async function createChildAdapter(params: {
     detached: useDetached,
     windowsHide: true,
     windowsVerbatimArguments: params.windowsVerbatimArguments,
+    ...(useShell ? { shell: true } : {}),
   };
   if (stdinMode === "inherit") {
     options.stdio = ["inherit", "pipe", "pipe"];
