@@ -1149,6 +1149,29 @@ describe("tui command handlers", () => {
     expect(closeOverlay).toHaveBeenCalledTimes(1);
   });
 
+  it("uses runtimeLabel as model selector description when provided", async () => {
+    const listModels = vi.fn().mockResolvedValue([
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        runtimeLabel: "CLI",
+      },
+      {
+        provider: "openrouter",
+        id: "openrouter/auto",
+        name: "OpenRouter Auto",
+      },
+    ]);
+    const { handleCommand, openOverlay } = createHarness({ listModels });
+
+    await handleCommand("/model");
+
+    const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
+    expect(selector?.items?.[0]?.description).toBe("CLI");
+    expect(selector?.items?.[1]?.description).toBe("OpenRouter Auto");
+  });
+
   it("renders model listing feedback before the backend list resolves", async () => {
     let resolveModels: (
       value: Array<{ provider: string; id: string; name?: string }>,

@@ -22,3 +22,22 @@ export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
   }
   return false;
 }
+
+/**
+ * Resolve the user-facing integration label for a model entry. Returns "CLI"
+ * when the model is pinned to a CLI backend via `agentRuntime.id` in user
+ * config, otherwise undefined. Intended for picker/status display only —
+ * never used as a routing key.
+ */
+export function resolveModelRuntimeLabel(
+  provider: string,
+  modelId: string,
+  cfg?: OpenClawConfig,
+): string | undefined {
+  const modelKey = `${provider}/${modelId}`;
+  const runtimeId = cfg?.agents?.defaults?.models?.[modelKey]?.agentRuntime?.id;
+  if (runtimeId && isCliProvider(runtimeId, cfg)) {
+    return "CLI";
+  }
+  return undefined;
+}

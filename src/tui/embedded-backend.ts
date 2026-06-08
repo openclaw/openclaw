@@ -5,6 +5,7 @@ import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { resolveDefaultAgentId, resolveSessionAgentId } from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveModelRuntimeLabel } from "../agents/model-selection-cli.js";
 import {
   buildAllowedModelSet,
   buildConfiguredModelCatalog,
@@ -577,6 +578,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       provider: entry.provider,
       contextWindow: entry.contextWindow,
       reasoning: entry.reasoning,
+      runtimeLabel: resolveModelRuntimeLabel(entry.provider, entry.id, cfg),
     }));
   }
 
