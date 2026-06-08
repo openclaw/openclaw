@@ -3261,6 +3261,19 @@ describe("chat session controls", () => {
     });
   });
 
+  it("sets composer speed to auto", async () => {
+    const { state, request } = createChatHeaderState();
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    clickChatSpeedOption(container, "auto");
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      fastMode: "auto",
+    });
+  });
+
   it("scopes composer model changes for a selected global-session agent", async () => {
     const { state, request } = createChatHeaderState();
     state.sessionKey = "global";
@@ -3337,7 +3350,7 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    expect(container.querySelectorAll("[data-chat-speed-option]").length).toBe(3);
+    expect(container.querySelectorAll("[data-chat-speed-option]").length).toBe(4);
 
     clickChatSpeedOption(container, "");
 
