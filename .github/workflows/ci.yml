@@ -1988,6 +1988,12 @@ jobs:
               ;;
           esac
 
+      - name: Native PowerShell smoke checks
+        shell: pwsh
+        run: |
+          pnpm check:docs
+          pnpm build:strict-smoke
+
   macos-node:
     permissions:
       contents: read
