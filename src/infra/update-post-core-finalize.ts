@@ -21,10 +21,18 @@ import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
-import type { UpdateChannel } from "./update-channels.js";
+import { DEFAULT_GIT_CHANNEL, type UpdateChannel } from "./update-channels.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
-const DEFAULT_FINALIZE_TIMEOUT_MS = 30 * 60_000;
+// Whole-process backstop for the finalizer. `update finalize` runs several timed
+// steps (doctor + plugin update/convergence), each bounded by its own per-step
+// `--timeout`. The outer process kill must therefore be larger than a single
+// per-step bound, or a valid multi-step run would be killed and falsely reported
+// as `post-core-plugin-finalize-failed` (blocking the restart). We use a generous
+// floor and, when a larger per-step timeout is requested, scale the outer bound
+// above it rather than reusing the per-step value as the whole-process kill.
+const FINALIZE_PROCESS_TIMEOUT_FLOOR_MS = 30 * 60_000;
+const FINALIZE_PROCESS_STEP_BUDGET_MULTIPLIER = 6;
 
 // Strip the running gateway's service identity from the finalizer child so it is
 // not mistaken for the managed service process (matches the CLI post-core spawn).
@@ -146,27 +154,37 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
   }
 
   const spawnFinalize = params.spawnFinalize ?? defaultFinalizeSpawner;
-  const timeoutMs =
+  const perStepTimeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
       ? params.timeoutMs
       : undefined;
+  // This helper only runs for git/source updates, where `runGatewayUpdate`
+  // defaults the core update to the git/dev channel (`opts.channel ?? "dev"`).
+  // Match it so the finalizer converges official plugins on the same channel as
+  // the core update instead of falling back to the package (stable) channel.
+  const channel = params.channel ?? DEFAULT_GIT_CHANNEL;
   const nodePath = await resolveStableNodePath(process.execPath);
   const argv = buildFinalizeArgv({
     nodePath,
     entrypoint,
-    ...(params.channel ? { channel: params.channel } : {}),
-    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    channel,
+    ...(perStepTimeoutMs === undefined ? {} : { timeoutMs: perStepTimeoutMs }),
   });
   // Pin the finalizer's host-compat resolution to the just-installed core
   // version so plugins reconcile against the new core, not the running process.
   const compatHostVersion = result.after?.version ?? undefined;
   const env = buildFinalizeEnv(params.env ?? process.env, compatHostVersion);
+  // Outer whole-process backstop, decoupled from the per-step `--timeout` above.
+  const processTimeoutMs = Math.max(
+    FINALIZE_PROCESS_TIMEOUT_FLOOR_MS,
+    (perStepTimeoutMs ?? 0) * FINALIZE_PROCESS_STEP_BUDGET_MULTIPLIER,
+  );
 
   try {
     const spawnResult = await spawnFinalize({
       argv,
       cwd: path.dirname(entrypoint),
-      timeoutMs: timeoutMs ?? DEFAULT_FINALIZE_TIMEOUT_MS,
+      timeoutMs: processTimeoutMs,
       env,
     });
     if (spawnResult.code === 0) {
