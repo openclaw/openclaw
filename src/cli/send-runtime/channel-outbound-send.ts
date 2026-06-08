@@ -5,6 +5,7 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundDeliveryFormattingOptions } from "../../infra/outbound/formatting.js";
+import type { OutboundIdentity } from "../../infra/outbound/identity-types.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 
 type RuntimeSendOpts = {
@@ -26,6 +27,7 @@ type RuntimeSendOpts = {
   gifPlayback?: boolean;
   gatewayClientScopes?: readonly string[];
   textMode?: "markdown" | "html";
+  identity?: OutboundIdentity;
 };
 
 function resolveRuntimeThreadId(opts: RuntimeSendOpts): string | number | undefined {
@@ -65,6 +67,7 @@ export function createChannelOutboundRuntimeSend(params: {
           opts.formatting ?? (opts.textMode === "html" ? { parseMode: "HTML" } : undefined),
         gifPlayback: opts.gifPlayback,
         gatewayClientScopes: opts.gatewayClientScopes,
+        identity: opts.identity,
       });
       const hasMedia = Boolean(opts.mediaUrl);
       if (opts.blocks && outbound?.sendPayload) {

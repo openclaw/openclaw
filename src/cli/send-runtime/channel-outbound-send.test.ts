@@ -229,6 +229,54 @@ describe("createChannelOutboundRuntimeSend", () => {
     expect(params.replyToId).toBe("400.000");
   });
 
+  it("passes identity through to sendText when opts.identity is set", async () => {
+    const sendText = vi.fn(async () => ({ channel: "slack", messageId: "slack-id" }));
+    mocks.loadChannelOutboundAdapter.mockResolvedValue({
+      sendText,
+    });
+
+    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
+    const runtimeSend = createChannelOutboundRuntimeSend({
+      channelId: "slack" as never,
+      unavailableMessage: "unavailable",
+    });
+    const identity = { name: "Pulse", emoji: "📟" };
+
+    await runtimeSend.sendMessage("C123", "hello", {
+      cfg: {},
+      identity,
+    });
+
+    const params = expectSingleCallParams(sendText);
+    expect(params.identity).toEqual({ name: "Pulse", emoji: "📟" });
+  });
+
+  it("passes identity through to sendMedia when opts.identity is set", async () => {
+    const sendMedia = vi.fn(async () => ({ channel: "slack", messageId: "slack-media" }));
+    mocks.loadChannelOutboundAdapter.mockResolvedValue({
+      sendText: vi.fn(),
+      sendMedia,
+    });
+    const mediaReadFile = vi.fn(async () => Buffer.from("png"));
+
+    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
+    const runtimeSend = createChannelOutboundRuntimeSend({
+      channelId: "slack" as never,
+      unavailableMessage: "unavailable",
+    });
+    const identity = { name: "Bot", avatarUrl: "https://example.com/avatar.png" };
+
+    await runtimeSend.sendMessage("C123", "caption", {
+      cfg: {},
+      mediaUrl: "file:///tmp/photo.png",
+      mediaAccess: { localRoots: ["/tmp"], readFile: mediaReadFile },
+      identity,
+    });
+
+    const params = expectSingleCallParams(sendMedia);
+    expect(params.identity).toEqual({ name: "Bot", avatarUrl: "https://example.com/avatar.png" });
+  });
+
   it("falls back to sendText when media is present but sendMedia is unavailable", async () => {
     const sendText = vi.fn(async () => ({ channel: "whatsapp", messageId: "wa-3" }));
     mocks.loadChannelOutboundAdapter.mockResolvedValue({
