@@ -3162,6 +3162,62 @@ describe("active-memory plugin", () => {
     expectLinesToContain(lines, "🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0");
   });
 
+  it("preserves memory_search evidence when a later no-recall reply would otherwise discard it", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      qmd: { searchMode: "vsearch" },
+      timeoutMs: 100,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:preserve-early-evidence";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-preserve-early-evidence",
+      updatedAt: 0,
+    };
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: {
+              results: [
+                {
+                  path: "memory/calendar.md",
+                  text: "Ultrassom - Dr. Mario, 2026-06-08 12:30-13:30.",
+                },
+              ],
+              debug: {
+                backend: "qmd",
+                configuredMode: "vsearch",
+                effectiveMode: "vsearch",
+                hits: 1,
+                searchMs: 9,
+              },
+            },
+          },
+        },
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      return { payloads: [{ text: "NONE" }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "quando e com quem era o ultrassom?", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    const prependContext = requirePrependContext(result);
+    expect(prependContext).toContain("Ultrassom - Dr. Mario");
+    expect(prependContext).toContain("2026-06-08 12:30-13:30");
+    expect(activeMemoryConfigFrom(embeddedRunConfig()).qmd).toEqual({
+      searchMode: "vsearch",
+    });
+  });
+
   it("fast-fails configured-provider-missing memory_search results without injecting provider errors", async () => {
     const CONFIGURED_TIMEOUT_MS = 1_000;
     testing.setMinimumTimeoutMsForTests(1);
