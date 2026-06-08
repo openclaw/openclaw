@@ -2424,6 +2424,54 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n`🛠️ Exec`\n• _Checking files_");
   });
 
+  it("keeps tool progress after inter-tool commentary in non-persist progress mode", async () => {
+    // Regression for #90962. In progress mode with commentary enabled, inter-tool
+    // commentary arrives as assistant partial text (onPartialReply -> ingestDraftLaneSegments).
+    // It must accumulate into the shared progress draft, not tear the lane down, otherwise the
+    // tool-progress lines that follow are dropped. Drives the dispatcher with the
+    // commentary -> tool -> commentary -> tool interleave the #90883 producer emits.
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onPartialReply?.({ text: "Let me check the config file" });
+      // onToolStart primes the live progress draft (startImmediately), which is the
+      // precondition for the suppress that #90962 triggers on the next commentary.
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onPartialReply?.({ text: "Now running the tests" });
+      // The tool line #90962 drops: it arrives after the commentary suppressed the draft.
+      await replyOptions?.onItemEvent?.({
+        kind: "command",
+        name: "exec",
+        progressText: "pnpm test",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Cracking", commentary: true },
+        },
+      },
+    });
+
+    // Both tool-progress lines must survive the interleaved commentary; the second one is the
+    // line #90962 drops on main once commentary suppresses the draft.
+    expect(answerDraftStream.update).toHaveBeenCalledWith(expect.stringContaining("Exec"));
+    expect(answerDraftStream.update).toHaveBeenCalledWith(expect.stringContaining("pnpm test"));
+    // The final draft holds every tool line and the commentary together in one open draft.
+    const lastDraft = answerDraftStream.update.mock.calls.at(-1)?.[0];
+    expect(lastDraft).toContain("Exec");
+    expect(lastDraft).toContain("pnpm test");
+    expect(lastDraft).toContain("Let me check the config file");
+    expect(lastDraft).toContain("Now running the tests");
+  });
+
   it("renders configured Telegram commentary progress from preamble item events", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
