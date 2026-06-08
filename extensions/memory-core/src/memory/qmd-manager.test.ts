@@ -1561,6 +1561,79 @@ describe("QmdMemoryManager", () => {
     );
   });
 
+  it("migrates legacy scoped sessions collection to unscoped name", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const sessionPath = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const legacyScopedName = `sessions-${agentId}`;
+    const legacyCollections = new Map<string, { path: string; pattern: string }>([
+      [legacyScopedName, { path: sessionPath, pattern: "**/*.md" }],
+    ]);
+    const removeCalls: string[] = [];
+    const addCalls: Array<{ name: string; path: string }> = [];
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify(
+            [...legacyCollections.entries()].map(([name, info]) => ({
+              name,
+              path: info.path,
+              mask: info.pattern,
+            })),
+          ),
+        );
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "remove") {
+        const child = createMockChild({ autoClose: false });
+        const name = args[2] ?? "";
+        removeCalls.push(name);
+        legacyCollections.delete(name);
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const child = createMockChild({ autoClose: false });
+        const nameIdx = args.indexOf("--name");
+        const name = nameIdx >= 0 ? (args[nameIdx + 1] ?? "") : "";
+        const pathArg = args[2] ?? "";
+        addCalls.push({ name, path: pathArg });
+        legacyCollections.set(name, { path: pathArg, pattern: "**/*.md" });
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    // Legacy scoped name must be removed.
+    expect(removeCalls).toContain(legacyScopedName);
+    // Unscoped "sessions" must be added at the per-agent qmd path.
+    const addedSessions = addCalls.find((c) => c.name === "sessions");
+    expect(addedSessions).toBeDefined();
+    expect(addedSessions?.path).toBe(sessionPath);
+    // Legacy entry must be gone from the simulated index.
+    expect(legacyCollections.has(legacyScopedName)).toBe(false);
+    expect(legacyCollections.has("sessions")).toBe(true);
+  });
+
   it("times out qmd update during sync when configured", async () => {
     vi.useFakeTimers();
     cfg = {

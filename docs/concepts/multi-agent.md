@@ -149,7 +149,7 @@ If one agent should search another agent's QMD session transcripts, add extra co
         workspace: "~/workspaces/main",
         memorySearch: {
           qmd: {
-            extraCollections: [{ path: "notes" }], // resolves inside workspace -> collection named "notes-main"
+            extraCollections: [{ path: "notes" }], // resolves inside workspace -> collection named "custom-1" (no explicit name; use name: "notes" to pin it)
           },
         },
       },
@@ -163,7 +163,7 @@ If one agent should search another agent's QMD session transcripts, add extra co
 }
 ```
 
-The extra collection path can be shared across agents, but the collection name stays explicit when the path is outside the agent workspace. Paths inside the workspace remain agent-scoped so each agent keeps its own transcript search set.
+The extra collection path can be shared across agents. Collection names are always the explicit or auto-derived base name — no agent suffix is appended. Per-agent isolation comes from each agent running its own separate QMD index (under `state/agents/<agentId>/qmd/`), not from the collection name. Provide an explicit `name` field to keep a stable, human-readable name across agents.
 
 ## One WhatsApp number, multiple people (DM split)
 

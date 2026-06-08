@@ -832,6 +832,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     collection: ManagedCollection,
     listedLegacy: ListedCollection,
   ): boolean {
+    // Path mismatch: the legacy collection sits at an unexpected path (e.g. a
+    // workspace was moved, or a user coincidentally named their own collection
+    // like a legacy scoped name). Leave it as an orphan rather than risk
+    // removing something we don't own. It is never queried through managed
+    // collections, so it causes no functional harm.
     if (listedLegacy.path && !this.pathsMatch(listedLegacy.path, collection.path)) {
       return false;
     }

@@ -377,7 +377,7 @@ All under `memorySearch.query.hybrid`:
 
 Paths can be absolute or workspace-relative. Directories are scanned recursively for `.md` files. Symlink handling depends on the active backend: the builtin engine ignores symlinks, while QMD follows the underlying QMD scanner behavior.
 
-For agent-scoped cross-agent transcript search, use `agents.list[].memorySearch.qmd.extraCollections` instead of `memory.qmd.paths`. Those extra collections follow the same `{ path, name, pattern? }` shape, but they are merged per agent and can preserve explicit shared names when the path points outside the current workspace. If the same resolved path appears in both `memory.qmd.paths` and `memorySearch.qmd.extraCollections`, QMD keeps the first entry and skips the duplicate.
+For per-agent cross-agent transcript search, use `agents.list[].memorySearch.qmd.extraCollections` instead of `memory.qmd.paths`. Those extra collections follow the same `{ path, name, pattern? }` shape and are merged per agent. Collection names are always the explicit or auto-derived base name — no agent suffix is appended regardless of whether the path is inside or outside the workspace. If the same resolved path appears in both `memory.qmd.paths` and `memorySearch.qmd.extraCollections`, QMD keeps the first entry and skips the duplicate.
 
 ---
 
