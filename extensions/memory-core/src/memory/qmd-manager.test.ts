@@ -6557,14 +6557,14 @@ describe("QmdMemoryManager", () => {
     const parser = (manager as unknown as WithParser).parseShownCollection.bind(manager);
 
     const sampleOutput = [
-      "Collection: memory-dir-tony",
-      "  Path:     /home/node/.openclaw/teams/front-door/workspace-tony/memory",
+      "Collection: memory-dir-example",
+      "  Path:     /home/node/.openclaw/teams/example-team/workspace-example/memory",
       "  Pattern:  **/*.md",
       "  Include:  yes (default)",
     ].join("\n");
 
     const result = parser(sampleOutput);
-    expect(result.path).toBe("/home/node/.openclaw/teams/front-door/workspace-tony/memory");
+    expect(result.path).toBe("/home/node/.openclaw/teams/example-team/workspace-example/memory");
     expect(result.pattern).toBe("**/*.md");
 
     // Tolerant of missing fields.
