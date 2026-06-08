@@ -117,7 +117,13 @@ function resolveDefaultGatewayTarget(params: {
     // so loopback alone must not grant local approval-runtime authority.
     return "remote";
   }
-  return params.cfg.gateway?.mode === "remote" ? "remote" : "local";
+  if (
+    params.cfg.gateway?.mode === "remote" &&
+    normalizeOptionalString(params.cfg.gateway.remote?.url)
+  ) {
+    return "remote";
+  }
+  return "local";
 }
 
 function validateGatewayUrlOverrideForAgentTools(params: {

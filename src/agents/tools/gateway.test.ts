@@ -364,6 +364,21 @@ describe("gateway tool defaults", () => {
     expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
   });
 
+  it("keeps the local approval runtime token for remote mode without a remote URL", async () => {
+    mocks.configState.value = {
+      gateway: {
+        mode: "remote",
+      },
+    };
+    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
+
+    await callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" });
+
+    const call = capturedGatewayCall();
+    expect(call).not.toHaveProperty("deviceIdentity");
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+  });
+
   it("does not send the local approval runtime token to env-selected gateways", async () => {
     process.env.OPENCLAW_GATEWAY_URL = "wss://gateway.example";
     mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
