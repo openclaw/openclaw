@@ -178,6 +178,19 @@ describe("TTS core", () => {
         expected: inlineTagSummary,
       },
       {
+        content: [
+          {
+            type: "text",
+            text: "Use <text_to_summarize>Start</text_to_summarize> to mark input.",
+          },
+        ],
+        expected: "Use <text_to_summarize>Start</text_to_summarize> to mark input.",
+      },
+      {
+        content: [{ type: "text", text: "The tag <text_to_summarize> begins the block." }],
+        expected: "The tag <text_to_summarize> begins the block.",
+      },
+      {
         content: [{ type: "text", text: "The docs mention <text_to_summarize>." }],
         expected: "The docs mention <text_to_summarize>.",
       },
@@ -209,14 +222,17 @@ describe("TTS core", () => {
       {
         content: [{ type: "text", text: '"Deploy Friday." <text_to_summarize>Do not speak this.' }],
         expected: '"Deploy Friday."',
+        sourceText: "Do not speak this.",
       },
       {
         content: [{ type: "text", text: "(Deploy Friday.) <text_to_summarize>Do not speak this." }],
         expected: "(Deploy Friday.)",
+        sourceText: "Do not speak this.",
       },
       {
         content: [{ type: "text", text: "Deploy Friday <text_to_summarize>Do not speak this." }],
         expected: "Deploy Friday",
+        sourceText: "Do not speak this.",
       },
       {
         content: [
@@ -226,6 +242,7 @@ describe("TTS core", () => {
           },
         ],
         expected: "Deploy Friday",
+        sourceText: "As discussed, do not speak this.",
       },
       {
         content: [
@@ -235,6 +252,7 @@ describe("TTS core", () => {
           },
         ],
         expected: "Deploy Friday",
+        sourceText: "In yesterday's meeting, do not speak this.",
       },
       {
         content: [

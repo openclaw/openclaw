@@ -77,7 +77,10 @@ function isTextContentBlock(block: { type: string }): block is TextContent {
 const TEXT_TO_SUMMARIZE_PROMPT_BLOCK_RE =
   /(^|\r?\n|[.!?][)"'\]]*)[\t ]*<\s*text_to_summarize\b[^>]*>[\s\S]*?(?:<\s*\/\s*text_to_summarize\s*>|$)/gi;
 const SAME_LINE_TEXT_TO_SUMMARIZE_PROMPT_BLOCK_RE =
-  /([^\s<])[\t ]+<\s*text_to_summarize\b[^>]*>(?![\t ]*(?:$|[.!?,;:)\]}'"`]|(?:and|as|for|in|inside|to|when|with|without)\b))[\s\S]*?(?:<\s*\/\s*text_to_summarize\s*>|$)/g;
+  /([^\s<])[\t ]+<\s*text_to_summarize\b[^>]*>[\s\S]*?(?:<\s*\/\s*text_to_summarize\s*>|$)/gi;
+const TEXT_TO_SUMMARIZE_OPEN_TAG_RE = /^.*?<\s*text_to_summarize\b[^>]*>/is;
+const SOURCE_ECHO_PREFIX_LENGTH = 32;
+const MIN_SOURCE_ECHO_PREFIX_LENGTH = 12;
 const SUMMARY_PROMPT_INSTRUCTIONS_ECHO_RE =
   /^you are an assistant that summarizes texts concisely while keeping the most important information\.\s+summarize the text to approximately \d+ characters\.\s+maintain the original tone and style\.\s+reply only with the summary, without additional explanations\.\s*/i;
 const USER_SUMMARY_PROMPT_ECHO = String.raw`the user (?:wants|asks|asked|requested) me to summarize`;
@@ -92,6 +95,33 @@ function stripExactTextToSummarizePromptBlock(text: string, sourceText: string):
   return text.replace(`<text_to_summarize>\n${sourceText}\n</text_to_summarize>`, "");
 }
 
+function stripSameLineTextToSummarizePromptBlocks(text: string, sourceText: string): string {
+  const normalizedSourceText = sourceText.replace(/\s+/g, " ").trim();
+  if (normalizedSourceText.length < MIN_SOURCE_ECHO_PREFIX_LENGTH) {
+    return text;
+  }
+  const sourcePrefix = normalizedSourceText.slice(
+    0,
+    Math.min(normalizedSourceText.length, SOURCE_ECHO_PREFIX_LENGTH),
+  );
+  return text.replace(
+    SAME_LINE_TEXT_TO_SUMMARIZE_PROMPT_BLOCK_RE,
+    (match: string, prefix: string, offset: number, fullText: string) => {
+      const hasInlineContinuation =
+        /<\s*\/\s*text_to_summarize\s*>\s*$/i.test(match) &&
+        /^[\t ]+\S/.test(fullText.slice(offset + match.length));
+      if (hasInlineContinuation) {
+        return match;
+      }
+      const candidateSourceEcho = match
+        .replace(TEXT_TO_SUMMARIZE_OPEN_TAG_RE, "")
+        .replace(/\s+/g, " ")
+        .trimStart();
+      return candidateSourceEcho.startsWith(sourcePrefix) ? prefix : match;
+    },
+  );
+}
+
 function sanitizeSummaryForSpeech(summary: string, sourceText: string): string {
   const withoutAssistantScaffolding = sanitizeAssistantVisibleText(summary).trim();
   const withoutPromptInstructions = withoutAssistantScaffolding
@@ -103,9 +133,14 @@ function sanitizeSummaryForSpeech(summary: string, sourceText: string): string {
   ).trim();
   const withoutPromptBlock = withoutExactPromptBlock
     .replace(TEXT_TO_SUMMARIZE_PROMPT_BLOCK_RE, "$1")
-    .replace(SAME_LINE_TEXT_TO_SUMMARIZE_PROMPT_BLOCK_RE, "$1")
     .trim();
-  const withoutPromptEcho = withoutPromptBlock.replace(LEADING_SUMMARY_PROMPT_ECHO_RE, "").trim();
+  const withoutSameLinePromptBlock = stripSameLineTextToSummarizePromptBlocks(
+    withoutPromptBlock,
+    sourceText,
+  ).trim();
+  const withoutPromptEcho = withoutSameLinePromptBlock
+    .replace(LEADING_SUMMARY_PROMPT_ECHO_RE, "")
+    .trim();
   return withoutPromptEcho.trim();
 }
 
