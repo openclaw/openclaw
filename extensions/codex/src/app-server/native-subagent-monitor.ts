@@ -304,6 +304,8 @@ export class CodexNativeSubagentMonitor {
       }
       const completion = toThreadCompletion(nativeCompletion, childState.childThreadId);
       if (shouldWaitForTranscriptCompletion(completion, this.codexHome)) {
+        // Codex can notify `completed: null` before the child transcript exposes
+        // its final assistant message; poll briefly before delivering the no-final fallback.
         const eventAt = Date.now();
         const reconciled = await this.reconcileChildTranscript(childState.childThreadId);
         if (!reconciled) {
