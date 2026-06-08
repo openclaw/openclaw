@@ -1,3 +1,8 @@
+/**
+ * Nested agent-step executor.
+ *
+ * Sends annotated inter-session messages through in-process or Gateway execution and reads the assistant reply.
+ */
 import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
@@ -41,6 +46,7 @@ function extractAgentCommandReply(result: unknown): string | undefined {
   return texts.length > 0 ? texts.join("\n\n") : undefined;
 }
 
+/** Sends one annotated message to a target session and returns the resulting assistant text. */
 export async function runAgentStep(params: {
   sessionKey: string;
   message: string;
@@ -60,10 +66,12 @@ export async function runAgentStep(params: {
     sourceChannel: params.sourceChannel,
     sourceTool: params.sourceTool ?? "sessions_send",
   };
+  // Mark inter-session prompts so downstream transcripts can distinguish tool-routed text.
   const message = annotateInterSessionPromptText(params.message, inputProvenance);
   const lane = params.lane ?? resolveNestedAgentLaneForSession(params.sessionKey);
   const channel = params.channel ?? INTERNAL_MESSAGE_CHANNEL;
   if (params.transcriptMessage !== undefined) {
+    // Transcript-message mode must use the in-process command path to preserve transcript text.
     const result = await agentStepDeps.agentCommandFromIngress({
       message,
       transcriptMessage: params.transcriptMessage,
@@ -101,6 +109,7 @@ export async function runAgentStep(params: {
 
   const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
   const resolvedRunId = stepRunId || stepIdem;
+  // Gateway agent calls can return before the assistant reply is persisted.
   const result = await waitForAgentRunAndReadUpdatedAssistantReply({
     runId: resolvedRunId,
     sessionKey: params.sessionKey,
@@ -118,6 +127,7 @@ export async function runAgentStep(params: {
   return result.replyText;
 }
 
+/** Test-only dependency overrides for gateway and in-process command execution. */
 export const testing = {
   setDepsForTest(
     overrides?: Partial<{

@@ -1,3 +1,4 @@
+// Stores interactive plugin state and dedupe caches.
 import { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
 import type { DedupeCache } from "../infra/dedupe.js";
 import type { PluginInteractiveHandlerRegistration } from "./types.js";

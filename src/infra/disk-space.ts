@@ -1,3 +1,4 @@
+// Reads and formats disk-space snapshots and warnings.
 import fs from "node:fs";
 import path from "node:path";
 

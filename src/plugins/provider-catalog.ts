@@ -1,3 +1,4 @@
+// Builds provider catalog entries from plugin manifest metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,

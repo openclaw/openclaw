@@ -1,3 +1,4 @@
+// Registers transcript providers and resolves enabled source runtimes.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolvePluginCapabilityProvider,

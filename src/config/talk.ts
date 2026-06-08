@@ -1,3 +1,4 @@
+// Normalizes talk-mode config for voice and channel interactions.
 import {
   normalizeFastMode,
   normalizeOptionalString,

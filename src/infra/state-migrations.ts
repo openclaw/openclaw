@@ -1,3 +1,4 @@
+// Applies persisted state migrations across OpenClaw config files.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -55,7 +56,11 @@ import {
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  detectOpenClawStateDatabaseSchemaMigrations,
+  repairOpenClawStateDatabaseSchema,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { expandHomePrefix } from "./home-dir.js";
 import {
   executeSqliteQuerySync,
@@ -108,6 +113,10 @@ export type LegacyStateDetection = {
   pluginInstallIndex: {
     sourcePath: string;
     hasLegacy: boolean;
+  };
+  stateSchema: {
+    hasLegacy: boolean;
+    preview: string[];
   };
   taskStateSidecars: {
     taskRunsPath: string;
@@ -2626,6 +2635,9 @@ export async function detectLegacyStateMigrations(params: {
   const hasPluginStateSidecar = fileExists(pluginStateSidecarPath);
   const pluginInstallIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
   const hasPluginInstallIndex = fileExists(pluginInstallIndexPath);
+  const stateSchemaMigrations = detectOpenClawStateDatabaseSchemaMigrations({
+    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
+  });
   const taskRunsSidecarPath = resolveLegacyTaskRunsSidecarPath(stateDir);
   const flowRunsSidecarPath = resolveLegacyFlowRunsSidecarPath(stateDir);
   const hasTaskStateSidecars = fileExists(taskRunsSidecarPath) || fileExists(flowRunsSidecarPath);
@@ -2644,12 +2656,15 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     oauthDir,
   });
-  const pluginPlans = await collectPluginDoctorStateMigrationPlans({
-    cfg: params.cfg,
-    env,
-    stateDir,
-    oauthDir,
-  });
+  const pluginPlans =
+    stateSchemaMigrations.length > 0
+      ? []
+      : await collectPluginDoctorStateMigrationPlans({
+          cfg: params.cfg,
+          env,
+          stateDir,
+          oauthDir,
+        });
 
   const preview: string[] = [];
   if (hasLegacySessions) {
@@ -2666,6 +2681,12 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (hasPluginInstallIndex) {
     preview.push(`- Plugin install index: ${pluginInstallIndexPath} → shared SQLite state`);
+  }
+  if (stateSchemaMigrations.length > 0) {
+    preview.push("- Shared SQLite schema: agent database registry primary key → agent_id,path");
+    preview.push(
+      "- Rerun doctor after shared SQLite schema repair to detect plugin state migrations",
+    );
   }
   if (fileExists(taskRunsSidecarPath)) {
     preview.push(`- Task registry sidecar: ${taskRunsSidecarPath} → shared SQLite state`);
@@ -2717,6 +2738,10 @@ export async function detectLegacyStateMigrations(params: {
     pluginInstallIndex: {
       sourcePath: pluginInstallIndexPath,
       hasLegacy: hasPluginInstallIndex,
+    },
+    stateSchema: {
+      hasLegacy: stateSchemaMigrations.length > 0,
+      preview: stateSchemaMigrations.map((migration) => migration.path),
     },
     taskStateSidecars: {
       taskRunsPath: taskRunsSidecarPath,
@@ -2968,6 +2993,15 @@ async function runPluginDoctorStateMigrationPlans(params: {
   return { changes, warnings };
 }
 
+function migrateLegacyStateSchema(detected: LegacyStateDetection): {
+  changes: string[];
+  warnings: string[];
+} {
+  return repairOpenClawStateDatabaseSchema({
+    env: { ...process.env, OPENCLAW_STATE_DIR: detected.stateDir },
+  });
+}
+
 export async function runLegacyStateMigrations(params: {
   detected: LegacyStateDetection;
   config?: OpenClawConfig;
@@ -2976,6 +3010,10 @@ export async function runLegacyStateMigrations(params: {
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const now = params.now ?? (() => Date.now());
   const detected = params.detected;
+  const stateSchema = migrateLegacyStateSchema(detected);
+  if (detected.stateSchema.hasLegacy && stateSchema.warnings.length > 0) {
+    return stateSchema;
+  }
   const pluginStateSidecar = await migrateLegacyPluginStateSidecar({
     stateDir: detected.stateDir,
   });
@@ -2991,10 +3029,12 @@ export async function runLegacyStateMigrations(params: {
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
-  const pluginPlans = await runPluginDoctorStateMigrationPlans({
-    detected,
-    config: params.config ?? ({} as OpenClawConfig),
-  });
+  const pluginPlans = detected.stateSchema.hasLegacy
+    ? { changes: [], warnings: [] }
+    : await runPluginDoctorStateMigrationPlans({
+        detected,
+        config: params.config ?? ({} as OpenClawConfig),
+      });
   const sessions = await migrateLegacySessions(detected, now, {
     recoverCorruptTargetStore: params.recoverCorruptTargetStore,
   });
@@ -3009,6 +3049,7 @@ export async function runLegacyStateMigrations(params: {
   );
   return {
     changes: [
+      ...stateSchema.changes,
       ...pluginStateSidecar.changes,
       ...pluginInstallIndex.changes,
       ...taskStateSidecars.changes,
@@ -3021,6 +3062,7 @@ export async function runLegacyStateMigrations(params: {
       ...channelPlans.changes,
     ],
     warnings: [
+      ...stateSchema.warnings,
       ...pluginStateSidecar.warnings,
       ...pluginInstallIndex.warnings,
       ...taskStateSidecars.warnings,
@@ -3305,6 +3347,10 @@ export async function autoMigrateLegacyState(params: {
     homedir: params.homedir,
     log: params.log,
   });
+  const stateDir = resolveStateDir(env, params.homedir ?? os.homedir);
+  const stateSchema = repairOpenClawStateDatabaseSchema({
+    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
+  });
 
   // Canonicalize orphaned session keys regardless of whether legacy migration
   // is needed — the orphan-key bug (#29683) affects all installs with
@@ -3361,6 +3407,7 @@ export async function autoMigrateLegacyState(params: {
     });
     const changes = [
       ...stateDirResult.changes,
+      ...stateSchema.changes,
       ...orphanKeys.changes,
       ...acpSessionMetadata.changes,
       ...pluginStateSidecar.changes,
@@ -3372,6 +3419,7 @@ export async function autoMigrateLegacyState(params: {
     ];
     const warnings = [
       ...stateDirResult.warnings,
+      ...stateSchema.warnings,
       ...orphanKeys.warnings,
       ...acpSessionMetadata.warnings,
       ...pluginStateSidecar.warnings,
@@ -3385,6 +3433,7 @@ export async function autoMigrateLegacyState(params: {
     return {
       migrated:
         stateDirResult.migrated ||
+        stateSchema.changes.length > 0 ||
         orphanKeys.changes.length > 0 ||
         acpSessionMetadata.changes.length > 0 ||
         pluginStateSidecar.changes.length > 0 ||
@@ -3405,16 +3454,19 @@ export async function autoMigrateLegacyState(params: {
     !detected.pluginPlans?.hasLegacy &&
     !detected.pluginStateSidecar.hasLegacy &&
     !detected.pluginInstallIndex.hasLegacy &&
+    !detected.stateSchema.hasLegacy &&
     !detected.taskStateSidecars.hasLegacy &&
     !detected.deliveryQueues.hasLegacy
   ) {
     const changes = [
       ...stateDirResult.changes,
+      ...stateSchema.changes,
       ...orphanKeys.changes,
       ...acpSessionMetadata.changes,
     ];
     const warnings = [
       ...stateDirResult.warnings,
+      ...stateSchema.warnings,
       ...orphanKeys.warnings,
       ...acpSessionMetadata.warnings,
     ];
@@ -3422,6 +3474,7 @@ export async function autoMigrateLegacyState(params: {
     return {
       migrated:
         stateDirResult.migrated ||
+        stateSchema.changes.length > 0 ||
         orphanKeys.changes.length > 0 ||
         acpSessionMetadata.changes.length > 0,
       skipped: false,
@@ -3464,6 +3517,7 @@ export async function autoMigrateLegacyState(params: {
   );
   const changes = [
     ...stateDirResult.changes,
+    ...stateSchema.changes,
     ...orphanKeys.changes,
     ...acpSessionMetadata.changes,
     ...pluginStateSidecar.changes,
@@ -3479,6 +3533,7 @@ export async function autoMigrateLegacyState(params: {
   ];
   const warnings = [
     ...stateDirResult.warnings,
+    ...stateSchema.warnings,
     ...orphanKeys.warnings,
     ...acpSessionMetadata.warnings,
     ...pluginStateSidecar.warnings,

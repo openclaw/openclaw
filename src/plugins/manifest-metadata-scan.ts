@@ -1,3 +1,4 @@
+// Scans plugin manifest metadata without importing runtime entrypoints.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

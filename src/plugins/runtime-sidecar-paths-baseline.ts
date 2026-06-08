@@ -1,3 +1,4 @@
+// Loads runtime sidecar path baselines for bundled plugin checks.
 import fs from "node:fs";
 import path from "node:path";
 import { tryReadJsonSync } from "../infra/json-files.js";

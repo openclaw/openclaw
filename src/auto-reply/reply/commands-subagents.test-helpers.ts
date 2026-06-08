@@ -1,3 +1,4 @@
+// Shared helpers for subagent command tests and directive fixtures.
 import type { InlineDirectives } from "./directive-handling.js";
 
 /** Test helper that returns a fully cleared inline-directive object. */

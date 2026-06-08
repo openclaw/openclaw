@@ -1,3 +1,6 @@
+/**
+ * Manages context-engine lifecycle hooks for native agent harnesses.
+ */
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type {
   AssembleResult,
@@ -144,6 +147,8 @@ export async function finalizeHarnessContextEngineTurn(params: {
   sessionManager?: unknown;
   config?: SessionWriteLockAcquireTimeoutConfig;
   warn: (message: string) => void;
+  /** True when this turn belongs to a heartbeat run. */
+  isHeartbeat?: boolean;
 }) {
   if (!params.contextEngine) {
     return { postTurnFinalizationSucceeded: true };
@@ -165,6 +170,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
         prePromptMessageCount: conversationSnapshot.prePromptMessageCount,
         tokenBudget: params.tokenBudget,
         runtimeContext: params.runtimeContext,
+        isHeartbeat: params.isHeartbeat,
       });
     } catch (afterTurnErr) {
       postTurnFinalizationSucceeded = false;
@@ -181,6 +187,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
             sessionId: params.sessionIdUsed,
             sessionKey: params.sessionKey,
             messages: newMessages,
+            isHeartbeat: params.isHeartbeat,
           });
         } catch (ingestErr) {
           postTurnFinalizationSucceeded = false;
@@ -193,6 +200,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
               sessionId: params.sessionIdUsed,
               sessionKey: params.sessionKey,
               message: msg,
+              isHeartbeat: params.isHeartbeat,
             });
           } catch (ingestErr) {
             postTurnFinalizationSucceeded = false;

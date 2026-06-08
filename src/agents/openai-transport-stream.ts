@@ -1,3 +1,9 @@
+/**
+ * OpenAI-compatible streaming transport.
+ *
+ * Handles Chat Completions, Responses, Azure variants, tool-call replay, reasoning events, and
+ * provider-specific payload policy before converting SDK streams into OpenClaw assistant events.
+ */
 import { createHash, randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -3432,6 +3438,7 @@ function getCompat(model: OpenAIModeModel): {
     visibleReasoningDetailTypes:
       compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
     requiresReasoningContentOnAssistantMessages:
+      compat.requiresReasoningContentOnAssistantMessages ??
       detected.requiresReasoningContentOnAssistantMessages,
     requiresNonEmptyUserOrAssistantMessage: detected.requiresNonEmptyUserOrAssistantMessage,
   };
@@ -4277,6 +4284,7 @@ function mapStopReason(reason: string | null) {
 }
 
 export const testing = {
+  getCompat,
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
   buildOpenAISdkClientOptions,

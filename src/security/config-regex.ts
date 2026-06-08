@@ -1,3 +1,4 @@
+// Defines config regexes used by security validation.
 import {
   compileSafeRegexDetailed,
   type SafeRegexCompileResult,

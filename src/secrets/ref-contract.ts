@@ -1,3 +1,4 @@
+/** Shared SecretRef grammar and validation helpers for config, schema, SDK, and gateway parity. */
 import {
   DEFAULT_SECRET_PROVIDER_ALIAS,
   type SecretRef,

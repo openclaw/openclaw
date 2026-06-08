@@ -1,3 +1,4 @@
+// Creates private fs-safe file stores.
 import "./fs-safe-defaults.js";
 import {
   fileStore,

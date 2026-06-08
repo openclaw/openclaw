@@ -1,3 +1,4 @@
+/** Normalizes durable plugin install records into installed-index metadata and back. */
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type {
   InstalledPluginIndex,

@@ -1,3 +1,4 @@
+// Adapts Node's sync sqlite API to Kysely.
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type {
   DatabaseConnection,

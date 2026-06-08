@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover index behavior.
 import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../../src/test-utils/talk-test-provider.js";
 import * as protocol from "./index.js";
@@ -120,6 +121,46 @@ describe("lazy protocol validators", () => {
     expect(validateChatMetadataParams({ agentId: "work" })).toBe(true);
     expect(validateChatMetadataParams({ agentId: "" })).toBe(false);
     expect(validateChatMetadataParams({ agentId: "work", view: "configured" })).toBe(false);
+  });
+
+  it("validates chat sends that suppress command interpretation", () => {
+    expect(
+      validateChatSendParams({
+        sessionKey: "agent:main",
+        message: "/reset examples",
+        suppressCommandInterpretation: true,
+        idempotencyKey: "chat-run-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("validates Skill Workshop revision request params", () => {
+    expect(
+      protocol.validateSkillsProposalRequestRevisionParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        targetAgentId: "writer",
+        instructions: "Make the support files 5",
+        sessionKey: "agent:main:session:skill-workshop",
+        idempotencyKey: "revision-run-1",
+      }),
+    ).toBe(true);
+    expect(
+      protocol.validateSkillsProposalRequestRevisionParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        instructions: "",
+        sessionKey: "agent:main:session:skill-workshop",
+        idempotencyKey: "revision-run-1",
+      }),
+    ).toBe(false);
+    expect(
+      protocol.validateSkillsProposalRequestRevisionParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        instructions: "Make the support files 5",
+        sessionKey: "agent:main:session:skill-workshop",
+        idempotencyKey: "revision-run-1",
+        hiddenPrompt: "do not accept caller-provided hidden prompts",
+      }),
+    ).toBe(false);
   });
 
   it("can still compile every exported protocol validator", () => {

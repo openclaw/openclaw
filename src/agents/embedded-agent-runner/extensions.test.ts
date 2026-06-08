@@ -1,4 +1,5 @@
-import type { ModelRegistry, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+// Coverage for embedded extension factory selection and runtime wiring.
+import type { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -14,13 +15,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
-  applyProviderResolvedModelCompatWithPlugins: () => undefined,
-  applyProviderResolvedTransportWithPlugin: () => undefined,
-  buildProviderUnknownModelHintWithPlugin: () => undefined,
-  normalizeProviderResolvedModelWithPlugin: () => undefined,
-  normalizeProviderTransportWithPlugin: () => undefined,
-  prepareProviderDynamicModel: async () => {},
-  resolveExternalAuthProfilesWithPlugins: () => [],
+  // Plugin-owned cache-TTL decisions are mocked out here; extension selection
+  // tests assert the core default wiring only.
   resolveProviderCacheTtlEligibility: () => undefined,
   resolveProviderRuntimePlugin: () => undefined,
   runProviderDynamicModel: () => undefined,
@@ -36,6 +32,8 @@ vi.mock("./logger.js", () => ({
 }));
 
 function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
+  // The safeguard runtime attaches to the session manager, so tests keep the
+  // same manager instance around for both factory construction and inspection.
   const sessionManager = {} as SessionManager;
   const model = {
     id: "claude-sonnet-4-20250514",
