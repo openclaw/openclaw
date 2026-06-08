@@ -42,6 +42,10 @@ const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
   "thread-create",
   "thread-reply",
   "sticker",
+  // list-reply produces a visible message in the destination chat, so it must
+  // honor the same bound-context restriction as send/poll/upload-file; without
+  // this entry an agent bound to chat A could fire a native list reply at chat B.
+  "list-reply",
 ]);
 
 // Mutations are guarded above, but markers only apply to outbound payloads that
@@ -72,6 +76,21 @@ function resolveContextGuardTarget(
     }
     if (typeof params.to === "string") {
       return params.to;
+    }
+    return undefined;
+  }
+
+  if (action === "list-reply") {
+    // The WhatsApp list-reply action accepts chatJid/chatId in addition to to;
+    // resolve them here so an alias-only invocation cannot skip the guard.
+    if (typeof params.to === "string") {
+      return params.to;
+    }
+    if (typeof params.chatJid === "string") {
+      return params.chatJid;
+    }
+    if (typeof params.chatId === "string") {
+      return params.chatId;
     }
     return undefined;
   }
