@@ -34,6 +34,7 @@ export type BuildStatusTextParams = {
   defaultGroupActivation: () => "always" | "mention";
   mediaDecisions?: MediaUnderstandingDecision[];
   taskLineOverride?: string;
+  pluginHealthLineOverride?: string;
   skipDefaultTaskLookup?: boolean;
   primaryModelLabelOverride?: string;
   modelAuthOverride?: string;

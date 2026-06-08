@@ -46,6 +46,7 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
+import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 export type { BuildStatusTextParams } from "./status-text.types.js";
 
@@ -66,6 +67,9 @@ let agentHarnessSelectionRuntimePromise: Promise<
 let statusQueueRuntimePromise: Promise<typeof import("./status-queue.runtime.js")> | null = null;
 let statusSubagentsRuntimePromise: Promise<typeof import("./status-subagents.runtime.js")> | null =
   null;
+let statusPluginHealthRuntimePromise: Promise<
+  typeof import("./status-plugin-health.runtime.js")
+> | null = null;
 
 function loadStatusMessageRuntime(): Promise<typeof import("../auto-reply/status.runtime.js")> {
   const runtimePromise = (statusMessageRuntimePromise ??=
@@ -91,6 +95,14 @@ function loadStatusSubagentsRuntime(): Promise<typeof import("./status-subagents
 
 function loadStatusQueueRuntime(): Promise<typeof import("./status-queue.runtime.js")> {
   const runtimePromise = (statusQueueRuntimePromise ??= import("./status-queue.runtime.js"));
+  return runtimePromise;
+}
+
+function loadStatusPluginHealthRuntime(): Promise<
+  typeof import("./status-plugin-health.runtime.js")
+> {
+  const runtimePromise = (statusPluginHealthRuntimePromise ??=
+    import("./status-plugin-health.runtime.js"));
   return runtimePromise;
 }
 
@@ -265,6 +277,15 @@ export function buildStatusUptimeLine(): string {
   const gatewayUptimeMs = Math.max(0, Math.round(process.uptime() * 1000));
   const systemUptimeMs = Math.max(0, Math.round(os.uptime() * 1000));
   return `⏱️ Uptime: gateway ${formatStatusUptimeDuration(gatewayUptimeMs)} · system ${formatStatusUptimeDuration(systemUptimeMs)}`;
+}
+
+async function resolveRuntimePluginHealthLine(): Promise<string> {
+  try {
+    const { collectRuntimePluginHealthSnapshot } = await loadStatusPluginHealthRuntime();
+    return formatCompactPluginHealthLine(collectRuntimePluginHealthSnapshot());
+  } catch {
+    return "⚠️ Plugins: health unavailable";
+  }
 }
 
 // Public status text builder for CLI/chat status commands. It resolves dynamic
@@ -509,6 +530,9 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     allowPluginNormalization: false,
   });
   const configuredDefaultModelLabel = `${configuredDefaultRef.provider}/${configuredDefaultRef.model}`;
+  const pluginHealthLine = Object.hasOwn(params, "pluginHealthLineOverride")
+    ? params.pluginHealthLineOverride
+    : await resolveRuntimePluginHealthLine();
   const { buildStatusMessage } = await loadStatusMessageRuntime();
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
@@ -567,6 +591,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     },
     subagentsLine,
     taskLine,
+    pluginHealthLine,
     mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: params.includeTranscriptUsage ?? true,
   });
