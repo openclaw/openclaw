@@ -99,9 +99,9 @@ export type ContinuationSpanAttrs = {
    */
   readonly "delegate.delivery"?: string;
   /**
-   * `true` when `ChainBudget.declineToCarry` silenced emission for this
-   * step. Carried on the `continuation.disabled` event-span and on the
-   * `heartbeat` span when continuation context is present.
+   * `true` when a continuation cap (see `disabled.reason`) silenced emission
+   * for this step. Carried on the `continuation.disabled` event-span and on
+   * the `heartbeat` span when continuation context is present.
    */
   readonly "continuation.disabled"?: boolean;
   /**
