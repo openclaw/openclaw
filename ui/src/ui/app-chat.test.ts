@@ -1380,6 +1380,34 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("preserves /reset soft args and skips confirmation dialog", async () => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/reset soft please reload system prompt",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(confirm).not.toHaveBeenCalled();
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    expect(payload.sessionKey).toBe("agent:main");
+    expect(payload.message).toBe("/reset soft please reload system prompt");
+    expect(host.chatMessage).toBe("");
+  });
+
   it("records visible send timing phases for a normal chat send", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
