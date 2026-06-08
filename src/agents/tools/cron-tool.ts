@@ -432,13 +432,16 @@ function cronCreatorToolNames(tools: readonly NormalizedCronCreatorTool[]): stri
 function capCronAgentTurnToolsAllow(params: {
   payload: Record<string, unknown>;
   creatorToolAllowlist: CronCreatorToolAllowlistEntry[];
+  defaultToolsAllow?: unknown;
 }): void {
   if (params.payload.kind !== "agentTurn") {
     return;
   }
   const creatorToolsAllow = normalizeCronCreatorToolsAllow(params.creatorToolAllowlist);
   const creatorToolNames = cronCreatorToolNames(creatorToolsAllow);
-  const requestedRaw = params.payload.toolsAllow;
+  const requestedRaw = Object.hasOwn(params.payload, "toolsAllow")
+    ? params.payload.toolsAllow
+    : params.defaultToolsAllow;
   if (!Array.isArray(requestedRaw)) {
     params.payload.toolsAllow = creatorToolNames;
     return;
@@ -446,6 +449,10 @@ function capCronAgentTurnToolsAllow(params: {
   const requestedToolsAllow = normalizeCronToolsAllow(
     requestedRaw.filter((entry): entry is string => typeof entry === "string"),
   );
+  if (requestedToolsAllow.length === 0) {
+    params.payload.toolsAllow = [];
+    return;
+  }
   if (requestedToolsAllow.includes("*")) {
     params.payload.toolsAllow = creatorToolNames;
     return;
@@ -492,14 +499,18 @@ async function capCronAgentTurnUpdatePatchToolsAllow(params: {
   }
   const payload = isRecord(params.patch.payload) ? params.patch.payload : undefined;
   const patchPayloadKind = readCronPayloadKind(payload);
-  if (patchPayloadKind === "agentTurn") {
+  if (patchPayloadKind === "agentTurn" && payload && Object.hasOwn(payload, "toolsAllow")) {
     capCronAgentTurnToolsAllow({
       payload,
       creatorToolAllowlist: params.creatorToolAllowlist,
     });
     return;
   }
-  if (patchPayloadKind === "systemEvent" || patchPayloadKind === "command" || patchPayloadKind) {
+  if (
+    patchPayloadKind === "systemEvent" ||
+    patchPayloadKind === "command" ||
+    (patchPayloadKind && patchPayloadKind !== "agentTurn")
+  ) {
     return;
   }
 
@@ -514,6 +525,7 @@ async function capCronAgentTurnUpdatePatchToolsAllow(params: {
   capCronAgentTurnToolsAllow({
     payload: nextPayload,
     creatorToolAllowlist: params.creatorToolAllowlist,
+    defaultToolsAllow: isRecord(existingPayload) ? existingPayload.toolsAllow : undefined,
   });
 }
 
