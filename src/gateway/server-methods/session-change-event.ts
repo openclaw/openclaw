@@ -2,6 +2,7 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
+import { resolveSessionMessageSubscriptionKey } from "./sessions.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export type SessionChangedPayload = {
@@ -18,10 +19,40 @@ export function emitSessionsChanged(
     | "chatAbortControllers"
     | "getRuntimeConfig"
     | "getSessionEventSubscriberConnIds"
+    | "getSessionMessageSubscriberConnIds"
   >,
   payload: SessionChangedPayload,
 ) {
-  const connIds = context.getSessionEventSubscriberConnIds();
+  const evSubs = context.getSessionEventSubscriberConnIds();
+  const isTeardown =
+    payload.reason === "reset" || payload.reason === "delete" || payload.reason === "new";
+
+  if (isTeardown) {
+    let msgSubs = new Set<string>();
+    if (payload.sessionKey) {
+      const subscriptionKey = resolveSessionMessageSubscriptionKey({
+        canonicalKey: payload.sessionKey,
+        agentId: payload.agentId,
+        defaultAgentId: resolveDefaultAgentId(context.getRuntimeConfig()),
+      });
+      msgSubs = context.getSessionMessageSubscriberConnIds(subscriptionKey);
+    }
+    const drainConnIds = new Set<string>([...evSubs, ...msgSubs]);
+
+    if (drainConnIds.size > 0 && payload.sessionKey) {
+      context.broadcastToConnIds(
+        "socket.drain",
+        {
+          sessionKey: payload.sessionKey,
+          reason: payload.reason,
+          ts: Date.now(),
+        },
+        drainConnIds,
+      );
+    }
+  }
+
+  const connIds = evSubs;
   if (connIds.size === 0) {
     return;
   }
@@ -104,6 +135,6 @@ export function emitSessionsChanged(
         : {}),
     },
     connIds,
-    { dropIfSlow: true },
+    { dropIfSlow: !isTeardown },
   );
 }
