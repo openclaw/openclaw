@@ -3,6 +3,11 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  clearPersistedContextEngineQuarantine,
+  listPersistedContextEngineQuarantines,
+  recordPersistedContextEngineQuarantine,
+} from "./quarantine-health.js";
 import type {
   AssembleResult,
   BootstrapResult,
@@ -445,6 +450,11 @@ function recordContextEngineQuarantine(params: {
     ...(params.owner ? { owner: params.owner } : {}),
   };
   registryState.quarantinedEngines.set(params.engineId, quarantine);
+  try {
+    recordPersistedContextEngineQuarantine(quarantine);
+  } catch {
+    // Quarantine behavior must not depend on the best-effort health mirror.
+  }
   const ownerSuffix = params.owner ? ` owner=${sanitizeForLog(params.owner)}` : "";
   console.error(
     `[context-engine] Context engine "${sanitizeForLog(params.engineId)}"${ownerSuffix} failed during ${sanitizeForLog(params.operation)}: ` +
@@ -471,6 +481,14 @@ export function listContextEngineQuarantines(): ContextEngineRuntimeQuarantine[]
     }
     quarantines.push(quarantine);
   }
+  const seenEngineIds = new Set(quarantines.map((entry) => entry.engineId));
+  for (const entry of listPersistedContextEngineQuarantines()) {
+    if (seenEngineIds.has(entry.engineId)) {
+      continue;
+    }
+    quarantines.push(entry);
+    seenEngineIds.add(entry.engineId);
+  }
   return quarantines;
 }
 
@@ -478,9 +496,11 @@ export function clearContextEngineRuntimeQuarantine(engineId?: string): void {
   const quarantinedEngines = getContextEngineRegistryState().quarantinedEngines;
   if (engineId === undefined) {
     quarantinedEngines.clear();
+    clearPersistedContextEngineQuarantine();
     return;
   }
   quarantinedEngines.delete(engineId);
+  clearPersistedContextEngineQuarantine(engineId);
 }
 
 /**
