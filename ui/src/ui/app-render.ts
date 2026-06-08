@@ -1312,7 +1312,7 @@ export function renderApp(state: AppViewState) {
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const localAssistantAvatarOverride =
-    normalizeOptionalString(loadLocalAssistantIdentity().avatar) ?? null;
+    normalizeOptionalString(loadLocalAssistantIdentity(state.assistantAgentId).avatar) ?? null;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAssistantAvatarStatus = localAssistantAvatarOverride
     ? "data"

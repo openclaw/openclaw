@@ -350,28 +350,51 @@ export function saveLocalUserIdentity(next: LocalUserIdentity) {
 
 export type LocalAssistantIdentity = { avatar: string | null };
 
-export function loadLocalAssistantIdentity(): LocalAssistantIdentity {
+function resolveLocalAssistantIdentityKey(agentId?: string | null): string {
+  const normalized = agentId?.trim();
+  return normalized
+    ? `${LOCAL_ASSISTANT_IDENTITY_KEY}:${normalized}`
+    : LOCAL_ASSISTANT_IDENTITY_KEY;
+}
+
+export function loadLocalAssistantIdentity(agentId?: string | null): LocalAssistantIdentity {
   const storage = getSafeLocalStorage();
   try {
-    const raw = storage?.getItem(LOCAL_ASSISTANT_IDENTITY_KEY);
-    if (!raw) {
-      return { avatar: null };
+    const scopedKey = resolveLocalAssistantIdentityKey(agentId);
+    const scopedRaw = storage?.getItem(scopedKey);
+    if (scopedRaw) {
+      const parsed = JSON.parse(scopedRaw) as Partial<LocalAssistantIdentity>;
+      return { avatar: typeof parsed.avatar === "string" ? parsed.avatar : null };
     }
-    const parsed = JSON.parse(raw) as Partial<LocalAssistantIdentity>;
-    return { avatar: typeof parsed.avatar === "string" ? parsed.avatar : null };
+    // One-time upgrade: fall back to legacy unscoped key when no scoped entry exists
+    if (agentId) {
+      const legacyRaw = storage?.getItem(LOCAL_ASSISTANT_IDENTITY_KEY);
+      if (legacyRaw) {
+        const parsed = JSON.parse(legacyRaw) as Partial<LocalAssistantIdentity>;
+        const avatar = typeof parsed.avatar === "string" ? parsed.avatar : null;
+        if (avatar) {
+          // Migrate the legacy value to the scoped key
+          storage?.setItem(scopedKey, JSON.stringify({ avatar }));
+          storage?.removeItem(LOCAL_ASSISTANT_IDENTITY_KEY);
+        }
+        return { avatar };
+      }
+    }
+    return { avatar: null };
   } catch {
     return { avatar: null };
   }
 }
 
-export function saveLocalAssistantIdentity(next: LocalAssistantIdentity) {
+export function saveLocalAssistantIdentity(next: LocalAssistantIdentity, agentId?: string | null) {
   const storage = getSafeLocalStorage();
+  const key = resolveLocalAssistantIdentityKey(agentId);
   try {
     if (!next.avatar) {
-      storage?.removeItem(LOCAL_ASSISTANT_IDENTITY_KEY);
+      storage?.removeItem(key);
       return;
     }
-    storage?.setItem(LOCAL_ASSISTANT_IDENTITY_KEY, JSON.stringify({ avatar: next.avatar }));
+    storage?.setItem(key, JSON.stringify({ avatar: next.avatar }));
   } catch {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory identity updates from being applied
