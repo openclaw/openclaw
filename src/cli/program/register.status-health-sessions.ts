@@ -389,7 +389,13 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           "Backed by the sessions.compact gateway RPC; exits non-zero when compaction fails.",
         )}`,
     )
-    .action(async (key: string, opts) => {
+    .action(async (key: string, opts, command) => {
+      // Sibling `sessions` subcommands inherit parent options (see list/cleanup
+      // above): `--agent`/`--json` may be supplied on the parent `sessions`
+      // command, e.g. `openclaw sessions --agent work compact <key>`. Merge them
+      // so a parent `--agent` is not silently dropped and the wrong agent's
+      // session compacted.
+      const parentOpts = command.parent?.opts() as { agent?: string; json?: boolean } | undefined;
       const maxLines = parseStrictPositiveIntOrUndefined(opts.maxLines);
       if (opts.maxLines !== undefined && maxLines === undefined) {
         defaultRuntime.error("--max-lines must be a positive integer.");
@@ -407,13 +413,13 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         await sessionsCompactCommand(
           {
             key,
-            agent: opts.agent as string | undefined,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
             maxLines,
             timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
             url: opts.url as string | undefined,
             token: opts.token as string | undefined,
             password: opts.password as string | undefined,
-            json: Boolean(opts.json),
+            json: Boolean(opts.json || parentOpts?.json),
           },
           defaultRuntime,
         );
