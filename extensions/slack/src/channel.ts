@@ -472,7 +472,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
   },
   ...createAttachedChannelResultAdapter({
     channel: "slack",
-    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg, identity }) => {
       const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
         cfg,
         accountId: accountId ?? undefined,
@@ -485,6 +485,15 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
         threadTs: threadTsValue,
         accountId: accountId ?? undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
+        ...(identity
+          ? {
+              identity: {
+                username: identity.name,
+                iconUrl: identity.avatarUrl,
+                iconEmoji: identity.emoji,
+              },
+            }
+          : {}),
       });
     },
     sendMedia: async ({
@@ -497,6 +506,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       cfg,
+      identity,
     }) => {
       const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
         cfg,
@@ -512,6 +522,15 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
         threadTs: threadTsValue,
         accountId: accountId ?? undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
+        ...(identity
+          ? {
+              identity: {
+                username: identity.name,
+                iconUrl: identity.avatarUrl,
+                iconEmoji: identity.emoji,
+              },
+            }
+          : {}),
       });
     },
   }),
