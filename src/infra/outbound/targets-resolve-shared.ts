@@ -8,7 +8,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { validateTargetProviderPrefix } from "./channel-target-prefix.js";
-import { missingTargetError } from "./target-errors.js";
+import {
+  isReservedTargetMetaString,
+  missingTargetError,
+  reservedTargetMetaStringError,
+} from "./target-errors.js";
 
 /**
  * Result of resolving a concrete outbound target for a channel send.
@@ -72,6 +76,12 @@ export function resolveOutboundTargetWithPlugin(params: {
           accountId: params.target.accountId ?? undefined,
         })
       : undefined);
+
+  // Reject reserved meta-strings before they leak as chat handles or directory lookups.
+  if (effectiveTo && isReservedTargetMetaString(effectiveTo)) {
+    return { ok: false, error: reservedTargetMetaStringError(effectiveTo) };
+  }
+
   const targetPrefixError = validateTargetProviderPrefix({
     channel: params.target.channel,
     to: effectiveTo,

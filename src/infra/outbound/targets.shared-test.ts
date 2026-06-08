@@ -132,5 +132,21 @@ export function runResolveOutboundTargetCoreTests(): void {
         expect(res.error.message).toContain("WebChat");
       }
     });
+
+    it.each([
+      { target: "current", description: "current" },
+      { target: "CURRENT", description: "CURRENT (uppercase)" },
+      { target: "  current  ", description: "current with whitespace" },
+      { target: "self", description: "self" },
+      { target: "this", description: "this" },
+      { target: "me", description: "me" },
+    ])("rejects reserved meta-string $description as literal target", ({ target }) => {
+      const res = resolveOutboundTarget({ channel: "alpha", to: target });
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.error.message).toContain("reserved meta-string");
+        expect(res.error.message).toContain(target.trim());
+      }
+    });
   });
 }

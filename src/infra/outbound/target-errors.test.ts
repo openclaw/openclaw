@@ -3,8 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   ambiguousTargetError,
   ambiguousTargetMessage,
+  isReservedTargetMetaString,
   missingTargetError,
   missingTargetMessage,
+  reservedTargetMetaStringError,
+  reservedTargetMetaStringMessage,
+  RESERVED_TARGET_META_STRINGS,
   unknownTargetError,
   unknownTargetMessage,
 } from "./target-errors.js";
@@ -68,5 +72,52 @@ describe("target error helpers", () => {
     expect(ambiguousTargetError("Discord", "general", "Use channel:123").message).toContain(
       "Hint: Use channel:123",
     );
+  });
+
+  describe("reserved target meta-strings", () => {
+    it("identifies reserved meta-strings (case-insensitive)", () => {
+      expect(isReservedTargetMetaString("current")).toBe(true);
+      expect(isReservedTargetMetaString("CURRENT")).toBe(true);
+      expect(isReservedTargetMetaString("  current  ")).toBe(true);
+      expect(isReservedTargetMetaString("self")).toBe(true);
+      expect(isReservedTargetMetaString("Self")).toBe(true);
+      expect(isReservedTargetMetaString("this")).toBe(true);
+      expect(isReservedTargetMetaString("THIS")).toBe(true);
+      expect(isReservedTargetMetaString("me")).toBe(true);
+      expect(isReservedTargetMetaString("ME")).toBe(true);
+    });
+
+    it("rejects non-reserved strings", () => {
+      expect(isReservedTargetMetaString("my-room")).toBe(false);
+      expect(isReservedTargetMetaString("@channel")).toBe(false);
+      expect(isReservedTargetMetaString("current-room")).toBe(false);
+      expect(isReservedTargetMetaString("selfie")).toBe(false);
+      expect(isReservedTargetMetaString("")).toBe(false);
+      expect(isReservedTargetMetaString("   ")).toBe(false);
+    });
+
+    it("formats reserved target error message", () => {
+      expect(reservedTargetMetaStringMessage("current")).toBe(
+        'Resolver: reserved meta-string "current" cannot be a literal target. Use explicit { chatId, threadId } instead.',
+      );
+      expect(reservedTargetMetaStringMessage("CURRENT")).toBe(
+        'Resolver: reserved meta-string "CURRENT" cannot be a literal target. Use explicit { chatId, threadId } instead.',
+      );
+    });
+
+    it("creates reserved target error", () => {
+      const error = reservedTargetMetaStringError("current");
+      expect(error).toBeInstanceOf(Error);
+      expect(error.message).toContain("reserved meta-string");
+      expect(error.message).toContain("current");
+    });
+
+    it("exports the complete list of reserved strings", () => {
+      expect(RESERVED_TARGET_META_STRINGS).toContain("current");
+      expect(RESERVED_TARGET_META_STRINGS).toContain("self");
+      expect(RESERVED_TARGET_META_STRINGS).toContain("this");
+      expect(RESERVED_TARGET_META_STRINGS).toContain("me");
+      expect(RESERVED_TARGET_META_STRINGS.length).toBe(4);
+    });
   });
 });

@@ -47,3 +47,26 @@ function formatTargetHint(hint?: string, withLabel = false): string {
   }
   return withLabel ? ` Hint: ${normalized}` : ` ${normalized}`;
 }
+
+/** Reserved meta-strings that must not be used as literal outbound targets. */
+export const RESERVED_TARGET_META_STRINGS = ["current", "self", "this", "me"] as const;
+
+/** Type for reserved target meta-strings. */
+export type ReservedTargetMetaString = (typeof RESERVED_TARGET_META_STRINGS)[number];
+
+/** Checks if a target string matches a reserved meta-string (case-insensitive). */
+export function isReservedTargetMetaString(value: string): boolean {
+  const lowered = value.trim().toLowerCase();
+  return RESERVED_TARGET_META_STRINGS.includes(lowered as ReservedTargetMetaString);
+}
+
+/** Formats the user-facing error shown when a reserved meta-string is used as target. */
+export function reservedTargetMetaStringMessage(value: string): string {
+  const trimmed = value.trim();
+  return `Resolver: reserved meta-string "${trimmed}" cannot be a literal target. Use explicit { chatId, threadId } instead.`;
+}
+
+/** Builds an Error for reserved meta-string target failures. */
+export function reservedTargetMetaStringError(value: string): Error {
+  return new Error(reservedTargetMetaStringMessage(value));
+}
