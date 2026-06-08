@@ -688,6 +688,39 @@ describe("usage-format", () => {
     expect(total).toBeCloseTo(0.045, 4);
   });
 
+  it("uses OpenCode Go Qwen3.7 Plus low rates through 256K", () => {
+    const tiers: PricingTier[] = [
+      { input: 0.4, output: 1.6, cacheRead: 0.04, cacheWrite: 0.5, range: [0, 256_001] },
+      { input: 1.2, output: 4.8, cacheRead: 0.12, cacheWrite: 1.5, range: [256_001, Infinity] },
+    ];
+    const cost = {
+      input: 0.4,
+      output: 1.6,
+      cacheRead: 0.04,
+      cacheWrite: 0.5,
+      tieredPricing: tiers,
+    };
+
+    expect(
+      estimateUsageCost({
+        usage: { input: 256_000, output: 1_000, cacheRead: 10_000, cacheWrite: 2_000 },
+        cost,
+      }),
+    ).toBeCloseTo(0.1054, 6);
+    expect(
+      estimateUsageCost({
+        usage: { input: 256_001, output: 1_000, cacheRead: 10_000, cacheWrite: 2_000 },
+        cost,
+      }),
+    ).toBeCloseTo(0.3162012, 8);
+    expect(
+      estimateUsageCost({
+        usage: { input: 300_000, output: 1_000, cacheRead: 10_000, cacheWrite: 2_000 },
+        cost,
+      }),
+    ).toBeCloseTo(0.369, 6);
+  });
+
   it("estimates cost with three tiers — volcengine-style pricing", () => {
     // Simulates volcengine/doubao pricing (per-million):
     // Tier 1: [0, 32000) → in $0.46, out $2.30

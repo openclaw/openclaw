@@ -182,6 +182,28 @@ describe("opencode-go provider plugin", () => {
     expect(qwen37Plus.reasoning).toBe(true);
     expect(qwen37Plus.contextWindow).toBe(1_000_000);
     expect(qwen37Plus.maxTokens).toBe(65_536);
+    expect(qwen37Plus.cost).toMatchObject({
+      input: 0.4,
+      output: 1.6,
+      cacheRead: 0.04,
+      cacheWrite: 0.5,
+      tieredPricing: [
+        {
+          input: 0.4,
+          output: 1.6,
+          cacheRead: 0.04,
+          cacheWrite: 0.5,
+          range: [0, 256_001],
+        },
+        {
+          input: 1.2,
+          output: 4.8,
+          cacheRead: 0.12,
+          cacheWrite: 1.5,
+          range: [256_001],
+        },
+      ],
+    });
 
     const dynamicModel = requireRecord(
       provider.resolveDynamicModel?.({
