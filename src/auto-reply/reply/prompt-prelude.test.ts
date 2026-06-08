@@ -216,4 +216,51 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.transcriptCommandBody).toBe("re-read persona files");
     expect(envelope.transcriptCommandBody).not.toContain("Startup context");
   });
+
+  it("uses baseBody as transcript label for exec-event heartbeats instead of [OpenClaw heartbeat poll]", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "A background command you started earlier has completed. The completion details are...",
+      BodyStripped:
+        "A background command you started earlier has completed. The completion details are...",
+      Provider: "exec-event",
+      ChatType: "direct",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody:
+        "A background command you started earlier has completed. The completion details are:\n\nExec completed (abc, code 0) :: done\n\nExamine the result.",
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
+      isHeartbeat: true,
+    });
+
+    expect(envelope.transcriptCommandBody).toContain("background command you started earlier");
+    expect(envelope.transcriptCommandBody).not.toContain("[OpenClaw heartbeat poll]");
+  });
+
+  it("keeps [OpenClaw heartbeat poll] transcript label for regular heartbeats", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "",
+      BodyStripped: "",
+      Provider: "heartbeat",
+      ChatType: "direct",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "Read HEARTBEAT.md...",
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
+      isHeartbeat: true,
+    });
+
+    expect(envelope.transcriptCommandBody).toBe("[OpenClaw heartbeat poll]");
+  });
 });

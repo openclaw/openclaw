@@ -199,7 +199,9 @@ export function buildReplyPromptEnvelopeBase(
       ? resetModelBody
       : "[User sent media without caption]";
   const transcriptBody = params.isHeartbeat
-    ? HEARTBEAT_TRANSCRIPT_PROMPT
+    ? params.ctx?.Provider === "exec-event"
+      ? params.baseBody
+      : HEARTBEAT_TRANSCRIPT_PROMPT
     : params.isBareSessionReset
       ? softResetTail || `[OpenClaw session ${params.startupAction}]`
       : isRoomEvent
