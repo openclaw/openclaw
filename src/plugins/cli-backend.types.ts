@@ -71,6 +71,15 @@ export type CliBackendUsageEstimate = {
   cacheRead?: number;
   cacheWrite?: number;
   total?: number;
+  /**
+   * Discriminator marker. Required `true` for any value returned by
+   * `estimateUsage` so downstream consumers (TUI footer, session-status,
+   * billing displays) can distinguish heuristic counts from provider-
+   * supplied exact usage and render them differently (e.g.
+   * `~Xk (estimated)` vs `Xk`). Keep this required, not optional: a
+   * missing flag would silently conflate heuristic and exact totals.
+   */
+  estimated: true;
 };
 
 /** Inputs given to a backend's `estimateUsage` hook for a single CLI turn. */

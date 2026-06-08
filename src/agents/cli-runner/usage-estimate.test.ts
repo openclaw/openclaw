@@ -42,7 +42,7 @@ describe("applyBackendEstimateUsage", () => {
   });
 
   it("fills usage from the backend estimator when output.usage is undefined", () => {
-    const estimator = vi.fn().mockReturnValue({ input: 5, output: 3, total: 8 });
+    const estimator = vi.fn().mockReturnValue({ input: 5, output: 3, total: 8, estimated: true });
     const out = makeOutput({ text: "abc" });
     const result = applyBackendEstimateUsage(
       { id: "text-backend", estimateUsage: estimator } as Pick<
@@ -57,8 +57,25 @@ describe("applyBackendEstimateUsage", () => {
       assistantText: "abc",
       modelId: "gemini-3.5-flash",
     });
-    expect(result.usage).toEqual({ input: 5, output: 3, total: 8 });
+    expect(result.usage).toEqual({ input: 5, output: 3, total: 8, estimated: true });
     expect(result.text).toBe("abc");
+  });
+
+  it("preserves the estimated marker so UI can distinguish heuristic counts from exact usage", () => {
+    // Maintainer concern (clawsweeper review on #91282): estimates must not
+    // be presentable as exact provider billing data. The `estimated: true`
+    // discriminator survives through the wiring untouched.
+    const estimator = vi.fn().mockReturnValue({ total: 42, estimated: true });
+    const out = makeOutput();
+    const result = applyBackendEstimateUsage(
+      { id: "text-backend", estimateUsage: estimator } as Pick<
+        CliBackendPlugin,
+        "id" | "estimateUsage"
+      >,
+      out,
+      { promptText: "p", modelId: "gemini-3.5-flash" },
+    );
+    expect(result.usage).toMatchObject({ estimated: true });
   });
 
   it("leaves usage unset when the estimator returns undefined", () => {
@@ -96,12 +113,12 @@ describe("applyBackendEstimateUsage", () => {
         estimateUsage: ({ promptText, assistantText }) => {
           const input = Math.ceil(promptText.length / 4);
           const output = Math.ceil(assistantText.length / 4);
-          return { input, output, total: input + output };
+          return { input, output, total: input + output, estimated: true };
         },
       } as Pick<CliBackendPlugin, "id" | "estimateUsage">,
       out,
       { promptText: "abcdefghijklmnop", modelId: "gemini-3.5-flash" },
     );
-    expect(result.usage).toEqual({ input: 4, output: 2, total: 6 });
+    expect(result.usage).toEqual({ input: 4, output: 2, total: 6, estimated: true });
   });
 });
