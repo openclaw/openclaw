@@ -50,6 +50,10 @@ import {
 import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
 import { isDefaultAgentRuntimeId } from "../agent-runtime-id.js";
 import {
+  mapSandboxSkillEntriesForPrompt,
+  resolveSandboxSkillRuntimeInputs,
+} from "./sandbox-skills.js";
+import {
   resolveAgentDir,
   resolveRunModelFallbacksOverride,
   resolveSessionAgentIds,
@@ -160,10 +164,6 @@ import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt.thread-helpers.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
-import {
-  mapSandboxSkillEntriesForPrompt,
-  resolveSandboxSkillRuntimeInputs,
-} from "./sandbox-skills.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import {
   resolveEmbeddedAgentBaseStreamFn,

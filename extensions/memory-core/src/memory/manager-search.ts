@@ -382,7 +382,11 @@ export async function searchKeyword(params: {
             ` WHERE 1=1${fallbackLikeClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
             ` LIMIT ?`,
         )
-        .all(...fallbackLikeParams, ...params.sourceFilter.params, params.limit) as typeof rows;
+        .all(
+          ...fallbackLikeParams,
+          ...params.sourceFilter.params,
+          params.limit,
+        ) as typeof rows;
     }
   } else {
     rows = params.db
@@ -393,7 +397,11 @@ export async function searchKeyword(params: {
           ` WHERE 1=1${substringClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
           ` LIMIT ?`,
       )
-      .all(...substringParams, ...params.sourceFilter.params, params.limit) as typeof rows;
+      .all(
+        ...substringParams,
+        ...params.sourceFilter.params,
+        params.limit,
+      ) as typeof rows;
   }
 
   return rows.map((row) => {

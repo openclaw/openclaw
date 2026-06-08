@@ -1,4 +1,3 @@
-import type { SkillEligibilityContext } from "../../skills/types.js";
 /**
  * Sandbox runtime configuration and context types.
  *
@@ -7,6 +6,7 @@ import type { SkillEligibilityContext } from "../../skills/types.js";
 import type { SandboxBackendHandle, SandboxBackendId } from "./backend-handle.types.js";
 import type { SandboxFsBridge } from "./fs-bridge.types.js";
 import type { SandboxDockerConfig } from "./types.docker.js";
+import type { SkillEligibilityContext } from "../../skills/types.js";
 
 export type { SandboxDockerConfig } from "./types.docker.js";
 
