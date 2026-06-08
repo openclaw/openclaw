@@ -160,6 +160,30 @@ describe("resolveMemoryWikiStatus", () => {
       other: 0,
     });
   });
+
+  it("counts source pages stored in subfolders", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-status-",
+      initialize: true,
+    });
+    await fs.mkdir(path.join(rootDir, "sources", "meetings"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "meetings", "nested.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.nested", title: "Nested Source" },
+        body: "# Nested Source\n",
+      }),
+      "utf8",
+    );
+
+    const status = await resolveMemoryWikiStatus(config, {
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    });
+
+    expect(status.pageCounts.source).toBe(1);
+    expect(status.sourceCounts.native).toBe(1);
+  });
 });
 
 describe("renderMemoryWikiStatus", () => {
