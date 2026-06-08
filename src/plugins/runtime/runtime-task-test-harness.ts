@@ -29,11 +29,6 @@ export function installRuntimeTaskDeliveryMock(): void {
       cancelSession: runtimeTaskMocks.cancelSessionMock,
     }),
     killSubagentRunAdmin: (params: unknown) => runtimeTaskMocks.killSubagentRunAdminMock(params),
-    cancelCronJobRun: () => ({
-      found: false,
-      cancelled: false,
-      reason: "Cron task is not active in this gateway process.",
-    }),
   });
 }
 
