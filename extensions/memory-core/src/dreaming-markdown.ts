@@ -13,6 +13,10 @@ import {
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
+const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
+export const DEEP_SLEEP_START_MARKER = "<!-- openclaw:dreaming:deep-sleep:start -->";
+export const DEEP_SLEEP_END_MARKER = "<!-- openclaw:dreaming:deep-sleep:end -->";
+
 const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
   light: "## Light Sleep",
   rem: "## REM Sleep",
@@ -123,6 +127,43 @@ export async function writeDailyDreamingPhaseBlock(params: {
   };
 }
 
+async function resolveDreamsPath(workspaceDir: string): Promise<string> {
+  for (const name of DREAMS_FILENAMES) {
+    const target = path.join(workspaceDir, name);
+    try {
+      await fs.access(target);
+      return target;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw err;
+      }
+    }
+  }
+  return path.join(workspaceDir, DREAMS_FILENAMES[0]);
+}
+
+async function ensureDeepSleepSection(dreamsPath: string, body: string): Promise<void> {
+  await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
+  const original = await fs.readFile(dreamsPath, "utf-8").catch((err: unknown) => {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return "";
+    }
+    throw err;
+  });
+  const updated = replaceManagedMarkdownBlock({
+    original,
+    heading: "## Deep Sleep",
+    startMarker: DEEP_SLEEP_START_MARKER,
+    endMarker: DEEP_SLEEP_END_MARKER,
+    body,
+  });
+  const final = withTrailingNewline(updated);
+  if (final === original || (original.length === 0 && updated.trim().length === 0)) {
+    return;
+  }
+  await fs.writeFile(dreamsPath, final, "utf-8");
+}
+
 export async function writeDeepDreamingReport(params: {
   workspaceDir: string;
   bodyLines: string[];
@@ -138,6 +179,19 @@ export async function writeDeepDreamingReport(params: {
   await fs.mkdir(path.dirname(reportPath), { recursive: true });
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
   await fs.writeFile(reportPath, `# Deep Sleep\n\n${body}\n`, "utf-8");
+
+  // Write the ## Deep Sleep summary into DREAMS.md so the documented
+  // DREAMS.md section stays in sync with the separate deep-phase report.
+  try {
+    const dreamsPath = await resolveDreamsPath(params.workspaceDir);
+    await ensureDeepSleepSection(dreamsPath, body);
+  } catch (err: unknown) {
+    // Best-effort: don't block the separate report for a DREAMS.md write failure.
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw err;
+    }
+  }
+
   await appendMemoryHostEvent(params.workspaceDir, {
     type: "memory.dream.completed",
     timestamp: resolveMemoryCoreTimestamp(nowMs),
