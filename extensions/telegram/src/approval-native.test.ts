@@ -1,7 +1,12 @@
+// Telegram tests cover approval native plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { saveSessionStore, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  clearSessionStoreCacheForTest,
+  saveSessionStore,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
 import { telegramApprovalCapability, telegramNativeApprovalAdapter } from "./approval-native.js";
 
@@ -29,6 +34,7 @@ async function writeStore(store: Record<string, unknown>) {
   await saveSessionStore(STORE_PATH, store as Record<string, SessionEntry>, {
     skipMaintenance: true,
   });
+  clearSessionStoreCacheForTest();
 }
 
 describe("telegram native approval adapter", () => {

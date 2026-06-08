@@ -7,7 +7,7 @@ import type {
   TelegramAccountConfig,
   TelegramExecApprovalConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { saveSessionStore, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getTelegramExecApprovalApprovers,
@@ -247,7 +247,7 @@ describe("telegram exec approvals", () => {
           lastTo: "channel:C999",
           lastAccountId: "work",
         },
-      },
+      } as Record<string, SessionEntry>,
       { skipMaintenance: true },
     );
     const cfg = buildMultiAccountTelegramConfig({ sessionStorePath: storePath });
