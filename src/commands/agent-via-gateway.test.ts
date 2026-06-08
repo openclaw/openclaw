@@ -36,6 +36,7 @@ const isGatewayTransportError = vi.hoisted(() =>
 const agentCommand = vi.hoisted(() => vi.fn());
 const agentModuleLoadCount = vi.hoisted(() => vi.fn());
 const loadAgentSessionModuleMock = vi.hoisted(() => vi.fn());
+const ensureSessionStateMigratedForCommand = vi.hoisted(() => vi.fn(async () => undefined));
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -155,16 +156,21 @@ function createSignalProcess() {
 }
 
 async function waitForAgentCommandCall(expectedCalls = 1) {
-  for (
-    let attempt = 0;
-    attempt < 50 && agentCommand.mock.calls.length < expectedCalls;
-    attempt += 1
-  ) {
+  const deadline = Date.now() + 5_000;
+  while (agentCommand.mock.calls.length < expectedCalls && Date.now() < deadline) {
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
+      setTimeout(resolve, 10);
     });
   }
   expect(agentCommand).toHaveBeenCalledTimes(expectedCalls);
+}
+
+function runAbortHandlerWhenReady(signal: AbortSignal | undefined, onAbort: () => void): void {
+  if (signal?.aborted) {
+    onAbort();
+    return;
+  }
+  signal?.addEventListener("abort", onAbort, { once: true });
 }
 
 async function waitForGatewayCall(expectedCalls = 1) {
@@ -249,6 +255,9 @@ vi.mock("../gateway/call.js", () => ({
   isGatewayExplicitAuthRequiredError,
   isGatewayTransportError,
   randomIdempotencyKey: () => "idem-1",
+}));
+vi.mock("./session-state-migration.js", () => ({
+  ensureSessionStateMigratedForCommand,
 }));
 vi.mock("./agent.js", () => {
   agentModuleLoadCount();
@@ -1124,15 +1133,11 @@ describe("agentCliCommand", () => {
       agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
         expect(opts.abortSignal).toBeInstanceOf(AbortSignal);
         return await new Promise((_, reject) => {
-          opts.abortSignal?.addEventListener(
-            "abort",
-            () => {
-              const err = new Error("local agent aborted");
-              err.name = "AbortError";
-              reject(err);
-            },
-            { once: true },
-          );
+          runAbortHandlerWhenReady(opts.abortSignal, () => {
+            const err = new Error("local agent aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
           abortListenerAttached.resolve();
         });
       });
@@ -1158,16 +1163,12 @@ describe("agentCliCommand", () => {
       const abortListenerAttached = createDeferredVoid();
       agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
         return await new Promise((resolve) => {
-          opts.abortSignal?.addEventListener(
-            "abort",
-            () => {
-              resolve({
-                payloads: [],
-                meta: { aborted: true },
-              } as unknown as Awaited<ReturnType<typeof AgentCommand>>);
-            },
-            { once: true },
-          );
+          runAbortHandlerWhenReady(opts.abortSignal, () => {
+            resolve({
+              payloads: [],
+              meta: { aborted: true },
+            } as unknown as Awaited<ReturnType<typeof AgentCommand>>);
+          });
           abortListenerAttached.resolve();
         });
       });
@@ -1719,6 +1720,10 @@ describe("agentCliCommand", () => {
       );
 
       expect(callGateway).not.toHaveBeenCalled();
+      expect(ensureSessionStateMigratedForCommand).toHaveBeenCalledTimes(1);
+      expect(ensureSessionStateMigratedForCommand).toHaveBeenCalledWith(
+        loadRuntimeConfig.mock.results[0]?.value,
+      );
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const localOpts = requireRecord(
         requireFirstCallArg(agentCommand, "embedded agent"),
