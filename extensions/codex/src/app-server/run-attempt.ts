@@ -85,7 +85,7 @@ import {
   isCurrentThreadOptionalTurnRequestParams,
   isCurrentThreadTurnRequestParams,
   isNativeResponseStreamDeltaNotification,
-  isNativeToolProgressNotification,
+  isRawFunctionToolOutputCompletionNotification,
   isTerminalTurnStatus,
 } from "./attempt-notifications.js";
 import {
@@ -1508,8 +1508,8 @@ export async function runCodexAppServerAttempt(
       await projector.handleNotification(notification);
       if (
         notificationState.isCurrentTurnNotification &&
-        notification.method === "item/completed" &&
-        isNativeToolProgressNotification(notification)
+        activeTurnItemIds.size === 0 &&
+        isRawFunctionToolOutputCompletionNotification(notification)
       ) {
         await maybeAnnounceFastModeAutoOff();
       }
@@ -1855,7 +1855,6 @@ export async function runCodexAppServerAttempt(
         }
         throw error;
       } finally {
-        await maybeAnnounceFastModeAutoOff();
         unsubscribeToolDiagnosticObserver();
       }
     } finally {
@@ -2195,6 +2194,7 @@ export async function runCodexAppServerAttempt(
     nativePostToolUseRelayEnabled:
       nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
       nativeHookRelay.shouldRelayEvent("post_tool_use"),
+    onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
     trajectoryRecorder,
   });
   if (

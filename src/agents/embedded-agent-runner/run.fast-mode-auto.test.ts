@@ -1,4 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  onAgentEvent,
+  resetAgentEventsForTest,
+  type AgentEventPayload,
+} from "../../infra/agent-events.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -33,6 +38,7 @@ type FastModeAttemptParams = {
   };
   onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => unknown;
   onRunProgress?: (payload: { reason: string }) => unknown;
+  onToolStreamBoundary?: () => unknown;
   onToolResult?: (payload: { text?: string; channelData?: Record<string, unknown> }) => unknown;
 };
 
@@ -56,6 +62,7 @@ describe("runEmbeddedAgent fast auto progress", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetAgentEventsForTest();
   });
 
   it("emits auto-off after a tool execution boundary crosses the threshold", async () => {
@@ -68,6 +75,16 @@ describe("runEmbeddedAgent fast auto progress", () => {
       text?: string;
       channelData?: Record<string, unknown>;
     }> = [];
+    const globalSummaries: string[] = [];
+    const stopGlobalCapture = onAgentEvent((event: AgentEventPayload) => {
+      if (event.runId !== "run-fast-auto-retry" || event.stream !== "item") {
+        return;
+      }
+      const summary = event.data.summary;
+      if (typeof summary === "string") {
+        globalSummaries.push(summary);
+      }
+    });
     let attemptParams: FastModeAttemptParams | undefined;
     let completeAttempt: (() => void) | undefined;
     const attemptDone = new Promise<EmbeddedRunAttemptResult>((resolve) => {
@@ -103,11 +120,19 @@ describe("runEmbeddedAgent fast auto progress", () => {
 
     expect(events.map((event) => event.data?.summary).filter(Boolean)).toHaveLength(0);
     expect(toolResults).toHaveLength(0);
+    expect(globalSummaries).toHaveLength(0);
 
     attemptParams?.onRunProgress?.({ reason: "model-progress" });
     await vi.advanceTimersByTimeAsync(2);
     expect(events).toHaveLength(0);
     expect(toolResults).toHaveLength(0);
+    expect(globalSummaries).toHaveLength(0);
+
+    await attemptParams?.onToolResult?.({ text: "🛠️ Exec: still running" });
+    await vi.advanceTimersByTimeAsync(2);
+    expect(events.map((event) => event.data?.summary).filter(Boolean)).toHaveLength(0);
+    expect(toolResults.map((payload) => payload.text)).toEqual(["🛠️ Exec: still running"]);
+    expect(globalSummaries).toHaveLength(0);
 
     await attemptParams?.onAgentEvent?.({
       stream: "tool",
@@ -116,7 +141,8 @@ describe("runEmbeddedAgent fast auto progress", () => {
     await vi.advanceTimersByTimeAsync(2);
 
     expect(events.map((event) => event.data?.summary).filter(Boolean)).toHaveLength(0);
-    expect(toolResults).toHaveLength(0);
+    expect(toolResults.map((payload) => payload.text)).toEqual(["🛠️ Exec: still running"]);
+    expect(globalSummaries).toHaveLength(0);
 
     await attemptParams?.onAgentEvent?.({
       stream: "tool",
@@ -124,8 +150,15 @@ describe("runEmbeddedAgent fast auto progress", () => {
     });
     await vi.advanceTimersByTimeAsync(2);
 
+    expect(events.map((event) => event.data?.summary).filter(Boolean)).toHaveLength(0);
+    expect(globalSummaries).toHaveLength(0);
+
+    await attemptParams?.onToolStreamBoundary?.();
+    await vi.advanceTimersByTimeAsync(2);
+
     const summaries = events.map((event) => event.data?.summary).filter(Boolean);
     expect(summaries).toContain("💨Fast: auto-off(31s>=30s)");
+    expect(globalSummaries).toContain("💨Fast: auto-off(31s>=30s)");
     expect(toolResults.some((payload) => payload.text === "💨Fast: auto-off(31s>=30s)")).toBe(true);
     expect(toolResults.at(-1)?.channelData?.openclawProgressKind).toBe("fast-mode-auto");
 
@@ -134,6 +167,8 @@ describe("runEmbeddedAgent fast auto progress", () => {
 
     expect(events.map((event) => event.data?.summary)).toContain("💨Fast: auto-on");
     expect(toolResults.map((payload) => payload.text)).toContain("💨Fast: auto-on");
+    expect(globalSummaries).toContain("💨Fast: auto-on");
+    stopGlobalCapture();
   });
 
   it("emits one auto-off notice at the first completed boundary past the threshold", async () => {
@@ -182,12 +217,14 @@ describe("runEmbeddedAgent fast auto progress", () => {
       stream: "tool",
       data: { phase: "result", name: "exec" },
     });
+    await attemptParams?.onToolStreamBoundary?.();
 
     await vi.advanceTimersByTimeAsync(14_000);
     await attemptParams?.onAgentEvent?.({
       stream: "tool",
       data: { phase: "result", name: "exec" },
     });
+    await attemptParams?.onToolStreamBoundary?.();
     await attemptParams?.onToolResult?.({ text: "🛠️ Exec: later tool summary" });
 
     completeAttempt?.();
@@ -266,6 +303,7 @@ describe("runEmbeddedAgent fast auto progress", () => {
         stream: "tool",
         data: { phase: "result", name: "exec" },
       });
+      await attemptParams?.onToolStreamBoundary?.();
 
       completeAttempt?.();
       await expect(resultPromise).resolves.toBeTruthy();
@@ -334,6 +372,7 @@ describe("runEmbeddedAgent fast auto progress", () => {
         stream: "tool",
         data: { phase: "result", name: "exec" },
       });
+      await attemptParams?.onToolStreamBoundary?.();
 
       expect(events.map((event) => event.data?.summary).filter(Boolean)).toContainEqual(
         expect.stringMatching(/^💨Fast: auto-off\(/u),

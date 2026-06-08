@@ -12,6 +12,7 @@ import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
@@ -682,6 +683,11 @@ export function createFollowupRunner(params: {
         | undefined;
       let queuedUserMessagePersistedAcrossFallback = false;
       let assistantErrorPersistedAcrossFallback = false;
+      const fastModeStartedAtMs = Date.now();
+      const fastModeAutoProgressState: FastModeAutoProgressState = {
+        offAnnounced: false,
+        resetAnnounced: false,
+      };
       try {
         const outcomePlan = buildAgentRuntimeOutcomePlan();
         const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
@@ -784,6 +790,32 @@ export function createFollowupRunner(params: {
                       emitChannelProgress: shouldEmitToolResultProgress(),
                     });
                   },
+                  onCommentaryText:
+                    opts?.commentaryProgressEnabled === true && opts.onItemEvent
+                      ? async ({ text, itemId }) => {
+                          await forwardFollowupProgressEvent({
+                            evt: {
+                              stream: "item",
+                              data: { kind: "preamble", progressText: text, itemId },
+                            },
+                            opts,
+                            detailMode: toolProgressDetail,
+                          });
+                        }
+                      : undefined,
+                  onFastModeAutoProgress: async (payload) => {
+                    await enqueueProgressDelivery(async () => {
+                      await sendFollowupPayloads(
+                        [payload],
+                        effectiveQueued,
+                        {
+                          provider,
+                          modelId: model,
+                        },
+                        { kind: "tool", mirror: false, runId },
+                      );
+                    });
+                  },
                   transformResult:
                     queued.currentInboundEventKind === "room_event"
                       ? (resultLocal) =>
@@ -820,6 +852,10 @@ export function createFollowupRunner(params: {
                       config: runtimeConfig,
                     }),
                     thinkLevel: run.thinkLevel,
+                    fastMode: candidateRun.fastMode,
+                    fastModeStartedAtMs,
+                    fastModeAutoOnSeconds: candidateRun.fastModeAutoOnSeconds,
+                    fastModeAutoProgressState,
                     timeoutMs: run.timeoutMs,
                     runId,
                     extraSystemPrompt: run.extraSystemPrompt,
@@ -930,6 +966,10 @@ export function createFollowupRunner(params: {
                 model,
                 ...selectedAuthProfile,
                 thinkLevel: run.thinkLevel,
+                fastMode: candidateRun.fastMode,
+                fastModeStartedAtMs,
+                fastModeAutoOnSeconds: candidateRun.fastModeAutoOnSeconds,
+                fastModeAutoProgressState,
                 verboseLevel: run.verboseLevel,
                 reasoningLevel: run.reasoningLevel,
                 suppressToolErrorWarnings: shouldSuppressToolErrorWarnings,

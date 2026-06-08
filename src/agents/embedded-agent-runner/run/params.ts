@@ -1,6 +1,7 @@
 /**
  * Shared parameter types for embedded-agent run orchestration.
  */
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   PartialReplyPayload,
   SourceReplyDeliveryMode,
@@ -15,17 +16,16 @@ import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SkillSnapshot } from "../../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { BlockReplyPayload } from "../../embedded-agent-payloads.js";
-import type { FastModeAutoProgressState } from "../../fast-mode.js";
 import type {
   BlockReplyChunking,
   ToolProgressDetailMode,
   ToolResultFormat,
 } from "../../embedded-agent-subscribe.shared-types.js";
+import type { FastModeAutoProgressState } from "../../fast-mode.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
@@ -218,6 +218,7 @@ export type RunEmbeddedAgentParams = {
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => void | Promise<void>;
+  onToolStreamBoundary?: () => void | Promise<void>;
   /**
    * Emit lifecycle "finishing" when the model turn ends; the caller owns the
    * final lifecycle "end" after durable post-turn maintenance completes.

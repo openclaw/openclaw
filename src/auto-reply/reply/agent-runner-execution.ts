@@ -42,6 +42,7 @@ import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sani
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { isFailoverError } from "../../agents/failover-error.js";
+import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
@@ -1964,6 +1965,11 @@ export async function runAgentTurnWithFallback(params: {
       const notifyUserMessagePersisted = () => {
         queuedUserMessagePersistedAcrossFallback = true;
       };
+      const fastModeStartedAtMs = Date.now();
+      const fastModeAutoProgressState: FastModeAutoProgressState = {
+        offAnnounced: false,
+        resetAnnounced: false,
+      };
       // Profiler-only milestone: it separates fallback setup from the actual
       // model run without adding extra live logs/snapshots to normal turns.
       agentTurnTiming.logMilestoneIfSlow({
@@ -2139,6 +2145,19 @@ export async function runAgentTurnWithFallback(params: {
                       }),
                     ]);
                   },
+                  onCommentaryText:
+                    params.opts?.commentaryProgressEnabled === true && params.opts.onItemEvent
+                      ? async ({ text, itemId }) => {
+                          await params.opts?.onItemEvent?.({
+                            kind: "preamble",
+                            progressText: text,
+                            itemId,
+                          });
+                        }
+                      : undefined,
+                  onFastModeAutoProgress: async (payload) => {
+                    await params.opts?.onToolResult?.(payload);
+                  },
                   onErrorBeforeLifecycle: async () => {
                     if (!rollbackFallbackCandidateSelection) {
                       return;
@@ -2183,6 +2202,10 @@ export async function runAgentTurnWithFallback(params: {
                     provider: cliExecutionProvider,
                     model,
                     thinkLevel: params.followupRun.run.thinkLevel,
+                    fastMode: candidateRun.fastMode,
+                    fastModeStartedAtMs,
+                    fastModeAutoOnSeconds: candidateRun.fastModeAutoOnSeconds,
+                    fastModeAutoProgressState,
                     timeoutMs: params.followupRun.run.timeoutMs,
                     runId,
                     lane: runLane,
@@ -2298,6 +2321,8 @@ export async function runAgentTurnWithFallback(params: {
                     provider: embeddedRunProvider,
                     agentHarnessId: embeddedRunHarnessOverride,
                     agentHarnessRuntimeOverride: embeddedRunHarnessOverride,
+                    fastModeStartedAtMs,
+                    fastModeAutoProgressState,
                     sandboxSessionKey: params.runtimePolicySessionKey,
                     prompt: params.commandBody,
                     transcriptPrompt: params.transcriptCommandBody,
