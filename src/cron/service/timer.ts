@@ -138,7 +138,36 @@ export async function executeJobCoreWithTimeout(
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   try {
     if (typeof jobTimeoutMs !== "number") {
-      return await executeJobCore(state, job, runAbortController.signal);
+      const cancellationMarker = Symbol("cron-cancelled");
+      const cancellationPromise = new Promise<typeof cancellationMarker>((resolve) => {
+        const resolveCancelled = () => resolve(cancellationMarker);
+        if (runAbortController.signal.aborted) {
+          resolveCancelled();
+          return;
+        }
+        runAbortController.signal.addEventListener("abort", resolveCancelled, { once: true });
+      });
+      const corePromise = executeJobCore(state, job, runAbortController.signal);
+      void corePromise.catch((err: unknown) => {
+        if (runAbortController.signal.aborted) {
+          state.deps.log.warn(
+            { jobId: job.id, err: String(err) },
+            "cron: job core rejected after cancellation abort",
+          );
+        }
+      });
+      const first = await Promise.race([corePromise, cancellationPromise]);
+      if (first !== cancellationMarker) {
+        return first;
+      }
+      const error = abortErrorMessage(runAbortController.signal);
+      return {
+        status: "error",
+        error,
+        diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
+          nowMs: state.deps.nowMs,
+        }),
+      };
     }
 
     let timeoutReason: string | undefined;
