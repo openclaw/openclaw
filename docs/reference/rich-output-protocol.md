@@ -37,7 +37,7 @@ it is not a general plugin/tool protocol.
 
 Plain Markdown image syntax stays text by default. Channels that intentionally
 map Markdown image replies to media attachments opt in at their outbound
-adapter; Telegram does this so `![alt](url)` can still become a media reply.
+adapter; Telegram does this so `![alt](https://example.com/image.png)` can still become a media reply.
 
 These directives are separate. Structured media fields and reply/voice tags are
 delivery metadata; `[embed ...]` is the web-only rich render path.
