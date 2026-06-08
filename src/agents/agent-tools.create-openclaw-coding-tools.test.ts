@@ -26,9 +26,11 @@ import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
+import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
+import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
 
 const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
@@ -740,6 +742,32 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes(cronAllowNames, ["read", "cron"]);
     expect(cronAllowNames?.includes("exec")).toBe(false);
     expect(cronAllowNames?.includes("process")).toBe(false);
+  });
+
+  it("lets embedded attempts refresh a caller-owned cron creator tool surface", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const cronCreatorToolAllowlistRef: NonNullable<
+      OpenClawToolsOptions["cronCreatorToolAllowlist"]
+    > = [];
+
+    createOpenClawCodingTools({
+      config: { tools: { allow: ["read", "cron"] } },
+      cronCreatorToolAllowlistRef,
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
+    expect(cronAllow).toBe(cronCreatorToolAllowlistRef);
+    expect(cronCreatorToolNames(cronAllow)).toEqual(["read", "cron"]);
+
+    replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlistRef, [
+      stubTool("read"),
+      stubTool("cron"),
+      stubTool("bundle_mcp_search"),
+    ]);
+
+    expect(cronCreatorToolNames(cronAllow)).toEqual(["read", "cron", "bundle_mcp_search"]);
   });
 
   it("passes deny-restricted tool surface to cron-created agent turns", () => {

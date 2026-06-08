@@ -516,6 +516,8 @@ export function createOpenClawCodingTools(options?: {
   allowGatewaySubagentBinding?: boolean;
   /** Runtime-scoped explicit allowlist used to materialize matching plugin tools. */
   runtimeToolAllowlist?: string[];
+  /** Mutable cron creator cap ref for callers that append final runtime tools later. */
+  cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
   /** If true, the model has native vision capability */
   modelHasVision?: boolean;
   /** Require explicit message targets (no implicit last-route sends). */
@@ -936,7 +938,7 @@ export function createOpenClawCodingTools(options?: {
   ];
   const shouldInheritEffectiveToolAllowlist =
     toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
-  const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
+  const cronCreatorToolAllowlist = options?.cronCreatorToolAllowlistRef ?? [];
   const shouldCaptureCronCreatorToolAllowlist = toolPolicyInheritanceSources.some(
     (policy) => hasRestrictiveAllowPolicy(policy) || hasExplicitDenyPolicy(policy),
   );
