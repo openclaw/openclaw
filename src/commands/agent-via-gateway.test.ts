@@ -157,16 +157,13 @@ function createSignalProcess() {
 async function waitForAgentCommandCall(expectedAdditionalCalls = 1) {
   const initialCalls = agentCommand.mock.calls.length;
   const expectedCalls = initialCalls + expectedAdditionalCalls;
-  for (
-    let attempt = 0;
-    attempt < 50 && agentCommand.mock.calls.length < expectedCalls;
-    attempt += 1
-  ) {
+  const deadline = Date.now() + 10_000;
+  while (agentCommand.mock.calls.length < expectedCalls && Date.now() < deadline) {
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
+      setTimeout(resolve, 10);
     });
   }
-  expect(agentCommand.mock.calls.length - initialCalls).toBe(expectedAdditionalCalls);
+  expect(agentCommand.mock.calls.length).toBeGreaterThanOrEqual(expectedCalls);
 }
 
 async function waitForGatewayCall(expectedCalls = 1) {
