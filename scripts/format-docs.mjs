@@ -22,20 +22,26 @@ function docsFiles() {
     .filter((relativePath) => fs.existsSync(path.join(ROOT, relativePath)));
 }
 
-function runOxfmt(files) {
-  const result = spawnSync(
-    process.execPath,
-    [OXFMT_BIN, "--write", "--threads=1", "--config", OXFMT_CONFIG, ...files],
-    {
-      cwd: ROOT,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024 * 16,
-    },
-  );
+function runOxfmt(files, cwd = ROOT) {
+  const chunkSize = 50;
+  const configPath = cwd === ROOT ? OXFMT_CONFIG : path.join(cwd, ".oxfmtrc.jsonc");
+  for (let i = 0; i < files.length; i += chunkSize) {
+    const chunk = files.slice(i, i + chunkSize);
+    const result = spawnSync(
+      process.execPath,
+      [OXFMT_BIN, "--write", "--threads=1", "--config", configPath, ...chunk],
+      {
+        cwd,
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024 * 16,
+      },
+    );
 
-  if (result.status !== 0) {
-    const stderr = result.stderr.trim();
-    throw new Error(`oxfmt failed${stderr ? `:\n${stderr}` : ""}`);
+    if (result.status !== 0 || result.error) {
+      console.error("spawnSync result:", result);
+      const stderr = result.stderr?.trim() ?? "";
+      throw new Error(`oxfmt failed${stderr ? `:\n${stderr}` : ""}`);
+    }
   }
 }
 
@@ -62,6 +68,7 @@ function copyDocsToTemp(files) {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(source, target);
   }
+  fs.copyFileSync(OXFMT_CONFIG, path.join(tempRoot, ".oxfmtrc.jsonc"));
   return tempRoot;
 }
 
@@ -71,11 +78,11 @@ const files = docsFiles();
 if (CHECK) {
   const tempRoot = copyDocsToTemp(files);
   try {
-    runOxfmt(files.map((relativePath) => path.join(tempRoot, relativePath)));
+    runOxfmt(files, tempRoot);
     repairFiles(tempRoot, files);
     for (const relativePath of files) {
-      const raw = fs.readFileSync(path.join(ROOT, relativePath), "utf8");
-      const formatted = fs.readFileSync(path.join(tempRoot, relativePath), "utf8");
+      const raw = fs.readFileSync(path.join(ROOT, relativePath), "utf8").replace(/\r\n/g, "\n");
+      const formatted = fs.readFileSync(path.join(tempRoot, relativePath), "utf8").replace(/\r\n/g, "\n");
       if (formatted !== raw) {
         changed.push(relativePath);
       }
