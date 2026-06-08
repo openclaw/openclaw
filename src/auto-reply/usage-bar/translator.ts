@@ -6,6 +6,7 @@
 //
 // Verbs, used as {path|verb:args|fallback}:
 //   num                3000 -> "3.0k"      (compact count)
+//   fixed:N            0.03771985 -> "0.0377"  (fixed-decimal; N digits, default 2)
 //   dur                14820 -> "4h07m"    (seconds -> reset)
 //   pct                96 -> "96%"
 //   inv                100-value complement (88 -> 12); pipe before another verb
@@ -51,6 +52,17 @@ function num(value: unknown): string {
     return Math.abs(v) < 10 ? `${v.toFixed(1)}k` : `${Math.round(v)}k`;
   }
   return String(Math.trunc(n));
+}
+
+function fixed(value: unknown, digits: number): string {
+  if (value === null || value === undefined || value === "") {
+    return "";
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    return "";
+  }
+  return n.toFixed(Math.max(0, digits));
 }
 
 function dur(value: unknown): string {
@@ -122,12 +134,16 @@ function meter(value: unknown, width: number, scale: unknown): string {
   return cells.slice(0, width).join("");
 }
 
-const VERB_NAMES = new Set(["num", "dur", "pct", "inv", "alias", "meter"]);
+const VERB_NAMES = new Set(["num", "fixed", "dur", "pct", "inv", "alias", "meter"]);
 
 function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): unknown {
   switch (name) {
     case "num":
       return num(value);
+    case "fixed": {
+      const digits = args[0] ? Number.parseInt(args[0], 10) || 0 : 2;
+      return fixed(value, digits);
+    }
     case "dur":
       return dur(value);
     case "pct":

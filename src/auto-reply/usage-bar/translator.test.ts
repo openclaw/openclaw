@@ -30,6 +30,13 @@ describe("usage-bar verbs", () => {
     expect(render([{ text: "{x|num}" }], { x: 128 })).toBe("128");
   });
 
+  it("fixed — fixed-decimal precision", () => {
+    expect(render([{ text: "{cost|fixed:4}" }], { cost: 0.03771985 })).toBe("0.0377");
+    expect(render([{ text: "{cost|fixed}" }], { cost: 1.5 })).toBe("1.50");
+    expect(render([{ text: "{cost|fixed:0}" }], { cost: 2.7 })).toBe("3");
+    expect(render([{ text: "{cost|fixed:4}" }], { cost: "nope" })).toBe("");
+  });
+
   it("dur — seconds to reset", () => {
     expect(render([{ text: "{x|dur}" }], { x: 14820 })).toBe("4h07m");
     expect(render([{ text: "{x|dur}" }], { x: 449280 })).toBe("5.2d");
