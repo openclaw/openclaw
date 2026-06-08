@@ -212,7 +212,28 @@ describe("agent delivery helpers", () => {
       wantsDelivery: true,
     });
     expect(plan.resolvedTo).toBe("+1555");
-    expect(plan.deliveryTargetMode).toBe("explicit");
+    expect(plan.deliveryTargetMode).toBe("implicit");
+  });
+
+  it("inherits session account when reserved meta-string falls back", () => {
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: {
+        sessionId: "s-reserved-acct",
+        updatedAt: 1,
+        deliveryContext: {
+          channel: "directchat",
+          to: "+1555",
+          accountId: "work",
+        },
+      },
+      requestedChannel: "last",
+      explicitTo: "current",
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+    expect(plan.resolvedTo).toBe("+1555");
+    expect(plan.deliveryTargetMode).toBe("implicit");
+    expect(plan.resolvedAccountId).toBe("work");
   });
 
   it("rejects reserved meta-strings to undefined when no session fallback", () => {
@@ -224,7 +245,7 @@ describe("agent delivery helpers", () => {
       wantsDelivery: true,
     });
     expect(plan.resolvedTo).toBeUndefined();
-    expect(plan.deliveryTargetMode).toBe("explicit");
+    expect(plan.deliveryTargetMode).toBeUndefined();
   });
 
   it("resolves fallback targets when no explicit destination is provided", () => {

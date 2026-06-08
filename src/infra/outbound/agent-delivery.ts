@@ -104,11 +104,12 @@ export function resolveAgentDeliveryPlan(params: {
     return INTERNAL_MESSAGE_CHANNEL;
   })();
 
-  const deliveryTargetMode = explicitTo
-    ? "explicit"
-    : isDeliverableMessageChannel(resolvedChannel)
-      ? "implicit"
-      : undefined;
+  const deliveryTargetMode =
+    baseDelivery.mode === "explicit"
+      ? "explicit"
+      : isDeliverableMessageChannel(resolvedChannel)
+        ? "implicit"
+        : undefined;
 
   const resolvedAccountId =
     normalizeAccountId(params.accountId) ??
