@@ -1578,16 +1578,16 @@ export default definePluginEntry({
           }
 
           const text = results
-            .map(({ result, text }, i) => {
-              const escapedText = escapeMemoryForPrompt(text);
+            .map(({ result, text: memoryText }, i) => {
+              const escapedText = escapeMemoryForPrompt(memoryText);
               return `${i + 1}. [${result.entry.category}] ${escapedText} (${(result.score * 100).toFixed(0)}%)`;
             })
             .join("\n");
 
           // Strip vector data for serialization (typed arrays can't be cloned)
-          const sanitizedResults = results.map(({ result, text }) => ({
+          const sanitizedResults = results.map(({ result, text: memoryText }) => ({
             id: result.entry.id,
-            text,
+            text: memoryText,
             category: result.entry.category,
             importance: result.entry.importance,
             score: result.score,
