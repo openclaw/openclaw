@@ -47,7 +47,7 @@ import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summar
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../../infra/os-summary.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type { AssistantMessage, UserMessage } from "../../../llm/types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -685,13 +685,18 @@ function contentValuesEqual(left: unknown, right: unknown): boolean {
   }
 }
 
+function isUserAgentMessage(message: AgentMessage | undefined): message is UserMessage {
+  return message?.role === "user";
+}
+
 function removeTrailingUserMessageForOrphanRepair(
   messages: AgentMessage[],
   orphanMessage: SessionMessageEntry["message"],
 ): AgentMessage[] {
   const lastMessage = messages.at(-1);
   if (
-    lastMessage?.role === "user" &&
+    isUserAgentMessage(lastMessage) &&
+    isUserAgentMessage(orphanMessage) &&
     contentValuesEqual(lastMessage.content, orphanMessage.content)
   ) {
     return messages.slice(0, -1);
