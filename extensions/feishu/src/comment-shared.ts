@@ -91,22 +91,29 @@ export function createFeishuApiError(
 
 // Feishu message-API error codes that signal a transient rate limit; safe to retry with backoff.
 // 230020: per-chat rate limit (ext=chat rate limit) — confirmed by real concurrent load test.
+// 11232: tenant-level "create message service trigger rate limit" (100/min, 5/sec per app/bot).
 // Distinct from FEISHU_BACKOFF_CODES in typing.ts, which covers the reaction API (99991400+).
-const FEISHU_SEND_RATE_LIMIT_CODES = new Set([230020]);
+const FEISHU_SEND_RATE_LIMIT_CODES = new Set([230020, 11232]);
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
 
 /**
- * Returns the Feishu body error code when an AxiosError signals a retryable
- * message-API rate limit. The code lives in `error.response.data.code` on the
- * HTTP 400 response the Feishu API returns on frequency limit. Returns `undefined`
- * for all other errors.
+ * Returns a numeric rate-limit signal when an AxiosError indicates a retryable
+ * Feishu message-API rate limit. Sources, in priority order:
+ *   1. Gateway-level HTTP 429 (app-wide quota; `x-ogw-ratelimit-reset` header)
+ *   2. Business-level `code` in `error.response.data.code` matching
+ *      FEISHU_SEND_RATE_LIMIT_CODES (e.g. 230020 per-chat, 11232 tenant-level).
+ * Returns `undefined` for all other errors so they propagate without retry.
  */
 export function getFeishuSendRateLimitCode(error: unknown): number | undefined {
   if (!isRecord(error)) {
     return undefined;
   }
   const response = isRecord(error.response) ? error.response : undefined;
+  // HTTP 429: Feishu Open API gateway-level rate limit, always retry.
+  if (typeof response?.status === "number" && response.status === 429) {
+    return 429;
+  }
   const data = isRecord(response?.data) ? response.data : undefined;
   const code = data?.code;
   return typeof code === "number" && FEISHU_SEND_RATE_LIMIT_CODES.has(code) ? code : undefined;
