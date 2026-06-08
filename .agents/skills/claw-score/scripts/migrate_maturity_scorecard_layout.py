@@ -299,8 +299,8 @@ def move_inventory(root: Path) -> None:
     if missing.exists():
         text = missing.read_text()
         text = text.replace(
-            "docs/kevinslin/maturity-scorecard/`.",
-            "docs/kevinslin/maturity-scorecard/inventory/`.",
+            "docs/maturity-scorecard/`.",
+            "docs/maturity-scorecard/inventory/`.",
         )
         text = re.sub(r"`([^`]+/)(?:[^`/]+-feature-matrix\.md|report\.md)`", r"`inventory/\1report.md`", text)
         missing.write_text(text)
@@ -313,7 +313,7 @@ def move_inventory(root: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path, default=Path("docs/kevinslin/maturity-scorecard"))
+    parser.add_argument("--root", type=Path, default=Path("docs/maturity-scorecard"))
     parser.add_argument("--taxonomy-out", type=Path, default=DEFAULT_TAXONOMY_OUT)
     args = parser.parse_args()
 

@@ -32,11 +32,11 @@ from render_scorecard_from_taxonomy import (
 from render_score_matrix import average, maturity_label
 
 
-DEFAULT_TAXONOMY_DOC_PATH = REPO_ROOT / "docs/kevinslin/maturity-scorecard/taxonomy.md"
+DEFAULT_TAXONOMY_DOC_PATH = REPO_ROOT / "docs/maturity-scorecard/taxonomy.md"
 DEFAULT_TAXONOMY_OUTLINE_DOC_PATH = (
-    REPO_ROOT / "docs/kevinslin/maturity-scorecard/taxonomy-outline.md"
+    REPO_ROOT / "docs/maturity-scorecard/taxonomy-outline.md"
 )
-SCORECARD_ROOT = REPO_ROOT / "docs/kevinslin/maturity-scorecard"
+SCORECARD_ROOT = REPO_ROOT / "docs/maturity-scorecard"
 
 
 def category_note_path(surface: dict[str, Any], category: dict[str, Any]) -> str:

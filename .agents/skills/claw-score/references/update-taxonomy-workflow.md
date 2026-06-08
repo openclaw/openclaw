@@ -27,10 +27,10 @@ Required:
 
 Optional:
 
-- `docs/kevinslin/maturity-scorecard/inventory/<surface-id>/scores.yaml`
-- `docs/kevinslin/maturity-scorecard/inventory/<surface-id>/report.md`
-- `docs/kevinslin/maturity-scorecard/inventory/<surface-id>/<category>.md`
-- `docs/kevinslin/maturity-scorecard/LTS.md`
+- `docs/maturity-scorecard/inventory/<surface-id>/scores.yaml`
+- `docs/maturity-scorecard/inventory/<surface-id>/report.md`
+- `docs/maturity-scorecard/inventory/<surface-id>/<category>.md`
+- `docs/maturity-scorecard/LTS.md`
 
 ## Workflow
 
@@ -216,7 +216,7 @@ Optional:
      ```bash
      python3 .agents/skills/claw-score/scripts/sync_scores_yaml.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --scorecard-root docs/kevinslin/maturity-scorecard
+       --scorecard-root docs/maturity-scorecard
      ```
 
    - If taxonomy should be recovered from an existing active inventory tree,
@@ -225,7 +225,7 @@ Optional:
      ```bash
      python3 .agents/skills/claw-score/scripts/sync_taxonomy_categories.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --scorecard-root docs/kevinslin/maturity-scorecard
+       --scorecard-root docs/maturity-scorecard
      ```
 
    - `sync_taxonomy_categories.py` treats taxonomy and category notes as the
@@ -240,8 +240,8 @@ Optional:
      ```bash
      python3 .agents/skills/claw-score/scripts/render_taxonomy_from_taxonomy.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --taxonomy-doc docs/kevinslin/maturity-scorecard/taxonomy.md \
-       --taxonomy-outline-doc docs/kevinslin/maturity-scorecard/taxonomy-outline.md
+       --taxonomy-doc docs/maturity-scorecard/taxonomy.md \
+       --taxonomy-outline-doc docs/maturity-scorecard/taxonomy-outline.md
      ```
 
    - Render top-level scorecard:
@@ -249,14 +249,14 @@ Optional:
      ```bash
      python3 .agents/skills/claw-score/scripts/render_scorecard_from_taxonomy.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --scorecard docs/kevinslin/maturity-scorecard/maturity-scorecard.md
+       --scorecard docs/maturity-scorecard/maturity-scorecard.md
      ```
 
    - The scorecard layout is owned by
      `./references/maturity-scorecard-template.md`. Change the template when
      the scorecard structure changes.
 
-   - Update `docs/kevinslin/maturity-scorecard/LTS.md` in the same change when
+   - Update `docs/maturity-scorecard/LTS.md` in the same change when
      the taxonomy edit renames, adds, removes, or regroups any surface or
      category referenced by the LTS slice. `LTS.md` is intentionally
      hand-curated rather than fully rendered from taxonomy, so the render
@@ -271,8 +271,8 @@ Optional:
      ```bash
      python3 .agents/skills/claw-score/scripts/render_taxonomy_from_taxonomy.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --taxonomy-doc docs/kevinslin/maturity-scorecard/taxonomy.md \
-       --taxonomy-outline-doc docs/kevinslin/maturity-scorecard/taxonomy-outline.md \
+       --taxonomy-doc docs/maturity-scorecard/taxonomy.md \
+       --taxonomy-outline-doc docs/maturity-scorecard/taxonomy-outline.md \
        --check
      ```
 
@@ -281,7 +281,7 @@ Optional:
      ```bash
      python3 .agents/skills/claw-score/scripts/render_scorecard_from_taxonomy.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --scorecard docs/kevinslin/maturity-scorecard/maturity-scorecard.md \
+       --scorecard docs/maturity-scorecard/maturity-scorecard.md \
        --check
      ```
 
@@ -290,12 +290,12 @@ Optional:
      ```bash
      python3 .agents/skills/claw-score/scripts/sync_taxonomy_categories.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --scorecard-root docs/kevinslin/maturity-scorecard \
+       --scorecard-root docs/maturity-scorecard \
        --check
 
      python3 .agents/skills/claw-score/scripts/sync_scores_yaml.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --scorecard-root docs/kevinslin/maturity-scorecard \
+       --scorecard-root docs/maturity-scorecard \
        --check
      ```
 
@@ -308,8 +308,8 @@ Optional:
      ```bash
      python3 .agents/skills/claw-score/scripts/validate_lts_sync.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --scorecard-root docs/kevinslin/maturity-scorecard \
-       --lts docs/kevinslin/maturity-scorecard/LTS.md
+       --scorecard-root docs/maturity-scorecard \
+       --lts docs/maturity-scorecard/LTS.md
      ```
 
    - Run `git diff --check` over changed files.

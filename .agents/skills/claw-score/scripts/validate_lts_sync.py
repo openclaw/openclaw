@@ -267,12 +267,12 @@ def main() -> int:
     parser.add_argument(
         "--scorecard-root",
         type=Path,
-        default=Path("docs/kevinslin/maturity-scorecard"),
+        default=Path("docs/maturity-scorecard"),
     )
     parser.add_argument(
         "--lts",
         type=Path,
-        default=Path("docs/kevinslin/maturity-scorecard/LTS.md"),
+        default=Path("docs/maturity-scorecard/LTS.md"),
     )
     args = parser.parse_args()
 

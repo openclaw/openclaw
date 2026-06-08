@@ -19,7 +19,7 @@ from render_scorecard_from_taxonomy import inventory_dir, is_archived_surface, r
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_TAXONOMY_PATH = REPO_ROOT / ".agents/skills/claw-score/taxonomy.yaml"
-DEFAULT_SCORECARD_ROOT = REPO_ROOT / "docs/kevinslin/maturity-scorecard"
+DEFAULT_SCORECARD_ROOT = REPO_ROOT / "docs/maturity-scorecard"
 
 
 class IndentDumper(yaml.SafeDumper):

@@ -26,9 +26,9 @@ Required:
 
 Expected active outputs:
 
-- `docs/kevinslin/maturity-scorecard/inventory/<surface-id>/scores.yaml`
-- `docs/kevinslin/maturity-scorecard/inventory/<surface-id>/report.md`
-- `docs/kevinslin/maturity-scorecard/inventory/<surface-id>/<category>.md`
+- `docs/maturity-scorecard/inventory/<surface-id>/scores.yaml`
+- `docs/maturity-scorecard/inventory/<surface-id>/report.md`
+- `docs/maturity-scorecard/inventory/<surface-id>/<category>.md`
 
 ## Workflow
 
@@ -37,7 +37,7 @@ Expected active outputs:
    - Locate the requested surface. If multiple rows match, ask one concise
      question.
    - Use the taxonomy surface id to derive the output root as
-     `docs/kevinslin/maturity-scorecard/inventory/<surface-id>/`.
+     `docs/maturity-scorecard/inventory/<surface-id>/`.
    - If the surface is marked `archived: true`, stop unless the user explicitly
      asks to rescore archived material.
 
@@ -166,8 +166,8 @@ Expected active outputs:
      ```bash
      python3 .agents/skills/claw-score/scripts/validate_lts_sync.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --scorecard-root docs/kevinslin/maturity-scorecard \
-       --lts docs/kevinslin/maturity-scorecard/LTS.md
+       --scorecard-root docs/maturity-scorecard \
+       --lts docs/maturity-scorecard/LTS.md
      ```
 
    - Confirm top-level artifacts are current:
@@ -175,13 +175,13 @@ Expected active outputs:
      ```bash
      python3 .agents/skills/claw-score/scripts/render_taxonomy_from_taxonomy.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --taxonomy-doc docs/kevinslin/maturity-scorecard/taxonomy.md \
-       --taxonomy-outline-doc docs/kevinslin/maturity-scorecard/taxonomy-outline.md \
+       --taxonomy-doc docs/maturity-scorecard/taxonomy.md \
+       --taxonomy-outline-doc docs/maturity-scorecard/taxonomy-outline.md \
        --check
 
      python3 .agents/skills/claw-score/scripts/render_scorecard_from_taxonomy.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --scorecard docs/kevinslin/maturity-scorecard/maturity-scorecard.md \
+       --scorecard docs/maturity-scorecard/maturity-scorecard.md \
        --check
      ```
 

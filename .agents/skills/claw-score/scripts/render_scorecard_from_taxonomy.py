@@ -68,15 +68,15 @@ DOC_LINE_REFERENCE_RE = re.compile(
     re.IGNORECASE,
 )
 GENERATED_SCORECARD_DOC_RE = re.compile(
-    r"^docs/kevinslin/maturity-scorecard/(?:inventory/|taxonomy\.md$|maturity-scorecard\.md$)"
+    r"^docs/maturity-scorecard/(?:inventory/|taxonomy\.md$|maturity-scorecard\.md$)"
 )
 SHELL_DOC_REFERENCE_RE = re.compile(
     r"(?:\s[|;&]\s|`|\$\(|\b(?:cat|sed|rg|grep|awk)\b\s+)"
 )
 REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_TAXONOMY_PATH = REPO_ROOT / ".agents/skills/claw-score/taxonomy.yaml"
-DEFAULT_SCORECARD_PATH = REPO_ROOT / "docs/kevinslin/maturity-scorecard/maturity-scorecard.md"
-SCORECARD_ROOT = REPO_ROOT / "docs/kevinslin/maturity-scorecard"
+DEFAULT_SCORECARD_PATH = REPO_ROOT / "docs/maturity-scorecard/maturity-scorecard.md"
+SCORECARD_ROOT = REPO_ROOT / "docs/maturity-scorecard"
 SKILL_ROOT = REPO_ROOT / ".agents/skills/claw-score"
 DEFAULT_SCORECARD_TEMPLATE_PATH = (
     REPO_ROOT / ".agents/skills/claw-score/references/maturity-scorecard-template.md"

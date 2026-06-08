@@ -2,7 +2,7 @@
 
 Use this workflow when the task is to update the `claw-score` skill itself:
 `SKILL.md`, reference docs, templates, renderer behavior, sync scripts, or the
-artifact-maintenance contract for `docs/kevinslin/maturity-scorecard/`.
+artifact-maintenance contract for `docs/maturity-scorecard/`.
 
 ## Scope
 
@@ -12,7 +12,7 @@ This workflow owns:
 - changing files under `.agents/skills/claw-score/references/`
 - changing files under `.agents/skills/claw-score/scripts/`
 - changing the human-facing artifact contract in
-  `docs/kevinslin/maturity-scorecard/README.md`
+  `docs/maturity-scorecard/README.md`
 - rerendering or resyncing active scorecard artifacts when a skill change
   affects their generated shape or maintenance rules
 
@@ -31,11 +31,11 @@ Optional, depending on the change:
 
 - `.agents/skills/claw-score/references/**`
 - `.agents/skills/claw-score/scripts/**`
-- `docs/kevinslin/maturity-scorecard/README.md`
-- `docs/kevinslin/maturity-scorecard/taxonomy.md`
-- `docs/kevinslin/maturity-scorecard/taxonomy-outline.md`
-- `docs/kevinslin/maturity-scorecard/maturity-scorecard.md`
-- `docs/kevinslin/maturity-scorecard/inventory/**`
+- `docs/maturity-scorecard/README.md`
+- `docs/maturity-scorecard/taxonomy.md`
+- `docs/maturity-scorecard/taxonomy-outline.md`
+- `docs/maturity-scorecard/maturity-scorecard.md`
+- `docs/maturity-scorecard/inventory/**`
 
 ## Workflow
 
@@ -68,7 +68,7 @@ Optional, depending on the change:
      same change.
 
 4. Keep the human-facing artifact contract current.
-   - Check `docs/kevinslin/maturity-scorecard/README.md` whenever the skill
+   - Check `docs/maturity-scorecard/README.md` whenever the skill
      changes artifact ownership, regeneration commands, terminology, or the
      division of responsibilities between source YAML and rendered Markdown.
    - Keep the README human-facing: describe file roles, regeneration steps, and
@@ -80,7 +80,7 @@ Optional, depending on the change:
      ```bash
      python3 .agents/skills/claw-score/scripts/sync_taxonomy_categories.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --scorecard-root docs/kevinslin/maturity-scorecard
+       --scorecard-root docs/maturity-scorecard
      ```
 
    - If score-row identity or `scores.yaml` shape changed, run:
@@ -88,7 +88,7 @@ Optional, depending on the change:
      ```bash
      python3 .agents/skills/claw-score/scripts/sync_scores_yaml.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --scorecard-root docs/kevinslin/maturity-scorecard
+       --scorecard-root docs/maturity-scorecard
      ```
 
    - If taxonomy-reference rendering changed, rerender:
@@ -96,8 +96,8 @@ Optional, depending on the change:
      ```bash
      python3 .agents/skills/claw-score/scripts/render_taxonomy_from_taxonomy.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --taxonomy-doc docs/kevinslin/maturity-scorecard/taxonomy.md \
-       --taxonomy-outline-doc docs/kevinslin/maturity-scorecard/taxonomy-outline.md
+       --taxonomy-doc docs/maturity-scorecard/taxonomy.md \
+       --taxonomy-outline-doc docs/maturity-scorecard/taxonomy-outline.md
      ```
 
    - If top-level scorecard rendering changed, rerender:
@@ -105,7 +105,7 @@ Optional, depending on the change:
      ```bash
      python3 .agents/skills/claw-score/scripts/render_scorecard_from_taxonomy.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --scorecard docs/kevinslin/maturity-scorecard/maturity-scorecard.md
+       --scorecard docs/maturity-scorecard/maturity-scorecard.md
      ```
 
    - If per-surface report rendering or report template behavior changed,
@@ -114,7 +114,7 @@ Optional, depending on the change:
      change is broad, rerender all active reports:
 
      ```bash
-     rg --files docs/kevinslin/maturity-scorecard/inventory -g 'report.md' \
+     rg --files docs/maturity-scorecard/inventory -g 'report.md' \
        | while IFS= read -r report; do
            python3 .agents/skills/claw-score/scripts/render_score_matrix.py \
              --taxonomy .agents/skills/claw-score/taxonomy.yaml \
@@ -133,23 +133,23 @@ Optional, depending on the change:
      ```bash
      python3 .agents/skills/claw-score/scripts/render_taxonomy_from_taxonomy.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --taxonomy-doc docs/kevinslin/maturity-scorecard/taxonomy.md \
-       --taxonomy-outline-doc docs/kevinslin/maturity-scorecard/taxonomy-outline.md \
+       --taxonomy-doc docs/maturity-scorecard/taxonomy.md \
+       --taxonomy-outline-doc docs/maturity-scorecard/taxonomy-outline.md \
        --check
 
      python3 .agents/skills/claw-score/scripts/render_scorecard_from_taxonomy.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --scorecard docs/kevinslin/maturity-scorecard/maturity-scorecard.md \
+       --scorecard docs/maturity-scorecard/maturity-scorecard.md \
        --check
 
      python3 .agents/skills/claw-score/scripts/sync_taxonomy_categories.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --scorecard-root docs/kevinslin/maturity-scorecard \
+       --scorecard-root docs/maturity-scorecard \
        --check
 
      python3 .agents/skills/claw-score/scripts/sync_scores_yaml.py \
        --taxonomy .agents/skills/claw-score/taxonomy.yaml \
-       --scorecard-root docs/kevinslin/maturity-scorecard \
+       --scorecard-root docs/maturity-scorecard \
        --check
      ```
 

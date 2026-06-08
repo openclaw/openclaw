@@ -22,14 +22,14 @@ It owns:
 - rendered artifact shape and renderer expectations
 - maintenance rules for the scorecard artifact directory
 
-Treat `docs/kevinslin/maturity-scorecard/` as an artifact root maintained by
+Treat `docs/maturity-scorecard/` as an artifact root maintained by
 this skill. That includes:
 
-- `docs/kevinslin/maturity-scorecard/README.md`
-- `docs/kevinslin/maturity-scorecard/taxonomy.md`
-- `docs/kevinslin/maturity-scorecard/taxonomy-outline.md`
-- `docs/kevinslin/maturity-scorecard/maturity-scorecard.md`
-- `docs/kevinslin/maturity-scorecard/inventory/**`
+- `docs/maturity-scorecard/README.md`
+- `docs/maturity-scorecard/taxonomy.md`
+- `docs/maturity-scorecard/taxonomy-outline.md`
+- `docs/maturity-scorecard/maturity-scorecard.md`
+- `docs/maturity-scorecard/inventory/**`
 
 Treat archived surfaces and historical artifacts under
 `/Users/kevinlin/tmp/maturity` as out of scope. Do not edit, regenerate, or
@@ -45,13 +45,13 @@ Discord archive evidence scope for this skill is intentionally narrow:
 Keep the separation of concerns tight:
 
 - Put all operational scoring instructions in this skill.
-- Keep `docs/kevinslin/maturity-scorecard/README.md` human-facing only:
+- Keep `docs/maturity-scorecard/README.md` human-facing only:
   canonical source pointers, file roles, artifact contract, and regeneration
   commands.
 - Do not split scoring policy, validation rules, or workflow steps across both
   this skill and the human-facing `README.md`.
 - When this skill changes artifact layout, ownership, or regeneration rules,
-  check `docs/kevinslin/maturity-scorecard/README.md` and update it in the same
+  check `docs/maturity-scorecard/README.md` and update it in the same
   change if needed so it continues to describe the outputs accurately.
 
 ## Inputs
@@ -66,13 +66,13 @@ OpenClaw maintainer default:
 - Taxonomy path:
   `.agents/skills/claw-score/taxonomy.yaml`.
 - Scorecard path:
-  `docs/kevinslin/maturity-scorecard/maturity-scorecard.md`.
+  `docs/maturity-scorecard/maturity-scorecard.md`.
 - Taxonomy doc path:
-  `docs/kevinslin/maturity-scorecard/taxonomy.md`.
+  `docs/maturity-scorecard/taxonomy.md`.
 - Taxonomy outline path:
-  `docs/kevinslin/maturity-scorecard/taxonomy-outline.md`.
+  `docs/maturity-scorecard/taxonomy-outline.md`.
 - Report root:
-  `docs/kevinslin/maturity-scorecard/<artifact-root>/<surface-slug>/`, where
+  `docs/maturity-scorecard/<artifact-root>/<surface-slug>/`, where
   `<artifact-root>/<surface-slug>` is derived from the taxonomy surface id as
   `inventory/<surface-id>/`. Active work currently means `inventory/`; archived
   surfaces are marked with `archived: true` and skipped by normal render and
@@ -90,7 +90,7 @@ Default output names:
 Command working directory:
 
 - Run shell commands from the repository root that contains both
-  `docs/kevinslin/maturity-scorecard/` and `.agents/skills/claw-score/`.
+  `docs/maturity-scorecard/` and `.agents/skills/claw-score/`.
 - Script paths in commands are repository-root-relative. Template paths such as
   `./references/category-note-template.md` are skill-directory-relative.
 
@@ -205,12 +205,12 @@ Other YAML files used by this skill live in two places:
   state, and `last_score_run`.
 - `/Users/kevinlin/tmp/maturity/taxonomy.yaml`: archive copy for the other
   surfaces that are temporarily out of the active in-repo taxonomy scope.
-- `docs/kevinslin/maturity-scorecard/taxonomy.md`: rendered Markdown reference
+- `docs/maturity-scorecard/taxonomy.md`: rendered Markdown reference
   view of the taxonomy source, including surface inventory and per-surface
   category metadata.
-- `docs/kevinslin/maturity-scorecard/taxonomy-outline.md`: rendered Markdown
+- `docs/maturity-scorecard/taxonomy-outline.md`: rendered Markdown
   outline of active surfaces grouped by family, generated from taxonomy.
-- `docs/kevinslin/maturity-scorecard/<artifact-root>/<surface-slug>/scores.yaml`:
+- `docs/maturity-scorecard/<artifact-root>/<surface-slug>/scores.yaml`:
   rendered per-surface score source for category Coverage, Quality,
   Completeness, and row identity (`name` and `category_note`). It does not
   duplicate taxonomy-owned `features`, `docs`, `search_anchors`,
@@ -224,7 +224,7 @@ Archived surfaces note:
   live at `/Users/kevinlin/tmp/maturity`.
 
 Example output shape: the Gateway audit uses
-`docs/kevinslin/maturity-scorecard/inventory/<surface-id>/report.md`
+`docs/maturity-scorecard/inventory/<surface-id>/report.md`
 plus one note per category in the same surface directory.
 
 ## Methods
@@ -250,7 +250,7 @@ plus one note per category in the same surface directory.
 
 ## Output Contract
 
-- One human-facing `docs/kevinslin/maturity-scorecard/README.md` that points
+- One human-facing `docs/maturity-scorecard/README.md` that points
   back to this skill, the taxonomy source, and the rendered artifact roles
   without restating the scoring workflow in full.
 - One rendered taxonomy reference Markdown file from the taxonomy YAML.
@@ -279,7 +279,7 @@ plus one note per category in the same surface directory.
 - Markdown rollups, matrix Coverage, matrix Quality, matrix Completeness, and
   matrix LTS rendered from the YAML score source plus taxonomy category
   `human_lts_override`.
-- `docs/kevinslin/maturity-scorecard/LTS.md`, taxonomy
+- `docs/maturity-scorecard/LTS.md`, taxonomy
   `human_lts_override`, and every rendered surface-report matrix LTS column
   must stay synchronized. Run `validate_lts_sync.py` after any LTS-affecting
   taxonomy, score, report, or `LTS.md` edit.
