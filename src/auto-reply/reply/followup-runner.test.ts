@@ -1119,6 +1119,7 @@ describe("createFollowupRunner runtime config", () => {
           model: "claude-opus-4-7",
           suppressNextUserMessagePersistence: true,
           sourceReplyDeliveryMode: "message_tool_only",
+          allowEmptyAssistantReplyAsSilent: true,
         },
       }),
     );
@@ -1129,6 +1130,8 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.currentInboundEventKind).toBe("room_event");
     expect(call.currentInboundAudio).toBe(true);
     expect(call.suppressNextUserMessagePersistence).toBe(true);
+    expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(call.allowEmptyAssistantReplyAsSilent).toBe(true);
     expect(call.cliSessionId).toBe("cli-session-1");
     expect(call.cliSessionBinding).toEqual({ sessionId: "cli-session-1" });
   });
