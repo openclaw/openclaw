@@ -2431,6 +2431,25 @@ export async function dispatchReplyFromConfig(
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
     const allowSuppressedSourceProgressCallbacks =
       params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
+    const isChannelOwnedToolResultProgressPayload = (payload: ReplyPayload) => {
+      const text = normalizeOptionalString(payload.text);
+      return Boolean(text?.startsWith("🛠️") || text?.startsWith("🔧"));
+    };
+    const shouldForwardToolResultProgressCallback = (
+      payload: ReplyPayload,
+      isFastModeAutoProgress: boolean,
+    ) => {
+      if (isFastModeAutoProgress) {
+        return shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true });
+      }
+      if (
+        allowSuppressedSourceProgressCallbacks &&
+        isChannelOwnedToolResultProgressPayload(payload)
+      ) {
+        return shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true });
+      }
+      return shouldSendToolSummaries() && shouldForwardProgressCallback();
+    };
     const shouldAllowQuietChannelOwnedProgressCallbacks = (options?: {
       requiresToolSummaryVisibility?: boolean;
     }) =>
@@ -2575,11 +2594,10 @@ export async function dispatchReplyFromConfig(
                 const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
                 const isForcedToolProgress =
                   shouldDeliverForcedToolProgressDespiteSourceSuppression();
-                const progressCallbackForwarded = shouldForwardProgressCallback({
-                  forwardWhenSourceDeliverySuppressed: true,
-                  requiresToolSummaryVisibility:
-                    !isFastModeAutoProgress && !allowSuppressedSourceProgressCallbacks,
-                });
+                const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
+                  payload,
+                  isFastModeAutoProgress,
+                );
                 if (progressCallbackForwarded) {
                   await onToolResultFromReplyOptions?.(payload);
                 }
