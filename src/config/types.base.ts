@@ -1,3 +1,4 @@
+// Defines base configuration types shared by multiple config sections.
 import type { ChatType } from "../channels/chat-type.js";
 
 /** Reply handling mode for chat command surfaces. */
@@ -67,6 +68,8 @@ export type ChannelStreamingProgressConfig = {
   toolProgress?: boolean;
   /** Command/exec progress detail in the draft. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
   commandText?: ChannelStreamingCommandTextMode;
+  /** Include assistant commentary/preamble text in the progress draft. Default: false. */
+  commentary?: boolean;
 };
 
 export type ChannelStreamingPreviewConfig = {

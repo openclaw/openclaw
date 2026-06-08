@@ -1,3 +1,4 @@
+/** Applies model override tokens embedded in reset/new command text. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
@@ -138,6 +139,7 @@ function applySelectionToSession(params: {
 }
 
 /** Applies a model override embedded in a reset command body. */
+/** Applies a valid reset model override to session state and returns the cleaned body. */
 export async function applyResetModelOverride(params: {
   cfg: OpenClawConfig;
   agentId?: string;

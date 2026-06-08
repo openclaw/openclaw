@@ -1,3 +1,4 @@
+// Verifies node camera/photo tool payloads, media URLs, and vision gating.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readFileUtf8AndCleanup,
@@ -11,7 +12,12 @@ const { callGateway } = vi.hoisted(() => ({
 
 vi.mock("../gateway/call.js", () => ({ callGateway }));
 vi.mock("../media/media-services.js", () => ({
+  buildImageResizeSideGrid: vi.fn(() => [1200]),
   getImageMetadata: vi.fn(async () => ({ width: 1, height: 1 })),
+  IMAGE_REDUCE_QUALITY_STEPS: [85],
+  isImageProcessorUnavailableError: vi.fn(() => false),
+  MAX_IMAGE_INPUT_PIXELS: 25_000_000,
+  readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
   resizeToJpeg: vi.fn(async () => Buffer.from("jpeg")),
 }));
 
@@ -47,6 +53,7 @@ function unexpectedGatewayMethod(method: unknown): never {
 }
 
 function getNodesTool(options?: { modelHasVision?: boolean; allowMediaInvokeCommands?: boolean }) {
+  // Tests vary only model vision capability and media invoke permission.
   return createNodesTool({
     ...(options?.modelHasVision !== undefined ? { modelHasVision: options.modelHasVision } : {}),
     ...(options?.allowMediaInvokeCommands !== undefined
@@ -80,6 +87,7 @@ function expectInvokeParams(
     params?: Record<string, unknown>;
   },
 ) {
+  // Node command payloads are nested under the gateway node.invoke params object.
   const record = requireRecord(invokeParams, "node.invoke params");
   expect(record.command).toBe(expected.command);
   if (expected.nodeId !== undefined) {
@@ -146,6 +154,7 @@ function setupNodeInvokeMock(params: {
   onInvoke?: (invokeParams: unknown) => GatewayMockResult | Promise<GatewayMockResult>;
   invokePayload?: unknown;
 }) {
+  // Most camera tests need node.list followed by one node.invoke command.
   callGateway.mockImplementation(async ({ method, params: invokeParams }: GatewayCall) => {
     if (method === "node.list") {
       return mockNodeList({ commands: params.commands, remoteIp: params.remoteIp });

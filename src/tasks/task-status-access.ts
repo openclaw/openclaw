@@ -1,3 +1,4 @@
+// Filters task status visibility by requester, owner, and flow scope.
 import {
   findTaskByRunId,
   getTaskById,

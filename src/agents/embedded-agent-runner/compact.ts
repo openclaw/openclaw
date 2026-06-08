@@ -1,3 +1,6 @@
+/**
+ * Implements embedded-agent transcript compaction and runtime handoff.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
@@ -46,6 +49,10 @@ import {
 } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
 import { isDefaultAgentRuntimeId } from "../agent-runtime-id.js";
+import {
+  mapSandboxSkillEntriesForPrompt,
+  resolveSandboxSkillRuntimeInputs,
+} from "./sandbox-skills.js";
 import {
   resolveAgentDir,
   resolveRunModelFallbacksOverride,
@@ -682,13 +689,24 @@ async function compactEmbeddedAgentSessionDirectOnce(
   let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null = null;
   let checkpointSnapshotRetained = false;
   try {
-    const skillsSnapshotForRun =
-      sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? undefined : params.skillsSnapshot;
+    const {
+      skillsEligibility,
+      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+      skillsSnapshot: skillsSnapshotForRun,
+      skillsWorkspaceDir: effectiveSkillsWorkspace,
+      workspaceOnly: loadSkillsWorkspaceOnly,
+    } = resolveSandboxSkillRuntimeInputs({
+      sandbox,
+      effectiveWorkspace,
+      skillsSnapshot: params.skillsSnapshot,
+    });
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-      workspaceDir: effectiveWorkspace,
+      workspaceDir: effectiveSkillsWorkspace,
       config: params.config,
       agentId: effectiveSkillAgentId,
+      eligibility: skillsEligibility,
       skillsSnapshot: skillsSnapshotForRun,
+      workspaceOnly: loadSkillsWorkspaceOnly,
     });
     restoreSkillEnv = skillsSnapshotForRun
       ? applySkillEnvOverridesFromSnapshot({
@@ -699,12 +717,18 @@ async function compactEmbeddedAgentSessionDirectOnce(
           skills: skillEntries ?? [],
           config: params.config,
         });
+    const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
+      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      skillsWorkspaceDir: effectiveSkillsWorkspace,
+      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+    });
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: skillsSnapshotForRun,
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      entries: promptSkillEntries,
       config: params.config,
-      workspaceDir: effectiveWorkspace,
+      workspaceDir: effectiveSkillsPromptWorkspace,
       agentId: effectiveSkillAgentId,
+      eligibility: skillsEligibility,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;

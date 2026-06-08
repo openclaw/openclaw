@@ -1,3 +1,4 @@
+// Test assertions for scanning repository files and filesystem fixtures.
 import fs from "node:fs";
 import { expect, vi } from "vitest";
 import { spawnNodeEvalSync } from "./node-process.js";

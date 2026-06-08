@@ -1,3 +1,4 @@
+/** Builds embedded-agent settings snapshots from global, bundle, and project settings. */
 import path from "node:path";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,11 +20,16 @@ import type { SettingsManager } from "./sessions/index.js";
 
 const log = createSubsystemLogger("embedded-agent-settings");
 
+// Embedded-agent settings snapshot assembly. Global settings merge with enabled
+// bundle settings and optional project settings, with shell execution fields
+// sanitized unless the project policy is explicitly trusted.
 export const DEFAULT_EMBEDDED_AGENT_PROJECT_SETTINGS_POLICY = "sanitize";
 const SANITIZED_PROJECT_AGENT_KEYS = ["shellPath", "shellCommandPrefix"] as const;
 
+/** Policy for whether workspace project settings can influence embedded-agent behavior. */
 export type EmbeddedAgentProjectSettingsPolicy = "trusted" | "sanitize" | "ignore";
 
+/** Merged settings snapshot consumed by embedded agent settings managers. */
 export type AgentSettingsSnapshot = ReturnType<SettingsManager["getGlobalSettings"]> & {
   mcpServers?: Record<string, BundleMcpServerConfig>;
 };
@@ -42,6 +48,8 @@ function sanitizeProjectSettings(settings: AgentSettingsSnapshot): AgentSettings
 }
 
 function canReuseUnscopedCurrentPluginMetadataSnapshot(config: OpenClawConfig): boolean {
+  // Unscoped snapshots are only reusable when config does not introduce
+  // workspace-local plugin load paths that would change the registry contents.
   return normalizePluginsConfigWithResolver(config.plugins).loadPaths.length === 0;
 }
 
@@ -73,6 +81,8 @@ function loadBundleSettingsFile(params: {
     rejectHardlinks: true,
   });
   if (!result.ok && result.reason === "open") {
+    // Settings files are plugin-owned input. Unsafe path/hardlink results should
+    // skip the bundle rather than weaken the plugin root boundary.
     log.warn(`skipping unsafe bundle settings file: ${absolutePath}`);
     return null;
   }
@@ -83,6 +93,10 @@ function loadBundleSettingsFile(params: {
   return sanitizeAgentSettingsSnapshot(result.value as AgentSettingsSnapshot);
 }
 
+/**
+ * Load and merge settings contributed by enabled bundle plugins for one
+ * embedded-agent workspace.
+ */
 export function loadEnabledBundleAgentSettingsSnapshot(params: {
   cwd: string;
   cfg?: OpenClawConfig;
@@ -174,6 +188,8 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
   return snapshot;
 }
 
+/** Resolve how project-local embedded-agent settings should be applied. */
+/** Resolves the configured project-settings trust policy for embedded agents. */
 export function resolveEmbeddedAgentProjectSettingsPolicy(
   cfg?: OpenClawConfig,
 ): EmbeddedAgentProjectSettingsPolicy {
@@ -184,6 +200,8 @@ export function resolveEmbeddedAgentProjectSettingsPolicy(
   return DEFAULT_EMBEDDED_AGENT_PROJECT_SETTINGS_POLICY;
 }
 
+/** Build the final embedded-agent settings snapshot in merge-precedence order. */
+/** Merges global, plugin, and project settings according to the selected trust policy. */
 export function buildEmbeddedAgentSettingsSnapshot(params: {
   globalSettings: AgentSettingsSnapshot;
   pluginSettings?: AgentSettingsSnapshot;

@@ -1,3 +1,4 @@
+// Defines secret reference and resolution configuration types.
 import { isRecord } from "../utils.js";
 
 /** Supported secret reference backends in config. */

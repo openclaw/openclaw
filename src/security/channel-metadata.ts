@@ -1,3 +1,4 @@
+// Extracts channel metadata used by security audit findings.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { wrapExternalContent } from "./external-content.js";
 

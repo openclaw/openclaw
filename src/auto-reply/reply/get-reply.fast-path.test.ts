@@ -1,3 +1,4 @@
+// Tests get-reply fast-path command handling before full agent dispatch.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -578,6 +579,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         cleanedBody: continuationPrompt,
       };
     });
+    const onSessionMetadataChanges = vi.fn();
 
     await expect(
       getReplyFromConfig(
@@ -591,11 +593,17 @@ describe("getReplyFromConfig fast test bootstrap", () => {
           SessionKey: "telegram:slash:123",
           CommandTargetSessionKey: targetSessionKey,
         }),
-        undefined,
+        { onSessionMetadataChanges } as never,
         cfg,
       ),
     ).resolves.toEqual({ text: "ok" });
 
+    expect(onSessionMetadataChanges).toHaveBeenCalledWith([
+      { sessionKey: targetSessionKey, agentId: "main", reason: "command-metadata" },
+    ]);
+    expect(onSessionMetadataChanges.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(runPreparedReplyMock).mock.invocationCallOrder[0],
+    );
     expect(getSessionEntry({ storePath, sessionKey: targetSessionKey })?.goal?.objective).toBe(
       "/status",
     );
