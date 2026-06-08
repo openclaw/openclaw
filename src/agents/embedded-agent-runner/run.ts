@@ -1793,7 +1793,7 @@ export async function runEmbeddedAgent(
             ...(params.fastMode === "auto"
               ? {
                   fastModeStartedAtMs: fastModeStarted,
-                  fastModeAutoOnSeconds: fastModeAutoOnSeconds,
+                  fastModeAutoOnSeconds,
                   fastModeAutoProgressState,
                 }
               : {}),
