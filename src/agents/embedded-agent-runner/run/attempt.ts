@@ -236,6 +236,10 @@ import {
   type ToolSearchCatalogToolExecutor,
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
+import {
+  replaceWithEffectiveCronCreatorToolAllowlist,
+  type CronCreatorToolAllowlistEntry,
+} from "../../tools/cron-tool.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "../../workspace.js";
@@ -1221,6 +1225,7 @@ export async function runEmbeddedAttempt(
         ? createToolSearchCatalogRef()
         : undefined;
     const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
+    const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
     const toolsRaw = !shouldConstructTools
       ? []
       : (() => {
@@ -1308,6 +1313,7 @@ export async function runEmbeddedAttempt(
             enableHeartbeatTool: params.enableHeartbeatTool,
             forceHeartbeatTool: params.forceHeartbeatTool,
             runtimeToolAllowlist: effectiveToolsAllow,
+            cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
             authProfileStore: params.authProfileStore,
             recordToolPrepStage: (name) => corePluginToolStages.mark(name),
             onToolOutcome: params.onToolOutcome,
@@ -1602,6 +1608,15 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
       preserveToolNames: localModelLeanPreserveToolNames,
     });
+    if (cronCreatorToolAllowlist.length > 0) {
+      // Cron is constructed before bundled MCP/LSP tools are appended; refresh
+      // the shared cap so scheduled turns preserve the creator's full surface.
+      replaceWithEffectiveCronCreatorToolAllowlist(
+        cronCreatorToolAllowlist,
+        projectedUncompactedEffectiveTools,
+        (tool) => getPluginToolMeta(tool),
+      );
+    }
     const uncompactedToolSchemaProjection = filterRuntimeCompatibleTools(
       projectedUncompactedEffectiveTools,
     );
