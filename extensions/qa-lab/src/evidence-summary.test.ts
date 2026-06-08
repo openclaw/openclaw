@@ -61,7 +61,7 @@ describe("evidence summary", () => {
       packageSource: {
         kind: "source-checkout",
       },
-      target: {
+      environment: {
         ref: "abc123",
         os: process.platform,
         nodeVersion: process.version,

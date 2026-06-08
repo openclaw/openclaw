@@ -28,7 +28,7 @@ const qaEvidenceChannelSchema = z
   })
   .strict();
 
-const qaEvidenceTargetSchema = z
+const qaEvidenceEnvironmentSchema = z
   .object({
     ref: nonEmptyStringSchema.nullable(),
     os: nonEmptyStringSchema,
@@ -82,7 +82,7 @@ export const qaEvidenceSummaryEntrySchema = z
     surfaceId: nonEmptyStringSchema.optional(),
     runner: nonEmptyStringSchema,
     packageSource: qaEvidencePackageSourceSchema,
-    target: qaEvidenceTargetSchema,
+    environment: qaEvidenceEnvironmentSchema,
     artifactPaths: z.array(nonEmptyStringSchema),
     status: qaEvidenceStatusSchema,
     failure: qaEvidenceFailureSchema.optional(),
@@ -174,7 +174,7 @@ function resolveQaEvidenceRunner(params: { env?: NodeJS.ProcessEnv; fallback?: s
   return params.env?.OPENCLAW_QA_RUNNER?.trim() || params.fallback || "host";
 }
 
-function resolveQaEvidenceTarget(env: NodeJS.ProcessEnv | undefined) {
+function resolveQaEvidenceEnvironment(env: NodeJS.ProcessEnv | undefined) {
   return {
     ref: env?.OPENCLAW_QA_REF?.trim() || env?.GITHUB_SHA?.trim() || null,
     os: process.platform,
@@ -272,7 +272,7 @@ export function buildQaSuiteEvidenceSummary(
   },
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
-  const target = resolveQaEvidenceTarget(params.env);
+  const environment = resolveQaEvidenceEnvironment(params.env);
   const packageSource = resolveQaEvidencePackageSource(params.env);
   const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
   const tier = resolveQaEvidenceTier({
@@ -309,7 +309,7 @@ export function buildQaSuiteEvidenceSummary(
       surfaceId: surfaceIds[0],
       runner,
       packageSource,
-      target,
+      environment,
       artifactPaths: [...params.artifactPaths],
       status: result.status,
       ...(failureForScenario(result) ? { failure: failureForScenario(result) } : {}),
@@ -331,7 +331,7 @@ export function buildLiveTransportEvidenceSummary(
   },
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
-  const target = resolveQaEvidenceTarget(params.env);
+  const environment = resolveQaEvidenceEnvironment(params.env);
   const packageSource = resolveQaEvidencePackageSource(params.env);
   const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
   const tier = resolveQaEvidenceTier({
@@ -364,7 +364,7 @@ export function buildLiveTransportEvidenceSummary(
       },
       runner,
       packageSource,
-      target,
+      environment,
       artifactPaths: [...params.artifactPaths],
       status: result.status,
       ...(failureForScenario(result) ? { failure: failureForScenario(result) } : {}),
