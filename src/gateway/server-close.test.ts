@@ -78,6 +78,9 @@ const {
 } = await import("./restart-trace.js");
 type GatewayCloseHandlerParams = Parameters<typeof createGatewayCloseHandler>[0];
 type GatewayCloseClient = GatewayCloseHandlerParams["clients"] extends Set<infer T> ? T : never;
+type MarkMainSessionsAbortedForRestart = NonNullable<
+  GatewayCloseHandlerParams["markMainSessionsAbortedForRestart"]
+>;
 type DrainActiveSessionsForShutdown = NonNullable<
   GatewayCloseHandlerParams["drainActiveSessionsForShutdown"]
 >;
@@ -708,7 +711,7 @@ describe("createGatewayCloseHandler", () => {
         },
       ],
     ]);
-    const markMainSessionsAbortedForRestart = vi.fn(async () => {
+    const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(async () => {
       events.push("marker");
     });
     const removeChatRun = vi.fn(() => {
