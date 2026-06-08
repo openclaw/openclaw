@@ -1442,7 +1442,7 @@ describe("createFollowupRunner runtime config", () => {
           model: "claude-opus-4-7",
           messageProvider: "telegram",
           sourceReplyDeliveryMode: "message_tool_only",
-          verboseLevel: "on",
+          verboseLevel: "off",
         },
       }),
     );

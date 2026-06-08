@@ -794,7 +794,6 @@ export function createFollowupRunner(params: {
                             },
                             opts,
                             detailMode: toolProgressDetail,
-                            emitChannelProgress: shouldEmitToolResultProgress(),
                           });
                         }
                       : undefined,
