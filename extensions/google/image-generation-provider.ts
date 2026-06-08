@@ -195,9 +195,9 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       let requestUrl: string;
       let requestHeaders: Headers;
       let allowPrivateNetwork: boolean | undefined;
-      let dispatcherPolicy: ReturnType<
-        typeof resolveGoogleGenerativeAiHttpRequestConfig
-      >["dispatcherPolicy"];
+      let dispatcherPolicy:
+        | ReturnType<typeof resolveGoogleGenerativeAiHttpRequestConfig>["dispatcherPolicy"]
+        | undefined;
 
       if (isVertex) {
         const project = resolveGoogleVertexProject();
