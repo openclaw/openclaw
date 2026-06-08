@@ -15,6 +15,17 @@ function restoreEnvVar(name: string, value: string | undefined): void {
   }
 }
 
+function readAuthorizationHeader(init?: { headers?: HeadersInit }): string {
+  const headers = init?.headers;
+  if (headers instanceof Headers) {
+    return headers.get("Authorization") ?? "";
+  }
+  if (Array.isArray(headers)) {
+    return headers.find(([key]) => key.toLowerCase() === "authorization")?.[1] ?? "";
+  }
+  return headers?.Authorization ?? headers?.authorization ?? "";
+}
+
 async function runChutesCatalog(params: { apiKey?: string; discoveryApiKey?: string }) {
   const provider = await registerSingleProviderPlugin(plugin);
   const result = await provider.catalog?.run({
@@ -102,9 +113,7 @@ describe("chutes implicit provider auth mode", () => {
       const chutesCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes("chutes.ai"));
       expect(chutesCalls.length).toBeGreaterThan(0);
       const request = chutesCalls[0]?.[1] as { headers?: HeadersInit } | undefined;
-      expect(new Headers(request?.headers).get("authorization")).toBe(
-        "Bearer my-chutes-access-token",
-      );
+      expect(readAuthorizationHeader(request)).toBe("Bearer my-chutes-access-token");
     });
   });
 });
