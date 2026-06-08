@@ -16,7 +16,10 @@ import {
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
+import {
+  CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  LEGACY_CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+} from "./control-ui-contract.js";
 import {
   handleControlUiAssistantMediaRequest,
   handleControlUiAvatarRequest,
@@ -810,6 +813,30 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAgentId).toBe("main");
         expect(parsed.chatMessageMaxWidth).toBe("min(1280px, 82%)");
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
+      },
+    });
+  });
+
+  it("serves bootstrap config JSON via legacy documented path on root-mounted gateways", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: LEGACY_CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: {
+              agents: { defaults: { workspace: tmp } },
+              ui: { assistant: { name: "Legacy", avatar: "old.png" } },
+            },
+          },
+        );
+        expect(handled).toBe(true);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.basePath).toBe("");
+        expect(parsed.assistantName).toBe("Legacy");
+        expect(parsed.assistantAgentId).toBe("main");
       },
     });
   });

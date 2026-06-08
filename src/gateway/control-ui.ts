@@ -36,6 +36,7 @@ import {
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  LEGACY_CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
@@ -874,7 +875,11 @@ export async function handleControlUiHttpRequest(
   const bootstrapConfigPath = basePath
     ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
     : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
-  if (pathname === bootstrapConfigPath) {
+  // Backward compatibility: also serve the legacy documented namespace-prefixed
+  // path on root-mounted gateways so existing docs, reverse-proxy rules, and
+  // custom clients continue to work.
+  const legacyPath = !basePath ? LEGACY_CONTROL_UI_BOOTSTRAP_CONFIG_PATH : null;
+  if (pathname === bootstrapConfigPath || pathname === legacyPath) {
     if (
       !(await authorizeControlUiReadRequest(req, res, {
         auth: opts?.auth,
