@@ -17,7 +17,6 @@ action families but live scenario proof is not equally deep for every action.
 Quality is Beta because the source is robust but the action surface is broad
 and some room/member info fields remain intentionally partial.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

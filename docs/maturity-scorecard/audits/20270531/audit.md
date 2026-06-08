@@ -476,11 +476,11 @@
   Closest existing: `Docker / Podman hosting` / `Containerized Agents, Sandbox, and Tooling Support` / `Container image dependency baking`
   Why: `Creating skills` section `Optional frontmatter keys` describes first-class skill authoring behavior rather than plugin SDK, CLI setup, or generic Gateway RPC coverage, so it needs a dedicated `Skills` surface in taxonomy.
 - `05-05-capabilities-skills-p003-s005` | `tools/creating-skills` | `Using `{baseDir}``
-  Recommendation: `new_surface`
-  Source: `tools/creating-skills` :: `L118 Using `{baseDir}``
+Recommendation: `new_surface`
+Source: `tools/creating-skills` :: `L118 Using `{baseDir}``
   Target: `Skills` / `Skill authoring and metadata` / `Skill-local file references`
   Closest existing: `Docker / Podman hosting` / `Containerized Agents, Sandbox, and Tooling Support` / `Container image dependency baking`
-  Why: `Creating skills` section `Using `{baseDir}`` describes first-class skill authoring behavior rather than plugin SDK, CLI setup, or generic Gateway RPC coverage, so it needs a dedicated `Skills` surface in taxonomy.
+  Why: `Creating skills` section `Using `{baseDir}``describes first-class skill authoring behavior rather than plugin SDK, CLI setup, or generic Gateway RPC coverage, so it needs a dedicated`Skills` surface in taxonomy.
 - `05-05-capabilities-skills-p003-s006` | `tools/creating-skills` | `Adding conditional activation`
   Recommendation: `new_surface`
   Source: `tools/creating-skills` :: `L127 Adding conditional activation`
@@ -592,9 +592,7 @@
 - `05-05-capabilities-skills-p006-s002` | `prose` | `Slash command`
   Recommendation: `new_surface`
   Source: `prose` :: `L57 Slash command`
-  Target: `OpenProse` / `OpenProse installation and entrypoints` / ``/prose` command entrypoint`
-  Closest existing: `Slack` / `Slash Commands and Native Command Routing` / `Slash Commands and Native Command Routing`
-  Why: `OpenProse` section `Slash command` documents a plugin-backed workflow product (`/prose`, `.prose` programs, runtime mapping, and state backends) that is broader than existing generic plugin-install or subagent coverage and warrants its own surface.
+  Target: `OpenProse` / `OpenProse installation and entrypoints` / ``/prose` command entrypoint`Closest existing:`Slack`/`Slash Commands and Native Command Routing`/`Slash Commands and Native Command Routing`Why:`OpenProse`section`Slash command` documents a plugin-backed workflow product (`/prose`, `.prose` programs, runtime mapping, and state backends) that is broader than existing generic plugin-install or subagent coverage and warrants its own surface.
 - `05-05-capabilities-skills-p006-s003` | `prose` | `What it can do`
   Recommendation: `new_surface`
   Source: `prose` :: `L74 What it can do`
@@ -1389,7 +1387,7 @@
   Source: `concepts/session-tool` :: `(page)`
   Target: `Session, memory, and context engine` / `Session Tools and Sub-agent Orchestration` / `Session Tools and Sub-agent Orchestration`
   Closest existing: `Session, memory, and context engine` / `Memory Files, Tools, and Active Memory` / `Memory Files, Tools, and Active Memory`
-  Why: Agent-facing sessions_* and subagents tools lack an owning category.
+  Why: Agent-facing sessions\_\* and subagents tools lack an owning category.
 - `04-02-agents-sessions-and-memory-p005-s011` | `concepts/memory` | `Dreaming`
   Recommendation: `new_category`
   Source: `concepts/memory` :: `L218 Dreaming`
@@ -1804,18 +1802,12 @@
   Target: `Agent runtime and provider execution` / `Code mode orchestration and runtime` / `Model-visible tools`
   Closest existing: `Image/video/music generation tools` / `Configuration, Model Refs, and Provider Discovery` / `Configuration, Model Refs, and Provider Discovery`
   Why: Exposing exactly `exec` and `wait` as the model-facing tool surface is the defining missing capability.
-- `10-02-reference-rpc-and-api-p004-s011` | `reference/code-mode` | ``exec``
+- `10-02-reference-rpc-and-api-p004-s011` | `reference/code-mode` | `exec`
   Recommendation: `new_category`
-  Source: `reference/code-mode` :: `L271 `exec``
-  Target: `Agent runtime and provider execution` / `Code mode orchestration and runtime` / `exec contract`
-  Closest existing: `Browser automation and exec/sandbox tools` / `Host Exec Approvals and Elevated Mode` / `Host Exec Approvals and Elevated Mode`
-  Why: The hostile-code `exec` contract, accepted inputs, output unions, and suspension behavior are not covered by existing exec-tool or sandbox categories.
-- `10-02-reference-rpc-and-api-p004-s012` | `reference/code-mode` | ``wait``
+  Source: `reference/code-mode` :: `L271 `exec``Target:`Agent runtime and provider execution`/`Code mode orchestration and runtime`/`exec contract`Closest existing:`Browser automation and exec/sandbox tools`/`Host Exec Approvals and Elevated Mode`/`Host Exec Approvals and Elevated Mode`Why: The hostile-code`exec` contract, accepted inputs, output unions, and suspension behavior are not covered by existing exec-tool or sandbox categories.
+- `10-02-reference-rpc-and-api-p004-s012` | `reference/code-mode` | `wait`
   Recommendation: `new_category`
-  Source: `reference/code-mode` :: `L338 `wait``
-  Target: `Agent runtime and provider execution` / `Code mode orchestration and runtime` / `wait contract`
-  Closest existing: `CLI` / `CLI Observability` / `Remote log tailing`
-  Why: Snapshot restore, same-run scoping, and resumed completion semantics are specific to the code-mode `wait` tool.
+  Source: `reference/code-mode` :: `L338 `wait``Target:`Agent runtime and provider execution`/`Code mode orchestration and runtime`/`wait contract`Closest existing:`CLI`/`CLI Observability`/`Remote log tailing`Why: Snapshot restore, same-run scoping, and resumed completion semantics are specific to the code-mode`wait` tool.
 - `10-02-reference-rpc-and-api-p004-s013` | `reference/code-mode` | `Guest runtime API`
   Recommendation: `new_category`
   Source: `reference/code-mode` :: `L379 Guest runtime API`
@@ -2652,7 +2644,7 @@
   Source: `plugins/workboard` :: `L300 Permissions`
   Target: `Workboard plugin` / `Operator UI and CLI workflows` / `RPC permissions and operator scopes`
   Closest existing: `Plugin SDK and bundled plugin architecture` / `Bundled plugins` / `Bundled channel IDs`
-  Why: The workboard.* RPC namespace and its read/write permission split are an explicit supported surface for operators and clients.
+  Why: The workboard.\* RPC namespace and its read/write permission split are an explicit supported surface for operators and clients.
 - `05-03-capabilities-bundled-plugin-guides-p005-s012` | `plugins/workboard` | `Configuration`
   Recommendation: `new_feature`
   Source: `plugins/workboard` :: `L318 Configuration`
@@ -2701,23 +2693,17 @@
   Target: `Session, memory, and context engine` / `Compiled wiki vaults, claims, and dashboards` / `Hybrid recall plus wiki workflow`
   Closest existing: `Google provider path` / `Plugin Distribution and Cross-surface Capability Adapters` / `Plugin Distribution and Cross-surface Capability Adapters`
   Why: The recommended QMD-plus-wiki pattern describes a supported hybrid operating mode that existing memory categories do not call out.
-- `05-03-capabilities-bundled-plugin-guides-p009-s005` | `plugins/memory-wiki` | ``isolated``
+- `05-03-capabilities-bundled-plugin-guides-p009-s005` | `plugins/memory-wiki` | `isolated`
   Recommendation: `new_feature`
-  Source: `plugins/memory-wiki` :: `L78 `isolated``
-  Target: `Session, memory, and context engine` / `Vault modes and bridge ingestion` / `Isolated vault mode`
-  Closest existing: `Google provider path` / `Plugin Distribution and Cross-surface Capability Adapters` / `Plugin Distribution and Cross-surface Capability Adapters`
+  Source: `plugins/memory-wiki` :: `L78 `isolated``Target:`Session, memory, and context engine`/`Vault modes and bridge ingestion`/`Isolated vault mode`Closest existing:`Google provider path`/`Plugin Distribution and Cross-surface Capability Adapters`/`Plugin Distribution and Cross-surface Capability Adapters`
   Why: A fully isolated wiki vault is a distinct supported mode of operation for the plugin.
-- `05-03-capabilities-bundled-plugin-guides-p009-s006` | `plugins/memory-wiki` | ``bridge``
+- `05-03-capabilities-bundled-plugin-guides-p009-s006` | `plugins/memory-wiki` | `bridge`
   Recommendation: `new_feature`
-  Source: `plugins/memory-wiki` :: `L84 `bridge``
-  Target: `Session, memory, and context engine` / `Vault modes and bridge ingestion` / `Bridge mode imports and event following`
-  Closest existing: `Google provider path` / `Plugin Distribution and Cross-surface Capability Adapters` / `Plugin Distribution and Cross-surface Capability Adapters`
+  Source: `plugins/memory-wiki` :: `L84 `bridge``Target:`Session, memory, and context engine`/`Vault modes and bridge ingestion`/`Bridge mode imports and event following`Closest existing:`Google provider path`/`Plugin Distribution and Cross-surface Capability Adapters`/`Plugin Distribution and Cross-surface Capability Adapters`
   Why: Bridge-mode import of memory artifacts, dream reports, daily notes, memory roots, and event logs is a specific capability missing from current taxonomy.
-- `05-03-capabilities-bundled-plugin-guides-p009-s007` | `plugins/memory-wiki` | ``unsafe-local``
+- `05-03-capabilities-bundled-plugin-guides-p009-s007` | `plugins/memory-wiki` | `unsafe-local`
   Recommendation: `new_feature`
-  Source: `plugins/memory-wiki` :: `L100 `unsafe-local``
-  Target: `Session, memory, and context engine` / `Vault modes and bridge ingestion` / `Unsafe-local filesystem mode`
-  Closest existing: `Browser automation and exec/sandbox tools` / `Browser Plugin Service and Profiles` / `Browser Plugin Service and Profiles`
+  Source: `plugins/memory-wiki` :: `L100 `unsafe-local``Target:`Session, memory, and context engine`/`Vault modes and bridge ingestion`/`Unsafe-local filesystem mode`Closest existing:`Browser automation and exec/sandbox tools`/`Browser Plugin Service and Profiles`/`Browser Plugin Service and Profiles`
   Why: The same-machine escape hatch is a distinct mode with its own trust boundary.
 - `05-03-capabilities-bundled-plugin-guides-p009-s008` | `plugins/memory-wiki` | `Vault layout`
   Recommendation: `new_feature`
@@ -3726,7 +3712,7 @@
 - `10-01-reference-cli-commands-p053-root` | `cli/clawbot` | `(page)`
   Recommendation: `nav_missing_source`
   Why: Legacy alias guidance only.
-- `10-01-reference-cli-commands-p053-s001` | `cli/clawbot` | ``openclaw clawbot``
+- `10-01-reference-cli-commands-p053-s001` | `cli/clawbot` | `openclaw clawbot`
   Recommendation: `nav_missing_source`
   Why: Legacy alias guidance only.
 - `10-01-reference-cli-commands-p053-s002` | `cli/clawbot` | `Migration`
@@ -4035,4 +4021,3 @@
 - `11-05-help-community-and-meta-p002-s014` | `start/hubs` | `Related`
   Recommendation: `nav_missing_source`
   Why: The Related block is navigation only.
-

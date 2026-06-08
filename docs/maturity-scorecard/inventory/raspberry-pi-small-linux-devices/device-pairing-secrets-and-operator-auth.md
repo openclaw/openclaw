@@ -94,11 +94,13 @@ This category evaluates the Raspberry Pi / small Linux devices capability area r
 Query: `gitcrawl search openclaw/openclaw --json --query "Raspberry Pi device pairing gateway token"`
 
 Results:
+
 - No matching threads returned.
 
 Query: `gitcrawl search openclaw/openclaw --json --query "Raspberry Pi systemd Gateway auth SecretRef"`
 
 Results:
+
 - Returned PR #78555, with snippets mentioning `sibling_ref` SecretRef assignments and an `rpi-2712` Pi 5 aarch64 managed-systemd Gateway.
 
 ### Discrawl queries
@@ -106,9 +108,11 @@ Results:
 Query: `/Users/kevinlin/.local/bin/discrawl search --limit 5 "Raspberry Pi device pairing OpenClaw"`
 
 Results:
+
 - Found Pi `devices list` output, pairing-required/native approval loops, `/tmp` read-only breaking plugin/device pairing/memory behavior, Pi 5 Docker/Tailscale Serve approval plans, stale device-token mismatch, and Pi 5 local Ollama/Gateway/Telegram setup struggles.
 
 Query: `/Users/kevinlin/.local/bin/discrawl search --limit 5 "Raspberry Pi Codex auth systemd"`
 
 Results:
+
 - Found Pi/Linux systemd support history with repeated Codex OAuth failures.

@@ -11,7 +11,6 @@ last_refreshed_by: codex
 
 The shared catalog/install/status layer is the cross-cutting component that makes regional channels discoverable and operable. It covers docs navigation, channel picker entries, official external catalog records, aliases, install plans, trusted official install markers, missing-plugin repair hints, plugin validation, channel status/list output, and wizard localization. This shared layer is better covered than several individual external runtimes, but recent archive evidence shows install/list/status confusion, undefined picker/status rows, optional-channel startup failures, and external-channel trust-path churn.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

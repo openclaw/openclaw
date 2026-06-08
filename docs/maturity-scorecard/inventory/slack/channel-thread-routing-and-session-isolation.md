@@ -11,7 +11,6 @@ last_refreshed_by: codex
 
 Slack channel and thread routing is one of the better-covered Slack families. Docs and source model channel IDs, mention gates, bot/user allowlists, `replyToMode`, `thread_ts`, session suffixes, thread starter context, and live thread follow-up/isolation. Quality remains Beta because archive history shows active fixes around thread session continuity, assistant DM thread fan-out, interaction thread status, and confusing `replyToMode` expectations.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

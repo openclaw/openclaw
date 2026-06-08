@@ -26,15 +26,15 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Media Capture](camera-media-capture.md) | ❌ | `Alpha (66%)` | `Alpha (62%)` | `Alpha (66%)` | Camera and media capture |
-| [Mobile Chat](chat-sessions-ui.md) | ❌ | `Beta (70%)` | `Alpha (66%)` | `Beta (70%)` | Chat tab |
-| [Connection Setup](gateway-pairing-security.md) | ❌ | `Alpha (68%)` | `Alpha (64%)` | `Alpha (68%)` | Gateway discovery |
-| [Distribution](install-release-distribution.md) | ❌ | `Alpha (60%)` | `Alpha (62%)` | `Alpha (60%)` | Public Google Play install path, Manual install path, Release smoke and startup performance |
-| [Settings](settings-permissions-diagnostics.md) | ❌ | `Alpha (64%)` | `Alpha (66%)` | `Alpha (64%)` | Settings sheet |
-| [Voice](voice-talk-wake.md) | ❌ | `Alpha (66%)` | `Alpha (60%)` | `Alpha (66%)` | Voice tab |
-| [Device Runtime](node-device-capabilities.md) | ❌ | `Alpha (62%)` | `Alpha (55%)` | `Alpha (62%)` | Background reconnect and presence, Device command availability |
+| Category                                        | LTS | Coverage      | Quality       | Completeness  | Features to evaluate                                                                        |
+| ----------------------------------------------- | --- | ------------- | ------------- | ------------- | ------------------------------------------------------------------------------------------- |
+| [Media Capture](camera-media-capture.md)        | ❌  | `Alpha (66%)` | `Alpha (62%)` | `Alpha (66%)` | Camera and media capture                                                                    |
+| [Mobile Chat](chat-sessions-ui.md)              | ❌  | `Beta (70%)`  | `Alpha (66%)` | `Beta (70%)`  | Chat tab                                                                                    |
+| [Connection Setup](gateway-pairing-security.md) | ❌  | `Alpha (68%)` | `Alpha (64%)` | `Alpha (68%)` | Gateway discovery                                                                           |
+| [Distribution](install-release-distribution.md) | ❌  | `Alpha (60%)` | `Alpha (62%)` | `Alpha (60%)` | Public Google Play install path, Manual install path, Release smoke and startup performance |
+| [Settings](settings-permissions-diagnostics.md) | ❌  | `Alpha (64%)` | `Alpha (66%)` | `Alpha (64%)` | Settings sheet                                                                              |
+| [Voice](voice-talk-wake.md)                     | ❌  | `Alpha (66%)` | `Alpha (60%)` | `Alpha (66%)` | Voice tab                                                                                   |
+| [Device Runtime](node-device-capabilities.md)   | ❌  | `Alpha (62%)` | `Alpha (55%)` | `Alpha (62%)` | Background reconnect and presence, Device command availability                              |
 
 ## Scoring rubric
 

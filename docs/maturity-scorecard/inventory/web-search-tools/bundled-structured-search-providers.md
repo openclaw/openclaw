@@ -89,6 +89,7 @@ Quality is Beta because the structured-provider shape is reusable, but implement
 ## Evidence
 
 ### Docs
+
 - `/Users/kevinlin/code/openclaw/docs/tools/web.md:57` lists the provider cards for bundled web_search providers.
 - `/Users/kevinlin/code/openclaw/docs/tools/web.md:100` compares providers, credentials, source type, freshness, and cost.
 - `/Users/kevinlin/code/openclaw/docs/tools/brave-search.md:9` documents Brave Search.
@@ -100,6 +101,7 @@ Quality is Beta because the structured-provider shape is reusable, but implement
 - `/Users/kevinlin/code/openclaw/docs/tools/searxng-search.md:10` documents SearXNG Search.
 
 ### Source
+
 - `/Users/kevinlin/code/openclaw/extensions/brave/src/brave-web-search-provider.runtime.ts:88` resolves Brave credentials and env.
 - `/Users/kevinlin/code/openclaw/extensions/brave/src/brave-web-search-provider.runtime.ts:336` executes Brave search with validation, caching, diagnostics, and error wrapping.
 - `/Users/kevinlin/code/openclaw/extensions/tavily/src/tavily-client.ts:68` issues guarded Tavily requests.
@@ -110,11 +112,13 @@ Quality is Beta because the structured-provider shape is reusable, but implement
 - `/Users/kevinlin/code/openclaw/extensions/searxng/src/searxng-client.ts:105` validates SearXNG base URL and endpoint mode.
 
 ### Integration tests
+
 - `/Users/kevinlin/code/openclaw/qa/scenarios/runtime/tools/tavily-search.md:4` defines a Tavily search runtime scenario.
 - `/Users/kevinlin/code/openclaw/qa/scenarios/runtime/tools/tavily-extract.md:4` defines a Tavily extract runtime scenario.
 - `/Users/kevinlin/code/openclaw/scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs:423` checks plugin web-search provider ids in an E2E plugin path.
 
 ### Unit tests
+
 - `/Users/kevinlin/code/openclaw/extensions/brave/src/brave-web-search-provider.test.ts:154` covers Brave missing-key behavior and later cases cover base URL, malformed JSON, bounded errors, cache isolation, and diagnostics.
 - `/Users/kevinlin/code/openclaw/extensions/tavily/src/tavily-tools.test.ts:74` covers Tavily tool behavior, and `/Users/kevinlin/code/openclaw/extensions/tavily/src/tavily-client.test.ts:44` covers client errors.
 - `/Users/kevinlin/code/openclaw/extensions/exa/src/exa-web-search-provider.test.ts:24` covers Exa provider behavior and error handling.
@@ -124,12 +128,16 @@ Quality is Beta because the structured-provider shape is reusable, but implement
 - `/Users/kevinlin/code/openclaw/extensions/searxng/src/searxng-search-provider.test.ts:30` and `/Users/kevinlin/code/openclaw/extensions/searxng/src/searxng-client.test.ts:47` cover SearXNG provider and client behavior.
 
 ### Gitcrawl queries
+
 Freshness: `gitcrawl doctor --json` reported version `0.2.1`, `last_sync_at` `2026-05-28T19:09:52.784704Z`, `29,810` threads, `11,181` open threads, and `18,594` clusters.
+
 - `gitcrawl --json search issues -R openclaw/openclaw "Perplexity"` returned #84872, #85800, #6792, #80843, #17925, #75562, #72527, #49949, and #87347.
 - `gitcrawl --json search prs -R openclaw/openclaw "Perplexity"` returned #86338 search context size, #85828 model override, #86622 Tavily auth fix, #62126 native search onboarding, #85158 Parallel provider, and related provider work.
 - `gitcrawl --json search prs -R openclaw/openclaw "provider-web-search"` returned #85158 Parallel, #86440 SerpApi, #40311 Brave Goggles, #52207 SearXNG and Tavily freshness, #86622 Tavily auth, and #63571 fallback.
 
 ### Discrawl queries
+
 Freshness: `discrawl status --json` reported state `current`, `generated_at` `2026-05-29T17:44:19Z`, `last_sync_at` `2026-05-29T15:59:50Z`, `1,487,061` messages, `25,819` channels, and zero embedding backlog.
+
 - `discrawl search --mode hybrid --limit 12 "Tavily Firecrawl Perplexity Brave SearXNG DuckDuckGo web_search"` found provider-choice discussion, public lists of available providers, Perplexity provider CLI output, and Perplexity 401 user-facing failure evidence.
 - `discrawl search --mode hybrid --limit 12 "web_fetch web_search config provider api key"` found setup guidance for Brave API keys and notes that web_fetch only fetches known URLs.

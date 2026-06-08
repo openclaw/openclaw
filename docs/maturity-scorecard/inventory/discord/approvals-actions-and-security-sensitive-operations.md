@@ -18,14 +18,14 @@ Included in this category:
 - Native Discord exec/plugin approvals: Native Discord exec/plugin approvals, including approver resolution, dm/channel/both target routing, approval button authorization, stale/expired click handling, gateway resolution, and route-notice/privacy behavior
 - Sensitive owner-only command routing for prompts: Sensitive owner-only command routing for prompts and final results, especially /diagnostics and /export-trajectory
 - Discord message actions: Discord message actions for messages, reactions, pins, reads/search, permissions, channel/guild administration, role changes, moderation, scheduled events, voice status, and presence
-- Action gates under channels.discord.actions.*: Action gates under channels.discord.actions.*, per-account overrides, requester trust, senderUserId-based Discord permission checks, role hierarchy checks, and read target allowlisting
+- Action gates under channels.discord.actions._: Action gates under channels.discord.actions._, per-account overrides, requester trust, senderUserId-based Discord permission checks, role hierarchy checks, and read target allowlisting
 
 ## Features
 
 - Native Discord exec/plugin approvals: Native Discord exec/plugin approvals, including approver resolution, dm/channel/both target routing, approval button authorization, stale/expired click handling, gateway resolution, and route-notice/privacy behavior
 - Sensitive owner-only command routing for prompts: Sensitive owner-only command routing for prompts and final results, especially /diagnostics and /export-trajectory
 - Discord message actions: Discord message actions for messages, reactions, pins, reads/search, permissions, channel/guild administration, role changes, moderation, scheduled events, voice status, and presence
-- Action gates under channels.discord.actions.*: Action gates under channels.discord.actions.*, per-account overrides, requester trust, senderUserId-based Discord permission checks, role hierarchy checks, and read target allowlisting
+- Action gates under channels.discord.actions._: Action gates under channels.discord.actions._, per-account overrides, requester trust, senderUserId-based Discord permission checks, role hierarchy checks, and read target allowlisting
 
 ## Archive Freshness
 
@@ -85,7 +85,7 @@ Included in this category:
 
 - Score: `Alpha (58%)`
 - Surface instructions: evaluated against `references/completeness/discord.md`.
-- Positive signals: archived docs, source, test, Gitcrawl, and Discrawl evidence cover the taxonomy scope for Native Discord exec/plugin approvals, Sensitive owner-only command routing for prompts, Discord message actions, Action gates under channels.discord.actions.*.
+- Positive signals: archived docs, source, test, Gitcrawl, and Discrawl evidence cover the taxonomy scope for Native Discord exec/plugin approvals, Sensitive owner-only command routing for prompts, Discord message actions, Action gates under channels.discord.actions.\*.
 - Negative signals: the archived note predated process-version-3 Completeness scoring, so this score is initialized from the same evidence breadth and known-gap record used for the archived Coverage score.
 - Missing capability branches: see `## Known Gaps` and `## Evidence` below for the recorded missing branches and operator-visible caveats.
 

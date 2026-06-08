@@ -11,7 +11,6 @@ last_refreshed_by: codex
 
 Discord guild channel routing is a real, documented runtime path with fail-closed guild/channel policy, mention gating, per-channel session keys, thread inheritance, configured/runtime bindings, role-aware routing, and inbound context isolation. The strongest live proof covers canary, mention-gating, and guild-channel round trips. The main limitation is that several important negative and recovery flows are still not proven by live or E2E scenarios, especially allowlist-block behavior, role-routing in a guild channel, restart/resume, top-level reply shape, and history-window behavior.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

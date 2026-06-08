@@ -16,7 +16,6 @@ receipts. It is held at Beta because media behavior is still active field-churn:
 direct-handle media sends, group media, attachment roots, and reply attachments
 all show recent archive activity.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

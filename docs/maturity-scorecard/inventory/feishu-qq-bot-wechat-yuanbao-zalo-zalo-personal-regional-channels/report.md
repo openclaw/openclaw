@@ -26,12 +26,12 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Channel Setup and Operations](shared-regional-channel-catalog-install-status.md) | ❌ | `Experimental (42%)` | `Experimental (44%)` | `Experimental (42%)` | Docs channel index, Official external channel catalog entries, Core channel-plugin catalog, Channel setup wizard, Missing-plugin, Cross-channel ingress/access/refactor concerns |
-| [Access and Identity](access-and-identity.md) | ❌ | `Experimental (42%)` | `Experimental (44%)` | `Experimental (42%)` | Access and Identity |
-| [Conversation Routing and Delivery](conversation-routing-and-delivery.md) | ❌ | `Experimental (42%)` | `Experimental (44%)` | `Experimental (42%)` | Conversation Routing and Delivery |
-| [Media and Rich Content](media-and-rich-content.md) | ❌ | `Experimental (47%)` | `Alpha (55%)` | `Experimental (47%)` | Media and Rich Content |
+| Category                                                                          | LTS | Coverage             | Quality              | Completeness         | Features to evaluate                                                                                                                                                             |
+| --------------------------------------------------------------------------------- | --- | -------------------- | -------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Channel Setup and Operations](shared-regional-channel-catalog-install-status.md) | ❌  | `Experimental (42%)` | `Experimental (44%)` | `Experimental (42%)` | Docs channel index, Official external channel catalog entries, Core channel-plugin catalog, Channel setup wizard, Missing-plugin, Cross-channel ingress/access/refactor concerns |
+| [Access and Identity](access-and-identity.md)                                     | ❌  | `Experimental (42%)` | `Experimental (44%)` | `Experimental (42%)` | Access and Identity                                                                                                                                                              |
+| [Conversation Routing and Delivery](conversation-routing-and-delivery.md)         | ❌  | `Experimental (42%)` | `Experimental (44%)` | `Experimental (42%)` | Conversation Routing and Delivery                                                                                                                                                |
+| [Media and Rich Content](media-and-rich-content.md)                               | ❌  | `Experimental (47%)` | `Alpha (55%)`        | `Experimental (47%)` | Media and Rich Content                                                                                                                                                           |
 
 ## Scoring rubric
 
@@ -108,7 +108,6 @@ Features:
 
 Primary docs:
 
-
 ### 3. Conversation Routing and Delivery
 
 Search anchors: feishu, qq bot, wechat, yuanbao, zalo, zalo personal, regional channels conversation routing and delivery, conversation routing and delivery.
@@ -128,7 +127,6 @@ Features:
 
 Primary docs:
 
-
 ### 4. Media and Rich Content
 
 Search anchors: feishu, qq bot, wechat, yuanbao, zalo, zalo personal, regional channels media and rich content, media and rich content.
@@ -147,7 +145,6 @@ Features:
 - Media and Rich Content: Evidence scope for Media and Rich Content.
 
 Primary docs:
-
 
 ## Recommended scorecard interpretation
 

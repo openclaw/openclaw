@@ -15,7 +15,6 @@ store paths are documented and source-backed, but live proof mostly starts after
 credentials already exist and archive evidence still shows QR/session and
 profile-boundary churn.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

@@ -131,7 +131,7 @@ themselves.
   - Query `gitcrawl search openclaw/openclaw --query "plugin sdk testing harness fixture" --json`
     returned 4 keyword hits. The relevant category signal was open issue
     `#80219`, `[plugin sdk] Consolidate author surface, lifecycle semantics, and
-    export sprawl`, whose body explicitly counts `23` test-ish and contract or
+export sprawl`, whose body explicitly counts `23` test-ish and contract or
     mock families and recommends freezing or de-emphasizing wide compatibility
     surfaces such as `testing`.
   - Query `gitcrawl search openclaw/openclaw --query "plugin sdk e2e docker fixture" --json`

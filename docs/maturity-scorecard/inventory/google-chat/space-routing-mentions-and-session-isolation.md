@@ -11,7 +11,6 @@ last_refreshed_by: codex
 
 Space routing is the main reason the surface remains Alpha. The implementation has shared ingress policy, stable `spaces/<id>` keys, mention extraction, group sender allowlists, access groups, group prompts, and bot loop protection, but archive evidence includes open or recent reports for spaces being silently ignored, add-on payloads failing, wildcard group configs blocking senders, and users needing optional user OAuth to receive non-mention traffic.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

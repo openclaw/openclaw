@@ -66,7 +66,7 @@ Included in this category:
 
 - Score: `Stable (80%)`
 - Gitcrawl reports: Exact issue and PR searches for `google plugin provider
-  image generation web search speech` returned no direct results.
+image generation web search speech` returned no direct results.
 - Discrawl reports: `@openclaw/google-plugin capability adapters` returned no
   results; `Google Gemini web search image generation provider` returned an
   adjacent custom-provider/openrouter support thread but no direct bundled

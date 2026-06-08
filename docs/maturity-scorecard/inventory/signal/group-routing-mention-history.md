@@ -11,7 +11,6 @@ last_refreshed_by: codex
 
 This note migrates archived maturity evidence for `Signal` / `Group Routing, Mentions, and Pending History` into the current process-version-3 scorecard inventory.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

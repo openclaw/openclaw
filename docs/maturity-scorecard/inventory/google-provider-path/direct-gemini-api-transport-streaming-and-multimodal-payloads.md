@@ -66,7 +66,7 @@ Included in this category:
 
 - Score: `Stable (81%)`
 - Gitcrawl reports: Exact issue search for `Gemini transport thought signature
-  tool call` returned no direct issue results, but broader archive searches
+tool call` returned no direct issue results, but broader archive searches
   found #84384 on Vertex/OpenAI-compatible Gemini thinking timeouts and #69220
   around Gemini empty post-tool behavior.
 - Discrawl reports: `Gemini thought signature` and `functionResponse` searches

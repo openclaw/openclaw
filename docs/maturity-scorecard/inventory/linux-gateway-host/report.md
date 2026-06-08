@@ -26,13 +26,13 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Host Setup and Updates](linux-cli-install-and-update-path.md) | ✅ | `Stable (82%)` | `Beta (78%)` | `Stable (82%)` | Linux CLI install, Node runtime prerequisites, Package-manager policy, Update path |
-| [Gateway Runtime and Service Control](foreground-gateway-runtime-and-process-control.md) | ✅ | `Stable (83%)` | `Beta (78%)` | `Stable (83%)` | Foreground Gateway Runtime, Process Control, Systemd User Service Lifecycle setup, Systemd User Service Lifecycle operation, Systemd User Service Lifecycle status, Systemd User Service Lifecycle recovery |
-| [Remote Access and Security](remote-network-exposure-tls-and-tailscale.md) | ✅ | `Beta (78%)` | `Beta (74%)` | `Beta (78%)` | Remote Network Exposure, TLS, Tailscale, Gateway exposure safeguards, Gateway authentication modes, Secret Handling |
-| [Diagnostics and Repair](diagnostics-logs-doctor-and-repair.md) | ✅ | `Stable (82%)` | `Beta (78%)` | `Stable (82%)` | Gateway diagnostic reports, Gateway log tailing, Doctor checks, Operator repair guidance |
-| [Deployment Targets](vps-container-and-cloud-deployment-guidance.md) | ❌ | `Beta (76%)` | `Beta (72%)` | `Beta (76%)` | VPS, Container, Cloud Deployment Guidance |
+| Category                                                                                 | LTS | Coverage       | Quality      | Completeness   | Features to evaluate                                                                                                                                                                                        |
+| ---------------------------------------------------------------------------------------- | --- | -------------- | ------------ | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Host Setup and Updates](linux-cli-install-and-update-path.md)                           | ✅  | `Stable (82%)` | `Beta (78%)` | `Stable (82%)` | Linux CLI install, Node runtime prerequisites, Package-manager policy, Update path                                                                                                                          |
+| [Gateway Runtime and Service Control](foreground-gateway-runtime-and-process-control.md) | ✅  | `Stable (83%)` | `Beta (78%)` | `Stable (83%)` | Foreground Gateway Runtime, Process Control, Systemd User Service Lifecycle setup, Systemd User Service Lifecycle operation, Systemd User Service Lifecycle status, Systemd User Service Lifecycle recovery |
+| [Remote Access and Security](remote-network-exposure-tls-and-tailscale.md)               | ✅  | `Beta (78%)`   | `Beta (74%)` | `Beta (78%)`   | Remote Network Exposure, TLS, Tailscale, Gateway exposure safeguards, Gateway authentication modes, Secret Handling                                                                                         |
+| [Diagnostics and Repair](diagnostics-logs-doctor-and-repair.md)                          | ✅  | `Stable (82%)` | `Beta (78%)` | `Stable (82%)` | Gateway diagnostic reports, Gateway log tailing, Doctor checks, Operator repair guidance                                                                                                                    |
+| [Deployment Targets](vps-container-and-cloud-deployment-guidance.md)                     | ❌  | `Beta (76%)`   | `Beta (72%)` | `Beta (76%)`   | VPS, Container, Cloud Deployment Guidance                                                                                                                                                                   |
 
 ## Scoring rubric
 

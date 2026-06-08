@@ -59,6 +59,7 @@ Quality is Stable because safety controls are centralized and conservative: netw
 ## Evidence
 
 ### Docs
+
 - `/Users/kevinlin/code/openclaw/docs/tools/web.md:156` documents guarded fetch behavior, fake-IP allowlists, private/metadata blocking, and redirect rechecks.
 - `/Users/kevinlin/code/openclaw/docs/tools/web-fetch.md:40` documents private/internal blocks and redirect rechecks.
 - `/Users/kevinlin/code/openclaw/docs/tools/web-fetch.md:146` documents trusted env proxy and limits.
@@ -66,6 +67,7 @@ Quality is Stable because safety controls are centralized and conservative: netw
 - `/Users/kevinlin/code/openclaw/docs/tools/searxng-search.md:112` documents SearXNG self-hosted endpoint configuration.
 
 ### Source
+
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-guarded-fetch.ts:13` defines self-hosted endpoint policy.
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-guarded-fetch.ts:41` chooses strict or trusted-env guarded fetch behavior.
 - `/Users/kevinlin/code/openclaw/src/infra/net/fetch-guard.ts:383` implements redirect loops with policy checks.
@@ -78,10 +80,12 @@ Quality is Stable because safety controls are centralized and conservative: netw
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-search-citation-redirect.ts:1` resolves citation redirects through guarded HEAD requests.
 
 ### Integration tests
+
 - `/Users/kevinlin/code/openclaw/qa/scenarios/runtime/tools/web-fetch.md:11` covers web_fetch runtime behavior with failure modes.
 - `/Users/kevinlin/code/openclaw/qa/scenarios/runtime/tools/web-search.md:11` covers web_search runtime behavior with failure modes.
 
 ### Unit tests
+
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-fetch.ssrf.test.ts:103` covers web_fetch SSRF protections.
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-search.redirect.test.ts:23` covers citation redirect behavior.
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-fetch-visibility.test.ts:214` covers visibility behavior around fetched content.
@@ -90,11 +94,15 @@ Quality is Stable because safety controls are centralized and conservative: netw
 - `/Users/kevinlin/code/openclaw/extensions/google/web-search-provider.test.ts:253` covers Gemini redirect handling.
 
 ### Gitcrawl queries
+
 Freshness: `gitcrawl doctor --json` reported version `0.2.1`, `last_sync_at` `2026-05-28T19:09:52.784704Z`, `29,810` threads, `11,181` open threads, and `18,594` clusters.
+
 - `gitcrawl --json search issues -R openclaw/openclaw "SSRF web_fetch"` returned #39604 private-network opt-in, #76260 exec parity with web_fetch SSRF block, #39685 egress firewall, #41993 IPv6 special-use failures, and #87505 timeout regression.
 - `gitcrawl --json search prs -R openclaw/openclaw "web_fetch"` returned #67421 per-agent SSRF policy, #39630 allowPrivateNetwork, #87758 fetched-content injection hardening, #55485 SSRF policy, and #61961 related safety work.
 - `gitcrawl --json search prs -R openclaw/openclaw "provider-web-search"` returned #85317 Gemini SSRF private-network bypass and #87758 fetched-content injection hardening.
 
 ### Discrawl queries
+
 Freshness: `discrawl status --json` reported state `current`, `generated_at` `2026-05-29T17:44:19Z`, `last_sync_at` `2026-05-29T15:59:50Z`, `1,487,061` messages, `25,819` channels, and zero embedding backlog.
+
 - `discrawl search --mode hybrid --limit 12 "web_fetch ssrf private internal redirect injection"` found support guidance that web_fetch is safer than exec/browser automation but remains high risk because it pulls untrusted external content, blocks private/internal hosts, and rechecks redirects.

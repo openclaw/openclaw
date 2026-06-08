@@ -15,7 +15,6 @@ ClawHub/npm install guidance, and doctor/setup caveats. It remains below Stable
 because the real operator path still depends on volatile Baileys/session
 behavior and lacks a WhatsApp-specific install-to-linked-account proof.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.
@@ -70,7 +69,7 @@ Included in this category:
   #86612 Docker gateway restart loop after official external plugin install,
   open #87604 plugin-disabled-but-config-present warning confusion, and adjacent
   packaging/cache PR history. `@openclaw/whatsapp package external plugin
-  install` surfaced #85869 on plugin/core version compatibility after floating
+install` surfaced #85869 on plugin/core version compatibility after floating
   install.
 - Discrawl reports: `whatsapp plugin install config auth dir` returned legacy
   setup/help/install chatter; `WhatsApp Baileys session QR login channels login`

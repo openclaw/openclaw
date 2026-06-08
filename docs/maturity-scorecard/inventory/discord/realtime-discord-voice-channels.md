@@ -13,7 +13,6 @@ Realtime Discord voice channels have a substantial implementation and a broad si
 
 The component is therefore beta on Coverage and alpha on Quality. Quality is held down by active GitHub issues and Discord support reports for join failures, DAVE/decryption receive failures, voice-output adapter gaps, and user confusion around `/vc`.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

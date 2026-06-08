@@ -26,13 +26,13 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Install Handoff](public-nix-docs-handoff.md) | ❌ | `Experimental (25%)` | `Experimental (45%)` | `Experimental (25%)` | Nix install overview, nix-openclaw source-of-truth, Install discoverability, Verification handoff |
-| [Plugin Lifecycle](plugin-lifecycle-nix-store-loading.md) | ❌ | `Experimental (40%)` | `Experimental (35%)` | `Experimental (40%)` | Lifecycle command refusal, Declarative plugin selection, Nix-store plugin loading, Hardlink safety |
-| [Activation and App UX](nix-mode-activation-runtime-detection.md) | ❌ | `Experimental (42%)` | `Alpha (50%)` | `Experimental (42%)` | Environment activation, macOS defaults activation, Runtime Nix-mode detection, Stable Nix defaults, Managed-by-Nix banner, Read-only config controls, Onboarding skip |
-| [Config and State](state-config-path-immutable-store.md) | ❌ | `Experimental (45%)` | `Alpha (50%)` | `Experimental (45%)` | Immutable config guard, Config writer refusal, Agent-first Nix edits, Explicit config path, Writable state directory, Immutable-store config support, State integrity checks |
-| [Service Runtime and Guards](gateway-service-path-nix-profile-discovery.md) | ❌ | `Experimental (38%)` | `Experimental (45%)` | `Experimental (38%)` | Nix profile PATH discovery, Profile precedence, Service PATH fallback, Trusted binary boundaries, Setup write refusal, Doctor repair refusal, Update handoff, Service lifecycle handoff |
+| Category                                                                    | LTS | Coverage             | Quality              | Completeness         | Features to evaluate                                                                                                                                                                    |
+| --------------------------------------------------------------------------- | --- | -------------------- | -------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Install Handoff](public-nix-docs-handoff.md)                               | ❌  | `Experimental (25%)` | `Experimental (45%)` | `Experimental (25%)` | Nix install overview, nix-openclaw source-of-truth, Install discoverability, Verification handoff                                                                                       |
+| [Plugin Lifecycle](plugin-lifecycle-nix-store-loading.md)                   | ❌  | `Experimental (40%)` | `Experimental (35%)` | `Experimental (40%)` | Lifecycle command refusal, Declarative plugin selection, Nix-store plugin loading, Hardlink safety                                                                                      |
+| [Activation and App UX](nix-mode-activation-runtime-detection.md)           | ❌  | `Experimental (42%)` | `Alpha (50%)`        | `Experimental (42%)` | Environment activation, macOS defaults activation, Runtime Nix-mode detection, Stable Nix defaults, Managed-by-Nix banner, Read-only config controls, Onboarding skip                   |
+| [Config and State](state-config-path-immutable-store.md)                    | ❌  | `Experimental (45%)` | `Alpha (50%)`        | `Experimental (45%)` | Immutable config guard, Config writer refusal, Agent-first Nix edits, Explicit config path, Writable state directory, Immutable-store config support, State integrity checks            |
+| [Service Runtime and Guards](gateway-service-path-nix-profile-discovery.md) | ❌  | `Experimental (38%)` | `Experimental (45%)` | `Experimental (38%)` | Nix profile PATH discovery, Profile precedence, Service PATH fallback, Trusted binary boundaries, Setup write refusal, Doctor repair refusal, Update handoff, Service lifecycle handoff |
 
 ## Scoring rubric
 

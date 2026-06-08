@@ -69,6 +69,7 @@ Quality is Beta because the canonical config direction is sound, but the operato
 ## Evidence
 
 ### Docs
+
 - `/Users/kevinlin/code/openclaw/docs/tools/web.md:27` documents `openclaw configure --section web`, provider choice, and credential storage.
 - `/Users/kevinlin/code/openclaw/docs/tools/web.md:100` lists supported providers and credential requirements.
 - `/Users/kevinlin/code/openclaw/docs/tools/web.md:170` documents auto-detection order, env/plugin key paths, keyless fallback, and SecretRefs.
@@ -77,6 +78,7 @@ Quality is Beta because the canonical config direction is sound, but the operato
 - `/Users/kevinlin/code/openclaw/docs/help/faq.md:732` gives operator guidance for enabling web_search/web_fetch, env vars, plugin-owned config, allowlists, and daemon env loading.
 
 ### Source
+
 - `/Users/kevinlin/code/openclaw/src/flows/search-setup.ts:403` implements provider selection, defaults, credential prompts, keyless provider handling, OAuth-backed Grok setup, SecretRef mode, and setup finalization.
 - `/Users/kevinlin/code/openclaw/src/web-search/runtime.ts:153` resolves explicit and auto-detected web_search providers from credentials, auth profiles, and keyless fallback.
 - `/Users/kevinlin/code/openclaw/src/web-search/runtime.ts:424` executes the selected provider and fallback behavior.
@@ -86,12 +88,14 @@ Quality is Beta because the canonical config direction is sound, but the operato
 - `/Users/kevinlin/code/openclaw/src/config/validation.ts:1337` validates configured web_search providers and emits install or doctor guidance.
 
 ### Integration tests
+
 - `/Users/kevinlin/code/openclaw/qa/scenarios/runtime/tools/web-search.md:11` defines runtime parity coverage for web_search.
 - `/Users/kevinlin/code/openclaw/qa/scenarios/runtime/tools/web-fetch.md:11` defines runtime parity coverage for web_fetch.
 - `/Users/kevinlin/code/openclaw/scripts/e2e/lib/openai-web-search-minimal/scenario.sh:57` runs the native OpenAI web-search gateway path.
 - `/Users/kevinlin/code/openclaw/src/gateway/server-startup-web-fetch-bind.test.ts:78` verifies gateway startup with credential-free web_fetch config.
 
 ### Unit tests
+
 - `/Users/kevinlin/code/openclaw/src/commands/doctor/shared/legacy-web-search-migrate.test.ts:9` covers migration from legacy `tools.web.search.*` config.
 - `/Users/kevinlin/code/openclaw/src/commands/doctor/shared/legacy-web-fetch-migrate.test.ts:9` covers Firecrawl fetch migration.
 - `/Users/kevinlin/code/openclaw/src/config/config.web-search-provider.test.ts:305` covers provider config acceptance.
@@ -100,14 +104,18 @@ Quality is Beta because the canonical config direction is sound, but the operato
 - `/Users/kevinlin/code/openclaw/src/flows/search-setup.test.ts:406` covers install-catalog provider setup.
 
 ### Gitcrawl queries
+
 Freshness: `gitcrawl doctor --json` reported version `0.2.1`, `last_sync_at` `2026-05-28T19:09:52.784704Z`, `29,810` threads, `11,181` open threads, and `18,594` clusters.
+
 - `gitcrawl --json search issues -R openclaw/openclaw "web_search"` returned open setup and runtime issues including #87347 no provider available despite Brave loaded, #77826 plugin web tools dropped at runtime, #80843 fallback chain, and #87505 timeout regression.
 - `gitcrawl --json search issues -R openclaw/openclaw "web_fetch"` returned open fetch setup and safety issues including #39604 private-network opt-in, #82685 extraction body limits, #41993 IPv6 special-use failures, and #87505 timeout regression.
 - `gitcrawl --json search prs -R openclaw/openclaw "web_search"` returned active provider routing, startup snapshot, SecretRef, fallback, and proxy work including #77736, #86828, #76146, #63571, and #61413.
 - `gitcrawl --json search prs -R openclaw/openclaw "web_fetch"` returned active Firecrawl/Tavily fetch, private-network, progress, injection hardening, and runtime metadata work including #75218, #39630, #86965, #87758, and #77859.
 
 ### Discrawl queries
+
 Freshness: `discrawl status --json` reported state `current`, `generated_at` `2026-05-29T17:44:19Z`, `last_sync_at` `2026-05-29T15:59:50Z`, `1,487,061` messages, `25,819` channels, and zero embedding backlog.
+
 - `discrawl search --mode hybrid --limit 12 "web_search no provider available Brave loaded web_fetch"` found support guidance distinguishing web_fetch from web_search and explaining that search needs a configured provider key.
 - `discrawl search --mode hybrid --limit 12 "web_fetch web_search config provider api key"` found setup threads for enabling both tools, Brave key placement, `group:web` allowlists, and provider config review comments.
 - `discrawl search --mode hybrid --limit 12 "openclaw configure --section web Brave API key web_search web_fetch"` found repeated operator guidance to use `openclaw configure --section web`, restart the gateway, and put keys in gateway env.

@@ -16,7 +16,6 @@ Telegram-specific normalization. This remains Beta on Quality because operator
 confusion around owner IDs, group pairing expectations, and allowlist defaults
 is still visible.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

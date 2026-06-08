@@ -11,7 +11,6 @@ last_refreshed_by: codex
 
 Slack setup has a broad and current implementation surface: production docs cover Socket Mode and HTTP manifests, required token types, SecretRefs, env fallback, user-token reads, and multi-account precedence. The score remains Beta because real workspace setup is still scope- and reinstall-sensitive, and archive evidence shows repeated operator confusion around missing scopes, token type swaps, and multi-account default promotion.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

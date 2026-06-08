@@ -40,7 +40,7 @@ Included in this category:
 - Per-plugin managed npm project: Per-plugin managed npm project roots
 - npm-pack local release-candidate installs: npm-pack local release-candidate installs through npm semantics
 - Dependency ownership between plugin packages: Dependency ownership between plugin packages and OpenClaw
-- Peer dependency relinking: Peer dependency relinking for openclaw/plugin-sdk/*
+- Peer dependency relinking: Peer dependency relinking for openclaw/plugin-sdk/\*
 - Legacy dependency root cleanup: Legacy dependency root cleanup and doctor repair
 - plugins list: plugins list, plugins inspect, runtime inspect, plugins doctor, and
 - Local plugin index: Local plugin index and persisted cold registry state
@@ -66,7 +66,7 @@ Included in this category:
 - Per-plugin managed npm project: Per-plugin managed npm project roots
 - npm-pack local release-candidate installs: npm-pack local release-candidate installs through npm semantics
 - Dependency ownership between plugin packages: Dependency ownership between plugin packages and OpenClaw
-- Peer dependency relinking: Peer dependency relinking for openclaw/plugin-sdk/*
+- Peer dependency relinking: Peer dependency relinking for openclaw/plugin-sdk/\*
 - Legacy dependency root cleanup: Legacy dependency root cleanup and doctor repair
 - plugins list: plugins list, plugins inspect, runtime inspect, plugins doctor, and
 - Local plugin index: Local plugin index and persisted cold registry state

@@ -26,13 +26,13 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Channel Setup and Operations](app-install-auth-manifest-and-scopes.md) | ✅ | `Beta (74%)` | `Alpha (68%)` | `Beta (74%)` | App Install, Slack app credentials, Manifest, Scopes, Channel status diagnostics, Slack account status, Operator Repair, Socket, HTTP transport, Runtime Lifecycle |
-| [Access and Identity](dm-pairing-and-sender-authorization.md) | ✅ | `Beta (74%)` | `Beta (70%)` | `Beta (74%)` | Access and Identity |
-| [Conversation Routing and Delivery](channel-thread-routing-and-session-isolation.md) | ✅ | `Alpha (64%)` | `Alpha (66%)` | `Alpha (64%)` | Channel allowlists, Thread routing, Session Isolation, DM Pairing, Sender Authorization |
-| [Media and Rich Content](media-attachments-files-and-vision.md) | ✅ | `Alpha (64%)` | `Alpha (66%)` | `Alpha (64%)` | Media and Rich Content |
-| [Native Controls and Approvals](slash-commands-and-native-command-routing.md) | ✅ | `Beta (72%)` | `Beta (70%)` | `Beta (72%)` | Slash Commands, Native Command Routing, Interactive Replies, App Home, Assistant Events, Native Approvals, Actions, Security-sensitive Ops |
+| Category                                                                             | LTS | Coverage      | Quality       | Completeness  | Features to evaluate                                                                                                                                               |
+| ------------------------------------------------------------------------------------ | --- | ------------- | ------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [Channel Setup and Operations](app-install-auth-manifest-and-scopes.md)              | ✅  | `Beta (74%)`  | `Alpha (68%)` | `Beta (74%)`  | App Install, Slack app credentials, Manifest, Scopes, Channel status diagnostics, Slack account status, Operator Repair, Socket, HTTP transport, Runtime Lifecycle |
+| [Access and Identity](dm-pairing-and-sender-authorization.md)                        | ✅  | `Beta (74%)`  | `Beta (70%)`  | `Beta (74%)`  | Access and Identity                                                                                                                                                |
+| [Conversation Routing and Delivery](channel-thread-routing-and-session-isolation.md) | ✅  | `Alpha (64%)` | `Alpha (66%)` | `Alpha (64%)` | Channel allowlists, Thread routing, Session Isolation, DM Pairing, Sender Authorization                                                                            |
+| [Media and Rich Content](media-attachments-files-and-vision.md)                      | ✅  | `Alpha (64%)` | `Alpha (66%)` | `Alpha (64%)` | Media and Rich Content                                                                                                                                             |
+| [Native Controls and Approvals](slash-commands-and-native-command-routing.md)        | ✅  | `Beta (72%)`  | `Beta (70%)`  | `Beta (72%)`  | Slash Commands, Native Command Routing, Interactive Replies, App Home, Assistant Events, Native Approvals, Actions, Security-sensitive Ops                         |
 
 ## Scoring rubric
 

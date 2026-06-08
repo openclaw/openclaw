@@ -23,16 +23,17 @@ scores in
 Multi-agent orchestration is Beta overall. Setup, isolation, routing, account routing, and specialist lanes have strong docs/source/test coverage; the surface stays below Stable because full live multi-channel e2e proof is limited and delegate identity remains more policy/runbook-shaped than an enforced product workflow.
 
 This report was scored from `source_ref=openclaw@29dd7847fd` with one subagent dedicated to this surface. Global archive freshness checks passed before scoring: `gitcrawl doctor --json` and `discrawl status --json`.
+
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Agent Setup](agent-setup.md) | ❌ | `Beta (74%)` | `Stable (82%)` | `Stable (84%)` | Add agents, Agent list and delete, Identity files, Non-interactive setup, Single-agent default |
-| [Agent Isolation](agent-isolation.md) | ❌ | `Stable (82%)` | `Beta (78%)` | `Beta (76%)` | Workspace separation, State separation, Auth separation, Session separation, Tool profiles |
-| [Conversation Routing](conversation-routing.md) | ❌ | `Beta (76%)` | `Stable (84%)` | `Stable (86%)` | Agent selection, Route precedence, Default fallback, Peer overrides, Cross-channel examples |
-| [Account Routing](account-routing.md) | ❌ | `Beta (78%)` | `Stable (84%)` | `Stable (82%)` | Multi-account setup, Account selection, Default accounts, Account credentials, Delivery targets |
-| [Specialist Lanes](specialist-lanes.md) | ❌ | `Beta (78%)` | `Beta (74%)` | `Beta (76%)` | Lane contracts, Background handoff, Concurrency controls, Priority controls, Coordinator handoff |
-| [Delegate Identities](delegate-identities.md) | ❌ | `Experimental (45%)` | `Alpha (68%)` | `Alpha (62%)` | Named delegates, Authority model, Delegate tiers, Identity delegation, Organizational assistants |
+| Category                                        | LTS | Coverage             | Quality        | Completeness   | Features to evaluate                                                                             |
+| ----------------------------------------------- | --- | -------------------- | -------------- | -------------- | ------------------------------------------------------------------------------------------------ |
+| [Agent Setup](agent-setup.md)                   | ❌  | `Beta (74%)`         | `Stable (82%)` | `Stable (84%)` | Add agents, Agent list and delete, Identity files, Non-interactive setup, Single-agent default   |
+| [Agent Isolation](agent-isolation.md)           | ❌  | `Stable (82%)`       | `Beta (78%)`   | `Beta (76%)`   | Workspace separation, State separation, Auth separation, Session separation, Tool profiles       |
+| [Conversation Routing](conversation-routing.md) | ❌  | `Beta (76%)`         | `Stable (84%)` | `Stable (86%)` | Agent selection, Route precedence, Default fallback, Peer overrides, Cross-channel examples      |
+| [Account Routing](account-routing.md)           | ❌  | `Beta (78%)`         | `Stable (84%)` | `Stable (82%)` | Multi-account setup, Account selection, Default accounts, Account credentials, Delivery targets  |
+| [Specialist Lanes](specialist-lanes.md)         | ❌  | `Beta (78%)`         | `Beta (74%)`   | `Beta (76%)`   | Lane contracts, Background handoff, Concurrency controls, Priority controls, Coordinator handoff |
+| [Delegate Identities](delegate-identities.md)   | ❌  | `Experimental (45%)` | `Alpha (68%)`  | `Alpha (62%)`  | Named delegates, Authority model, Delegate tiers, Identity delegation, Organizational assistants |
 
 ## Scoring rubric
 

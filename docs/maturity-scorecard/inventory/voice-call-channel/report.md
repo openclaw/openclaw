@@ -26,13 +26,13 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Channel Setup and Operations](setup-configuration-and-smoke.md) | ❌ | `Experimental (42%)` | `Alpha (56%)` | `Experimental (42%)` | Voice Call Channel, Voice Call Channel |
-| [Access and Identity](webhook-exposure-and-security.md) | ❌ | `Alpha (60%)` | `Alpha (62%)` | `Alpha (60%)` | Voice Call Channel |
-| [Conversation Routing and Delivery](inbound-routing-sessions-and-lifecycle.md) | ❌ | `Alpha (52%)` | `Alpha (58%)` | `Alpha (52%)` | Voice Call Channel |
-| [Media and Rich Content](provider-transports-and-call-control.md) | ❌ | `Experimental (48%)` | `Alpha (57%)` | `Experimental (48%)` | Voice Call Channel, Voice Call Channel |
-| [Realtime Voice and Calls](realtime-voice-and-agent-consult.md) | ❌ | `Experimental (44%)` | `Alpha (55%)` | `Experimental (44%)` | Voice Call Channel, Voice Call Channel |
+| Category                                                                       | LTS | Coverage             | Quality       | Completeness         | Features to evaluate                   |
+| ------------------------------------------------------------------------------ | --- | -------------------- | ------------- | -------------------- | -------------------------------------- |
+| [Channel Setup and Operations](setup-configuration-and-smoke.md)               | ❌  | `Experimental (42%)` | `Alpha (56%)` | `Experimental (42%)` | Voice Call Channel, Voice Call Channel |
+| [Access and Identity](webhook-exposure-and-security.md)                        | ❌  | `Alpha (60%)`        | `Alpha (62%)` | `Alpha (60%)`        | Voice Call Channel                     |
+| [Conversation Routing and Delivery](inbound-routing-sessions-and-lifecycle.md) | ❌  | `Alpha (52%)`        | `Alpha (58%)` | `Alpha (52%)`        | Voice Call Channel                     |
+| [Media and Rich Content](provider-transports-and-call-control.md)              | ❌  | `Experimental (48%)` | `Alpha (57%)` | `Experimental (48%)` | Voice Call Channel, Voice Call Channel |
+| [Realtime Voice and Calls](realtime-voice-and-agent-consult.md)                | ❌  | `Experimental (44%)` | `Alpha (55%)` | `Experimental (44%)` | Voice Call Channel, Voice Call Channel |
 
 ## Scoring rubric
 

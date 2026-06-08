@@ -92,11 +92,13 @@ This category evaluates the Raspberry Pi / small Linux devices capability area r
 Query: `gitcrawl search openclaw/openclaw --json --query "ARM binary linux-arm64 aarch64 OpenClaw skill"`
 
 Results:
+
 - No matching threads returned.
 
 Query: `gitcrawl search openclaw/openclaw --json --query "Raspberry Pi low memory OpenClaw"`
 
 Results:
+
 - Returned Raspberry Pi npm global install confusion and ARM/low-memory related reports.
 
 ### Discrawl queries
@@ -104,9 +106,11 @@ Results:
 Query: `/Users/kevinlin/.local/bin/discrawl search --limit 5 "ARM binary OpenClaw"`
 
 Results:
+
 - Found reports that OpenClaw CLI is painfully slow on Raspberry Pi, QMD ARM/Pi 5 timeouts, Oracle ARM native binary conflicts, and QMD binary gaps on ARM platforms.
 
 Query: `/Users/kevinlin/.local/bin/discrawl search --limit 5 "Raspberry Pi QMD memory OpenClaw"`
 
 Results:
+
 - Found a Pi 5 aarch64 QMD embed timeout loop with node-llama-cpp build churn and a workaround using BM25/search mode.

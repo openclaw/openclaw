@@ -16,7 +16,6 @@ not the shape of the code; it is the amount of identity variance at runtime:
 phone numbers, Apple ID emails, service prefixes, chat ids, and old session keys
 all have to map cleanly.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

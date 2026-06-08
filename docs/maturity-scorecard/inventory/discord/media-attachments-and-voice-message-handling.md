@@ -18,7 +18,6 @@ all media shapes. Quality is Beta because source contracts are clear and
 security posture is reasonable, but archive history still shows media delivery
 regressions as an active release concern.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

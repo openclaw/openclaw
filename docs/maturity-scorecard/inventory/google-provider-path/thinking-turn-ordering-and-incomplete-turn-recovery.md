@@ -59,7 +59,7 @@ Google execution.
   compatibility; #73153, #85422, and #63188 clustered around
   incomplete/reasoning-only/empty response retry behavior.
 - Discrawl reports: Searches for `Gemini thought signature`, `Gemini incomplete
-  turn`, `functionResponse`, and `Gemini turn ordering` found missing-signature
+turn`, `functionResponse`, and `Gemini turn ordering` found missing-signature
   threads, PR #71362, function-response format failures, and turn-order repair
   logs.
 - Good qualities: The provider code scopes replay to same-route Google models,
@@ -196,5 +196,5 @@ Query: `discrawl search --mode fts "Gemini turn ordering"`
 Results:
 
 - Found user logs showing `google turn ordering fixup: prepended user
-  bootstrap` and #27862 linking missing thought signatures to ordering
+bootstrap` and #27862 linking missing thought signatures to ordering
   conflicts.

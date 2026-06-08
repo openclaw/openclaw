@@ -153,7 +153,7 @@ Gitcrawl reports:
 - Query:
   `gitcrawl threads openclaw/openclaw --numbers 41476 --include-closed --json`
   returned closed PR #41476 `build(protocol): regenerate Swift models after
-  pending node work schemas`, whose body says TypeBox schemas were added without
+pending node work schemas`, whose body says TypeBox schemas were added without
   running `pnpm protocol:gen:swift`, causing `protocol:check` to fail
   repo-wide.
 - Query:
@@ -253,7 +253,7 @@ Bad qualities:
 
 - Public, reusable, platform-agnostic Gateway WebSocket client SDK remains open
   as #49178; the local SDK package is private. Discrawl `gateway websocket
-  client sdk` results include third-party custom client usage and a
+client sdk` results include third-party custom client usage and a
   reverse-engineered client, indicating demand for an official documented
   consumption path.
 - Exposed OpenAPI/Swagger schema remains open as #33624; generated JSON Schema

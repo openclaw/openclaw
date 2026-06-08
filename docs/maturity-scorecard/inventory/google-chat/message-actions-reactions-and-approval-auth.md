@@ -11,7 +11,6 @@ last_refreshed_by: codex
 
 Google Chat exposes useful action primitives: text sends, `upload-file`, reaction add/list/remove, target normalization, and approval sender matching through stable user ids. The maturity is Alpha because several action capabilities depend on user OAuth that is not implemented, message-tool replies interact poorly with threading and typing placeholders, and the channel does not have native command or rich interactive surface parity with Slack/Discord.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

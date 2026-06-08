@@ -15,7 +15,6 @@ source anchors. It is still Beta because Bot API media limits, SSRF protections,
 sticker hydration, text-plus-media delivery, and forum-topic poll behavior create
 a large edge matrix.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

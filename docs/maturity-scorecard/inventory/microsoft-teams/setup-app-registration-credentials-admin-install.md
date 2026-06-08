@@ -16,7 +16,6 @@ did not find a durable live tenant setup scorecard for Teams CLI app creation,
 manifest upload, RSC/admin consent, app install, reinstall, and `teams app
 doctor`.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.
@@ -31,7 +30,7 @@ Included in this category:
 
 - Teams CLI app creation: Covers Microsoft Teams channel installation through `teams app create`, bot registration, manifest creation, credential generation, and setup verification.
 - Bot registration and manifest upload: Covers Entra ID application registration, Azure Bot setup, Teams app manifest/RSC permissions, and Teams app package upload.
-- Credential configuration: Covers CLIENT_ID, CLIENT_SECRET, TENANT_ID, `MSTEAMS_*` environment variables, and OpenClaw `channels.msteams` credential configuration.
+- Credential configuration: Covers CLIENT*ID, CLIENT_SECRET, TENANT_ID, `MSTEAMS*\*`environment variables, and OpenClaw`channels.msteams` credential configuration.
 - Teams app install verification: Covers Teams install links, app installation in Teams, and `teams app doctor` verification after setup.
 - Setup status: Covers Setup status across setup wizard status, credential prompts, env credential detection, setup docs, and related diagnostics and repair behavior.
 - Probe and scope reporting: Covers Probe and scope reporting across setup wizard status, credential prompts, env credential detection, setup docs, and related diagnostics and repair behavior.
@@ -59,7 +58,7 @@ Included in this category:
 
 - Teams CLI app creation: Covers Microsoft Teams channel installation through `teams app create`, bot registration, manifest creation, credential generation, and setup verification.
 - Bot registration and manifest upload: Covers Entra ID application registration, Azure Bot setup, Teams app manifest/RSC permissions, and Teams app package upload.
-- Credential configuration: Covers CLIENT_ID, CLIENT_SECRET, TENANT_ID, `MSTEAMS_*` environment variables, and OpenClaw `channels.msteams` credential configuration.
+- Credential configuration: Covers CLIENT*ID, CLIENT_SECRET, TENANT_ID, `MSTEAMS*\*`environment variables, and OpenClaw`channels.msteams` credential configuration.
 - Teams app install verification: Covers Teams install links, app installation in Teams, and `teams app doctor` verification after setup.
 - Setup status: Covers Setup status across setup wizard status, credential prompts, env credential detection, setup docs, and related diagnostics and repair behavior.
 - Probe and scope reporting: Covers Probe and scope reporting across setup wizard status, credential prompts, env credential detection, setup docs, and related diagnostics and repair behavior.

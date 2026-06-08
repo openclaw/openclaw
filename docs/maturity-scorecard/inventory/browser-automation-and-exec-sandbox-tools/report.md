@@ -26,11 +26,11 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Browser Automation](browser-actions-snapshots-and-artifacts.md) | ❌ | `Beta (78%)` | `Beta (74%)` | `Beta (78%)` | Browser Actions, Snapshots, Artifacts, Browser Plugin Service, Profiles, Browser Security, SSRF, Remote Control |
-| [Tool Invocation and Execution](exec-routing-and-process-lifecycle.md) | ✅ | `Stable (82%)` | `Beta (79%)` | `Stable (82%)` | Exec Routing, Process Lifecycle, Direct Tool Invoke API, Node System.run, Host Exec Approvals, Elevated Mode |
-| [Sandbox and Tool Policy](sandbox-backends-and-workspace-isolation.md) | ✅ | `Beta (76%)` | `Beta (72%)` | `Beta (76%)` | Sandbox Backends, Workspace Isolation, Sandboxed Browser, Codex Dynamic Tools, Tool Policy, Sandbox Tool Gates |
+| Category                                                               | LTS | Coverage       | Quality      | Completeness   | Features to evaluate                                                                                            |
+| ---------------------------------------------------------------------- | --- | -------------- | ------------ | -------------- | --------------------------------------------------------------------------------------------------------------- |
+| [Browser Automation](browser-actions-snapshots-and-artifacts.md)       | ❌  | `Beta (78%)`   | `Beta (74%)` | `Beta (78%)`   | Browser Actions, Snapshots, Artifacts, Browser Plugin Service, Profiles, Browser Security, SSRF, Remote Control |
+| [Tool Invocation and Execution](exec-routing-and-process-lifecycle.md) | ✅  | `Stable (82%)` | `Beta (79%)` | `Stable (82%)` | Exec Routing, Process Lifecycle, Direct Tool Invoke API, Node System.run, Host Exec Approvals, Elevated Mode    |
+| [Sandbox and Tool Policy](sandbox-backends-and-workspace-isolation.md) | ✅  | `Beta (76%)`   | `Beta (72%)` | `Beta (76%)`   | Sandbox Backends, Workspace Isolation, Sandboxed Browser, Codex Dynamic Tools, Tool Policy, Sandbox Tool Gates  |
 
 ## Scoring rubric
 

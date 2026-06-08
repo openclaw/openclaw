@@ -11,7 +11,6 @@ last_refreshed_by: codex
 
 Slack media support includes inbound private-file downloads, file placeholders, media-store writes, thread-root attachment inheritance, multi-attachment handling, `download-file`, outbound uploads, upload caps, and image/vision handoff. This is the weakest Slack coverage family because the live Slack QA standard lane does not currently exercise files/media, and archive evidence shows repeated attachment failures, download auth bugs, thread media rehydration bugs, and silent media-delivery confusion.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

@@ -26,13 +26,13 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Channel Setup and Operations](setup-install-account-provisioning.md) | ❌ | `Alpha (55%)` | `Alpha (58%)` | `Alpha (55%)` | QR link setup, SMS registration, Installer and binary setup, Container account provisioning, Status probes, Setup diagnostics, Account safety guardrails |
-| [Access and Identity](dm-pairing-access-control.md) | ❌ | `Beta (70%)` | `Alpha (66%)` | `Beta (70%)` | DM pairing, DM allowlists, Sender identity normalization, Group allowlists, Mention gates, Pending group history |
-| [Conversation Routing and Delivery](group-routing-mention-history.md) | ❌ | `Beta (70%)` | `Alpha (66%)` | `Beta (70%)` | Conversation Routing and Delivery |
-| [Media and Rich Content](outbound-delivery-media-receipts.md) | ❌ | `Beta (70%)` | `Alpha (68%)` | `Beta (70%)` | Text delivery targets, Media delivery and limits, Typing and read receipts, Styled/chunked output, Reaction action discovery, Add/remove reactions, Group reaction targeting |
-| [Native Controls and Approvals](approval-routing-reaction-resolution.md) | ❌ | `Alpha (65%)` | `Alpha (68%)` | `Alpha (65%)` | Native approval routing, Reaction approval responses, Approver targeting |
+| Category                                                                 | LTS | Coverage      | Quality       | Completeness  | Features to evaluate                                                                                                                                                         |
+| ------------------------------------------------------------------------ | --- | ------------- | ------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Channel Setup and Operations](setup-install-account-provisioning.md)    | ❌  | `Alpha (55%)` | `Alpha (58%)` | `Alpha (55%)` | QR link setup, SMS registration, Installer and binary setup, Container account provisioning, Status probes, Setup diagnostics, Account safety guardrails                     |
+| [Access and Identity](dm-pairing-access-control.md)                      | ❌  | `Beta (70%)`  | `Alpha (66%)` | `Beta (70%)`  | DM pairing, DM allowlists, Sender identity normalization, Group allowlists, Mention gates, Pending group history                                                             |
+| [Conversation Routing and Delivery](group-routing-mention-history.md)    | ❌  | `Beta (70%)`  | `Alpha (66%)` | `Beta (70%)`  | Conversation Routing and Delivery                                                                                                                                            |
+| [Media and Rich Content](outbound-delivery-media-receipts.md)            | ❌  | `Beta (70%)`  | `Alpha (68%)` | `Beta (70%)`  | Text delivery targets, Media delivery and limits, Typing and read receipts, Styled/chunked output, Reaction action discovery, Add/remove reactions, Group reaction targeting |
+| [Native Controls and Approvals](approval-routing-reaction-resolution.md) | ❌  | `Alpha (65%)` | `Alpha (68%)` | `Alpha (65%)` | Native approval routing, Reaction approval responses, Approver targeting                                                                                                     |
 
 ## Scoring rubric
 

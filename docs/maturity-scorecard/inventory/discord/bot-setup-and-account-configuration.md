@@ -11,7 +11,6 @@ last_refreshed_by: codex
 
 Discord bot setup and account configuration are usable for the normal single-bot path and have deep docs, account-aware source, runtime probes, and live QA coverage. The component is not Stable because current archive evidence shows repeated operator confusion and active regressions around plugin enablement, application ID resolution, named-account SecretRefs, and multi-account command registration.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

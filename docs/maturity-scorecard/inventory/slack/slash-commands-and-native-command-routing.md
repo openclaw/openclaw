@@ -11,7 +11,6 @@ last_refreshed_by: codex
 
 Slack slash command support includes a single `/openclaw` command path, explicit native command mode, native argument menus, command target session routing, plugin and skill command loaders, HTTP versus Socket Mode URL differences, and authorization copy. The component is Beta: native commands are implemented and documented, but they require manual Slack app registration, auto mode is intentionally off, and archive evidence shows unresolved command-prefix, stale-config, and session-routing edge cases.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

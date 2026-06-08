@@ -11,7 +11,6 @@ last_refreshed_by: codex
 
 Google Chat setup is documented and wired through the plugin setup surface, but it remains an Alpha operator experience because a successful install depends on Google Cloud project state, Chat API enablement, service account JSON, public HTTPS routing, Google Chat app visibility, webhook audience matching, and sometimes the numeric add-on principal. The docs explain the happy path, but archive evidence shows users still spend hours on appPrincipal, 401, and space setup issues.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

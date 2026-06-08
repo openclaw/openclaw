@@ -15,7 +15,6 @@ mention gates, topic config, per-topic agents, ACP topic binding, and thread
 aware session keys. Recent archive evidence still shows group and forum-topic
 responses routing to the wrong place, so Quality stays Alpha.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

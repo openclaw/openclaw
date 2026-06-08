@@ -16,7 +16,6 @@ tool actions for send/react/delete/edit/sticker/topic/poll. Quality remains
 limited by active callback, duplicate approval, media-edit, action-gating, and
 security-sensitive operator concerns.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

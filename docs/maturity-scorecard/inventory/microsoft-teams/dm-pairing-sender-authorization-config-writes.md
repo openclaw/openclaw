@@ -15,7 +15,6 @@ explicit invoke gates. Coverage remains Alpha because the audit did not find a
 live Teams pairing scenario or enterprise admin flow proof for Graph-resolved
 allowlists and config writes.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

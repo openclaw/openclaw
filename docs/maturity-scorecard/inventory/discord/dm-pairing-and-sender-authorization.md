@@ -13,7 +13,6 @@ Discord DM pairing and sender authorization are implemented as a shared channel-
 
 The maturity ceiling is held below Stable by missing live coverage for the core first-contact DM pairing loop and by active archive reports of silent Discord inbound drops, identity mismatches, and sender-authorization ambiguity. The implementation has good fail-closed primitives, but field evidence shows enough Discord-specific edge cases that this component should be treated as Beta until the pairing and allowlist paths have live regressions and the open bugs are retired.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

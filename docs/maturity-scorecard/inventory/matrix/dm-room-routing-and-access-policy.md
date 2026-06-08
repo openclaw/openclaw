@@ -16,7 +16,6 @@ and session route selection. Coverage is Beta because there are many unit and
 QA routes, but this is a broad stateful policy surface. Quality is Beta because
 gitcrawl has open reports for mention parsing and message delivery to sessions.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

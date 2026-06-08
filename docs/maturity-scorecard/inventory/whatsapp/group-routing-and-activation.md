@@ -16,7 +16,6 @@ Stable because group configuration is brittle in practice and archive evidence
 still shows operator confusion around exact group JIDs, account IDs, and mention
 requirements.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

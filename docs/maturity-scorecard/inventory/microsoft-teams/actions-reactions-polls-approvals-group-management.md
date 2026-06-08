@@ -16,7 +16,6 @@ unit backed. Quality remains Alpha because Graph permissions, target routing,
 card invokes, and native Teams approval delivery need real tenant proof across
 chat, channel, team, and admin-consent states.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

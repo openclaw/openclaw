@@ -26,13 +26,13 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Installation and Updates](packaging-install-update-desktop-integration.md) | ❌ | `Experimental (5%)` | `Experimental (25%)` | `Experimental (5%)` | Official app download, MSI/MSIX/App Installer/winget-style packaging, Windows architecture handling for x64, App release channel |
-| [Gateway Connection](gateway-connection-pairing-local-remote.md) | ❌ | `Experimental (8%)` | `Experimental (35%)` | `Experimental (8%)` | App-managed local Gateway attach/start, Remote Gateway connection modes, Device/node pairing |
-| [Chat Sessions](native-chat-session-controls.md) | ❌ | `Experimental (0%)` | `Experimental (25%)` | `Experimental (0%)` | Native Windows chat window, Gateway chat transport |
-| [Status and Repair](diagnostics-health-operator-repair.md) | ❌ | `Experimental (5%)` | `Experimental (35%)` | `Experimental (5%)` | App health states, App-specific repair, Windows system tray app, Status indicators, App-specific notification permission |
-| [Desktop Tools and Permissions](node-host-capabilities-exec-approvals.md) | ❌ | `Experimental (5%)` | `Experimental (28%)` | `Experimental (5%)` | Windows node identity, Host command execution, Desktop command policy, App approval prompts, Screen and media capture, Canvas host behavior, Windows shell integrations, App secrets, Windows ACL, Command approval |
+| Category                                                                    | LTS | Coverage            | Quality              | Completeness        | Features to evaluate                                                                                                                                                                                                |
+| --------------------------------------------------------------------------- | --- | ------------------- | -------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Installation and Updates](packaging-install-update-desktop-integration.md) | ❌  | `Experimental (5%)` | `Experimental (25%)` | `Experimental (5%)` | Official app download, MSI/MSIX/App Installer/winget-style packaging, Windows architecture handling for x64, App release channel                                                                                    |
+| [Gateway Connection](gateway-connection-pairing-local-remote.md)            | ❌  | `Experimental (8%)` | `Experimental (35%)` | `Experimental (8%)` | App-managed local Gateway attach/start, Remote Gateway connection modes, Device/node pairing                                                                                                                        |
+| [Chat Sessions](native-chat-session-controls.md)                            | ❌  | `Experimental (0%)` | `Experimental (25%)` | `Experimental (0%)` | Native Windows chat window, Gateway chat transport                                                                                                                                                                  |
+| [Status and Repair](diagnostics-health-operator-repair.md)                  | ❌  | `Experimental (5%)` | `Experimental (35%)` | `Experimental (5%)` | App health states, App-specific repair, Windows system tray app, Status indicators, App-specific notification permission                                                                                            |
+| [Desktop Tools and Permissions](node-host-capabilities-exec-approvals.md)   | ❌  | `Experimental (5%)` | `Experimental (28%)` | `Experimental (5%)` | Windows node identity, Host command execution, Desktop command policy, App approval prompts, Screen and media capture, Canvas host behavior, Windows shell integrations, App secrets, Windows ACL, Command approval |
 
 ## Scoring rubric
 

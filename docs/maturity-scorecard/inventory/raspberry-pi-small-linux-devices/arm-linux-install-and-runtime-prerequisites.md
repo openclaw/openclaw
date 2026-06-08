@@ -112,11 +112,13 @@ Included in this category:
 Query: `gitcrawl search openclaw/openclaw --json --query "Raspberry Pi ARM aarch64 arm64 Linux install Node openclaw"`
 
 Results:
+
 - No matching threads returned for the broad install query.
 
 Query: `gitcrawl search openclaw/openclaw --json --query "Raspberry Pi low memory OpenClaw"`
 
 Results:
+
 - Returned reports about adaptive resource limits for ARM/low-memory devices, Raspberry Pi OS arm64 discovery overhead, npm global install confusion on Raspberry Pi, and Linux arm64 systemd gateway state loss.
 
 ### Discrawl queries
@@ -124,6 +126,7 @@ Results:
 Query: `/Users/kevinlin/.local/bin/discrawl search --limit 5 "Raspberry Pi OpenClaw"`
 
 Results:
+
 - Found a May 24 user asking about installing OpenClaw on a Pi 3B+ for WhatsApp automation and memory expectations.
 - Found a May 21 report from a contributor running OpenClaw on a 2GB Pi 4.
 - Found May 19 messaging that names Raspberry Pi as an always-on host option.
@@ -131,4 +134,5 @@ Results:
 Query: `/Users/kevinlin/.local/bin/discrawl search --limit 5 "aarch64 OpenClaw"`
 
 Results:
+
 - Found setup/debug threads on aarch64 systems, including minimal aarch64 environments missing Git and users checking `uname -m` plus Node versions.

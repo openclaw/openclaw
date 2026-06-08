@@ -15,7 +15,6 @@ Coverage scores Stable because runtime-flow and integration-style tests exercise
 
 Quality scores Beta because the source shape is layered and defensive, but current archive evidence still shows active Discord-specific friction around slash command deployment, multi-account registration, plugin command acknowledgement timing, large picker limits, component schema exposure, missing callback metadata, and Discord interaction timing.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.
@@ -36,7 +35,7 @@ Included in this category:
 - Native Discord exec/plugin approvals: Native Discord exec/plugin approvals, including approver resolution, dm/channel/both target routing, approval button authorization, stale/expired click handling, gateway resolution, and route-notice/privacy behavior
 - Sensitive owner-only command routing for prompts: Sensitive owner-only command routing for prompts and final results, especially /diagnostics and /export-trajectory
 - Discord message actions: Discord message actions for messages, reactions, pins, reads/search, permissions, channel/guild administration, role changes, moderation, scheduled events, voice status, and presence
-- Action gates under channels.discord.actions.*: Action gates under channels.discord.actions.*, per-account overrides, requester trust, senderUserId-based Discord permission checks, role hierarchy checks, and read target allowlisting
+- Action gates under channels.discord.actions._: Action gates under channels.discord.actions._, per-account overrides, requester trust, senderUserId-based Discord permission checks, role hierarchy checks, and read target allowlisting
 
 ## Features
 

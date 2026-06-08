@@ -17,7 +17,6 @@ suppress duplicate local prompts. It remains Beta because the user experience
 depends on structured tapback metadata from Apple clients and on careful
 operator `allowFrom` configuration.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

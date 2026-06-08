@@ -57,6 +57,7 @@ Quality is Stable because web_fetch has a narrow, understandable contract: fetch
 ## Evidence
 
 ### Docs
+
 - `/Users/kevinlin/code/openclaw/docs/tools/web-fetch.md:11` describes web_fetch as plain HTTP GET plus readability extraction with no JavaScript execution.
 - `/Users/kevinlin/code/openclaw/docs/tools/web-fetch.md:19` documents default enablement.
 - `/Users/kevinlin/code/openclaw/docs/tools/web-fetch.md:40` documents fetch, extract, fallback, cache, and redirect behavior.
@@ -66,6 +67,7 @@ Quality is Stable because web_fetch has a narrow, understandable contract: fetch
 - `/Users/kevinlin/code/openclaw/docs/tools/web.md:243` documents that web_fetch provider selection is separate from web_search.
 
 ### Source
+
 - `/Users/kevinlin/code/openclaw/src/web-fetch/runtime.ts:107` resolves web_fetch provider IDs.
 - `/Users/kevinlin/code/openclaw/src/web-fetch/runtime.ts:163` resolves provider definitions and sandbox choice.
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-fetch.ts:136` clamps max response and redirect options.
@@ -77,11 +79,13 @@ Quality is Stable because web_fetch has a narrow, understandable contract: fetch
 - `/Users/kevinlin/code/openclaw/extensions/tavily/src/tavily-client.ts:207` implements Tavily extract.
 
 ### Integration tests
+
 - `/Users/kevinlin/code/openclaw/qa/scenarios/runtime/tools/web-fetch.md:4` defines the runtime web_fetch scenario.
 - `/Users/kevinlin/code/openclaw/qa/scenarios/runtime/tools/tavily-extract.md:4` defines Tavily extract coverage.
 - `/Users/kevinlin/code/openclaw/src/gateway/server-startup-web-fetch-bind.test.ts:78` verifies startup with credential-free web_fetch config.
 
 ### Unit tests
+
 - `/Users/kevinlin/code/openclaw/src/web-fetch/runtime.test.ts:108` covers SecretRef handling.
 - `/Users/kevinlin/code/openclaw/src/web-fetch/runtime.test.ts:168` covers env and fallback credentials.
 - `/Users/kevinlin/code/openclaw/src/web-fetch/runtime.test.ts:275` covers sandboxed bundled-provider boundaries.
@@ -91,11 +95,15 @@ Quality is Stable because web_fetch has a narrow, understandable contract: fetch
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-fetch-visibility.test.ts:5` covers visibility and transcript behavior.
 
 ### Gitcrawl queries
+
 Freshness: `gitcrawl doctor --json` reported version `0.2.1`, `last_sync_at` `2026-05-28T19:09:52.784704Z`, `29,810` threads, `11,181` open threads, and `18,594` clusters.
+
 - `gitcrawl --json search issues -R openclaw/openclaw "web_fetch"` returned #39604 private network opt-in, #82685 extraction full body, #45049, #76260 SSRF parity, #41993 IPv6 special-use, #48486 visibility sanitizer, #87505 timeout, and #77826 runtime dropping plugin web tools.
 - `gitcrawl --json search prs -R openclaw/openclaw "web_fetch"` returned #67421 per-agent SSRF policy, #86965 progress, #39630 allowPrivateNetwork, #75218 Tavily fetch provider, #87758 injection hardening, #55485 SSRF policy, #77859 runtime metadata, and #85993 browser capability expansion.
 
 ### Discrawl queries
+
 Freshness: `discrawl status --json` reported state `current`, `generated_at` `2026-05-29T17:44:19Z`, `last_sync_at` `2026-05-29T15:59:50Z`, `1,487,061` messages, `25,819` channels, and zero embedding backlog.
+
 - `discrawl search --mode hybrid --limit 12 "web_fetch ssrf private internal redirect injection"` found security guidance explaining that web_fetch does a plain HTTP GET, does not execute JavaScript, blocks private/internal hosts, rechecks redirects, and treats fetched content as untrusted.
 - `discrawl search --mode hybrid --limit 12 "web_fetch web_search config provider api key"` found user-facing guidance that web_fetch can retrieve supplied URLs without a search key, but cannot discover URLs.

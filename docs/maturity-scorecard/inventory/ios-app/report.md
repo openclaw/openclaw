@@ -26,16 +26,16 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Media and Sharing](camera-media-photos-and-share-extension.md) | ❌ | `Experimental (42%)` | `Experimental (45%)` | `Experimental (42%)` | Camera list/snap/clip |
-| [Canvas and Screen](canvas-screen-and-a2ui.md) | ❌ | `Experimental (44%)` | `Experimental (47%)` | `Experimental (44%)` | Canvas present/hide/navigate/eval/snapshot |
-| [Chat and Sessions](chat-operator-ui-and-session-controls.md) | ❌ | `Experimental (40%)` | `Experimental (44%)` | `Experimental (40%)` | Chat sessions and operator controls |
-| [Gateway Setup and Diagnostics](settings-permissions-and-diagnostics.md) | ❌ | `Experimental (41%)` | `Experimental (47%)` | `Experimental (41%)` | Bonjour/local, Manual host/port, Gateway connect configuration persistence, TLS fingerprint trust prompt, Pairing approval, Pairing/auth diagnostics for users, Settings tab |
-| [Distribution](install-signing-and-testflight-distribution.md) | ❌ | `Experimental (42%)` | `Experimental (45%)` | `Experimental (42%)` | Internal preview status |
-| [Device Commands](node-capability-routing-and-device-commands.md) | ❌ | `Experimental (37%)` | `Experimental (45%)` | `Experimental (37%)` | Location modes, Device command handling |
-| [Notifications and Background](relay-push-background-and-live-activity.md) | ❌ | `Experimental (44%)` | `Experimental (46%)` | `Experimental (44%)` | APNs registration and relay delivery |
-| [Voice](voice-talk-mode-and-wake.md) | ❌ | `Experimental (38%)` | `Experimental (43%)` | `Experimental (38%)` | Voice wake |
+| Category                                                                   | LTS | Coverage             | Quality              | Completeness         | Features to evaluate                                                                                                                                                         |
+| -------------------------------------------------------------------------- | --- | -------------------- | -------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Media and Sharing](camera-media-photos-and-share-extension.md)            | ❌  | `Experimental (42%)` | `Experimental (45%)` | `Experimental (42%)` | Camera list/snap/clip                                                                                                                                                        |
+| [Canvas and Screen](canvas-screen-and-a2ui.md)                             | ❌  | `Experimental (44%)` | `Experimental (47%)` | `Experimental (44%)` | Canvas present/hide/navigate/eval/snapshot                                                                                                                                   |
+| [Chat and Sessions](chat-operator-ui-and-session-controls.md)              | ❌  | `Experimental (40%)` | `Experimental (44%)` | `Experimental (40%)` | Chat sessions and operator controls                                                                                                                                          |
+| [Gateway Setup and Diagnostics](settings-permissions-and-diagnostics.md)   | ❌  | `Experimental (41%)` | `Experimental (47%)` | `Experimental (41%)` | Bonjour/local, Manual host/port, Gateway connect configuration persistence, TLS fingerprint trust prompt, Pairing approval, Pairing/auth diagnostics for users, Settings tab |
+| [Distribution](install-signing-and-testflight-distribution.md)             | ❌  | `Experimental (42%)` | `Experimental (45%)` | `Experimental (42%)` | Internal preview status                                                                                                                                                      |
+| [Device Commands](node-capability-routing-and-device-commands.md)          | ❌  | `Experimental (37%)` | `Experimental (45%)` | `Experimental (37%)` | Location modes, Device command handling                                                                                                                                      |
+| [Notifications and Background](relay-push-background-and-live-activity.md) | ❌  | `Experimental (44%)` | `Experimental (46%)` | `Experimental (44%)` | APNs registration and relay delivery                                                                                                                                         |
+| [Voice](voice-talk-mode-and-wake.md)                                       | ❌  | `Experimental (38%)` | `Experimental (43%)` | `Experimental (38%)` | Voice wake                                                                                                                                                                   |
 
 ## Scoring rubric
 

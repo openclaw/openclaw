@@ -116,7 +116,7 @@ channel/provider behavior, and non-plugin skill distribution.
     `/Users/kevinlin/code/openclaw` but blocked before real validation by local
     dependency installation failures (`403` auth errors for
     `@microsoft/teams.cards` / `@microsoft/teams.api` and `No authorization
-    header was set for the request`). That is a local validation blocker, not a
+header was set for the request`). That is a local validation blocker, not a
     product-quality signal, but it also means those commands did not add fresh
     runtime proof for this rescore.
 - Integration gaps:

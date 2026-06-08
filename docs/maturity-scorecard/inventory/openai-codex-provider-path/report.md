@@ -26,13 +26,13 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Model and Auth](canonical-openai-model-routing-and-catalog.md) | ✅ | `Beta (78%)` | `Alpha (66%)` | `Beta (78%)` | Canonical OpenAI Model Routing, Catalog, Codex OAuth Profiles, Subscription Usage, Doctor Diagnostics, Operator Repair |
-| [Responses and Tool Compatibility](codex-responses-transport-and-payload-compatibility.md) | ✅ | `Beta (76%)` | `Beta (70%)` | `Beta (76%)` | Codex Responses Transport, Payload Compatibility, Tool Context, Capability Compatibility |
-| [Native Codex Harness](native-codex-app-server-harness-and-thread-lifecycle.md) | ✅ | `Stable (82%)` | `Beta (72%)` | `Stable (82%)` | Native Codex App-server Harness, Thread Lifecycle |
-| [Image and Multimodal Input](image-generation-editing-and-multimodal-input.md) | ❌ | `Stable (80%)` | `Beta (72%)` | `Stable (80%)` | Image Generation Editing, Multimodal Input |
-| [Voice and Realtime Audio](realtime-voice-transcription-and-speech.md) | ❌ | `Beta (72%)` | `Alpha (68%)` | `Beta (72%)` | Realtime Voice Transcription, Speech |
+| Category                                                                                   | LTS | Coverage       | Quality       | Completeness   | Features to evaluate                                                                                                   |
+| ------------------------------------------------------------------------------------------ | --- | -------------- | ------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| [Model and Auth](canonical-openai-model-routing-and-catalog.md)                            | ✅  | `Beta (78%)`   | `Alpha (66%)` | `Beta (78%)`   | Canonical OpenAI Model Routing, Catalog, Codex OAuth Profiles, Subscription Usage, Doctor Diagnostics, Operator Repair |
+| [Responses and Tool Compatibility](codex-responses-transport-and-payload-compatibility.md) | ✅  | `Beta (76%)`   | `Beta (70%)`  | `Beta (76%)`   | Codex Responses Transport, Payload Compatibility, Tool Context, Capability Compatibility                               |
+| [Native Codex Harness](native-codex-app-server-harness-and-thread-lifecycle.md)            | ✅  | `Stable (82%)` | `Beta (72%)`  | `Stable (82%)` | Native Codex App-server Harness, Thread Lifecycle                                                                      |
+| [Image and Multimodal Input](image-generation-editing-and-multimodal-input.md)             | ❌  | `Stable (80%)` | `Beta (72%)`  | `Stable (80%)` | Image Generation Editing, Multimodal Input                                                                             |
+| [Voice and Realtime Audio](realtime-voice-transcription-and-speech.md)                     | ❌  | `Beta (72%)`   | `Alpha (68%)` | `Beta (72%)`   | Realtime Voice Transcription, Speech                                                                                   |
 
 ## Scoring rubric
 

@@ -141,12 +141,12 @@ Gitcrawl reports:
   returned 20 capped rows, all closed. Relevant reports include #73631
   "WebSocket handshake-timeout on reconnect causes Control UI to stay
   disconnected for minutes", #56254 "CLI handshake timeout when plugins take
-  >3s to load", #54616 "Feature request: configurable WebSocket handshake
-  timeout", #61554 "WebSocket handshake timeout when executing `openclaw cron
-  list`", #52453 "Gateway WebSocket rejects all inbound client connections with
-  handshake timeout", #48297 "Gateway sends connect.challenge but CLI never
-  replies with signed nonce", and #64911 "Gateway logs ready before websocket
-  control plane is usable".
+  > 3s to load", #54616 "Feature request: configurable WebSocket handshake
+  > timeout", #61554 "WebSocket handshake timeout when executing `openclaw cron
+list`", #52453 "Gateway WebSocket rejects all inbound client connections with
+  > handshake timeout", #48297 "Gateway sends connect.challenge but CLI never
+  > replies with signed nonce", and #64911 "Gateway logs ready before websocket
+  > control plane is usable".
 - `gitcrawl search issues "connect.challenge" -R openclaw/openclaw --state all --json number,title,state,url`
   returned 20 capped rows. Most were closed handshake/nonce regressions, including
   #50504, #9222, #9225, #49726, #22553, #46560, #52837, #49118, #46218,

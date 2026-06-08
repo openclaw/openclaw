@@ -16,7 +16,6 @@ cursors. It is not Stable because live `watch.subscribe` is a recurring field
 risk and because catchup correctness depends on real chat.db ordering, Gateway
 sleep/restart timing, and Apple-client behavior.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.
@@ -87,7 +86,7 @@ Included in this category:
     hits in the latest gitcrawl pass.
 - Discrawl reports:
   - `imsg rpc timeout gateway` returned support snippets with `imsg rpc not
-    ready` restart loops and Gateway readiness delays.
+ready` restart loops and Gateway readiness delays.
   - `iMessage catchup coalesce history watch.subscribe echo` returned no
     snippets.
 - Good qualities:

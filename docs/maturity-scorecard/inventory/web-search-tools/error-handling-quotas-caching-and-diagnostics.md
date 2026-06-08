@@ -57,6 +57,7 @@ Quality is Beta because each provider reports different auth, quota, freshness, 
 ## Evidence
 
 ### Docs
+
 - `/Users/kevinlin/code/openclaw/docs/reference/api-usage-costs.md:129` documents web_search provider cost and Brave credit behavior.
 - `/Users/kevinlin/code/openclaw/docs/reference/api-usage-costs.md:155` documents web_fetch Firecrawl/local fallback cost behavior.
 - `/Users/kevinlin/code/openclaw/docs/tools/web.md:100` documents credential requirements and provider cost differences.
@@ -66,6 +67,7 @@ Quality is Beta because each provider reports different auth, quota, freshness, 
 - `/Users/kevinlin/code/openclaw/docs/tools/firecrawl.md:139` documents Firecrawl troubleshooting and safety notes.
 
 ### Source
+
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-search-provider-common.ts:53` defines common count, cache, and freshness defaults.
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-search-provider-common.ts:71` resolves SecretRef and env credential values.
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-search-provider-common.ts:127` wraps provider API errors.
@@ -78,11 +80,13 @@ Quality is Beta because each provider reports different auth, quota, freshness, 
 - `/Users/kevinlin/code/openclaw/src/web-search/runtime.ts:424` runs provider fallback behavior.
 
 ### Integration tests
+
 - `/Users/kevinlin/code/openclaw/qa/scenarios/runtime/tools/web-search.md:43` covers success and failure runtime expectations.
 - `/Users/kevinlin/code/openclaw/qa/scenarios/runtime/tools/web-fetch.md:43` covers fetch success and failure runtime expectations.
 - `/Users/kevinlin/code/openclaw/scripts/e2e/lib/openai-web-search-minimal/assertions.mjs:132` checks native OpenAI minimal-reasoning rejection behavior.
 
 ### Unit tests
+
 - `/Users/kevinlin/code/openclaw/extensions/brave/src/brave-web-search-provider.test.ts:309` covers malformed JSON and later cases cover bounded errors, cache isolation, validation, and diagnostics.
 - `/Users/kevinlin/code/openclaw/extensions/tavily/src/tavily-client.test.ts:44` covers Tavily API failure behavior.
 - `/Users/kevinlin/code/openclaw/extensions/exa/src/exa-web-search-provider.test.ts:147` covers Exa error and response edge cases.
@@ -92,14 +96,18 @@ Quality is Beta because each provider reports different auth, quota, freshness, 
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-fetch.provider-fallback.test.ts:104` covers provider fallback responses.
 
 ### Gitcrawl queries
+
 Freshness: `gitcrawl doctor --json` reported version `0.2.1`, `last_sync_at` `2026-05-28T19:09:52.784704Z`, `29,810` threads, `11,181` open threads, and `18,594` clusters.
+
 - `gitcrawl --json search issues -R openclaw/openclaw "web_search"` returned #79384 hardcoded maxResults, #80843 fallback chain, #87505 timeout regression, #13615 rate limiting, #87347 no provider available, and #79670 quota-limit validation.
 - `gitcrawl --json search issues -R openclaw/openclaw "Perplexity"` returned #84872, #85800, #80843, #87347, and other provider-specific failure or feature requests.
 - `gitcrawl --json search prs -R openclaw/openclaw "web_search"` returned #86338 Perplexity context size, #86622 Tavily auth, #63571 fallback support, #77859 runtime metadata, #76146 SecretRefs, and #86965 progress surfacing.
 - `gitcrawl --json search issues -R openclaw/openclaw "SSRF web_fetch"` returned #87505 timeout regression in the guarded fetch path.
 
 ### Discrawl queries
+
 Freshness: `discrawl status --json` reported state `current`, `generated_at` `2026-05-29T17:44:19Z`, `last_sync_at` `2026-05-29T15:59:50Z`, `1,487,061` messages, `25,819` channels, and zero embedding backlog.
+
 - `discrawl search --mode hybrid --limit 12 "Tavily Firecrawl Perplexity Brave SearXNG DuckDuckGo web_search"` found Perplexity provider CLI output and a 401 provider error case.
 - `discrawl search --mode hybrid --limit 12 "web_search no provider available Brave loaded web_fetch"` found no-provider and allowlist warnings when web_search is not configured.
 - `discrawl search --mode hybrid --limit 12 "web_fetch web_search config provider api key"` found setup and config review discussions involving provider keys and failure modes.

@@ -37,17 +37,17 @@ approval paths.
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Authoring and Packaging plugins](public-sdk-api-and-subpaths.md) | ✅ | `Beta (77%)` | `Beta (74%)` | `Beta (72%)` | Root SDK entrypoint, Focused SDK imports, Entrypoint discovery, Migration shims, Plugin manifest, Package metadata, Runtime compatibility, Validation feedback |
-| [Bundled plugins](bundled-plugin-discovery-and-inventory.md) | ✅ | `Stable (86%)` | `Stable (84%)` | `Stable (88%)` | Bundled plugin listing, Bundled source overlays, Packaged bundled plugins, Generated plugin inventory, Bundled channel IDs |
-| [Canvas plugin](canvas-plugin.md) | ❌ | `Beta (76%)` | `Alpha (66%)` | `Beta (74%)` | Hosted Canvas and A2UI surfaces, Agent canvas tool, Node Canvas commands, Control UI embeds, Canvas documents, A2UI transport and snapshots |
-| [Installing and running plugins](runtime-loading-and-lifecycle.md) | ✅ | `Stable (86%)` | `Stable (84%)` | `Stable (88%)` | Plugin setup, Runtime activation, Enable and disable, Safe load failures, Dependency repair, Install update and uninstall |
-| [Channel plugins](channel-plugin-architecture.md) | ✅ | `Stable (82%)` | `Beta (78%)` | `Stable (80%)` | Inbound event handling, Outbound delivery, Ingress authorization, Destination resolution, Native approval prompts |
-| [Provider and tool plugins](provider-tool-plugin-architecture.md) | ✅ | `Stable (84%)` | `Stable (82%)` | `Stable (84%)` | Provider plugins, Tool plugins, Model catalogs, Provider auth, Web search and fetch, Mixed plugins |
-| [Plugin approvals](approval-and-security-boundaries.md) | ✅ | `Stable (84%)` | `Stable (86%)` | `Stable (86%)` | Approval requests, Native approval delivery, Same-chat fallbacks, Exec and plugin separation, Approval replay protection, Security helpers |
-| [Publishing plugins](distribution-release-and-compatibility.md) | ✅ | `Beta (79%)` | `Stable (82%)` | `Beta (74%)` | Install sources, ClawHub publishing, npm publishing, Compatibility signaling, Update and rollback expectations, Third-party publication rules |
-| [Testing plugins](developer-testing-and-fixtures.md) | ❌ | `Stable (84%)` | `Stable (81%)` | `Stable (82%)` | Test fixtures, Local test environment, Plugin runtime harness, Unit and integration scaffolds, Docker lifecycle suites, Smoke tests |
+| Category                                                           | LTS | Coverage       | Quality        | Completeness   | Features to evaluate                                                                                                                                           |
+| ------------------------------------------------------------------ | --- | -------------- | -------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Authoring and Packaging plugins](public-sdk-api-and-subpaths.md)  | ✅  | `Beta (77%)`   | `Beta (74%)`   | `Beta (72%)`   | Root SDK entrypoint, Focused SDK imports, Entrypoint discovery, Migration shims, Plugin manifest, Package metadata, Runtime compatibility, Validation feedback |
+| [Bundled plugins](bundled-plugin-discovery-and-inventory.md)       | ✅  | `Stable (86%)` | `Stable (84%)` | `Stable (88%)` | Bundled plugin listing, Bundled source overlays, Packaged bundled plugins, Generated plugin inventory, Bundled channel IDs                                     |
+| [Canvas plugin](canvas-plugin.md)                                  | ❌  | `Beta (76%)`   | `Alpha (66%)`  | `Beta (74%)`   | Hosted Canvas and A2UI surfaces, Agent canvas tool, Node Canvas commands, Control UI embeds, Canvas documents, A2UI transport and snapshots                    |
+| [Installing and running plugins](runtime-loading-and-lifecycle.md) | ✅  | `Stable (86%)` | `Stable (84%)` | `Stable (88%)` | Plugin setup, Runtime activation, Enable and disable, Safe load failures, Dependency repair, Install update and uninstall                                      |
+| [Channel plugins](channel-plugin-architecture.md)                  | ✅  | `Stable (82%)` | `Beta (78%)`   | `Stable (80%)` | Inbound event handling, Outbound delivery, Ingress authorization, Destination resolution, Native approval prompts                                              |
+| [Provider and tool plugins](provider-tool-plugin-architecture.md)  | ✅  | `Stable (84%)` | `Stable (82%)` | `Stable (84%)` | Provider plugins, Tool plugins, Model catalogs, Provider auth, Web search and fetch, Mixed plugins                                                             |
+| [Plugin approvals](approval-and-security-boundaries.md)            | ✅  | `Stable (84%)` | `Stable (86%)` | `Stable (86%)` | Approval requests, Native approval delivery, Same-chat fallbacks, Exec and plugin separation, Approval replay protection, Security helpers                     |
+| [Publishing plugins](distribution-release-and-compatibility.md)    | ✅  | `Beta (79%)`   | `Stable (82%)` | `Beta (74%)`   | Install sources, ClawHub publishing, npm publishing, Compatibility signaling, Update and rollback expectations, Third-party publication rules                  |
+| [Testing plugins](developer-testing-and-fixtures.md)               | ❌  | `Stable (84%)` | `Stable (81%)` | `Stable (82%)` | Test fixtures, Local test environment, Plugin runtime harness, Unit and integration scaffolds, Docker lifecycle suites, Smoke tests                            |
 
 ## Scoring rubric
 
@@ -426,17 +426,17 @@ The next promotion criteria should be concrete:
 
 - Scorecard source:
   `docs/kevinslin/maturity-scorecard/maturity-scorecard.md`, row `Plugin SDK
-  and bundled plugin architecture`.
+and bundled plugin architecture`.
 - Feature score source:
   `docs/kevinslin/maturity-scorecard/inventory/plugin-sdk-and-bundled-plugin-architecture/scores.yaml`.
 - Output root:
   `docs/kevinslin/maturity-scorecard/inventory/plugin-sdk-and-bundled-plugin-architecture/`.
 - OpenClaw source checkout:
   `/Users/kevinlin/code/openclaw` at `b877fc58a5c5 refactor: centralize numeric
-  coercion helpers`.
+coercion helpers`.
 - Maintainers checkout:
   `/Users/kevinlin/code/claw/maintainers` at `2ac4ebe4d3be Enhance
-  claw-score documentation and validation commands for maturity scoring`.
+claw-score documentation and validation commands for maturity scoring`.
 - Gitcrawl freshness:
   `gitcrawl doctor --json` succeeded after sync; `last_sync_at`
   `2026-05-28T19:09:52.784704Z`; `thread_count` `29810`;

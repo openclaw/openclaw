@@ -18,7 +18,6 @@ evidence, but not a single live install matrix that exercises every account and
 environment variant. Quality is Beta because the structure is mature but the
 surface is broad and tied to active Matrix operational risk.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

@@ -26,12 +26,12 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Channel Setup and Operations](channel-setup-and-operations.md) | ❌ | `Alpha (62%)` | `Alpha (58%)` | `Alpha (62%)` | Channel Setup and Operations |
-| [Access and Identity](access-and-identity.md) | ❌ | `Alpha (62%)` | `Alpha (58%)` | `Alpha (62%)` | Access and Identity |
-| [Conversation Routing and Delivery](conversation-routing-and-delivery.md) | ❌ | `Alpha (62%)` | `Alpha (58%)` | `Alpha (62%)` | Conversation Routing and Delivery |
-| [Media and Rich Content](media-and-rich-content.md) | ❌ | `Alpha (62%)` | `Alpha (58%)` | `Alpha (62%)` | Media and Rich Content |
+| Category                                                                  | LTS | Coverage      | Quality       | Completeness  | Features to evaluate              |
+| ------------------------------------------------------------------------- | --- | ------------- | ------------- | ------------- | --------------------------------- |
+| [Channel Setup and Operations](channel-setup-and-operations.md)           | ❌  | `Alpha (62%)` | `Alpha (58%)` | `Alpha (62%)` | Channel Setup and Operations      |
+| [Access and Identity](access-and-identity.md)                             | ❌  | `Alpha (62%)` | `Alpha (58%)` | `Alpha (62%)` | Access and Identity               |
+| [Conversation Routing and Delivery](conversation-routing-and-delivery.md) | ❌  | `Alpha (62%)` | `Alpha (58%)` | `Alpha (62%)` | Conversation Routing and Delivery |
+| [Media and Rich Content](media-and-rich-content.md)                       | ❌  | `Alpha (62%)` | `Alpha (58%)` | `Alpha (62%)` | Media and Rich Content            |
 
 ## Scoring rubric
 
@@ -79,7 +79,6 @@ Features:
 
 Primary docs:
 
-
 ### 2. Access and Identity
 
 Search anchors: mattermost, line, irc, nextcloud talk, nostr, twitch, tlon, synology chat access and identity, access and identity.
@@ -98,7 +97,6 @@ Features:
 - Access and Identity: Evidence scope for Access and Identity.
 
 Primary docs:
-
 
 ### 3. Conversation Routing and Delivery
 
@@ -119,7 +117,6 @@ Features:
 
 Primary docs:
 
-
 ### 4. Media and Rich Content
 
 Search anchors: mattermost, line, irc, nextcloud talk, nostr, twitch, tlon, synology chat media and rich content, media and rich content.
@@ -138,7 +135,6 @@ Features:
 - Media and Rich Content: Evidence scope for Media and Rich Content.
 
 Primary docs:
-
 
 ## Recommended scorecard interpretation
 

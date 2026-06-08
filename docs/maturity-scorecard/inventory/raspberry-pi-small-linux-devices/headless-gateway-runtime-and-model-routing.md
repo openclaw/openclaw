@@ -107,11 +107,13 @@ Included in this category:
 Query: `gitcrawl search openclaw/openclaw --json --query "Raspberry Pi WhatsApp Telegram gateway"`
 
 Results:
+
 - No focused thread returned for the combined WhatsApp/Telegram query.
 
 Query: `gitcrawl search openclaw/openclaw --json --query "Raspberry Pi low memory OpenClaw"`
 
 Results:
+
 - Returned plugin-loader and Raspberry Pi OS arm64 performance issues that affect headless Gateway use.
 
 ### Discrawl queries
@@ -119,9 +121,11 @@ Results:
 Query: `/Users/kevinlin/.local/bin/discrawl search --limit 5 "Raspberry Pi Codex auth systemd"`
 
 Results:
+
 - Found a Pi/Linux systemd comment describing Telegram agents and repeated Codex OAuth failures.
 
 Query: `/Users/kevinlin/.local/bin/discrawl search --limit 5 "Pi 5 aarch64 OpenClaw gateway"`
 
 Results:
+
 - Found Pi 5 aarch64 latency, npm install crash, QMD/native timeout, and CLI handshake timeout reports.

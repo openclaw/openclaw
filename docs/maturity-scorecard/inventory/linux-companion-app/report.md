@@ -26,13 +26,13 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [App Distribution](packaging-install-update-desktop-integration.md) | ❌ | `Experimental (0%)` | `Experimental (18%)` | `Experimental (0%)` | Native app package, Distro package targets, Official release metadata |
-| [Gateway Connectivity](gateway-connection-pairing-local-remote.md) | ❌ | `Experimental (8%)` | `Experimental (35%)` | `Experimental (8%)` | Local Gateway attach and status, Gateway pairing and auth, Remote mode, Local and remote resource boundaries |
-| [Chat and Sessions](native-chat-session-controls.md) | ❌ | `Experimental (10%)` | `Experimental (36%)` | `Experimental (10%)` | Native Linux chat window, Transcript, Gateway chat transport |
-| [Desktop Capabilities](desktop-permissions-secrets-sandbox.md) | ❌ | `Experimental (0%)` | `Experimental (20%)` | `Experimental (0%)` | Linux desktop permissions, Secret storage, Sandbox/package posture, Linux native node identity, Host command execution, Desktop tools, Linux native Talk, Microphone capture, Native media permissions |
-| [Status and Diagnostics](diagnostics-health-operator-repair.md) | ❌ | `Experimental (5%)` | `Experimental (25%)` | `Experimental (5%)` | Native Linux app readiness, Gateway health/status display, Log/transcript opening, Doctor/repair affordances, Linux tray/status item, Runtime status row, Desktop-environment integration |
+| Category                                                            | LTS | Coverage             | Quality              | Completeness         | Features to evaluate                                                                                                                                                                                   |
+| ------------------------------------------------------------------- | --- | -------------------- | -------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [App Distribution](packaging-install-update-desktop-integration.md) | ❌  | `Experimental (0%)`  | `Experimental (18%)` | `Experimental (0%)`  | Native app package, Distro package targets, Official release metadata                                                                                                                                  |
+| [Gateway Connectivity](gateway-connection-pairing-local-remote.md)  | ❌  | `Experimental (8%)`  | `Experimental (35%)` | `Experimental (8%)`  | Local Gateway attach and status, Gateway pairing and auth, Remote mode, Local and remote resource boundaries                                                                                           |
+| [Chat and Sessions](native-chat-session-controls.md)                | ❌  | `Experimental (10%)` | `Experimental (36%)` | `Experimental (10%)` | Native Linux chat window, Transcript, Gateway chat transport                                                                                                                                           |
+| [Desktop Capabilities](desktop-permissions-secrets-sandbox.md)      | ❌  | `Experimental (0%)`  | `Experimental (20%)` | `Experimental (0%)`  | Linux desktop permissions, Secret storage, Sandbox/package posture, Linux native node identity, Host command execution, Desktop tools, Linux native Talk, Microphone capture, Native media permissions |
+| [Status and Diagnostics](diagnostics-health-operator-repair.md)     | ❌  | `Experimental (5%)`  | `Experimental (25%)` | `Experimental (5%)`  | Native Linux app readiness, Gateway health/status display, Log/transcript opening, Doctor/repair affordances, Linux tray/status item, Runtime status row, Desktop-environment integration              |
 
 ## Scoring rubric
 

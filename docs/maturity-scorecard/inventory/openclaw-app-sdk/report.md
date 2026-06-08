@@ -23,16 +23,17 @@ scores in
 OpenClaw App SDK has a real implemented `@openclaw/sdk` package with docs, typed exports, WebSocket e2e coverage, real Gateway event e2e coverage, package-consumer e2e coverage, and env-gated live Gateway proof. Main limiters are private/0.0.0-private packaging, missing `sdk-react` and `sdk-testing`, incomplete `gateway: "auto"` and high-level scope knobs, design-only generated client, design-only approval callbacks/questions, and thin live/runtime coverage for helpers.
 
 This report was scored from `source_ref=openclaw@29dd7847fd` with one subagent dedicated to this surface. Global archive freshness checks passed before scoring: `gitcrawl doctor --json` and `discrawl status --json`.
+
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Client API](client-api.md) | ❌ | `Stable (86%)` | `Stable (82%)` | `Beta (78%)` | SDK entrypoints, Namespace layout, Package split, App/plugin boundary |
-| [Gateway Access](gateway-access.md) | ❌ | `Beta (78%)` | `Beta (74%)` | `Alpha (64%)` | Gateway connect, URL and token config, Auto gateway, Custom transport, Scopes and redaction |
-| [Agent Conversations](agent-conversations.md) | ❌ | `Beta (78%)` | `Stable (80%)` | `Stable (84%)` | Agent handles, Agent runs, Run results, Session creation, Session send, Session controls |
-| [Events and Approvals](events-and-approvals.md) | ❌ | `Beta (74%)` | `Beta (73%)` | `Alpha (58%)` | Event stream, Event envelope, Replay cursors, Approval callbacks, Questions |
-| [Resource Helpers](resource-helpers.md) | ❌ | `Alpha (58%)` | `Beta (72%)` | `Beta (70%)` | Models, ToolSpace, Artifacts, Tasks, Environments |
-| [Compatibility](compatibility.md) | ❌ | `Beta (76%)` | `Beta (70%)` | `Alpha (62%)` | Generated client, Ergonomic wrappers, Unsupported calls, Schema alignment, Public package contract |
+| Category                                        | LTS | Coverage       | Quality        | Completeness   | Features to evaluate                                                                               |
+| ----------------------------------------------- | --- | -------------- | -------------- | -------------- | -------------------------------------------------------------------------------------------------- |
+| [Client API](client-api.md)                     | ❌  | `Stable (86%)` | `Stable (82%)` | `Beta (78%)`   | SDK entrypoints, Namespace layout, Package split, App/plugin boundary                              |
+| [Gateway Access](gateway-access.md)             | ❌  | `Beta (78%)`   | `Beta (74%)`   | `Alpha (64%)`  | Gateway connect, URL and token config, Auto gateway, Custom transport, Scopes and redaction        |
+| [Agent Conversations](agent-conversations.md)   | ❌  | `Beta (78%)`   | `Stable (80%)` | `Stable (84%)` | Agent handles, Agent runs, Run results, Session creation, Session send, Session controls           |
+| [Events and Approvals](events-and-approvals.md) | ❌  | `Beta (74%)`   | `Beta (73%)`   | `Alpha (58%)`  | Event stream, Event envelope, Replay cursors, Approval callbacks, Questions                        |
+| [Resource Helpers](resource-helpers.md)         | ❌  | `Alpha (58%)`  | `Beta (72%)`   | `Beta (70%)`   | Models, ToolSpace, Artifacts, Tasks, Environments                                                  |
+| [Compatibility](compatibility.md)               | ❌  | `Beta (76%)`   | `Beta (70%)`   | `Alpha (62%)`  | Generated client, Ergonomic wrappers, Unsupported calls, Schema alignment, Public package contract |
 
 ## Scoring rubric
 

@@ -49,7 +49,7 @@ own control plane, and browser security docs.
   - Security behavior is not uniform across managed browser, existing-session,
     remote CDP, and sandbox browser paths.
   - Live archive evidence shows users still hit `browser navigation blocked by
-    policy` for localhost and file URLs and need clarification.
+policy` for localhost and file URLs and need clarification.
 - Integration gaps:
   - Add a live security matrix for managed, existing-session, remote CDP, and
     sandbox browser that proves localhost, file, private network, and explicit

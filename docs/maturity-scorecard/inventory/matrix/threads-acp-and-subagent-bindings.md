@@ -17,7 +17,6 @@ and subagent spawn paths, but Quality is Alpha because gitcrawl has an open
 report that Matrix thread replies were sent as normal replies and slash
 commands went silent.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

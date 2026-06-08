@@ -23,14 +23,15 @@ scores in
 Kubernetes hosting is a real but early cluster-hosting path. Docs, scripts, and Kustomize manifests support minimal Gateway deployment, Kind bootstrap, Kubernetes Secrets, ConfigMap config, PVC state, ClusterIP Service, probes, and conservative loopback access. Main gaps are missing Kubernetes-specific automated/live CI, no packaged ingress/TLS/NetworkPolicy/backup path, and production exposure guidance that is advisory rather than represented in manifests.
 
 This report was scored from `source_ref=openclaw@29dd7847fd` with one subagent dedicated to this surface. Global archive freshness checks passed before scoring: `gitcrawl doctor --json` and `discrawl status --json`.
+
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Deployment Setup](deployment-setup.md) | ❌ | `Alpha (55%)` | `Beta (76%)` | `Stable (84%)` | Kustomize packaging, Cluster prerequisites, Quick deploy, Manifest apply, Kind validation |
-| [Configuration and Secrets](configuration-and-secrets.md) | ❌ | `Alpha (52%)` | `Beta (74%)` | `Beta (76%)` | Agent instructions, Gateway config, Provider secrets, Secret rotation, Image and namespace |
-| [Access and Exposure](access-and-exposure.md) | ❌ | `Experimental (43%)` | `Beta (72%)` | `Alpha (58%)` | Port-forward access, Service endpoint, Ingress exposure, Auth and TLS, Localhost posture |
-| [Cluster Lifecycle](cluster-lifecycle.md) | ❌ | `Alpha (50%)` | `Beta (78%)` | `Beta (77%)` | Resource layout, State persistence, Redeploy, Teardown, Security context |
+| Category                                                  | LTS | Coverage             | Quality      | Completeness   | Features to evaluate                                                                       |
+| --------------------------------------------------------- | --- | -------------------- | ------------ | -------------- | ------------------------------------------------------------------------------------------ |
+| [Deployment Setup](deployment-setup.md)                   | ❌  | `Alpha (55%)`        | `Beta (76%)` | `Stable (84%)` | Kustomize packaging, Cluster prerequisites, Quick deploy, Manifest apply, Kind validation  |
+| [Configuration and Secrets](configuration-and-secrets.md) | ❌  | `Alpha (52%)`        | `Beta (74%)` | `Beta (76%)`   | Agent instructions, Gateway config, Provider secrets, Secret rotation, Image and namespace |
+| [Access and Exposure](access-and-exposure.md)             | ❌  | `Experimental (43%)` | `Beta (72%)` | `Alpha (58%)`  | Port-forward access, Service endpoint, Ingress exposure, Auth and TLS, Localhost posture   |
+| [Cluster Lifecycle](cluster-lifecycle.md)                 | ❌  | `Alpha (50%)`        | `Beta (78%)` | `Beta (77%)`   | Resource layout, State persistence, Redeploy, Teardown, Security context                   |
 
 ## Scoring rubric
 

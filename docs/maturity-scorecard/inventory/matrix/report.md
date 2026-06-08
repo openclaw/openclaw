@@ -26,14 +26,14 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Channel Setup and Operations](setup-config-and-account-selection.md) | ❌ | `Beta (74%)` | `Beta (74%)` | `Beta (74%)` | Matrix plugin identity, Setup wizard, Account discovery, Matrix doctor warnings, Matrix probe/status |
-| [Access and Identity](dm-room-routing-and-access-policy.md) | ❌ | `Beta (72%)` | `Alpha (66%)` | `Beta (72%)` | DM policy, Direct-room classification, Inbound route selection across sender-bound DMs, Mention gates, Matrix thread reply routing, Persisted Matrix thread routing managers, ACP/subagent spawn hooks |
-| [Conversation Routing and Delivery](threads-acp-and-subagent-bindings.md) | ❌ | `Beta (72%)` | `Alpha (66%)` | `Beta (72%)` | Conversation Routing and Delivery |
-| [Media and Rich Content](outbound-messages-media-and-streaming.md) | ❌ | `Beta (74%)` | `Alpha (68%)` | `Beta (74%)` | Media and Rich Content |
-| [Native Controls and Approvals](actions-profile-polls-reactions-and-room-tools.md) | ❌ | `Alpha (64%)` | `Alpha (68%)` | `Alpha (64%)` | Channel action discovery, Message send/read/edit/delete, Profile media loading, Outbound Matrix text, Message presentation metadata, Inbound media failure handling |
-| [Encryption and Verification](e2ee-verification-backup-and-migration.md) | ❌ | `Beta (76%)` | `Alpha (68%)` | `Beta (76%)` | Encryption setup, Encrypted media upload/download, Legacy state |
+| Category                                                                           | LTS | Coverage      | Quality       | Completeness  | Features to evaluate                                                                                                                                                                                   |
+| ---------------------------------------------------------------------------------- | --- | ------------- | ------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [Channel Setup and Operations](setup-config-and-account-selection.md)              | ❌  | `Beta (74%)`  | `Beta (74%)`  | `Beta (74%)`  | Matrix plugin identity, Setup wizard, Account discovery, Matrix doctor warnings, Matrix probe/status                                                                                                   |
+| [Access and Identity](dm-room-routing-and-access-policy.md)                        | ❌  | `Beta (72%)`  | `Alpha (66%)` | `Beta (72%)`  | DM policy, Direct-room classification, Inbound route selection across sender-bound DMs, Mention gates, Matrix thread reply routing, Persisted Matrix thread routing managers, ACP/subagent spawn hooks |
+| [Conversation Routing and Delivery](threads-acp-and-subagent-bindings.md)          | ❌  | `Beta (72%)`  | `Alpha (66%)` | `Beta (72%)`  | Conversation Routing and Delivery                                                                                                                                                                      |
+| [Media and Rich Content](outbound-messages-media-and-streaming.md)                 | ❌  | `Beta (74%)`  | `Alpha (68%)` | `Beta (74%)`  | Media and Rich Content                                                                                                                                                                                 |
+| [Native Controls and Approvals](actions-profile-polls-reactions-and-room-tools.md) | ❌  | `Alpha (64%)` | `Alpha (68%)` | `Alpha (64%)` | Channel action discovery, Message send/read/edit/delete, Profile media loading, Outbound Matrix text, Message presentation metadata, Inbound media failure handling                                    |
+| [Encryption and Verification](e2ee-verification-backup-and-migration.md)           | ❌  | `Beta (76%)`  | `Alpha (68%)` | `Beta (76%)`  | Encryption setup, Encrypted media upload/download, Legacy state                                                                                                                                        |
 
 ## Scoring rubric
 

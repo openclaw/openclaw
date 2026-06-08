@@ -182,7 +182,7 @@ Results:
 
 - Returned issue #79329 on cron local-provider reachability, PR #85373 on
   resolved model runtime through auth, issue #74986 on `infer model run
-  --local` hangs, PR #87558 on dense local-provider streaming, and issue #81214
+--local` hangs, PR #87558 on dense local-provider streaming, and issue #81214
   on subagent/runtime use of Ollama.
 
 Query: `gitcrawl search openclaw/openclaw --query "Ollama cron local unreachable" --json --limit 5`

@@ -15,14 +15,14 @@ Session, run, and usage diagnostics make long-running or stuck agent work observ
 
 Included in this category:
 
-- session.state: session.state, session.stuck, session.long_running, session.stalled, session.recovery.*, and session.turn.created diagnostic events
+- session.state: session.state, session.stuck, session.long_running, session.stalled, session.recovery.\*, and session.turn.created diagnostic events
 - Diagnostic session activity snapshots: Diagnostic session activity snapshots for embedded runs, model calls, and tool calls
 - Model usage: Model usage, token/cost, model-call byte/timing, run attempts, and usage logs
 - Export of session signals to stability: Export of session signals to stability, OpenTelemetry, and Prometheus
 
 ## Features
 
-- session.state: session.state, session.stuck, session.long_running, session.stalled, session.recovery.*, and session.turn.created diagnostic events
+- session.state: session.state, session.stuck, session.long_running, session.stalled, session.recovery.\*, and session.turn.created diagnostic events
 - Diagnostic session activity snapshots: Diagnostic session activity snapshots for embedded runs, model calls, and tool calls
 - Model usage: Model usage, token/cost, model-call byte/timing, run attempts, and usage logs
 - Export of session signals to stability: Export of session signals to stability, OpenTelemetry, and Prometheus

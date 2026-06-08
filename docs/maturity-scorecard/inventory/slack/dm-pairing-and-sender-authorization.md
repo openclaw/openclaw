@@ -11,7 +11,6 @@ last_refreshed_by: codex
 
 Slack DM access is implemented with pairing, allowlists, open mode guarded by `allowFrom: ["*"]`, group-DM controls, account inheritance, and command authorization. The component is Beta because implementation and docs are broad, while operator confusion persists around pairing in managed hosting, account-scope overrides, group DMs, owner allowlists, and missing outbound DM allowlist controls.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

@@ -15,7 +15,6 @@ outbound image/audio/video/document payloads, voice-note conversion, media caps,
 filename handling, and local-root safety. Coverage stays Beta because current
 live proof does not span the full media matrix.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

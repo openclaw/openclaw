@@ -16,7 +16,6 @@ fallback delivery. Coverage is Beta because docs, source, unit tests, and Matrix
 QA cover many paths. Quality is Alpha because gitcrawl has open reports for
 image handling, send queue failures, reasoning delivery, and mention rendering.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

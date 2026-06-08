@@ -95,11 +95,13 @@ This category evaluates the Raspberry Pi / small Linux devices capability area r
 Query: `gitcrawl search openclaw/openclaw --json --query "Raspberry Pi systemd linger gateway"`
 
 Results:
+
 - Returned PR #83489, "Fix gateway service startup race", with snippets mentioning Raspberry Pi, Linux/systemd, Gateway port `18789`, and old duplicate system units.
 
 Query: `gitcrawl search openclaw/openclaw --json --query "Raspberry Pi low memory OpenClaw"`
 
 Results:
+
 - Returned a Linux arm64 Raspberry Pi systemd Gateway report where cron history lost backing session state.
 
 ### Discrawl queries
@@ -107,4 +109,5 @@ Results:
 Query: `/Users/kevinlin/.local/bin/discrawl search --limit 5 "Raspberry Pi systemd OpenClaw"`
 
 Results:
+
 - Found Pi/Linux systemd service support threads, including Telegram agents with Codex auth failures and a Pi 5 Debian arm64 systemd loop with reconnect/certificate symptoms.

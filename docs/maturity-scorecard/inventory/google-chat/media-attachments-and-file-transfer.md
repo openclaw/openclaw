@@ -11,7 +11,6 @@ last_refreshed_by: codex
 
 Google Chat media support is structurally present for inbound downloads and outbound uploads, with size caps, local-root handling, upload tokens, and media receipts. It remains a low Alpha area because Google Chat attachment uploads need user OAuth for some real deployments, live proof is missing, and archive evidence ties media to open OAuth and typing/thread lifecycle problems.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

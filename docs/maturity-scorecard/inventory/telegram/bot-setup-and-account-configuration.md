@@ -15,7 +15,6 @@ behavior, and startup diagnostics. The main maturity drag is operator variance:
 token files, SecretRefs, multi-account defaults, and status summaries still show
 up in recent archive reports.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

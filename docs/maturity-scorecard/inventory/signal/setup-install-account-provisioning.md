@@ -11,7 +11,6 @@ last_refreshed_by: codex
 
 This note migrates archived maturity evidence for `Signal` / `Setup, Install, and Account Provisioning` into the current process-version-3 scorecard inventory.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

@@ -26,13 +26,13 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Channel Setup and Operations](operator-install-and-configuration.md) | ❌ | `Beta (74%)` | `Beta (72%)` | `Beta (74%)` | Official @openclaw/whatsapp plugin metadata, openclaw plugin install whatsapp, Channel config schema, Baileys socket lifecycle, Operator troubleshooting |
-| [Access and Identity](pairing-login-and-session-auth.md) | ❌ | `Beta (76%)` | `Beta (72%)` | `Beta (76%)` | QR login, Baileys multi-file auth persistence, DM pairing challenge, Multi-account/default-account resolution, Direct-message dmPolicy, Sender identity extraction, Privacy controls for plugin hooks |
-| [Conversation Routing and Delivery](group-routing-and-activation.md) | ❌ | `Beta (76%)` | `Beta (72%)` | `Beta (76%)` | Group allowlists, Group session keys, Outbound text sends, Provider-accepted receipts |
-| [Media and Rich Content](media-attachments-and-voice.md) | ❌ | `Beta (76%)` | `Stable (80%)` | `Beta (76%)` | Inbound media download, Outbound image |
-| [Native Controls and Approvals](native-approvals-and-reactions.md) | ❌ | `Beta (78%)` | `Stable (84%)` | `Beta (78%)` | Native exec, Approver target resolution |
+| Category                                                              | LTS | Coverage     | Quality        | Completeness | Features to evaluate                                                                                                                                                                                  |
+| --------------------------------------------------------------------- | --- | ------------ | -------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Channel Setup and Operations](operator-install-and-configuration.md) | ❌  | `Beta (74%)` | `Beta (72%)`   | `Beta (74%)` | Official @openclaw/whatsapp plugin metadata, openclaw plugin install whatsapp, Channel config schema, Baileys socket lifecycle, Operator troubleshooting                                              |
+| [Access and Identity](pairing-login-and-session-auth.md)              | ❌  | `Beta (76%)` | `Beta (72%)`   | `Beta (76%)` | QR login, Baileys multi-file auth persistence, DM pairing challenge, Multi-account/default-account resolution, Direct-message dmPolicy, Sender identity extraction, Privacy controls for plugin hooks |
+| [Conversation Routing and Delivery](group-routing-and-activation.md)  | ❌  | `Beta (76%)` | `Beta (72%)`   | `Beta (76%)` | Group allowlists, Group session keys, Outbound text sends, Provider-accepted receipts                                                                                                                 |
+| [Media and Rich Content](media-attachments-and-voice.md)              | ❌  | `Beta (76%)` | `Stable (80%)` | `Beta (76%)` | Inbound media download, Outbound image                                                                                                                                                                |
+| [Native Controls and Approvals](native-approvals-and-reactions.md)    | ❌  | `Beta (78%)` | `Stable (84%)` | `Beta (78%)` | Native exec, Approver target resolution                                                                                                                                                               |
 
 ## Scoring rubric
 

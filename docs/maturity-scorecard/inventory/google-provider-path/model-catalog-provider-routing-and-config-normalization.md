@@ -76,7 +76,7 @@ Included in this category:
   canonical `google/*` refs plus `google-gemini-cli` runtime, but also show
   stale custom-provider residue, preview alias confusion, double `/v1beta`
   fixes, and operator failures with `models.providers.google.api =
-  "openai-completions"`.
+"openai-completions"`.
 - Good qualities: Provider-owned hooks keep Google normalization out of generic
   OpenAI-style paths; base URL handling restricts trusted native Google origins;
   dynamic model resolution centralizes Gemini/Gemma churn.

@@ -106,11 +106,13 @@ Included in this category:
 Query: `gitcrawl search openclaw/openclaw --json --query "Raspberry Pi low memory OpenClaw"`
 
 Results:
+
 - Returned PR #47706 on adaptive resource limits for ARM/low-memory devices, issue #67288 on Raspberry Pi OS arm64 discovery overhead, PR #71652 on local tsgo pressure guards on Pi, and issue #78196 on plugins skipped by a Pi Gateway.
 
 Query: `gitcrawl search openclaw/openclaw --json --query "Raspberry Pi QMD memory OpenClaw"`
 
 Results:
+
 - Returned storage/performance-adjacent reports but no single focused QMD memory issue in gitcrawl.
 
 ### Discrawl queries
@@ -118,9 +120,11 @@ Results:
 Query: `/Users/kevinlin/.local/bin/discrawl search --limit 5 "Raspberry Pi QMD memory OpenClaw"`
 
 Results:
+
 - Found a Pi 5 aarch64 QMD embed timeout loop, node-llama-cpp build churn, timeout mismatch discussion, and workaround guidance to use BM25/search mode.
 
 Query: `/Users/kevinlin/.local/bin/discrawl search --limit 5 "Pi 5 aarch64 OpenClaw gateway"`
 
 Results:
+
 - Found Pi 5 aarch64 server-side latency, Pi500 aarch64 npm install crash, CLI handshake timeout, and high CPU from eager-loaded channel SDKs.

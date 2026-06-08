@@ -26,17 +26,17 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [CLI Session and Transcript Management](cli-session-and-transcript-management.md) | ✅ | `Beta (74%)` | `Alpha (68%)` | `Beta (74%)` | CLI Session, Transcript Management |
-| [Token Management](compaction-pruning-and-token-pressure.md) | ✅ | `Beta (78%)` | `Alpha (60%)` | `Beta (78%)` | Compaction, Pruning, Token Pressure |
-| [Context Engine](context-engine-and-runtime-assembly.md) | ✅ | `Beta (72%)` | `Stable (80%)` | `Beta (72%)` | Context Engine, Runtime Assembly |
-| [Cross-client History and Session Parity](cross-client-history-and-session-parity.md) | ❌ | `Beta (76%)` | `Alpha (62%)` | `Beta (76%)` | Cross-client History, Session Parity |
-| [Diagnostics, Maintenance, and Recovery](diagnostics-maintenance-and-recovery.md) | ❌ | `Beta (72%)` | `Alpha (68%)` | `Beta (72%)` | Session diagnostic reports, Session maintenance warnings, Session and transcript recovery |
-| [Core Prompts and Context](instruction-profile-and-context-visibility.md) | ✅ | `Alpha (68%)` | `Beta (70%)` | `Alpha (68%)` | Instruction Profile, Context Visibility |
-| [Memory](memory-files-tools-and-active-memory.md) | ❌ | `Alpha (66%)` | `Alpha (58%)` | `Alpha (66%)` | Memory Backend Storage, Embedding Search, Memory Files, Memory search and store tools, Active Memory |
-| [Session Routing](session-routing-and-conversation-binding.md) | ✅ | `Stable (82%)` | `Beta (74%)` | `Stable (82%)` | Session Routing, Conversation routing |
-| [Transcript Persistence](transcript-persistence-and-durability.md) | ✅ | `Beta (78%)` | `Alpha (58%)` | `Beta (78%)` | Transcript Persistence, Durability |
+| Category                                                                              | LTS | Coverage       | Quality        | Completeness   | Features to evaluate                                                                                 |
+| ------------------------------------------------------------------------------------- | --- | -------------- | -------------- | -------------- | ---------------------------------------------------------------------------------------------------- |
+| [CLI Session and Transcript Management](cli-session-and-transcript-management.md)     | ✅  | `Beta (74%)`   | `Alpha (68%)`  | `Beta (74%)`   | CLI Session, Transcript Management                                                                   |
+| [Token Management](compaction-pruning-and-token-pressure.md)                          | ✅  | `Beta (78%)`   | `Alpha (60%)`  | `Beta (78%)`   | Compaction, Pruning, Token Pressure                                                                  |
+| [Context Engine](context-engine-and-runtime-assembly.md)                              | ✅  | `Beta (72%)`   | `Stable (80%)` | `Beta (72%)`   | Context Engine, Runtime Assembly                                                                     |
+| [Cross-client History and Session Parity](cross-client-history-and-session-parity.md) | ❌  | `Beta (76%)`   | `Alpha (62%)`  | `Beta (76%)`   | Cross-client History, Session Parity                                                                 |
+| [Diagnostics, Maintenance, and Recovery](diagnostics-maintenance-and-recovery.md)     | ❌  | `Beta (72%)`   | `Alpha (68%)`  | `Beta (72%)`   | Session diagnostic reports, Session maintenance warnings, Session and transcript recovery            |
+| [Core Prompts and Context](instruction-profile-and-context-visibility.md)             | ✅  | `Alpha (68%)`  | `Beta (70%)`   | `Alpha (68%)`  | Instruction Profile, Context Visibility                                                              |
+| [Memory](memory-files-tools-and-active-memory.md)                                     | ❌  | `Alpha (66%)`  | `Alpha (58%)`  | `Alpha (66%)`  | Memory Backend Storage, Embedding Search, Memory Files, Memory search and store tools, Active Memory |
+| [Session Routing](session-routing-and-conversation-binding.md)                        | ✅  | `Stable (82%)` | `Beta (74%)`   | `Stable (82%)` | Session Routing, Conversation routing                                                                |
+| [Transcript Persistence](transcript-persistence-and-durability.md)                    | ✅  | `Beta (78%)`   | `Alpha (58%)`  | `Beta (78%)`   | Transcript Persistence, Durability                                                                   |
 
 ## Scoring rubric
 

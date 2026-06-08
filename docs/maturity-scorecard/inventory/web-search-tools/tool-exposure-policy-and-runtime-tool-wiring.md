@@ -73,6 +73,7 @@ Quality is Stable because tool exposure is built around explicit profile and all
 ## Evidence
 
 ### Docs
+
 - `/Users/kevinlin/code/openclaw/docs/gateway/config-tools.md:23` documents the coding profile and `group:web`.
 - `/Users/kevinlin/code/openclaw/docs/gateway/config-tools.md:35` maps `group:web` to `web_search`, `x_search`, and `web_fetch`.
 - `/Users/kevinlin/code/openclaw/docs/tools/web-fetch.md:178` documents tool profile and allowlist use for web_fetch and `group:web`.
@@ -80,6 +81,7 @@ Quality is Stable because tool exposure is built around explicit profile and all
 - `/Users/kevinlin/code/openclaw/docs/help/faq.md:732` covers enabling tools and allowlists in operator-facing terms.
 
 ### Source
+
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-search.ts:9` defines the web_search tool schema.
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-search.ts:67` builds the disabled-state response.
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-search.ts:83` late-binds runtime context before web_search execution.
@@ -89,12 +91,14 @@ Quality is Stable because tool exposure is built around explicit profile and all
 - `/Users/kevinlin/code/openclaw/src/web-fetch/runtime.ts:163` resolves web_fetch runtime provider definitions.
 
 ### Integration tests
+
 - `/Users/kevinlin/code/openclaw/qa/scenarios/runtime/tools/web-search.md:43` checks runtime web_search behavior.
 - `/Users/kevinlin/code/openclaw/qa/scenarios/runtime/tools/web-fetch.md:43` checks runtime web_fetch behavior.
 - `/Users/kevinlin/code/openclaw/scripts/e2e/lib/openai-web-search-minimal/assertions.mjs:132` checks native web-search injection and minimal-reasoning behavior.
 - `/Users/kevinlin/code/openclaw/src/gateway/server-startup-web-fetch-bind.test.ts:78` covers startup binding without early provider discovery.
 
 ### Unit tests
+
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-tools.enabled-defaults.test.ts:117` covers web tool default enablement behavior.
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-search.late-bind.test.ts:65` covers late-bound web_search context.
 - `/Users/kevinlin/code/openclaw/src/agents/tool-policy.test.ts:121` covers group aliases and policy behavior.
@@ -103,12 +107,16 @@ Quality is Stable because tool exposure is built around explicit profile and all
 - `/Users/kevinlin/code/openclaw/src/web-fetch/runtime.test.ts:275` covers sandbox/runtime web_fetch boundaries.
 
 ### Gitcrawl queries
+
 Freshness: `gitcrawl doctor --json` reported version `0.2.1`, `last_sync_at` `2026-05-28T19:09:52.784704Z`, `29,810` threads, `11,181` open threads, and `18,594` clusters.
+
 - `gitcrawl --json search issues -R openclaw/openclaw "no provider available web_search"` returned #87347 no provider available, #85030 subagent tool injection, and #80843 fallback chain.
 - `gitcrawl --json search issues -R openclaw/openclaw "web_search"` returned #77826 runtime drops plugin web tools, #85030 subagent tool injection, #87347 no provider available, and #87505 timeout.
 - `gitcrawl --json search prs -R openclaw/openclaw "web_fetch"` returned #77859 runtime metadata preservation, #85993 browser capability expansion, and #86965 progress surfacing.
 
 ### Discrawl queries
+
 Freshness: `discrawl status --json` reported state `current`, `generated_at` `2026-05-29T17:44:19Z`, `last_sync_at` `2026-05-29T15:59:50Z`, `1,487,061` messages, `25,819` channels, and zero embedding backlog.
+
 - `discrawl search --mode hybrid --limit 12 "web_fetch web_search config provider api key"` found a GitHub issue thread where subagents spawned via sessions could not access browser, web_search, or web_fetch despite allowlist config.
 - `discrawl search --mode hybrid --limit 12 "web_search no provider available Brave loaded web_fetch"` found operator guidance explaining allowlist warnings when web_search is unavailable and Brave is not configured.

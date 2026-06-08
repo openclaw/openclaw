@@ -91,11 +91,13 @@ This category evaluates the Raspberry Pi / small Linux devices capability area r
 Query: `gitcrawl search openclaw/openclaw --json --query "hardware smoke Raspberry Pi release OpenClaw"`
 
 Results:
+
 - No matching threads returned.
 
 Query: `gitcrawl search openclaw/openclaw --json --query "small Linux device OpenClaw"`
 
 Results:
+
 - Returned general Linux and platform discussions, but no focused small-device release gate.
 
 ### Discrawl queries
@@ -103,9 +105,11 @@ Results:
 Query: `/Users/kevinlin/.local/bin/discrawl search --limit 5 "Raspberry Pi OpenClaw"`
 
 Results:
+
 - Found user and contributor reports of intended and actual Raspberry Pi usage, including Pi 3B+ and 2GB Pi 4.
 
 Query: `/Users/kevinlin/.local/bin/discrawl search --limit 5 "Pi 5 aarch64 OpenClaw gateway"`
 
 Results:
+
 - Found Pi 5/aarch64 support issues around latency, install crashes, Gateway handshakes, QMD/native behavior, and plugin CPU load.

@@ -17,7 +17,6 @@ the test and QA footprint is broad. Quality is Alpha because gitcrawl has
 multiple open E2EE recovery, cross-signing, forced-reset, and persistence
 reports.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

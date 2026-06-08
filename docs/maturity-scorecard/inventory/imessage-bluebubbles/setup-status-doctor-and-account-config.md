@@ -15,7 +15,6 @@ source detection, status probes, and setup-policy edits. It remains below
 Stable because the setup path ultimately has to validate real macOS and `imsg`
 state, and there is no live setup lane covering the supported operator flows.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

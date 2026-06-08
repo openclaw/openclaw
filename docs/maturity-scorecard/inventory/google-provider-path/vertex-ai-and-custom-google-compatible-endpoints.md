@@ -59,7 +59,7 @@ logic is reused by Vertex.
   timeout around thinking tokens.
 - Discrawl reports: `google-vertex Vertex AI` and `Vertex AI ADC google-vertex`
   searches found setup failures around `No API key found for provider
-  "google-vertex"`, ADC marker regressions, and repeated clarification that
+"google-vertex"`, ADC marker regressions, and repeated clarification that
   Vertex uses ADC/service-account auth rather than Gemini API keys.
 - Good qualities: Source separates Vertex URL construction, ADC path
   resolution, token caching, base URL normalization, and request header

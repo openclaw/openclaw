@@ -16,7 +16,6 @@ context, and Graph thread fetching. Quality stays Alpha because archive history
 shows real regressions around thread session isolation, outbound reply targets,
 pagination, and debounced cross-thread handling.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

@@ -11,7 +11,6 @@ last_refreshed_by: codex
 
 Direct-message access is one of the stronger Google Chat subareas. The docs describe pairing and stable target formats, and the source uses the shared channel ingress resolver for DM policy, pairing-store allowlists, access groups, and mutable-identifier handling. The score is still Beta rather than Stable because the evidence is mostly simulated and because Google Chat identity semantics are easy to misconfigure when users mix raw emails and `users/<id>` values.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

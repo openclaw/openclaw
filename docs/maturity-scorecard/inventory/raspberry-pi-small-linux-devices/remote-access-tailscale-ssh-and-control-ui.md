@@ -104,6 +104,7 @@ Included in this category:
 Query: `gitcrawl search openclaw/openclaw --json --query "Raspberry Pi Tailscale gateway"`
 
 Results:
+
 - Returned issue #56276 about surfacing hostnames for laptop/server/Raspberry Pi, issue #53274 about secure context on HTTP reverse-proxy deployments for headless Linux/Raspberry Pi/home server/VPS, and issue #78196 about extension plugins skipped by a Tailscale-reachable Pi Gateway.
 
 ### Discrawl queries
@@ -111,4 +112,5 @@ Results:
 Query: `/Users/kevinlin/.local/bin/discrawl search --limit 5 "Raspberry Pi device pairing OpenClaw"`
 
 Results:
+
 - Found a Pi 5 Docker plus Tailscale Serve plan involving device approval, along with device-token and pairing support history.

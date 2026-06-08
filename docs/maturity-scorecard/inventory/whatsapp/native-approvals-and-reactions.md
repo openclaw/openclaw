@@ -16,7 +16,6 @@ prompt targets, and handles prompt update/cancel behavior. Coverage remains
 Beta because live approval proof exists but should remain a recurring scenario
 for both exec and plugin approval routes.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

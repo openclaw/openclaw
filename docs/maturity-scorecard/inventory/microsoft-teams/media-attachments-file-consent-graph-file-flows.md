@@ -16,7 +16,6 @@ Coverage and Quality remain Alpha because current archive evidence includes
 silent attachment failures and a fresh DNS-rebinding security fix for Teams
 attachment fetches.
 
-
 ## Normalization
 
 Active category after channel taxonomy normalization.

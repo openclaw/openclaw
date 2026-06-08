@@ -26,13 +26,13 @@ The category Coverage and Quality scores come from the archived evidence-backed 
 
 ## Matrix
 
-| Category | LTS | Coverage | Quality | Completeness | Features to evaluate |
-| --- | --- | --- | --- | --- | --- |
-| [Channel Setup and Operations](setup-app-registration-credentials-admin-install.md) | ❌ | `Alpha (58%)` | `Alpha (64%)` | `Alpha (58%)` | Teams CLI app creation, Bot registration and manifest upload, Credential configuration, Teams app install verification, Setup status, Probe and scope reporting, Teams app doctor, Webhook and health diagnostics, Operator repair paths |
-| [Access and Identity](dm-pairing-sender-authorization-config-writes.md) | ❌ | `Alpha (60%)` | `Alpha (62%)` | `Alpha (60%)` | DM pairing, Stable sender identity, Allowlists and access groups, Invoke and command authorization, Teams-originated config writes, Bot Framework SSO invokes, Delegated token storage, Graph directory lookup, Member profile lookup |
-| [Conversation Routing and Delivery](team-channel-routing-mention-gates-sessions-thread-context.md) | ❌ | `Alpha (68%)` | `Alpha (66%)` | `Alpha (68%)` | Team and channel allowlists, Deterministic channel replies, Mention-gated group access, Session routing, Reply and thread context |
-| [Media and Rich Content](media-attachments-file-consent-graph-file-flows.md) | ❌ | `Alpha (62%)` | `Alpha (58%)` | `Alpha (62%)` | Inbound attachments, Graph-hosted media, File consent, SharePoint and OneDrive sharing, Media fetch safety |
-| [Native Controls and Approvals](actions-reactions-polls-approvals-group-management.md) | ❌ | `Alpha (64%)` | `Alpha (66%)` | `Alpha (64%)` | Message action discovery, Polls and reactions, Read, edit, delete, and pin, Native approval cards, Feedback and group actions |
+| Category                                                                                           | LTS | Coverage      | Quality       | Completeness  | Features to evaluate                                                                                                                                                                                                                     |
+| -------------------------------------------------------------------------------------------------- | --- | ------------- | ------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Channel Setup and Operations](setup-app-registration-credentials-admin-install.md)                | ❌  | `Alpha (58%)` | `Alpha (64%)` | `Alpha (58%)` | Teams CLI app creation, Bot registration and manifest upload, Credential configuration, Teams app install verification, Setup status, Probe and scope reporting, Teams app doctor, Webhook and health diagnostics, Operator repair paths |
+| [Access and Identity](dm-pairing-sender-authorization-config-writes.md)                            | ❌  | `Alpha (60%)` | `Alpha (62%)` | `Alpha (60%)` | DM pairing, Stable sender identity, Allowlists and access groups, Invoke and command authorization, Teams-originated config writes, Bot Framework SSO invokes, Delegated token storage, Graph directory lookup, Member profile lookup    |
+| [Conversation Routing and Delivery](team-channel-routing-mention-gates-sessions-thread-context.md) | ❌  | `Alpha (68%)` | `Alpha (66%)` | `Alpha (68%)` | Team and channel allowlists, Deterministic channel replies, Mention-gated group access, Session routing, Reply and thread context                                                                                                        |
+| [Media and Rich Content](media-attachments-file-consent-graph-file-flows.md)                       | ❌  | `Alpha (62%)` | `Alpha (58%)` | `Alpha (62%)` | Inbound attachments, Graph-hosted media, File consent, SharePoint and OneDrive sharing, Media fetch safety                                                                                                                               |
+| [Native Controls and Approvals](actions-reactions-polls-approvals-group-management.md)             | ❌  | `Alpha (64%)` | `Alpha (66%)` | `Alpha (64%)` | Message action discovery, Polls and reactions, Read, edit, delete, and pin, Native approval cards, Feedback and group actions                                                                                                            |
 
 ## Scoring rubric
 
@@ -78,7 +78,7 @@ Features:
 
 - Teams CLI app creation: Covers Microsoft Teams channel installation through `teams app create`, bot registration, manifest creation, credential generation, and setup verification.
 - Bot registration and manifest upload: Covers Entra ID application registration, Azure Bot setup, Teams app manifest/RSC permissions, and Teams app package upload.
-- Credential configuration: Covers CLIENT_ID, CLIENT_SECRET, TENANT_ID, `MSTEAMS_*` environment variables, and OpenClaw `channels.msteams` credential configuration.
+- Credential configuration: Covers CLIENT*ID, CLIENT_SECRET, TENANT_ID, `MSTEAMS*\*`environment variables, and OpenClaw`channels.msteams` credential configuration.
 - Teams app install verification: Covers Teams install links, app installation in Teams, and `teams app doctor` verification after setup.
 - Setup status: Covers Setup status across setup wizard status, credential prompts, env credential detection, setup docs, and related diagnostics and repair behavior.
 - Probe and scope reporting: Covers Probe and scope reporting across setup wizard status, credential prompts, env credential detection, setup docs, and related diagnostics and repair behavior.

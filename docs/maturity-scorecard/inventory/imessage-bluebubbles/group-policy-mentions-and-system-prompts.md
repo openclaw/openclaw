@@ -168,6 +168,6 @@ Query:
 Results:
 
 - Multiple support snippets from February and March 2026 showed `groupPolicy:
-  "allowlist"`, `groupAllowFrom`, `groups`, and `requireMention` setup examples.
+"allowlist"`, `groupAllowFrom`, `groups`, and `requireMention` setup examples.
 - A 2026-02 support answer warned that iMessage groups need group policy,
   `groupAllowFrom`, and mention-gating checks.

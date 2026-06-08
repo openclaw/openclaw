@@ -59,6 +59,7 @@ Quality is Beta because the design cleanly separates manifest ownership, public 
 ## Evidence
 
 ### Docs
+
 - `/Users/kevinlin/code/openclaw/docs/plugins/sdk-subpaths.md:157` documents the web-search config contract SDK subpath.
 - `/Users/kevinlin/code/openclaw/docs/plugins/sdk-subpaths.md:158` documents web-search contract helpers such as config and scoped credential helpers.
 - `/Users/kevinlin/code/openclaw/docs/plugins/sdk-subpaths.md:159` documents web-search registration and runtime helpers.
@@ -67,6 +68,7 @@ Quality is Beta because the design cleanly separates manifest ownership, public 
 - `/Users/kevinlin/code/openclaw/docs/tools/web.md:12` documents managed web_search using the configured provider.
 
 ### Source
+
 - `/Users/kevinlin/code/openclaw/package.json:1252` exports `plugin-sdk/provider-web-search-config-contract`.
 - `/Users/kevinlin/code/openclaw/package.json:1256` exports `plugin-sdk/provider-web-search-contract`.
 - `/Users/kevinlin/code/openclaw/package.json:1260` exports `plugin-sdk/provider-web-search`.
@@ -78,6 +80,7 @@ Quality is Beta because the design cleanly separates manifest ownership, public 
 - `/Users/kevinlin/code/openclaw/src/agents/tools/web-search.ts:89` late-binds runtime context before execution.
 
 ### Integration tests
+
 - `/Users/kevinlin/code/openclaw/package.json:1654` defines the Docker kitchen-sink plugin lane.
 - `/Users/kevinlin/code/openclaw/scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs:423` validates kitchen-sink web-search provider ids.
 - `/Users/kevinlin/code/openclaw/extensions/google/google.live.test.ts:121` exercises Gemini web search in a live provider path.
@@ -86,6 +89,7 @@ Quality is Beta because the design cleanly separates manifest ownership, public 
 - `/Users/kevinlin/code/openclaw/extensions/ollama/ollama.live.test.ts:300` exercises Ollama web-search fallback in a live provider path.
 
 ### Unit tests
+
 - `/Users/kevinlin/code/openclaw/src/plugins/contracts/providers.contract.test.ts:17` runs web-search provider contract suites across bundled provider ids.
 - `/Users/kevinlin/code/openclaw/src/plugin-sdk/test-helpers/web-search-provider-contract.ts:41` loads public-artifact providers in the contract path.
 - `/Users/kevinlin/code/openclaw/src/plugin-sdk/test-helpers/provider-contract-suites.ts:130` asserts the base web-search provider contract.
@@ -95,13 +99,17 @@ Quality is Beta because the design cleanly separates manifest ownership, public 
 - `/Users/kevinlin/code/openclaw/src/web-search/runtime.test.ts:950` covers prefer-runtime-provider execution behavior.
 
 ### Gitcrawl queries
+
 Freshness: `gitcrawl doctor --json` reported version `0.2.1`, `last_sync_at` `2026-05-28T19:09:52.784704Z`, `29,810` threads, `11,181` open threads, and `18,594` clusters.
+
 - `gitcrawl --json search prs -R openclaw/openclaw "provider-web-search"` returned active registry and provider-runtime items including #77736 custom provider routing, #86828 startup snapshots, #76146 SecretRef CLI path, #63571 fallback support, #85158 Parallel provider, and #86440 SerpApi provider.
 - `gitcrawl --json search issues -R openclaw/openclaw "no provider available web_search"` returned #87347 no provider available despite Brave loaded, plus #80843 fallback chain and #85030 subagent tool injection.
 - `gitcrawl --json search prs -R openclaw/openclaw "web provider public artifacts"` returned mostly adjacent metadata and runtime-load PRs, which suggests public-artifact regressions surface through broader provider/runtime queries rather than direct issue titles.
 
 ### Discrawl queries
+
 Freshness: `discrawl status --json` reported state `current`, `generated_at` `2026-05-29T17:44:19Z`, `last_sync_at` `2026-05-29T15:59:50Z`, `1,487,061` messages, `25,819` channels, and zero embedding backlog.
+
 - `discrawl search --mode hybrid --limit 12 "provider-web-search resolvePluginWebSearchProviders public artifacts"` returned no direct hybrid hits, so current Discord evidence is sparse for the internal helper names.
 - Prior focused archive passes found custom provider guidance around `api.registerWebSearchProvider(...)` and review comments about runtime registry mismatch, cache staleness, and public-artifact fallback.
 - `discrawl search --mode hybrid --limit 12 "web_fetch web_search config provider api key"` found review comments involving provider config and legacy config merge behavior.

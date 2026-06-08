@@ -60,7 +60,7 @@ Included in this category:
   remains open for prompt-cache keep-warm; #86932 remains open for stale
   prompt-cache config warnings.
 - Discrawl reports: Searches for `Gemini cachedContent`, `Google
-  cachedContents`, and `cacheRetention google` found #71441, #51372, Gemini
+cachedContents`, and `cacheRetention google` found #71441, #51372, Gemini
   429/backoff discussions, and a P1 review concern about preserving tools with
   managed cached content.
 - Good qualities: The source scopes eligibility to direct Gemini families,
