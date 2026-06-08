@@ -442,6 +442,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/moonshot/**"
+"extensions: neosantara":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/neosantara/**"
+          - "docs/providers/neosantara.md"
 "extensions: nvidia":
   - changed-files:
       - any-glob-to-any-file:

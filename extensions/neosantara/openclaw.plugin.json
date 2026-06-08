@@ -1,0 +1,96 @@
+{
+  "id": "neosantara",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["neosantara"],
+  "providerAuthAliases": {
+    "neosantara-responses": "neosantara"
+  },
+  "providerRequest": {
+    "providers": {
+      "neosantara": {
+        "family": "neosantara"
+      },
+      "neosantara-responses": {
+        "family": "neosantara"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "neosantara",
+        "envVars": ["NEOSANTARA_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "neosantara",
+      "method": "api-key",
+      "choiceId": "neosantara-api-key",
+      "choiceLabel": "Neosantara API key",
+      "groupId": "neosantara",
+      "groupLabel": "Neosantara",
+      "groupHint": "API key",
+      "optionKey": "neosantaraApiKey",
+      "cliFlag": "--neosantara-api-key",
+      "cliOption": "--neosantara-api-key <key>",
+      "cliDescription": "Neosantara API key"
+    }
+  ],
+  "modelCatalog": {
+    "providers": {
+      "neosantara": {
+        "baseUrl": "https://api.neosantara.xyz/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "grok-4.1-fast-non-reasoning",
+            "name": "Grok 4.1 Fast",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "deepseek-r1",
+            "name": "DeepSeek R1",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 65536,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "aliases": {
+      "neosantara-responses": {
+        "provider": "neosantara",
+        "api": "openai-responses"
+      }
+    },
+    "discovery": {
+      "neosantara": "static"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
