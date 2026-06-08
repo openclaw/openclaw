@@ -12,11 +12,8 @@ function assertFiniteLimit(value, raw, name) {
   }
 }
 
-function parseMemoryMiB(raw) {
-  const value =
-    String(raw || "")
-      .split("/")[0]
-      ?.trim() || "";
+function parseMemoryValueMiB(raw) {
+  const value = String(raw || "").trim();
   const match = /^([0-9.]+)\s*([KMGT]?i?B)$/iu.exec(value);
   if (!match) {
     return undefined;
@@ -42,6 +39,24 @@ function parseMemoryMiB(raw) {
     return amount * 1024 * 1024;
   }
   return undefined;
+}
+
+function parseMemoryMiB(raw) {
+  const value =
+    String(raw || "")
+      .split("/")[0]
+      ?.trim() || "";
+  return parseMemoryValueMiB(value);
+}
+
+function isPostExitZeroMemorySample(raw) {
+  const [usedRaw, limitRaw] = String(raw || "").split("/");
+  if (limitRaw === undefined) {
+    return false;
+  }
+  const usedMiB = parseMemoryValueMiB(usedRaw);
+  const limitMiB = parseMemoryValueMiB(limitRaw);
+  return usedMiB === 0 && limitMiB === 0;
 }
 
 function parseCpuPercent(raw) {
@@ -98,6 +113,9 @@ await scanStatsFileLines(statsFile, (line) => {
     throw new Error(`docker stats sample for ${label} was not valid JSON`);
   }
   const observedMemoryMiB = parseMemoryMiB(parsed.MemUsage);
+  if (isPostExitZeroMemorySample(parsed.MemUsage)) {
+    return;
+  }
   const observedCpuPercent = parseCpuPercent(parsed.CPUPerc);
   // Docker can emit 0B / 0B after the target container exits; it proves
   // lifecycle timing, not resource usage. Keep the real captured samples.

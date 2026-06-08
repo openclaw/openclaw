@@ -115,4 +115,27 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("had non-positive MemUsage");
   });
+
+  it("skips Docker post-exit zero-limit memory samples after valid samples", () => {
+    const result = runAssert(
+      writeStats(
+        [
+          '{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}',
+          '{"MemUsage":"0B / 0B","CPUPerc":"0.0%"}',
+          "",
+        ].join("\n"),
+      ),
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("memory=128.0MiB");
+    expect(result.stdout).toContain("samples=1");
+  });
+
+  it("still requires at least one nonzero Docker stats sample", () => {
+    const result = runAssert(writeStats('{"MemUsage":"0B / 0B","CPUPerc":"0.0%"}\n'));
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("no docker stats samples captured");
+  });
 });
