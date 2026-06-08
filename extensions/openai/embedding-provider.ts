@@ -1,3 +1,4 @@
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 // Openai provider module implements model/runtime integration.
 import {
   fetchRemoteEmbeddingVectors,
@@ -34,6 +35,29 @@ function normalizeOpenAiModel(model: string): string {
     return DEFAULT_OPENAI_EMBEDDING_MODEL;
   }
   return trimmed.startsWith("openai/") ? trimmed.slice("openai/".length) : trimmed;
+}
+
+function resolveConfiguredModelMaxInputTokens(
+  options: MemoryEmbeddingProviderCreateOptions,
+  normalizedModel: string,
+): number | undefined {
+  const providerId = options.provider?.trim();
+  if (!providerId) {
+    return undefined;
+  }
+  const providerConfig = findNormalizedProviderValue(options.config.models?.providers, providerId);
+  const configuredModel = providerConfig?.models?.find(
+    (entry) => typeof entry?.id === "string" && entry.id.trim() === normalizedModel,
+  );
+  const maxTokens = configuredModel?.maxTokens;
+  if (typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0) {
+    return Math.floor(maxTokens);
+  }
+  const contextWindow = configuredModel?.contextWindow;
+  if (typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0) {
+    return Math.floor(contextWindow);
+  }
+  return undefined;
 }
 
 export async function createOpenAiEmbeddingProvider(
@@ -75,13 +99,16 @@ export async function createOpenAiEmbeddingProvider(
     });
   };
 
+  const configuredMaxInputTokens = resolveConfiguredModelMaxInputTokens(options, client.model);
+
   return {
     provider: {
       id: "openai",
       model: client.model,
-      ...(typeof OPENAI_MAX_INPUT_TOKENS[client.model] === "number"
-        ? { maxInputTokens: OPENAI_MAX_INPUT_TOKENS[client.model] }
-        : {}),
+      ...(() => {
+        const maxInputTokens = OPENAI_MAX_INPUT_TOKENS[client.model] ?? configuredMaxInputTokens;
+        return typeof maxInputTokens === "number" ? { maxInputTokens } : {};
+      })(),
       embedQuery: async (text, optionsValue) => {
         const [vec] = await embed([text], "query", optionsValue?.signal);
         return vec ?? [];

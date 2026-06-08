@@ -120,4 +120,48 @@ describe("OpenAI embedding provider", () => {
       }),
     );
   });
+
+  it("uses configured model maxTokens for third-party OpenAI-compatible embedding models", async () => {
+    const { provider } = await createOpenAiEmbeddingProvider(
+      createOptions({
+        provider: "siliconflow",
+        model: "BAAI/bge-large-zh-v1.5",
+        config: {
+          models: {
+            providers: {
+              siliconflow: {
+                api: "openai-completions",
+                baseUrl: "https://api.siliconflow.cn/v1",
+                models: [{ id: "BAAI/bge-large-zh-v1.5", maxTokens: 512 }],
+              },
+            },
+          },
+        } as MemoryEmbeddingProviderCreateOptions["config"],
+      }),
+    );
+
+    expect(provider.maxInputTokens).toBe(512);
+  });
+
+  it("falls back to configured model contextWindow when maxTokens is unavailable", async () => {
+    const { provider } = await createOpenAiEmbeddingProvider(
+      createOptions({
+        provider: "siliconflow",
+        model: "BAAI/bge-large-zh-v1.5",
+        config: {
+          models: {
+            providers: {
+              siliconflow: {
+                api: "openai-completions",
+                baseUrl: "https://api.siliconflow.cn/v1",
+                models: [{ id: "BAAI/bge-large-zh-v1.5", contextWindow: 768 }],
+              },
+            },
+          },
+        } as MemoryEmbeddingProviderCreateOptions["config"],
+      }),
+    );
+
+    expect(provider.maxInputTokens).toBe(768);
+  });
 });
