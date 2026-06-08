@@ -1865,6 +1865,38 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("forwards silent-empty reply allowance to CLI backends for message-tool-only turns", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "sonnet-4.6"),
+      provider: "claude-cli",
+      model: "sonnet-4.6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "sonnet-4.6";
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    followupRun.run.allowEmptyAssistantReplyAsSilent = true;
+    followupRun.originatingChannel = "telegram";
+
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expect(result.kind).toBe("success");
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      sourceReplyDeliveryMode: "message_tool_only",
+      allowEmptyAssistantReplyAsSilent: true,
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+    });
+  });
+
   it("passes prepared CLI user turns to the runtime persistence boundary", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
