@@ -21,6 +21,8 @@ It intentionally separates three categories:
 - The main always-on Node.js runtime is the **gateway process**.
 - OpenClaw also supports a second long-lived runtime, the **headless node host**
   (`openclaw node run` / `openclaw node install`).
+- Many agent turns are **orchestrated inside the gateway PID**, but some turn
+  execution paths still spawn a **per-turn child process**.
 - A number of **short-lived helper Node processes** exist for startup respawn,
   update/restart handoff, and one sandboxed tool-search/code-mode path.
 - Some memory-heavy work already avoids extra PIDs by using **worker threads**
@@ -242,7 +244,63 @@ with IPC.
 - likely a good candidate to compare against worker-thread or in-process
   alternatives
 
-## 7. Optional local model-provider service process
+## 7. Per-turn CLI agent runner child process
+
+### What it is
+
+When an agent turn is executed through the CLI-provider path, OpenClaw launches
+that provider execution as a supervised child process for the turn.
+
+This is the missing family the first draft did not call out clearly enough.
+
+### Source
+
+- `src/cron/isolated-agent/run.ts`
+- `src/agents/cli-runner.ts`
+- `src/agents/cli-runner/execute.ts`
+
+### What it does
+
+- the isolated-turn orchestration decides whether to use:
+  - `runEmbeddedPiAgent(...)` for embedded/in-process execution, or
+  - `runCliAgent(...)` for CLI-backed execution
+- `runCliAgent(...)` then calls `executePreparedCliRun(...)`
+- `executePreparedCliRun(...)` launches a supervised child run with:
+  - `supervisor.spawn(...)`
+  - `mode: "child"`
+
+### How it communicates
+
+- parent/child stdio capture
+- process-supervisor bookkeeping
+- session/run metadata persisted in OpenClaw state
+
+### When it is created
+
+- on agent turns that resolve to a CLI-provider execution path
+- especially relevant for isolated/cron agent turns that use CLI-backed models
+
+### Important clarification
+
+The **isolated agent turn itself is not automatically its own PID**.
+
+The orchestration path for isolated cron runs is in-process in the gateway:
+
+- `src/gateway/server-cron.ts`
+- `src/cron/isolated-agent/run.ts`
+
+What creates the extra process is the **CLI execution backend chosen inside that
+turn**, not the mere fact that the turn is isolated.
+
+### Memory relevance
+
+- this can create **at least one child process per qualifying agent turn**
+- if Joshua is observing one `openclaw`-related process per turn, this is one of
+  the first places to verify
+- this family matters much more than the first draft implied, because it sits on
+  a hot operational path instead of an edge/admin path
+
+## 8. Optional local model-provider service process
 
 ### What it is
 
@@ -277,7 +335,7 @@ demand.
   server is itself a Node service
 - even when not Node, it is still part of total machine memory topology
 
-## 8. Local embedding worker child process
+## 9. Local embedding worker child process
 
 ### What it is
 
@@ -308,7 +366,7 @@ The memory host SDK can fork a dedicated child process for local embeddings.
 - relevant for memory-heavy installs using local memory/embedding features
 - may be a major contributor if local embeddings are active continuously
 
-## 9. Other arbitrary child-process launches
+## 10. Other arbitrary child-process launches
 
 These exist, but they are not a single fixed Node process family:
 
@@ -385,6 +443,7 @@ PID.
 - CLI launcher respawn child
 - gateway full-process restart child
 - detached update restart script process
+- per-turn CLI agent runner child
 - tool-search code child
 
 ## Initial hypotheses for memory reduction work
@@ -394,11 +453,14 @@ PID.
 2. The biggest process-count wins are likely to come from reducing or
    eliminating **optional helper PIDs** that could instead use worker threads or
    a shared in-process service.
-3. The most suspicious "many Node processes" category is probably not normal
+3. A high-frequency target is the **per-turn CLI agent runner child**. Even if
+   each child is short-lived, repeated turn volume can make this one of the
+   most important contributors to process churn and memory spikes.
+4. The most suspicious "many Node processes" category is probably not normal
    sessions/cron work by itself, because much of that appears to stay inside the
    gateway PID. The extra PIDs seem to come more from **special helper runtimes**
    and **local-service patterns**.
-4. Worker threads already exist in some places, which suggests the codebase is
+5. Worker threads already exist in some places, which suggests the codebase is
    open to **replace-child-process-with-worker** refactors where isolation needs
    are moderate rather than absolute.
 
