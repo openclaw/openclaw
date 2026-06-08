@@ -484,6 +484,49 @@ PY
       }
     });
 
+    it("does not inject Copy text into heredoc code blocks (#85926)", () => {
+      // Regression test: the copy-button span text must not appear inside the code block
+      const markdown = [
+        "```bash",
+        "python3 - <<'PY'",
+        "import openpyxl",
+        "",
+        'path = "/home/rhq/.openclaw/workspace/myfile.xlsx"',
+        "wb = openpyxl.load_workbook(path, read_only=True, data_only=True)",
+        "",
+        "for ws in wb.worksheets:",
+        '    print(f"--- {ws.title} ---")',
+        "    rows = 0",
+        "",
+        "    for row in ws.iter_rows(values_only=True):",
+        "        vals = [str(v) for v in row if v is not None]",
+        "        if vals:",
+        '            print(" | ".join(vals))',
+        "            rows += 1",
+        "        if rows >= 5:",
+        "            break",
+        "PY",
+        "```",
+      ].join("\n");
+      const html = toSanitizedMarkdownHtml(markdown);
+      const fragment = htmlFragment(html);
+      const copyBtn = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
+      const codeEl = fragment.querySelector("pre code");
+
+      // The copy button's idle span must contain "Copy"
+      expect(copyBtn?.querySelector(".code-block-copy__idle")?.textContent).toBe("Copy");
+
+      // The code block must NOT contain the literal text "Copy"
+      // (this was the bug: span text leaked into the code block when span was not in allowedTags)
+      expect(codeEl?.textContent).not.toContain("Copy");
+
+      // Verify the actual code content is preserved with correct indentation
+      expect(codeEl?.textContent).toContain("for ws in wb.worksheets:");
+      expect(codeEl?.textContent).toContain('print(f"--- {ws.title} ---")');
+      expect(codeEl?.textContent).toContain("rows = 0");
+      expect(codeEl?.textContent).toContain("for row in ws.iter_rows");
+    });
+
     it("collapses JSON code blocks", () => {
       const html = toSanitizedMarkdownHtml('```json\n{"key": "value"}\n```');
       const fragment = htmlFragment(html);
