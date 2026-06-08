@@ -1260,7 +1260,7 @@ async function dispatchSlashCommand(
       await host.onSlashAction("new-session");
       return;
     case "reset":
-      await sendChatMessageNow(host, "/reset", {
+      await sendChatMessageNow(host, args.trim() ? `/reset ${args.trim()}` : "/reset", {
         refreshSessions: true,
         previousDraft: sendOpts?.previousDraft,
         restoreDraft: sendOpts?.restoreDraft,

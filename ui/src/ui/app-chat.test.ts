@@ -1061,6 +1061,30 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("preserves /reset soft args in the dispatched message", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/reset soft please reload",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    expect(payload.message).toBe("/reset soft please reload");
+    expect(host.chatMessage).toBe("");
+  });
+
   it("waits for an in-flight model picker update before sending chat", async () => {
     const switchUpdate = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
