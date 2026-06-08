@@ -560,14 +560,7 @@ function configuredAgentModelAliasMatches(
 ): boolean {
   const normalizedModelRef = normalizeExecReviewerAliasRef(modelRef);
   const agents = readUnknownRecord(readUnknownRecord(config)?.agents);
-  if (agentModelAliasMatches(readUnknownRecord(agents?.defaults), normalizedModelRef)) {
-    return true;
-  }
-  const list = agents?.list;
-  if (!Array.isArray(list)) {
-    return false;
-  }
-  return list.some((agent) => agentModelAliasMatches(readUnknownRecord(agent), normalizedModelRef));
+  return agentModelAliasMatches(readUnknownRecord(agents?.defaults), normalizedModelRef);
 }
 
 function agentModelAliasMatches(

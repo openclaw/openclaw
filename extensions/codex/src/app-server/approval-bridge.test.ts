@@ -614,6 +614,65 @@ describe("Codex app-server approval bridge", () => {
     ]);
   });
 
+  it("keeps exec auto-review when only an agent-specific alias matches the OpenAI reviewer", async () => {
+    const params = createParams();
+    params.config = {
+      agents: {
+        list: [
+          {
+            id: "sidecar",
+            models: {
+              "lmstudio/local-reviewer": {
+                alias: "openai/gpt-5.5-mini",
+              },
+            },
+          },
+        ],
+      },
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            model: "openai/gpt-5.5-mini@work",
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+      decision: "allow-once",
+      rationale: "real OpenAI reviewer",
+      risk: "low",
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review-agent-alias",
+        command: "node --version",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      execReviewerAgentId: "main",
+      internalExecAutoReview: true,
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockReviewExecRequestWithConfiguredModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: params.config,
+        agentId: "main",
+        reviewer: {
+          model: "openai/gpt-5.5-mini@work",
+        },
+      }),
+    );
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("falls back to plugin approval when OpenAI reviewer uses a custom environment base URL", async () => {
     const params = createParams();
     vi.stubEnv("OPENAI_BASE_URL", "http://127.0.0.1:11434/v1");
