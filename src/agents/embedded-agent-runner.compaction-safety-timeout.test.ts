@@ -127,9 +127,17 @@ describe("resolveCompactionTimeoutMs", () => {
   it("converts timeoutSeconds to milliseconds", () => {
     expect(
       resolveCompactionTimeoutMs({
+        agents: { defaults: { compaction: { timeoutSeconds: 120 } } },
+      }),
+    ).toBe(120_000);
+  });
+
+  it("caps configured timeoutSeconds at 600", () => {
+    expect(
+      resolveCompactionTimeoutMs({
         agents: { defaults: { compaction: { timeoutSeconds: 1800 } } },
       }),
-    ).toBe(1_800_000);
+    ).toBe(600_000);
   });
 
   it("floors fractional seconds", () => {
