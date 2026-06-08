@@ -1162,6 +1162,10 @@
         "cwd": {
           "type": "string"
         },
+        "fastMode": {
+          "description": "Optional per-spawn fast-mode override for the child session. Use false to keep a spawned child on standard processing even when agent or model defaults enable fast mode.",
+          "type": "boolean"
+        },
         "label": {
           "type": "string"
         },

@@ -6,12 +6,20 @@ const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
   const spawnAcpDirectMock = vi.fn();
   const registerSubagentRunMock = vi.fn();
+  const getRuntimeConfigMock = vi.fn(() => ({
+    session: { mainKey: "main", scope: "per-sender" },
+  }));
   return {
     spawnSubagentDirectMock,
     spawnAcpDirectMock,
     registerSubagentRunMock,
+    getRuntimeConfigMock,
   };
 });
+
+vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => hoisted.getRuntimeConfigMock(),
+}));
 
 vi.mock("../subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],
@@ -52,6 +60,9 @@ describe("sessions_spawn tool", () => {
       runId: "run-acp",
     });
     hoisted.registerSubagentRunMock.mockReset();
+    hoisted.getRuntimeConfigMock.mockReset().mockReturnValue({
+      session: { mainKey: "main", scope: "per-sender" },
+    });
   });
 
   function registerAcpBackendForTest() {
@@ -146,11 +157,14 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
     const resumeSessionId = requireSchemaProperty(schema.properties, "resumeSessionId");
     const streamTo = requireSchemaProperty(schema.properties, "streamTo");
+    const fastMode = requireSchemaProperty(schema.properties, "fastMode");
     expect(resumeSessionId.description).toContain("ACP-only resume target");
     expect(resumeSessionId.description).toContain('ignored for runtime="subagent"');
     expect(resumeSessionId.description).toContain("already recorded for this requester");
     expect(streamTo.description).toContain("ACP-only stream target");
     expect(streamTo.description).toContain('ignored for runtime="subagent"');
+    expect(fastMode.type).toBe("boolean");
+    expect(fastMode.description).toContain("per-spawn fast-mode override");
   });
 
   it("hides ACP runtime affordances when the ACP backend is unhealthy", () => {
@@ -303,6 +317,7 @@ describe("sessions_spawn tool", () => {
       model: "anthropic/claude-sonnet-4-6",
       thinking: "medium",
       cwd: "/workspace/requester",
+      fastMode: false,
       thread: true,
       mode: "session",
       cleanup: "keep",
@@ -321,6 +336,7 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.thinking).toBe("medium");
     expect(spawnArgs.cwd).toBe("/workspace/requester");
     expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
+    expect(spawnArgs.fastMode).toBe(false);
     expect(spawnArgs.thread).toBe(true);
     expect(spawnArgs.mode).toBe("session");
     expect(spawnArgs.cleanup).toBe("keep");
@@ -553,6 +569,7 @@ describe("sessions_spawn tool", () => {
       task: "investigate the failing CI run",
       agentId: "codex",
       cwd: "/workspace",
+      fastMode: false,
       thread: true,
       mode: "session",
       streamTo: "parent",
@@ -568,6 +585,7 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.agentId).toBe("codex");
     expect(spawnArgs.cwd).toBe("/workspace");
     expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
+    expect(spawnArgs.fastMode).toBe(false);
     expect(spawnArgs.thread).toBe(true);
     expect(spawnArgs.mode).toBe("session");
     expect(spawnArgs.streamTo).toBe("parent");

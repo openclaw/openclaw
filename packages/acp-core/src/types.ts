@@ -77,6 +77,8 @@ export type AcpSessionRuntimeOptions = {
   permissionProfile?: string;
   /** ACP runtime config option: per-turn timeout in seconds. */
   timeoutSeconds?: number;
+  /** ACP runtime config option: fast-mode toggle. */
+  fastMode?: boolean;
   /** Backend-specific option bag mapped through session/set_config_option. */
   backendExtras?: Record<string, string>;
 };

@@ -580,6 +580,11 @@ overrides.
   per-model `agents.defaults.models["provider/model"].params.thinking`
   for the selected model.
 </ParamField>
+<ParamField path="fastMode" type="boolean">
+  Optional child-session fast-mode override for ACP spawns. Set `false`
+  to keep the initial ACP child turn on standard processing even when
+  the target agent or model defaults enable fast mode.
+</ParamField>
 
 ## Spawn bind and thread modes
 

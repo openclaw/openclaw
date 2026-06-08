@@ -26,6 +26,7 @@ const RUNTIME_CONFIG_OPTION_ALIASES = {
   thinking: ["thinking", "effort", "reasoning_effort", "thought_level"],
   permissionProfile: ["approval_policy", "permission_profile", "permissions", "permission_mode"],
   timeoutSeconds: ["timeout", "timeout_seconds"],
+  fastMode: ["fast_mode", "fast-mode", "fastMode"],
 } as const;
 
 function failInvalidOption(message: string): never {
@@ -167,6 +168,7 @@ export function validateRuntimeOptionPatch(
     "cwd",
     "permissionProfile",
     "timeoutSeconds",
+    "fastMode",
     "backendExtras",
   ]);
   for (const key of Object.keys(rawPatch)) {
@@ -216,6 +218,15 @@ export function validateRuntimeOptionPatch(
       next.timeoutSeconds = undefined;
     } else {
       next.timeoutSeconds = validateRuntimeTimeoutSecondsInput(rawPatch.timeoutSeconds);
+    }
+  }
+  if (Object.hasOwn(rawPatch, "fastMode")) {
+    if (rawPatch.fastMode === undefined) {
+      next.fastMode = undefined;
+    } else if (typeof rawPatch.fastMode === "boolean") {
+      next.fastMode = rawPatch.fastMode;
+    } else {
+      failInvalidOption("Fast mode must be a boolean.");
     }
   }
   if (Object.hasOwn(rawPatch, "backendExtras")) {
@@ -268,6 +279,7 @@ export function normalizeRuntimeOptions(
     ...(cwd ? { cwd } : {}),
     ...(permissionProfile ? { permissionProfile } : {}),
     ...(typeof timeoutSeconds === "number" ? { timeoutSeconds } : {}),
+    ...(typeof options?.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),
     ...(backendExtras ? { backendExtras } : {}),
   };
 }
@@ -318,6 +330,7 @@ export function buildRuntimeControlSignature(options: AcpSessionRuntimeOptions):
     thinking: normalized.thinking ?? null,
     permissionProfile: normalized.permissionProfile ?? null,
     timeoutSeconds: normalized.timeoutSeconds ?? null,
+    fastMode: normalized.fastMode ?? null,
     backendExtras: extras,
   });
 }
@@ -350,6 +363,12 @@ export function buildRuntimeConfigOptionPairs(
     pairs.set(
       resolveRuntimeConfigOptionKey("timeout", advertisedConfigOptionKeys),
       String(normalized.timeoutSeconds),
+    );
+  }
+  if (typeof normalized.fastMode === "boolean") {
+    pairs.set(
+      resolveRuntimeConfigOptionKey("fast_mode", advertisedConfigOptionKeys),
+      String(normalized.fastMode),
     );
   }
   for (const [key, value] of Object.entries(normalized.backendExtras ?? {})) {
@@ -445,6 +464,13 @@ export function inferRuntimeOptionPatchFromConfigOption(
   }
   if (normalizedKey === "timeout" || normalizedKey === "timeout_seconds") {
     return { timeoutSeconds: parseRuntimeTimeoutSecondsInput(validated.value) };
+  }
+  if (
+    normalizedKey === "fast_mode" ||
+    normalizedKey === "fast-mode" ||
+    normalizedKey === "fastmode"
+  ) {
+    return { fastMode: normalizeLowercaseStringOrEmpty(validated.value) === "true" };
   }
   if (normalizedKey === "cwd") {
     return { cwd: validateRuntimeCwdInput(validated.value) };
