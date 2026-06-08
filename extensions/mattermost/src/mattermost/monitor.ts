@@ -4,7 +4,8 @@ import {
   deliverWithFinalizableLivePreviewAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
-  formatChannelProgressDraftLineForEntry,
+  buildChannelProgressDraftLineForEntry,
+  createChannelProgressDraftCompositor,
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
@@ -38,7 +39,7 @@ import {
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
-import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
+import { createMattermostDraftStream } from "./draft-stream.js";
 import {
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
@@ -1682,6 +1683,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             })
           : createDisabledMattermostDraftStream();
         let lastPartialText = "";
+        const progressDraft = createChannelProgressDraftCompositor({
+          entry: account.config,
+          mode: account.streamingMode,
+          active: draftPreviewEnabled,
+          seed: `${account.accountId}:${channelId}`,
+          update: async (previewText, options) => {
+            draftStream.update(previewText);
+            if (options?.flush) {
+              await draftStream.flush();
+            }
+          },
+        });
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
         };
@@ -1746,6 +1759,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
             typingCallbacks,
             deliver: async (payloadEntry: ReplyPayload, info) => {
+              if (info.kind === "final") {
+                progressDraft.markFinalReplyStarted();
+              }
               await deliverMattermostReplyWithDraftPreview({
                 payload: payloadEntry,
                 info,
@@ -1785,6 +1801,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   }
                 },
               });
+              if (info.kind === "final") {
+                progressDraft.markFinalReplyDelivered();
+              }
             },
             onError: (err, info) => {
               runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
@@ -1893,9 +1912,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           },
                           onAssistantMessageStart: () => {
                             lastPartialText = "";
+                            progressDraft.reset();
                           },
                           onReasoningEnd: () => {
                             lastPartialText = "";
+                            progressDraft.reset();
                           },
                           onReasoningStream: async () => {
                             if (!lastPartialText) {
@@ -1906,20 +1927,30 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             if (!draftToolProgressEnabled) {
                               return;
                             }
-                            draftStream.update(
-                              buildMattermostToolStatusText({
-                                ...payloadValue,
-                                config: account.config,
-                              }),
+                            await progressDraft.pushToolProgress(
+                              buildChannelProgressDraftLineForEntry(
+                                account.config,
+                                {
+                                  event: "tool",
+                                  itemId: payloadValue.itemId,
+                                  toolCallId: payloadValue.toolCallId,
+                                  name: payloadValue.name,
+                                  phase: payloadValue.phase,
+                                  args: payloadValue.args,
+                                },
+                                payloadValue.detailMode
+                                  ? { detailMode: payloadValue.detailMode }
+                                  : undefined,
+                              ),
+                              { startImmediately: true },
                             );
                           },
                           onItemEvent: async (payloadLocal) => {
                             if (!draftToolProgressEnabled) {
                               return;
                             }
-                            const progressText = formatChannelProgressDraftLineForEntry(
-                              account.config,
-                              {
+                            await progressDraft.pushToolProgress(
+                              buildChannelProgressDraftLineForEntry(account.config, {
                                 event: "item",
                                 itemId: payloadLocal.itemId,
                                 itemKind: payloadLocal.kind,
@@ -1930,11 +1961,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                                 summary: payloadLocal.summary,
                                 progressText: payloadLocal.progressText,
                                 meta: payloadLocal.meta,
-                              },
+                              }),
+                              { startImmediately: true },
                             );
-                            if (progressText) {
-                              draftStream.update(progressText);
-                            }
                           },
                         },
                       }),
