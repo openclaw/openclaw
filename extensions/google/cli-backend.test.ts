@@ -42,4 +42,10 @@ describe("google cli backends", () => {
     expect(backend.config).not.toHaveProperty("imageArg");
     expect(backend.config).not.toHaveProperty("imagePathScope");
   });
+
+  it("enables raw-transcript reseed for non-resumable text-mode so OpenClaw can pass conversation history", () => {
+    const backend = buildGoogleAntigravityCliBackend();
+
+    expect(backend.config.reseedFromRawTranscriptWhenUncompacted).toBe(true);
+  });
 });
