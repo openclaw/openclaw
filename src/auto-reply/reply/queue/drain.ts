@@ -54,6 +54,8 @@ type OriginRoutingMetadata = Pick<
   "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
 >;
 
+type OriginMessageMetadata = Pick<FollowupRun, "messageId" | "originatingReplyToId">;
+
 function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
   const metadata: OriginRoutingMetadata = {};
   for (const item of items) {
@@ -80,6 +82,23 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
       metadata.originatingAccountId &&
       metadata.originatingThreadId != null
     ) {
+      break;
+    }
+  }
+  return metadata;
+}
+
+function resolveOriginMessageMetadata(items: FollowupRun[]): OriginMessageMetadata {
+  const metadata: OriginMessageMetadata = {};
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (!metadata.messageId && item.messageId) {
+      metadata.messageId = item.messageId;
+    }
+    if (!metadata.originatingReplyToId && item.originatingReplyToId) {
+      metadata.originatingReplyToId = item.originatingReplyToId;
+    }
+    if (metadata.messageId && metadata.originatingReplyToId) {
       break;
     }
   }
@@ -474,6 +493,7 @@ export function scheduleFollowupDrain(
             }
 
             const routing = resolveOriginRoutingMetadata(groupItems);
+            const messageMetadata = resolveOriginMessageMetadata(groupItems);
             const prompt = buildCollectPrompt({
               title: "[Queued messages while agent was busy]",
               items: groupItems,
@@ -486,6 +506,7 @@ export function scheduleFollowupDrain(
                 run,
                 enqueuedAt: Date.now(),
                 ...routing,
+                ...messageMetadata,
                 ...collectRuntimeMetadata(groupItems),
                 ...collectQueuedImages(groupItems),
               });
@@ -525,10 +546,12 @@ export function scheduleFollowupDrain(
                     prompt: summaryPrompt,
                     run,
                     enqueuedAt: Date.now(),
+                    messageId: item.messageId,
                     originatingChannel: item.originatingChannel,
                     originatingTo: item.originatingTo,
                     originatingAccountId: item.originatingAccountId,
                     originatingThreadId: item.originatingThreadId,
+                    originatingReplyToId: item.originatingReplyToId,
                     ...collectSummaryRuntimeMetadata([item]),
                     ...collectQueuedImages([item]),
                   });
