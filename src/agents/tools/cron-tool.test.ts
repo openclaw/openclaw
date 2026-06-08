@@ -758,6 +758,30 @@ describe("cron tool", () => {
     expect(params?.payload?.toolsAllow).toEqual(["read", "cron"]);
   });
 
+  it("preserves explicit empty agentTurn add toolsAllow under a creator tool surface", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:telegram:group:restricted-room",
+      creatorToolAllowlist: ["read", "cron"],
+    });
+
+    await tool.execute("call-empty-capped-add-tools", {
+      action: "add",
+      job: {
+        ...buildReminderAgentTurnJob(),
+        payload: {
+          kind: "agentTurn",
+          message: "hello",
+          toolsAllow: [],
+        },
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add") as
+      | { payload?: { toolsAllow?: string[] } }
+      | undefined;
+    expect(params?.payload?.toolsAllow).toEqual([]);
+  });
+
   it("expands plugin selectors against the creator tool surface on agentTurn adds", async () => {
     const tool = createTestCronTool({
       agentSessionKey: "agent:main:telegram:group:restricted-room",
@@ -1969,6 +1993,76 @@ describe("cron tool", () => {
           payload: {
             kind: "agentTurn",
             toolsAllow: ["read", "cron"],
+          },
+        },
+      },
+    });
+  });
+
+  it("preserves an existing narrower toolsAllow when updating without a payload patch", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "job-10",
+        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["read"] },
+      })
+      .mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:telegram:group:restricted-room",
+      creatorToolAllowlist: ["read", "exec", "cron"],
+    });
+    await tool.execute("call-update-preserve-existing-tools", {
+      action: "update",
+      id: "job-10",
+      patch: { enabled: false },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.update",
+      params: {
+        id: "job-10",
+        patch: {
+          enabled: false,
+          payload: {
+            kind: "agentTurn",
+            toolsAllow: ["read"],
+          },
+        },
+      },
+    });
+  });
+
+  it("preserves an existing narrower toolsAllow when updating payload fields without toolsAllow", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "job-11",
+        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["read"] },
+      })
+      .mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:telegram:group:restricted-room",
+      creatorToolAllowlist: ["read", "exec", "cron"],
+    });
+    await tool.execute("call-update-preserve-existing-payload-tools", {
+      action: "update",
+      id: "job-11",
+      patch: {
+        payload: { model: "openai/gpt-5.5" },
+      },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.update",
+      params: {
+        id: "job-11",
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            model: "openai/gpt-5.5",
+            toolsAllow: ["read"],
           },
         },
       },
