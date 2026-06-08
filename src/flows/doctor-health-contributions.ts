@@ -727,15 +727,20 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
   });
 }
 
-async function hasActiveGatewayExecCredential(ctx: DoctorHealthFlowContext): Promise<boolean> {
+async function hasActiveGatewayExecCredential(
+  ctx: DoctorHealthFlowContext,
+  mode: DoctorFlowMode = resolveDoctorMode(ctx.cfg),
+): Promise<boolean> {
   const { resolveSecretInputRef } = await loadSecretTypesModule();
   const { gatewaySecretInputPathCanWin } = await import("../gateway/credentials-secret-inputs.js");
+  const { resolveGatewayProbeCredentialConfig } = await import("../gateway/probe-auth.js");
   const { ALL_GATEWAY_SECRET_INPUT_PATHS, readGatewaySecretInputValue } =
     await import("../gateway/secret-input-paths.js");
+  const cfg = resolveGatewayProbeCredentialConfig({ cfg: ctx.cfg, mode });
   return ALL_GATEWAY_SECRET_INPUT_PATHS.some((path) => {
     if (
       !gatewaySecretInputPathCanWin({
-        config: ctx.cfg,
+        config: cfg,
         env: process.env,
         path,
       })
@@ -743,8 +748,8 @@ async function hasActiveGatewayExecCredential(ctx: DoctorHealthFlowContext): Pro
       return false;
     }
     const ref = resolveSecretInputRef({
-      value: readGatewaySecretInputValue(ctx.cfg, path),
-      defaults: ctx.cfg.secrets?.defaults,
+      value: readGatewaySecretInputValue(cfg, path),
+      defaults: cfg.secrets?.defaults,
     }).ref;
     return ref?.source === "exec";
   });
@@ -759,7 +764,7 @@ async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<v
       const { gatherDaemonStatus } = await import("../cli/daemon-cli/status.gather.js");
       const allowExecSecretRefs = ctx.options.allowExec === true;
       const shouldProbeGateway =
-        allowExecSecretRefs || !(await hasActiveGatewayExecCredential(ctx));
+        allowExecSecretRefs || !(await hasActiveGatewayExecCredential(ctx, "local"));
       const status = await gatherDaemonStatus({
         rpc: {
           timeout: ctx.options.nonInteractive === true ? "3000" : "10000",

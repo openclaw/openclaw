@@ -496,6 +496,40 @@ describe("doctor health contributions", () => {
     expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
   });
 
+  it("ignores remote-only exec SecretRefs for local daemon-context plugin drift probes", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    const cfg = {
+      gateway: {
+        auth: {
+          mode: "token",
+        },
+        remote: {
+          token: {
+            source: "exec",
+            provider: "vault",
+            id: "gateway/remote-token",
+          },
+        },
+      },
+    };
+
+    await contribution.run({
+      cfg,
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0]);
+
+    expect(mocks.gatherDaemonStatus).toHaveBeenCalledWith({
+      rpc: {
+        timeout: "3000",
+        json: true,
+      },
+      probe: true,
+      requireRpc: false,
+      deep: false,
+      allowExecSecretRefs: false,
+    });
+  });
+
   it("uses the read-only model catalog for hooks.gmail.model warnings", async () => {
     const contribution = requireDoctorContribution("doctor:hooks-model");
     const cfg = {
