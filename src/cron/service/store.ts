@@ -104,7 +104,7 @@ export async function ensureLoaded(
     previousJobsById.set(job.id, job);
   }
   const loaded = await loadCronJobsStoreWithConfigJobs(state.deps.storePath);
-  const loadedJobs = (loaded.store.jobs ?? []) as unknown as CronJob[];
+  const loadedJobs: CronJob[] = loaded.store.jobs ?? [];
   const jobs: CronJob[] = [];
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
   for (const [index, job] of loadedJobs.entries()) {
