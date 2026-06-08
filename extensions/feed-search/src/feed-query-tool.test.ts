@@ -30,6 +30,11 @@ function makeApi() {
   } as never;
 }
 
+/** legal_user_role su-flag row (the first query the resolver runs). */
+function suRow(su: number): unknown[] {
+  return [{ su }];
+}
+
 /** entity_auth rows: newest grant first. */
 function authRows(...pairs: Array<[number, number]>): unknown[] {
   return pairs.map(([masterId, slaveId]) => ({ masterId, slaveId }));
@@ -59,6 +64,7 @@ describe("createFeedQueryToolFactory", () => {
 
   it("runs a scoped search and returns whitelisted rows", async () => {
     const tool = factory({ agentId: "rabbitmq-2005" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
     mockExecuteQuery.mockResolvedValueOnce(authRows([270, 585]));
     mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本监测专项"]));
     mockExecuteQuery.mockResolvedValueOnce([
@@ -74,18 +80,19 @@ describe("createFeedQueryToolFactory", () => {
     });
     // The auth query must use the trusted userId parsed from agentId.
     expect(mockExecuteQuery).toHaveBeenNthCalledWith(
-      1,
+      2,
       expect.anything(),
       expect.stringContaining("FROM entity_auth"),
       ["2005"],
     );
-    const searchCall = mockExecuteQuery.mock.calls[2];
+    const searchCall = mockExecuteQuery.mock.calls[3];
     expect(searchCall[1]).toContain("WHERE f.slaveTopicId = ? AND f.skip = 0");
     expect(searchCall[2]).toEqual([585, "%裁员%", "%裁员%", "%裁员%"]);
   });
 
   it("rejects a topicId outside the authorized set without querying data", async () => {
     const tool = factory({ agentId: "rabbitmq-2005" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
     mockExecuteQuery.mockResolvedValueOnce(authRows([270, 585]));
     mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本监测专项"]));
 
@@ -94,12 +101,13 @@ describe("createFeedQueryToolFactory", () => {
     expect(result.details.success).toBe(false);
     expect(String(result.details.error)).toContain("999");
     expect(result.details.authorizedTopics).toEqual([{ topicId: 585, topicName: "广本监测专项" }]);
-    // entity_auth + feed_topic only; the data query never ran.
-    expect(mockExecuteQuery).toHaveBeenCalledTimes(2);
+    // su + entity_auth + feed_topic only; the data query never ran.
+    expect(mockExecuteQuery).toHaveBeenCalledTimes(3);
   });
 
   it("returns a friendly error when the user has no authorized topics", async () => {
     const tool = factory({ agentId: "rabbitmq-7" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
     mockExecuteQuery.mockResolvedValueOnce([]);
 
     const result = await tool.execute("call-1", {});
@@ -110,6 +118,7 @@ describe("createFeedQueryToolFactory", () => {
 
   it("rejects malformed dates before touching the data tables", async () => {
     const tool = factory({ agentId: "rabbitmq-2005" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
     mockExecuteQuery.mockResolvedValueOnce(authRows([270, 585]));
     mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本"]));
 
@@ -117,11 +126,12 @@ describe("createFeedQueryToolFactory", () => {
 
     expect(result.details.success).toBe(false);
     expect(String(result.details.error)).toMatch(/YYYY-MM-DD/);
-    expect(mockExecuteQuery).toHaveBeenCalledTimes(2);
+    expect(mockExecuteQuery).toHaveBeenCalledTimes(3);
   });
 
   it("aggregates stats with a total and per-dimension buckets", async () => {
     const tool = factory({ agentId: "rabbitmq-2005" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
     mockExecuteQuery.mockResolvedValueOnce(authRows([270, 585]));
     mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本"]));
     mockExecuteQuery.mockResolvedValueOnce([{ cnt: 12 }]);
@@ -149,6 +159,7 @@ describe("createFeedQueryToolFactory", () => {
 
   it("rejects an unauthorized topicId in stats mode as well", async () => {
     const tool = factory({ agentId: "rabbitmq-2005" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
     mockExecuteQuery.mockResolvedValueOnce(authRows([270, 585]));
     mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本"]));
 
@@ -156,11 +167,12 @@ describe("createFeedQueryToolFactory", () => {
 
     expect(result.details.success).toBe(false);
     expect(result.details.authorizedTopics).toEqual([{ topicId: 585, topicName: "广本" }]);
-    expect(mockExecuteQuery).toHaveBeenCalledTimes(2);
+    expect(mockExecuteQuery).toHaveBeenCalledTimes(3);
   });
 
   it("ignores an LLM-supplied userId parameter; identity comes from agentId only", async () => {
     const tool = factory({ agentId: "rabbitmq-2005" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
     mockExecuteQuery.mockResolvedValueOnce(authRows([270, 585]));
     mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本"]));
     mockExecuteQuery.mockResolvedValueOnce([]);
@@ -168,7 +180,7 @@ describe("createFeedQueryToolFactory", () => {
     await tool.execute("call-1", { userId: "1749" });
 
     expect(mockExecuteQuery).toHaveBeenNthCalledWith(
-      1,
+      2,
       expect.anything(),
       expect.stringContaining("FROM entity_auth"),
       ["2005"],
@@ -188,6 +200,7 @@ describe("createFeedQueryToolFactory", () => {
 
   it("hides internal errors behind a generic message", async () => {
     const tool = factory({ agentId: "rabbitmq-2005" })!;
+    mockExecuteQuery.mockResolvedValueOnce(suRow(0));
     mockExecuteQuery.mockResolvedValueOnce(authRows([270, 585]));
     mockExecuteQuery.mockResolvedValueOnce(titleRows([585, "广本"]));
     mockExecuteQuery.mockRejectedValueOnce(new Error("ER_ACCESS_DENIED for user btclaw_reader"));

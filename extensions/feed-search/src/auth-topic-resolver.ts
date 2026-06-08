@@ -5,10 +5,13 @@ import type { MySqlConfig } from "./types.js";
 /**
  * One topic the user is authorized to query.
  *
- * Mapping rules mirror extensions/rabbitmq-consumer/src/topic-resolver.ts
- * (the authoritative blueprint for entity_auth ownership semantics) — keep
- * the two in sync so the feed_query tool and the injected chat prefix never
- * disagree about project ownership.
+ * Two resolution paths feed this (see 权限问题.md):
+ * - Superusers (legal_user_role.su = 1) get the master feed_topic of every
+ *   active daily-monitoring report, independent of entity_auth grants.
+ * - Everyone else goes through entity_auth ownership (masterId/slaveId),
+ *   mirroring extensions/rabbitmq-consumer/src/topic-resolver.ts. NOTE: that
+ *   blueprint still lacks the superuser branch; the injected chat prefix will
+ *   under-report topics for su=1 accounts until it is updated to match.
  */
 export interface AuthorizedTopic {
   topicId: number;
@@ -17,6 +20,9 @@ export interface AuthorizedTopic {
   /** Project title from feed_topic (null when missing or lookup failed). */
   topicName: string | null;
 }
+
+/** A resolved topic mapping before its title is attached. */
+type TopicMapping = Omit<AuthorizedTopic, "topicName">;
 
 interface CacheEntry {
   topics: AuthorizedTopic[];
@@ -35,9 +41,9 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
  * Per-row rule: slaveId > 0 wins (slave topic), else masterId > 0 (master
  * topic), else no mapping. Duplicates keep their first (most recent) entry.
  */
-function dedupeMappings(rows: RowDataPacket[]): Array<Omit<AuthorizedTopic, "topicName">> {
+function dedupeMappings(rows: RowDataPacket[]): TopicMapping[] {
   const seen = new Set<number>();
-  const mappings: Array<Omit<AuthorizedTopic, "topicName">> = [];
+  const mappings: TopicMapping[] = [];
   for (const row of rows) {
     const masterId = Number(row.masterId) || 0;
     const slaveId = Number(row.slaveId) || 0;
@@ -69,10 +75,11 @@ export class AuthTopicResolver {
   }
 
   /**
-   * Look up every topic the user owns (entity_auth.uid -> masterId/slaveId)
-   * plus their feed_topic titles. Index 0 is the most recently granted
-   * (current) project. Results are cached per uid for CACHE_TTL_MS; on a DB
-   * failure a stale entry (if any) is served instead of throwing.
+   * Look up every topic the user may query. Superusers (su = 1) get every
+   * active daily-monitoring master topic; everyone else gets their entity_auth
+   * grants (index 0 = most recently granted / current project). Results are
+   * cached per uid for CACHE_TTL_MS; on a DB failure a stale entry (if any) is
+   * served instead of throwing.
    */
   async getAuthorizedTopics(userId: string): Promise<AuthorizedTopic[]> {
     if (!userId) {
@@ -85,12 +92,9 @@ export class AuthTopicResolver {
     }
 
     try {
-      const rows = await executeQuery<RowDataPacket[]>(
-        this.config,
-        "SELECT masterId, slaveId FROM entity_auth WHERE uid = ? ORDER BY id DESC",
-        [userId],
-      );
-      const mappings = dedupeMappings(rows ?? []);
+      const mappings = (await this.isSuperUser(userId))
+        ? await this.resolveSuperUserTopics()
+        : await this.resolveEntityAuthTopics(userId);
       const names = await this.lookupTopicNames(mappings.map((m) => m.topicId));
       // A transient feed_topic blip must not blank previously known titles
       // (matches the rabbitmq-consumer blueprint): a flipping topicName would
@@ -112,6 +116,61 @@ export class AuthTopicResolver {
         cause: error,
       });
     }
+  }
+
+  /** True when legal_user_role.su = 1 for this user (missing row => not super). */
+  private async isSuperUser(userId: string): Promise<boolean> {
+    const rows = await executeQuery<RowDataPacket[]>(
+      this.config,
+      "SELECT su FROM legal_user_role WHERE id = ?",
+      [userId],
+    );
+    return Number(rows?.[0]?.su) === 1;
+  }
+
+  /** Normal-user path: entity_auth ownership, newest grant first. */
+  private async resolveEntityAuthTopics(userId: string): Promise<TopicMapping[]> {
+    const rows = await executeQuery<RowDataPacket[]>(
+      this.config,
+      "SELECT masterId, slaveId FROM entity_auth WHERE uid = ? ORDER BY id DESC",
+      [userId],
+    );
+    return dedupeMappings(rows ?? []);
+  }
+
+  /**
+   * Superuser path: the master feed_topic of every active (non-deleted)
+   * Running daily-monitoring report. Topics are always master topics, so they
+   * map to feed_monitor_item.topicId (useSlaveTopic = false). Ordered by topic
+   * id for a deterministic primary topic and prompt-cache-stable output.
+   */
+  private async resolveSuperUserTopics(): Promise<TopicMapping[]> {
+    const reportRows = await executeQuery<RowDataPacket[]>(
+      this.config,
+      "SELECT id FROM research_report WHERE status = 'Running' AND category = 'DailyMonitoring' AND deleted = 0",
+    );
+    const reportIds = (reportRows ?? []).map((r) => Number(r.id)).filter((id) => id > 0);
+    if (reportIds.length === 0) {
+      return [];
+    }
+
+    const placeholders = reportIds.map(() => "?").join(",");
+    const topicRows = await executeQuery<RowDataPacket[]>(
+      this.config,
+      `SELECT id FROM feed_topic WHERE master = 1 AND reportId IN (${placeholders}) ORDER BY id ASC`,
+      reportIds,
+    );
+
+    const seen = new Set<number>();
+    const mappings: TopicMapping[] = [];
+    for (const row of topicRows ?? []) {
+      const topicId = Number(row.id) || 0;
+      if (topicId > 0 && !seen.has(topicId)) {
+        seen.add(topicId);
+        mappings.push({ topicId, useSlaveTopic: false });
+      }
+    }
+    return mappings;
   }
 
   /**
