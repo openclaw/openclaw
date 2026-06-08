@@ -253,10 +253,9 @@ describe("legacy codex context metadata migration", () => {
 
     migration!.apply(raw, changes);
 
-    const openaiProvider = (raw.models!.providers as Record<string, unknown>).openai as Record<
-      string,
-      unknown
-    >;
+    const openaiProvider = (
+      (raw.models as Record<string, unknown>).providers as Record<string, unknown>
+    ).openai as Record<string, unknown>;
     const openaiModels = Array.isArray(openaiProvider.models) ? openaiProvider.models : [];
     expect(openaiModels).toHaveLength(1);
     expect(openaiModels[0]).toMatchObject({
@@ -285,10 +284,9 @@ describe("legacy codex context metadata migration", () => {
 
     migration!.apply(raw, changes);
 
-    const openaiProvider = (raw.models!.providers as Record<string, unknown>).openai as Record<
-      string,
-      unknown
-    >;
+    const openaiProvider = (
+      (raw.models as Record<string, unknown>).providers as Record<string, unknown>
+    ).openai as Record<string, unknown>;
     const openaiModels = openaiProvider.models as Record<string, unknown>[];
     expect(openaiModels).toHaveLength(1);
     expect(openaiModels[0].contextTokens).toBe(200_000);
@@ -316,10 +314,9 @@ describe("legacy codex context metadata migration", () => {
 
     migration!.apply(raw, changes);
 
-    const openaiProvider = (raw.models!.providers as Record<string, unknown>).openai as Record<
-      string,
-      unknown
-    >;
+    const openaiProvider = (
+      (raw.models as Record<string, unknown>).providers as Record<string, unknown>
+    ).openai as Record<string, unknown>;
     const openaiModels = openaiProvider.models as Record<string, unknown>[];
     expect(openaiModels[0].contextTokens).toBe(128_000);
     expect(openaiModels[0].contextWindow).toBe(128_000);

@@ -132,13 +132,13 @@ describe("legacy memory search config migrate", () => {
     expect(openai).toBeDefined();
     expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
 
-    const model = openai!.models![0];
-    expect(model.id).toBe("gpt-5.5");
-    expect(model.name).toBe("GPT-5.5");
+    const model = openai?.models?.[0];
+    expect(model?.id).toBe("gpt-5.5");
+    expect(model?.name).toBe("GPT-5.5");
     // Context metadata preserved
-    expect(model.contextWindow).toBe(200_000);
-    expect(model.contextTokens).toBe(100_000);
-    expect(model.maxTokens).toBe(16_384);
+    expect(model?.contextWindow).toBe(200_000);
+    expect(model?.contextTokens).toBe(100_000);
+    expect(model?.maxTokens).toBe(16_384);
     // Transport/runtime fields excluded
     expect(model).not.toHaveProperty("baseUrl");
     expect(model).not.toHaveProperty("api");
@@ -217,21 +217,21 @@ describe("legacy memory search config migrate", () => {
     expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
 
     // Case 3: gpt-4.1 already has contextWindow and contextTokens explicitly set — should NOT be overwritten
-    const gpt41 = openaiProvider!.models!.find((m: any) => m.id === "gpt-4.1");
-    expect(gpt41.contextWindow).toBe(2_000_000);
-    expect(gpt41.contextTokens).toBe(1_000_000);
+    const gpt41 = openaiProvider?.models?.find((m: any) => m.id === "gpt-4.1");
+    expect(gpt41?.contextWindow).toBe(2_000_000);
+    expect(gpt41?.contextTokens).toBe(1_000_000);
 
     // Case 2: gpt-5.5 exists without context metadata — should receive contextTokens and maxTokens from legacy
-    const gpt55 = openaiProvider!.models!.find((m: any) => m.id === "gpt-5.5");
-    expect(gpt55.contextTokens).toBe(200000);
-    expect(gpt55.maxTokens).toBe(16384);
+    const gpt55 = openaiProvider?.models?.find((m: any) => m.id === "gpt-5.5");
+    expect(gpt55?.contextTokens).toBe(200000);
+    expect(gpt55?.maxTokens).toBe(16384);
 
     // Case 1: o3 does not exist in openai.models — entire entry should be copied verbatim
-    const o3 = openaiProvider!.models!.find((m: any) => m.id === "o3");
+    const o3 = openaiProvider?.models?.find((m: any) => m.id === "o3");
     expect(o3).toBeDefined();
-    expect(o3.contextWindow).toBe(200_000);
-    expect(o3.contextTokens).toBe(100000);
-    expect(o3.maxTokens).toBe(100000);
+    expect(o3?.contextWindow).toBe(200_000);
+    expect(o3?.contextTokens).toBe(100000);
+    expect(o3?.maxTokens).toBe(100000);
 
     expect(res.changes).toContain(
       "Removed models.providers.openai-codex because models.providers.openai already exists.",

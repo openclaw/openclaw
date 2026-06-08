@@ -976,7 +976,7 @@ function migrateLegacyContextMetadata(
     return;
   }
 
-  let openaiModels = Array.isArray(openaiProvider.models) ? openaiProvider.models : [];
+  const openaiModels = Array.isArray(openaiProvider.models) ? openaiProvider.models : [];
   let changed = false;
   const modelIdLookup = new Map<string, number>();
   for (let i = 0; i < openaiModels.length; i++) {
@@ -1071,7 +1071,9 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
       if (Array.isArray(sanitized.models)) {
         sanitized.models = sanitized.models.map((model) => {
           const record = getRecord(model);
-          if (!record) return {};
+          if (!record) {
+            return {};
+          }
           const safe: Record<string, unknown> = {};
           for (const field of LEGACY_MODEL_SAFE_FIELDS) {
             const val = record[field];
