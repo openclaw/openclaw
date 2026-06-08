@@ -737,3 +737,29 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(result.content.filter((b) => b.type === "toolCall")).toStrictEqual([]);
   });
 });
+
+describe("openai-completions empty-stop guard", () => {
+  it("routes finish_reason stop with empty content into the error path", async () => {
+    mockChunksRef.chunks = [makeFinishChunk("stop")];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    // An empty stop must not surface as a deliverable turn. Downstream silent-reply
+    // policy already treats stopReason="error" as non-silent, so routing here keeps
+    // the blank provider reply from silently disappearing (impact:message-loss).
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("empty content");
+    expect(result.content).toStrictEqual([]);
+  });
+
+  it("keeps a normal stop with visible text deliverable", async () => {
+    mockChunksRef.chunks = [makeTextChunk("done"), makeFinishChunk("stop")];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.content.some((b) => b.type === "text")).toBe(true);
+  });
+});

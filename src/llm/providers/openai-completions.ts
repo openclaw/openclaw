@@ -479,6 +479,22 @@ export const streamOpenAICompletions: StreamFunction<
         output.content = output.content.filter((block) => block.type !== "toolCall");
       }
 
+      // A provider that finishes `stop` with no tool calls, no visible text, and
+      // no thinking emitted an empty turn. Passing it through as `done` makes
+      // channels deliver a blank reply with no error (impact:message-loss). Route
+      // it into the existing error path so empty-turn recovery/retry applies; the
+      // downstream silent-reply policy already excludes stopReason="error", so
+      // intentional NO_REPLY (a visible token) and reasoning-only turns are
+      // unaffected. The thrown message carries provider/model context so operators
+      // can spot misbehaving models.
+      const hasThinking = output.content.some((block) => block.type === "thinking");
+      if (output.stopReason === "stop" && !hasToolCalls && !hasVisibleText && !hasThinking) {
+        throw new Error(
+          `Provider ${model.provider} (model ${model.id}) returned stop with empty content: ` +
+            "no text, thinking, or tool calls",
+        );
+      }
+
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
