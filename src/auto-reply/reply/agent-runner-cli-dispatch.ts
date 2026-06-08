@@ -58,6 +58,20 @@ function createAgentEventBridge<T>(params: {
   };
 }
 
+type AgentEventBridge = {
+  unsubscribe: () => void;
+  drain: () => Promise<void>;
+};
+
+async function stopAgentEventBridges(bridges: readonly AgentEventBridge[]): Promise<void> {
+  for (const bridge of bridges) {
+    bridge.unsubscribe();
+  }
+  for (const bridge of bridges) {
+    await bridge.drain();
+  }
+}
+
 function createAssistantTextBridge(params: {
   runId: string;
   suppressed?: boolean;
@@ -173,10 +187,6 @@ function createToolEventBridge(params: {
   });
 }
 
-// Bridges CLI inter-tool commentary (assistant text emitted before a tool call, surfaced by the
-// parser as a `stream:"item", kind:"preamble"` agent event) into a channel callback. Without this,
-// CLI commentary lands on the agent-event bus with no subscriber and is silently dropped — the
-// tool/assistant/reasoning streams each have a bridge, but the item/preamble stream had none.
 function createCommentaryEventBridge(params: {
   runId: string;
   suppressed?: boolean;
@@ -251,18 +261,12 @@ export async function runCliAgentWithLifecycle(params: {
     suppressed: params.suppressAssistantBridge,
     deliver: params.onCommentaryText,
   });
+  const bridges = [assistantBridge, reasoningBridge, toolBridge, commentaryBridge];
   let lifecycleTerminalEmitted = false;
   try {
     const rawResult = await runCliAgent(params.runParams);
     const result = params.transformResult?.(rawResult) ?? rawResult;
-    assistantBridge.unsubscribe();
-    reasoningBridge.unsubscribe();
-    toolBridge.unsubscribe();
-    commentaryBridge.unsubscribe();
-    await assistantBridge.drain();
-    await reasoningBridge.drain();
-    await toolBridge.drain();
-    await commentaryBridge.drain();
+    await stopAgentEventBridges(bridges);
 
     const cliText = normalizeOptionalString(result.payloads?.[0]?.text);
     if (cliText) {
@@ -287,14 +291,7 @@ export async function runCliAgentWithLifecycle(params: {
     }
     return result;
   } catch (err) {
-    assistantBridge.unsubscribe();
-    reasoningBridge.unsubscribe();
-    toolBridge.unsubscribe();
-    commentaryBridge.unsubscribe();
-    await assistantBridge.drain();
-    await reasoningBridge.drain();
-    await toolBridge.drain();
-    await commentaryBridge.drain();
+    await stopAgentEventBridges(bridges);
     await params.onErrorBeforeLifecycle?.(err);
     if (emitLifecycleTerminal) {
       emitAgentEvent({
@@ -311,9 +308,9 @@ export async function runCliAgentWithLifecycle(params: {
     }
     throw err;
   } finally {
-    assistantBridge.unsubscribe();
-    reasoningBridge.unsubscribe();
-    toolBridge.unsubscribe();
+    for (const bridge of bridges) {
+      bridge.unsubscribe();
+    }
     if (emitLifecycleTerminal && !lifecycleTerminalEmitted) {
       emitAgentEvent({
         runId: params.runId,
