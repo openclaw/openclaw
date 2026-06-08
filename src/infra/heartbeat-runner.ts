@@ -1185,6 +1185,12 @@ function resolveHeartbeatRunPrompt(params: {
         .map((event) => event.text)
     : [];
   const hasExecCompletion = execEvents.length > 0;
+  if (hasExecCompletion) {
+    log.info(`[bg-exec] heartbeat found ${execEvents.length} exec event(s)`, {
+      events: execEvents,
+      canRelayToUser: params.canRelayToUser,
+    });
+  }
   const hasRelayableExecCompletion =
     params.canRelayToUser && execEvents.some((event) => isRelayableExecCompletionEvent(event));
   const hasCronEvents = cronEvents.length > 0;
@@ -1317,23 +1323,28 @@ export async function runHeartbeatOnce(opts: {
     mergeRequestedHeartbeat: opts.source === "cron",
   });
   if (!areHeartbeatsEnabled()) {
+    log.info(`[bg-exec] runHeartbeatOnce skip: heartbeats disabled (agent=${agentId})`);
     return { status: "skipped", reason: "disabled" };
   }
   if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+    log.info(`[bg-exec] runHeartbeatOnce skip: not enabled for agent (agent=${agentId})`);
     return { status: "skipped", reason: "disabled" };
   }
   if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+    log.info(`[bg-exec] runHeartbeatOnce skip: no interval (agent=${agentId})`);
     return { status: "skipped", reason: "disabled" };
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
   if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
+    log.info(`[bg-exec] runHeartbeatOnce skip: quiet-hours (agent=${agentId})`);
     return { status: "skipped", reason: "quiet-hours" };
   }
 
   const getSize = opts.deps?.getQueueSize ?? getQueueSize;
   const getSnapshots = opts.deps?.getCommandLaneSnapshots ?? getCommandLaneSnapshots;
   if (getSize(CommandLane.Main) > 0) {
+    log.info(`[bg-exec] runHeartbeatOnce skip: main lane busy (agent=${agentId})`);
     return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
   }
 
@@ -1362,6 +1373,7 @@ export async function runHeartbeatOnce(opts: {
   // the same agent is already replying; immediate/manual wakes keep their
   // existing semantics for explicit user/system actions.
   if (shouldHonorActiveReplyRuns && hasActiveReplyRunForAgent(agentId, listActiveReplyRuns)) {
+    log.info(`[bg-exec] runHeartbeatOnce skip: active reply run (agent=${agentId})`);
     emitHeartbeatEvent({
       status: "skipped",
       reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,

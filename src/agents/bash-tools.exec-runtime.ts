@@ -34,7 +34,7 @@ export {
   normalizeExecSecurity,
   normalizeExecTarget,
 } from "../infra/exec-approvals.js";
-import { logWarn } from "../logger.js";
+import { logInfo, logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
@@ -346,11 +346,21 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
 }
 
 function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
-  if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) {
+  if (!session.backgrounded) {
+    logInfo(`[bg-exec] maybeNotifyOnExit skip: not backgrounded (id=${session.id})`);
+    return;
+  }
+  if (!session.notifyOnExit) {
+    logInfo(`[bg-exec] maybeNotifyOnExit skip: notifyOnExit disabled (id=${session.id})`);
+    return;
+  }
+  if (session.exitNotified) {
+    logInfo(`[bg-exec] maybeNotifyOnExit skip: already notified (id=${session.id})`);
     return;
   }
   const sessionKey = session.sessionKey?.trim();
   if (!sessionKey) {
+    logInfo(`[bg-exec] maybeNotifyOnExit skip: no sessionKey (id=${session.id})`);
     return;
   }
   session.exitNotified = true;
@@ -361,14 +371,19 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
   if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
+    logInfo(`[bg-exec] maybeNotifyOnExit skip: manual-cancel no output (id=${session.id})`);
     return;
   }
   if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
+    logInfo(
+      `[bg-exec] maybeNotifyOnExit skip: completed no output and notifyOnExitEmptySuccess not set (id=${session.id})`,
+    );
     return;
   }
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+  logInfo(`[bg-exec] maybeNotifyOnExit enqueue: "${summary}" key=${sessionKey}`);
   const eventRouting = session.eventRouting ?? {
     mainKey: session.mainKey,
     sessionScope: session.sessionScope,
@@ -380,6 +395,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   // Subagent sessions receive exec results via process poll and announce flow;
   // the heartbeat would fall back to the main session and cause spurious wakes.
   if (!isSubagentSessionKey(sessionKey)) {
+    logInfo(`[bg-exec] maybeNotifyOnExit requestHeartbeat key=${sessionKey}`);
     requestHeartbeat(
       scopedHeartbeatWakeOptionsForPolicy(
         sessionKey,
@@ -392,6 +408,8 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
         eventRouting,
       ),
     );
+  } else {
+    logInfo(`[bg-exec] maybeNotifyOnExit skip heartbeat: subagent session key=${sessionKey}`);
   }
 }
 
