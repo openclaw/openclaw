@@ -4,8 +4,10 @@ import {
   validateCronAddParams,
   validateCronUpdateParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import { resolveCronDeliveryPlan } from "./delivery-plan.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
+import type { CronJob } from "./types.js";
 
 function expectNormalizedAtSchedule(scheduleInput: Record<string, unknown>) {
   const normalized = normalizeCronJobCreate({
@@ -140,6 +142,24 @@ describe("normalizeCronJobCreate", () => {
 
     const delivery = normalized.delivery as Record<string, unknown>;
     expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "7200373102" });
+  });
+
+  it("recovers an object-shaped delivery.channel so cron honors the explicit channel (#46899)", () => {
+    const normalized = normalizeIsolatedAgentTurnCreateJob({
+      name: "object channel ref",
+      delivery: {
+        mode: "announce",
+        channel: { id: "telegram" },
+        to: "7200373102",
+      },
+    });
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    // A persisted `{ id }` channel reference must normalize to the canonical id.
+    // Dropping it degrades routing to implicit "last", which misroutes delivery to
+    // another configured channel (the #46899 Telegram-configured/Feishu-used regression).
+    expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "7200373102" });
+    expect(resolveCronDeliveryPlan(normalized as unknown as CronJob).channel).toBe("telegram");
   });
 
   it("coerces ISO schedule.at to normalized ISO (UTC)", () => {

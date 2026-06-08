@@ -1,4 +1,5 @@
 /** Parses user-provided cron delivery fields into narrow runtime values. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { z, type ZodType } from "zod";
 
@@ -16,6 +17,19 @@ const DeliveryModeFieldSchema = z
 export const LowercaseNonEmptyStringFieldSchema = z.preprocess(
   trimLowercaseStringPreprocess,
   z.string().min(1),
+);
+
+// Persisted/legacy cron jobs may carry `delivery.channel` as a `{ id }` channel
+// reference instead of a bare id. Recover the id so the explicit channel survives
+// normalization; otherwise it is dropped and routing degrades to implicit "last",
+// misrouting delivery to another configured channel (e.g. Feishu instead of Telegram).
+const channelReferenceToId = (value: unknown): unknown =>
+  isRecord(value) && typeof value.id === "string" ? value.id : value;
+
+/** Accepts a channel id string or a `{ id }` channel reference from persisted cron jobs. */
+export const DeliveryChannelFieldSchema = z.preprocess(
+  channelReferenceToId,
+  LowercaseNonEmptyStringFieldSchema,
 );
 
 /** Accepts non-empty string fields after trimming delivery input without changing case. */
@@ -45,7 +59,7 @@ type ParsedDeliveryInput = {
 export function parseDeliveryInput(input: Record<string, unknown>): ParsedDeliveryInput {
   return {
     mode: parseOptionalField(DeliveryModeFieldSchema, input.mode),
-    channel: parseOptionalField(LowercaseNonEmptyStringFieldSchema, input.channel),
+    channel: parseOptionalField(DeliveryChannelFieldSchema, input.channel),
     to: parseOptionalField(TrimmedNonEmptyStringFieldSchema, input.to),
     threadId: parseOptionalField(DeliveryThreadIdFieldSchema, input.threadId),
     accountId: parseOptionalField(TrimmedNonEmptyStringFieldSchema, input.accountId),
