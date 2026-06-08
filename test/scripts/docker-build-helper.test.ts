@@ -2339,7 +2339,16 @@ docker_e2e_docker_cmd() {
 
 sleep() {
   SECONDS=$((SECONDS + \${1%%.*}))
-  command sleep 0.01
+}
+
+kill_checks=0
+kill() {
+  if [[ "\${1:-}" == "-0" && "\${2:-}" == "sampled-docker-pid" ]]; then
+    kill_checks=$((kill_checks + 1))
+    [[ "$kill_checks" -le 6 ]]
+    return
+  fi
+  command kill "$@"
 }
 
 stats_log="$TMPDIR/stats.log"
@@ -2347,27 +2356,7 @@ run_log="$TMPDIR/run.log"
 sampler_log="$TMPDIR/sampler.log"
 printf "container output\\n" >"$run_log"
 
-(
-  command sleep 30
-) &
-docker_pid="$!"
-
-docker_e2e_sample_stats_until_exit demo "$docker_pid" "$stats_log" "$run_log" "Docker stats" 08 >"$sampler_log" 2>&1 &
-sampler_pid="$!"
-
-for _ in {1..200}; do
-  if grep -q "Docker stats still running (8s elapsed," "$sampler_log"; then
-    break
-  fi
-  if ! kill -0 "$sampler_pid" 2>/dev/null; then
-    break
-  fi
-  command sleep 0.01
-done
-
-kill "$docker_pid" 2>/dev/null || true
-wait "$docker_pid" 2>/dev/null || true
-wait "$sampler_pid"
+docker_e2e_sample_stats_until_exit demo sampled-docker-pid "$stats_log" "$run_log" "Docker stats" 08 >"$sampler_log" 2>&1
 output="$(cat "$sampler_log")"
 
 [[ "$output" = *"Docker stats still running (8s elapsed,"* ]]
