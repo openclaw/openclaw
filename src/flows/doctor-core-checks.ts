@@ -33,6 +33,7 @@ import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-ch
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
+const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 
 const loadDoctorCoreChecksRuntimeModule = async () =>
   await import("./doctor-core-checks.runtime.js");
@@ -650,6 +651,34 @@ const codexSessionRoutesCheck: HealthCheck = {
   },
 };
 
+const gatewayServicesExtraCheck: HealthCheck = {
+  id: GATEWAY_SERVICES_EXTRA_CHECK_ID,
+  kind: "core",
+  description: "Extra gateway-like services are represented as structured findings.",
+  source: "doctor",
+  async detect() {
+    const { detectExtraGatewayServiceIssues, extraGatewayServiceToHealthFinding } =
+      await import("../commands/doctor-gateway-services.js");
+    return (await detectExtraGatewayServiceIssues()).map(extraGatewayServiceToHealthFinding);
+  },
+  async repair(ctx) {
+    const { detectExtraGatewayServiceIssues, extraGatewayServiceToRepairEffects } =
+      await import("../commands/doctor-gateway-services.js");
+    const effects = (await detectExtraGatewayServiceIssues()).flatMap(
+      extraGatewayServiceToRepairEffects,
+    );
+    if (ctx.dryRun === true) {
+      return { status: "repaired", changes: [], effects };
+    }
+    return {
+      status: "skipped",
+      reason: "legacy doctor gateway service contribution owns cleanup",
+      changes: [],
+      effects,
+    };
+  },
+};
+
 const gatewayPlatformNotesCheck: HealthCheck = {
   id: "core/doctor/gateway-services/platform-notes",
   kind: "core",
@@ -950,6 +979,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
     codexSessionRoutesCheck,
     shellCompletionCheck,
     uiProtocolFreshnessCheck,
+    gatewayServicesExtraCheck,
     gatewayPlatformNotesCheck,
     createSecurityCheck(deps),
     browserCheck,
@@ -964,6 +994,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
 
 let registered = false;
 
+/** @deprecated Core doctor flows use ordered doctor contributions; keep this only for SDK compatibility. */
 export function registerCoreHealthChecks(): void {
   if (registered) {
     return;
