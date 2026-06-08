@@ -54,6 +54,7 @@ function normalizeMockProviderId(providerId?: string): string {
 
 type SessionManagerMocks = {
   getLeafEntry: UnknownMock;
+  getEntry: UnknownMock;
   branch: UnknownMock;
   resetLeaf: UnknownMock;
   buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
@@ -209,6 +210,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const embeddedSystemPromptInputs: unknown[] = [];
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
+    getEntry: vi.fn(() => undefined),
     branch: vi.fn(),
     resetLeaf: vi.fn(),
     buildSessionContext: vi.fn<() => { messages: AgentMessage[] }>(() => ({ messages: [] })),
@@ -1050,6 +1052,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.systemPromptTexts.length = 0;
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
+  hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();
   hoisted.sessionManager.buildSessionContext
