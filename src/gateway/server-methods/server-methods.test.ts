@@ -19,6 +19,11 @@ import {
   resolveContextEngine,
 } from "../../context-engine/registry.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import {
+  emitDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+} from "../../infra/diagnostic-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
   buildSystemRunApprovalBinding,
@@ -26,18 +31,23 @@ import {
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import {
-  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  augmentChatHistoryWithCanvasBlocks,
-  dropPreSessionStartAnnouncePairs,
-  projectRecentChatDisplayMessages,
-  resolveEffectiveChatHistoryMaxChars,
-  sanitizeChatHistoryMessages,
-} from "../chat-display-projection.js";
-import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
+  resetDiagnosticStabilityRecorderForTest,
+  startDiagnosticStabilityRecorder,
+  stopDiagnosticStabilityRecorder,
+} from "../../logging/diagnostic-stability.js";
+import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
+import {
+  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  augmentChatHistoryWithCanvasBlocks,
+  dropPreSessionStartAnnouncePairs,
+  resolveEffectiveChatHistoryMaxChars,
+  sanitizeChatHistoryMessages,
+  sanitizeChatSendMessageInput,
+} from "./chat.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import { logsHandlers } from "./logs.js";
 
@@ -3590,6 +3600,8 @@ describe("gateway healthHandlers.health cache freshness", () => {
 
   beforeEach(() => {
     pricingState.clearGatewayModelPricingCacheState();
+    resetDiagnosticStabilityRecorderForTest();
+    resetDiagnosticEventsForTest();
     registerLegacyContextEngine();
     clearContextEnginesForOwner(contextEngineTestOwner);
     clearContextEngineRuntimeQuarantine();
@@ -3597,6 +3609,9 @@ describe("gateway healthHandlers.health cache freshness", () => {
 
   afterEach(() => {
     pricingState.clearGatewayModelPricingCacheState();
+    stopDiagnosticStabilityRecorder();
+    resetDiagnosticStabilityRecorderForTest();
+    resetDiagnosticEventsForTest();
     clearContextEnginesForOwner(contextEngineTestOwner);
     clearContextEngineRuntimeQuarantine();
   });
@@ -3795,6 +3810,85 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(payload?.modelPricing?.sources?.[0]?.source).toBe("openrouter");
     expect(payload?.modelPricing?.sources?.[0]?.state).toBe("degraded");
     expect(payload?.modelPricing?.sources?.[0]?.lastFailureAt).toBe(123);
+    expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+  });
+
+  it("merges live control-lane state into cached health responses", async () => {
+    startDiagnosticStabilityRecorder();
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:default:message:cached-control-lane",
+      turnEventType: "delivery.failed",
+      status: "failed",
+      reason: "missing_visible_delivery",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      controlLane: {
+        status: "ok",
+        reasons: [],
+        deliveryRequired: 0,
+        deliverySent: 0,
+        deliveryFailed: 0,
+        missingVisibleDelivery: 0,
+        slowIngress: 0,
+        slowQueue: 0,
+        slowVisibleDelivery: 0,
+        slowPreDeliveryTools: 0,
+        blockedSessions: 0,
+        stuckSessions: 0,
+        guidance: "stale cached control lane",
+      },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    const payload = mockCallArg(respond, 0, 1) as
+      | {
+          controlLane?: {
+            status?: string;
+            reasons?: string[];
+            deliveryFailed?: number;
+            missingVisibleDelivery?: number;
+          };
+        }
+      | undefined;
+    expect(payload?.controlLane).toMatchObject({
+      status: "degraded",
+      reasons: ["missing_visible_delivery"],
+      deliveryFailed: 1,
+      missingVisibleDelivery: 1,
+    });
     expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,

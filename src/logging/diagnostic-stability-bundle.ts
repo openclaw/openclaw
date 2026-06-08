@@ -330,6 +330,23 @@ function assignOptionalNumber(target: object, key: string, value: unknown, label
   }
 }
 
+function readOptionalBoolean(value: unknown, label: string): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "boolean") {
+    throw new Error(`Invalid stability bundle: ${label} must be a boolean`);
+  }
+  return value;
+}
+
+function assignOptionalBoolean(target: object, key: string, value: unknown, label: string): void {
+  const parsed = readOptionalBoolean(value, label);
+  if (parsed !== undefined) {
+    (target as Record<string, unknown>)[key] = parsed;
+  }
+}
+
 function assignOptionalPositiveInteger(
   target: object,
   key: string,
@@ -673,6 +690,873 @@ function readOptionalPayloadLargeSummary(
   };
 }
 
+function readOptionalLatencyMetric(
+  value: unknown,
+  label: string,
+): NonNullable<
+  NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["latency"]
+>["messageAgeMs"] {
+  if (value === undefined) {
+    return undefined;
+  }
+  const metric = readObject(value, label);
+  return {
+    count: readNumber(metric.count, `${label}.count`),
+    slowCount:
+      metric.slowCount === undefined ? 0 : readNumber(metric.slowCount, `${label}.slowCount`),
+    ...(metric.latestMs !== undefined
+      ? { latestMs: readNumber(metric.latestMs, `${label}.latestMs`) }
+      : {}),
+    ...(metric.maxMs !== undefined ? { maxMs: readNumber(metric.maxMs, `${label}.maxMs`) } : {}),
+    ...(metric.p50Ms !== undefined ? { p50Ms: readNumber(metric.p50Ms, `${label}.p50Ms`) } : {}),
+    ...(metric.p90Ms !== undefined ? { p90Ms: readNumber(metric.p90Ms, `${label}.p90Ms`) } : {}),
+    ...(metric.p95Ms !== undefined ? { p95Ms: readNumber(metric.p95Ms, `${label}.p95Ms`) } : {}),
+  };
+}
+
+function readOptionalChannelTurnLatencyBottleneck(
+  value: unknown,
+): NonNullable<
+  NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["latency"]
+>["bottleneck"] {
+  if (value === undefined) {
+    return undefined;
+  }
+  type ChannelTurnLatencyBottleneck = NonNullable<
+    NonNullable<
+      NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["latency"]
+    >["bottleneck"]
+  >;
+  const bottleneck = readObject(value, "snapshot.summary.channelTurns.latency.bottleneck");
+  const phase = readCodeString(
+    bottleneck.phase,
+    "snapshot.summary.channelTurns.latency.bottleneck.phase",
+  ) as ChannelTurnLatencyBottleneck["phase"];
+  if (!["ingress", "queue", "visible_delivery", "completion"].includes(phase)) {
+    throw new Error(
+      "Invalid stability bundle: snapshot.summary.channelTurns.latency.bottleneck.phase",
+    );
+  }
+  const metric = readCodeString(
+    bottleneck.metric,
+    "snapshot.summary.channelTurns.latency.bottleneck.metric",
+  ) as ChannelTurnLatencyBottleneck["metric"];
+  if (
+    !["messageAgeMs", "receivedToTurnStartMs", "startToDeliveryMs", "startToCompletionMs"].includes(
+      metric,
+    )
+  ) {
+    throw new Error(
+      "Invalid stability bundle: snapshot.summary.channelTurns.latency.bottleneck.metric",
+    );
+  }
+  return {
+    phase,
+    metric,
+    maxMs: readNumber(bottleneck.maxMs, "snapshot.summary.channelTurns.latency.bottleneck.maxMs"),
+    slowCount: readNumber(
+      bottleneck.slowCount,
+      "snapshot.summary.channelTurns.latency.bottleneck.slowCount",
+    ),
+    count: readNumber(bottleneck.count, "snapshot.summary.channelTurns.latency.bottleneck.count"),
+  };
+}
+
+function readOptionalChannelTurnLatencySummary(
+  value: unknown,
+): NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["latency"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const latency = readObject(value, "snapshot.summary.channelTurns.latency");
+  const recentSlowValue = latency.recentSlow;
+  const recentSlow = Array.isArray(recentSlowValue)
+    ? recentSlowValue.map((entry, index) => {
+        const slow = readObject(
+          entry,
+          `snapshot.summary.channelTurns.latency.recentSlow[${index}]`,
+        );
+        const parsed: NonNullable<
+          NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["latency"]
+        >["recentSlow"][number] = {
+          seq: readNumber(
+            slow.seq,
+            `snapshot.summary.channelTurns.latency.recentSlow[${index}].seq`,
+          ),
+          ts: readTimestampMs(
+            slow.ts,
+            `snapshot.summary.channelTurns.latency.recentSlow[${index}].ts`,
+          ),
+          metric: readCodeString(
+            slow.metric,
+            `snapshot.summary.channelTurns.latency.recentSlow[${index}].metric`,
+          ),
+          valueMs: readNumber(
+            slow.valueMs,
+            `snapshot.summary.channelTurns.latency.recentSlow[${index}].valueMs`,
+          ),
+        };
+        if (slow.channel !== undefined) {
+          parsed.channel = readOptionalCodeString(
+            slow.channel,
+            `snapshot.summary.channelTurns.latency.recentSlow[${index}].channel`,
+          );
+        }
+        if (slow.turnId !== undefined) {
+          parsed.turnId = readOptionalCodeString(
+            slow.turnId,
+            `snapshot.summary.channelTurns.latency.recentSlow[${index}].turnId`,
+          );
+        }
+        if (slow.messageId !== undefined) {
+          parsed.messageId = readOptionalCodeString(
+            slow.messageId,
+            `snapshot.summary.channelTurns.latency.recentSlow[${index}].messageId`,
+          );
+        }
+        return parsed;
+      })
+    : [];
+  return {
+    ...(latency.messageAgeMs !== undefined
+      ? {
+          messageAgeMs: readOptionalLatencyMetric(
+            latency.messageAgeMs,
+            "snapshot.summary.channelTurns.latency.messageAgeMs",
+          ),
+        }
+      : {}),
+    ...(latency.receivedToTurnStartMs !== undefined
+      ? {
+          receivedToTurnStartMs: readOptionalLatencyMetric(
+            latency.receivedToTurnStartMs,
+            "snapshot.summary.channelTurns.latency.receivedToTurnStartMs",
+          ),
+        }
+      : {}),
+    ...(latency.startToDeliveryMs !== undefined
+      ? {
+          startToDeliveryMs: readOptionalLatencyMetric(
+            latency.startToDeliveryMs,
+            "snapshot.summary.channelTurns.latency.startToDeliveryMs",
+          ),
+        }
+      : {}),
+    ...(latency.startToCompletionMs !== undefined
+      ? {
+          startToCompletionMs: readOptionalLatencyMetric(
+            latency.startToCompletionMs,
+            "snapshot.summary.channelTurns.latency.startToCompletionMs",
+          ),
+        }
+      : {}),
+    ...(latency.bottleneck !== undefined
+      ? { bottleneck: readOptionalChannelTurnLatencyBottleneck(latency.bottleneck) }
+      : {}),
+    recentSlow,
+  };
+}
+
+function readChannelTurnHealth(
+  value: unknown,
+): NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["health"] {
+  const health = readObject(value, "snapshot.summary.channelTurns.health");
+  const status = readCodeString(
+    health.status,
+    "snapshot.summary.channelTurns.health.status",
+  ) as NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["health"]["status"];
+  if (status !== "ok" && status !== "warning" && status !== "degraded") {
+    throw new Error("Invalid stability bundle: snapshot.summary.channelTurns.health.status");
+  }
+  const issuesValue = health.issues;
+  if (!Array.isArray(issuesValue)) {
+    throw new Error(
+      "Invalid stability bundle: snapshot.summary.channelTurns.health.issues must be an array",
+    );
+  }
+  return {
+    status,
+    issues: issuesValue.map((entry, index) => {
+      const issue = readObject(entry, `snapshot.summary.channelTurns.health.issues[${index}]`);
+      const level = readCodeString(
+        issue.level,
+        `snapshot.summary.channelTurns.health.issues[${index}].level`,
+      );
+      if (level !== "warning" && level !== "degraded") {
+        throw new Error(
+          `Invalid stability bundle: snapshot.summary.channelTurns.health.issues[${index}].level`,
+        );
+      }
+      const parsed: NonNullable<
+        DiagnosticStabilitySnapshot["summary"]["channelTurns"]
+      >["health"]["issues"][number] = {
+        code: readCodeString(
+          issue.code,
+          `snapshot.summary.channelTurns.health.issues[${index}].code`,
+        ) as NonNullable<
+          DiagnosticStabilitySnapshot["summary"]["channelTurns"]
+        >["health"]["issues"][number]["code"],
+        level,
+        message: redactSensitiveText(
+          readString(
+            issue.message,
+            `snapshot.summary.channelTurns.health.issues[${index}].message`,
+          ),
+        ),
+        guidance: redactSensitiveText(
+          readString(
+            issue.guidance,
+            `snapshot.summary.channelTurns.health.issues[${index}].guidance`,
+          ),
+        ),
+      };
+      if (issue.metric !== undefined) {
+        parsed.metric = readCodeString(
+          issue.metric,
+          `snapshot.summary.channelTurns.health.issues[${index}].metric`,
+        );
+      }
+      if (issue.valueMs !== undefined) {
+        parsed.valueMs = readNumber(
+          issue.valueMs,
+          `snapshot.summary.channelTurns.health.issues[${index}].valueMs`,
+        );
+      }
+      if (issue.count !== undefined) {
+        parsed.count = readNumber(
+          issue.count,
+          `snapshot.summary.channelTurns.health.issues[${index}].count`,
+        );
+      }
+      return parsed;
+    }),
+  };
+}
+
+function readOptionalChannelTurnToolSummary(
+  value: unknown,
+): NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["tools"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const tools = readObject(value, "snapshot.summary.channelTurns.tools");
+  const byToolRaw = readObject(tools.byTool, "snapshot.summary.channelTurns.tools.byTool");
+  const byTool: NonNullable<
+    NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["tools"]
+  >["byTool"] = {};
+  for (const [toolName, entry] of Object.entries(byToolRaw)) {
+    if (!SAFE_REASON_CODE.test(toolName)) {
+      continue;
+    }
+    const counts = readObject(entry, `snapshot.summary.channelTurns.tools.byTool.${toolName}`);
+    byTool[toolName] = {
+      called: readNumber(
+        counts.called,
+        `snapshot.summary.channelTurns.tools.byTool.${toolName}.called`,
+      ),
+      results: readNumber(
+        counts.results,
+        `snapshot.summary.channelTurns.tools.byTool.${toolName}.results`,
+      ),
+      failedResults: readNumber(
+        counts.failedResults,
+        `snapshot.summary.channelTurns.tools.byTool.${toolName}.failedResults`,
+      ),
+      missingResults: readNumber(
+        counts.missingResults,
+        `snapshot.summary.channelTurns.tools.byTool.${toolName}.missingResults`,
+      ),
+      slowResults: readNumber(
+        counts.slowResults,
+        `snapshot.summary.channelTurns.tools.byTool.${toolName}.slowResults`,
+      ),
+      preDeliveryCalls:
+        counts.preDeliveryCalls === undefined
+          ? 0
+          : readNumber(
+              counts.preDeliveryCalls,
+              `snapshot.summary.channelTurns.tools.byTool.${toolName}.preDeliveryCalls`,
+            ),
+      slowPreDeliveryResults:
+        counts.slowPreDeliveryResults === undefined
+          ? 0
+          : readNumber(
+              counts.slowPreDeliveryResults,
+              `snapshot.summary.channelTurns.tools.byTool.${toolName}.slowPreDeliveryResults`,
+            ),
+      ...(counts.maxDurationMs !== undefined
+        ? {
+            maxDurationMs: readNumber(
+              counts.maxDurationMs,
+              `snapshot.summary.channelTurns.tools.byTool.${toolName}.maxDurationMs`,
+            ),
+          }
+        : {}),
+    };
+  }
+  const readRecent = (raw: unknown, label: string) =>
+    Array.isArray(raw)
+      ? raw.map((entry, index) => {
+          const item = readObject(entry, `${label}[${index}]`);
+          return {
+            seq: readNumber(item.seq, `${label}[${index}].seq`),
+            ts: readTimestampMs(item.ts, `${label}[${index}].ts`),
+            ...(item.channel !== undefined
+              ? { channel: readOptionalCodeString(item.channel, `${label}[${index}].channel`) }
+              : {}),
+            ...(item.turnId !== undefined
+              ? { turnId: readOptionalCodeString(item.turnId, `${label}[${index}].turnId`) }
+              : {}),
+            ...(item.toolName !== undefined
+              ? { toolName: readOptionalCodeString(item.toolName, `${label}[${index}].toolName`) }
+              : {}),
+            ...(item.reason !== undefined
+              ? { reason: readOptionalCodeString(item.reason, `${label}[${index}].reason`) }
+              : {}),
+            ...(item.durationMs !== undefined
+              ? { durationMs: readNumber(item.durationMs, `${label}[${index}].durationMs`) }
+              : {}),
+          };
+        })
+      : [];
+  return {
+    called: readNumber(tools.called, "snapshot.summary.channelTurns.tools.called"),
+    results: readNumber(tools.results, "snapshot.summary.channelTurns.tools.results"),
+    failedResults: readNumber(
+      tools.failedResults,
+      "snapshot.summary.channelTurns.tools.failedResults",
+    ),
+    missingResults: readNumber(
+      tools.missingResults,
+      "snapshot.summary.channelTurns.tools.missingResults",
+    ),
+    slowResults: readNumber(tools.slowResults, "snapshot.summary.channelTurns.tools.slowResults"),
+    preDeliveryCalls:
+      tools.preDeliveryCalls === undefined
+        ? 0
+        : readNumber(
+            tools.preDeliveryCalls,
+            "snapshot.summary.channelTurns.tools.preDeliveryCalls",
+          ),
+    slowPreDeliveryResults:
+      tools.slowPreDeliveryResults === undefined
+        ? 0
+        : readNumber(
+            tools.slowPreDeliveryResults,
+            "snapshot.summary.channelTurns.tools.slowPreDeliveryResults",
+          ),
+    byTool,
+    recentSlow: readRecent(
+      tools.recentSlow,
+      "snapshot.summary.channelTurns.tools.recentSlow",
+    ) as NonNullable<
+      NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["tools"]
+    >["recentSlow"],
+    recentFailures: readRecent(
+      tools.recentFailures,
+      "snapshot.summary.channelTurns.tools.recentFailures",
+    ) as NonNullable<
+      NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["tools"]
+    >["recentFailures"],
+    recentPreDeliverySlow: readRecent(
+      tools.recentPreDeliverySlow,
+      "snapshot.summary.channelTurns.tools.recentPreDeliverySlow",
+    ) as NonNullable<
+      NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["tools"]
+    >["recentPreDeliverySlow"],
+  };
+}
+
+function readOptionalChannelTurnsSummary(
+  value: unknown,
+): DiagnosticStabilitySnapshot["summary"]["channelTurns"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const channelTurns = readObject(value, "snapshot.summary.channelTurns");
+  const byChannelRaw = readObject(
+    channelTurns.byChannel,
+    "snapshot.summary.channelTurns.byChannel",
+  );
+  const byChannel: NonNullable<
+    DiagnosticStabilitySnapshot["summary"]["channelTurns"]
+  >["byChannel"] = {};
+  for (const [channel, entry] of Object.entries(byChannelRaw)) {
+    if (!SAFE_REASON_CODE.test(channel)) {
+      continue;
+    }
+    const counts = readObject(entry, `snapshot.summary.channelTurns.byChannel.${channel}`);
+    byChannel[channel] = {
+      deliveryRequired: readNumber(
+        counts.deliveryRequired,
+        `snapshot.summary.channelTurns.byChannel.${channel}.deliveryRequired`,
+      ),
+      deliverySent: readNumber(
+        counts.deliverySent,
+        `snapshot.summary.channelTurns.byChannel.${channel}.deliverySent`,
+      ),
+      deliveryFailed: readNumber(
+        counts.deliveryFailed,
+        `snapshot.summary.channelTurns.byChannel.${channel}.deliveryFailed`,
+      ),
+      invalidCompletions: readNumber(
+        counts.invalidCompletions,
+        `snapshot.summary.channelTurns.byChannel.${channel}.invalidCompletions`,
+      ),
+      missingVisibleDelivery: readNumber(
+        counts.missingVisibleDelivery,
+        `snapshot.summary.channelTurns.byChannel.${channel}.missingVisibleDelivery`,
+      ),
+    };
+  }
+  const recentFailuresRaw = channelTurns.recentFailures;
+  const recentFailures = Array.isArray(recentFailuresRaw)
+    ? recentFailuresRaw.map((entry, index) => {
+        const failure = readObject(entry, `snapshot.summary.channelTurns.recentFailures[${index}]`);
+        const parsed: NonNullable<
+          DiagnosticStabilitySnapshot["summary"]["channelTurns"]
+        >["recentFailures"][number] = {
+          seq: readNumber(
+            failure.seq,
+            `snapshot.summary.channelTurns.recentFailures[${index}].seq`,
+          ),
+          ts: readTimestampMs(
+            failure.ts,
+            `snapshot.summary.channelTurns.recentFailures[${index}].ts`,
+          ),
+        };
+        if (failure.channel !== undefined) {
+          parsed.channel = readOptionalCodeString(
+            failure.channel,
+            `snapshot.summary.channelTurns.recentFailures[${index}].channel`,
+          );
+        }
+        if (failure.turnId !== undefined) {
+          parsed.turnId = readOptionalCodeString(
+            failure.turnId,
+            `snapshot.summary.channelTurns.recentFailures[${index}].turnId`,
+          );
+        }
+        if (failure.sessionKey !== undefined) {
+          parsed.sessionKey = readOptionalCodeString(
+            failure.sessionKey,
+            `snapshot.summary.channelTurns.recentFailures[${index}].sessionKey`,
+          );
+        }
+        if (failure.messageId !== undefined) {
+          parsed.messageId = readOptionalCodeString(
+            failure.messageId,
+            `snapshot.summary.channelTurns.recentFailures[${index}].messageId`,
+          );
+        }
+        if (failure.reason !== undefined) {
+          parsed.reason = readOptionalCodeString(
+            failure.reason,
+            `snapshot.summary.channelTurns.recentFailures[${index}].reason`,
+          );
+        }
+        return parsed;
+      })
+    : [];
+  return {
+    totalEvents: readNumber(channelTurns.totalEvents, "snapshot.summary.channelTurns.totalEvents"),
+    deliveryRequired: readNumber(
+      channelTurns.deliveryRequired,
+      "snapshot.summary.channelTurns.deliveryRequired",
+    ),
+    deliverySent: readNumber(
+      channelTurns.deliverySent,
+      "snapshot.summary.channelTurns.deliverySent",
+    ),
+    deliveryFailed: readNumber(
+      channelTurns.deliveryFailed,
+      "snapshot.summary.channelTurns.deliveryFailed",
+    ),
+    invalidCompletions: readNumber(
+      channelTurns.invalidCompletions,
+      "snapshot.summary.channelTurns.invalidCompletions",
+    ),
+    missingVisibleDelivery: readNumber(
+      channelTurns.missingVisibleDelivery,
+      "snapshot.summary.channelTurns.missingVisibleDelivery",
+    ),
+    byChannel,
+    recentFailures,
+    ...(channelTurns.latency !== undefined
+      ? { latency: readOptionalChannelTurnLatencySummary(channelTurns.latency) }
+      : {}),
+    ...(channelTurns.tools !== undefined
+      ? { tools: readOptionalChannelTurnToolSummary(channelTurns.tools) }
+      : {}),
+    health:
+      channelTurns.health === undefined
+        ? { status: "ok", issues: [] }
+        : readChannelTurnHealth(channelTurns.health),
+  };
+}
+
+function readOptionalSessionAttentionSummary(
+  value: unknown,
+): DiagnosticStabilitySnapshot["summary"]["sessions"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const sessions = readObject(value, "snapshot.summary.sessions");
+  const attention = readObject(sessions.attention, "snapshot.summary.sessions.attention");
+  const recentRaw = attention.recent;
+  const recent = Array.isArray(recentRaw)
+    ? recentRaw.map((entry, index) => {
+        const item = readObject(entry, `snapshot.summary.sessions.attention.recent[${index}]`);
+        const parsed: NonNullable<
+          DiagnosticStabilitySnapshot["summary"]["sessions"]
+        >["attention"]["recent"][number] = {
+          seq: readNumber(item.seq, `snapshot.summary.sessions.attention.recent[${index}].seq`),
+          ts: readTimestampMs(item.ts, `snapshot.summary.sessions.attention.recent[${index}].ts`),
+          type: readCodeString(
+            item.type,
+            `snapshot.summary.sessions.attention.recent[${index}].type`,
+          ),
+        };
+        if (item.sessionKey !== undefined) {
+          parsed.sessionKey = readOptionalCodeString(
+            item.sessionKey,
+            `snapshot.summary.sessions.attention.recent[${index}].sessionKey`,
+          );
+        }
+        if (item.state !== undefined) {
+          parsed.state = readOptionalCodeString(
+            item.state,
+            `snapshot.summary.sessions.attention.recent[${index}].state`,
+          );
+        }
+        if (item.reason !== undefined) {
+          parsed.reason = readOptionalCodeString(
+            item.reason,
+            `snapshot.summary.sessions.attention.recent[${index}].reason`,
+          );
+        }
+        if (item.classification !== undefined) {
+          parsed.classification = readOptionalCodeString(
+            item.classification,
+            `snapshot.summary.sessions.attention.recent[${index}].classification`,
+          );
+        }
+        if (item.activeWorkKind !== undefined) {
+          parsed.activeWorkKind = readOptionalCodeString(
+            item.activeWorkKind,
+            `snapshot.summary.sessions.attention.recent[${index}].activeWorkKind`,
+          );
+        }
+        if (item.toolName !== undefined) {
+          parsed.toolName = readOptionalCodeString(
+            item.toolName,
+            `snapshot.summary.sessions.attention.recent[${index}].toolName`,
+          );
+        }
+        if (item.ageMs !== undefined) {
+          parsed.ageMs = readNumber(
+            item.ageMs,
+            `snapshot.summary.sessions.attention.recent[${index}].ageMs`,
+          );
+        }
+        if (item.queueDepth !== undefined) {
+          parsed.queueDepth = readNumber(
+            item.queueDepth,
+            `snapshot.summary.sessions.attention.recent[${index}].queueDepth`,
+          );
+        }
+        return parsed;
+      })
+    : [];
+  return {
+    attention: {
+      longRunning: readNumber(
+        attention.longRunning,
+        "snapshot.summary.sessions.attention.longRunning",
+      ),
+      stalled: readNumber(attention.stalled, "snapshot.summary.sessions.attention.stalled"),
+      stuck: readNumber(attention.stuck, "snapshot.summary.sessions.attention.stuck"),
+      recoveryRequested: readNumber(
+        attention.recoveryRequested,
+        "snapshot.summary.sessions.attention.recoveryRequested",
+      ),
+      recoveryCompleted: readNumber(
+        attention.recoveryCompleted,
+        "snapshot.summary.sessions.attention.recoveryCompleted",
+      ),
+      byClassification: readNumberMap(
+        attention.byClassification,
+        "snapshot.summary.sessions.attention.byClassification",
+      ),
+      byActiveWorkKind: readNumberMap(
+        attention.byActiveWorkKind,
+        "snapshot.summary.sessions.attention.byActiveWorkKind",
+      ),
+      recent,
+    },
+  };
+}
+
+function readOptionalQueueSummary(
+  value: unknown,
+): DiagnosticStabilitySnapshot["summary"]["queues"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const queues = readObject(value, "snapshot.summary.queues");
+  const byLaneRaw = readObject(queues.byLane, "snapshot.summary.queues.byLane");
+  const byLane: NonNullable<DiagnosticStabilitySnapshot["summary"]["queues"]>["byLane"] = {};
+  for (const [lane, entry] of Object.entries(byLaneRaw)) {
+    if (!SAFE_REASON_CODE.test(lane)) {
+      continue;
+    }
+    const laneSummary = readObject(entry, `snapshot.summary.queues.byLane.${lane}`);
+    byLane[lane] = {
+      enqueued: readNumber(laneSummary.enqueued, `snapshot.summary.queues.byLane.${lane}.enqueued`),
+      dequeued: readNumber(laneSummary.dequeued, `snapshot.summary.queues.byLane.${lane}.dequeued`),
+      slowDequeues: readNumber(
+        laneSummary.slowDequeues,
+        `snapshot.summary.queues.byLane.${lane}.slowDequeues`,
+      ),
+      ...(laneSummary.maxWaitMs !== undefined
+        ? {
+            maxWaitMs: readNumber(
+              laneSummary.maxWaitMs,
+              `snapshot.summary.queues.byLane.${lane}.maxWaitMs`,
+            ),
+          }
+        : {}),
+      ...(laneSummary.maxQueueSize !== undefined
+        ? {
+            maxQueueSize: readNumber(
+              laneSummary.maxQueueSize,
+              `snapshot.summary.queues.byLane.${lane}.maxQueueSize`,
+            ),
+          }
+        : {}),
+    };
+  }
+  const recentRaw = queues.recentSlow;
+  const recentSlow = Array.isArray(recentRaw)
+    ? recentRaw.map((entry, index) => {
+        const item = readObject(entry, `snapshot.summary.queues.recentSlow[${index}]`);
+        const parsed: NonNullable<
+          DiagnosticStabilitySnapshot["summary"]["queues"]
+        >["recentSlow"][number] = {
+          seq: readNumber(item.seq, `snapshot.summary.queues.recentSlow[${index}].seq`),
+          ts: readTimestampMs(item.ts, `snapshot.summary.queues.recentSlow[${index}].ts`),
+          lane: readCodeString(item.lane, `snapshot.summary.queues.recentSlow[${index}].lane`),
+          waitMs: readNumber(item.waitMs, `snapshot.summary.queues.recentSlow[${index}].waitMs`),
+        };
+        if (item.queueSize !== undefined) {
+          parsed.queueSize = readNumber(
+            item.queueSize,
+            `snapshot.summary.queues.recentSlow[${index}].queueSize`,
+          );
+        }
+        return parsed;
+      })
+    : [];
+  return {
+    enqueued: readNumber(queues.enqueued, "snapshot.summary.queues.enqueued"),
+    dequeued: readNumber(queues.dequeued, "snapshot.summary.queues.dequeued"),
+    slowDequeues: readNumber(queues.slowDequeues, "snapshot.summary.queues.slowDequeues"),
+    ...(queues.maxWaitMs !== undefined
+      ? { maxWaitMs: readNumber(queues.maxWaitMs, "snapshot.summary.queues.maxWaitMs") }
+      : {}),
+    ...(queues.maxQueueSize !== undefined
+      ? { maxQueueSize: readNumber(queues.maxQueueSize, "snapshot.summary.queues.maxQueueSize") }
+      : {}),
+    byLane,
+    recentSlow,
+  };
+}
+
+function readOptionalControlLaneHealth(
+  value: unknown,
+): DiagnosticStabilitySnapshot["summary"]["controlLane"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const health = readObject(value, "snapshot.summary.controlLane");
+  const status = readCodeString(
+    health.status,
+    "snapshot.summary.controlLane.status",
+  ) as NonNullable<DiagnosticStabilitySnapshot["summary"]["controlLane"]>["status"];
+  if (status !== "ok" && status !== "warning" && status !== "degraded") {
+    throw new Error("Invalid stability bundle: snapshot.summary.controlLane.status");
+  }
+  if (!Array.isArray(health.reasons)) {
+    throw new Error(
+      "Invalid stability bundle: snapshot.summary.controlLane.reasons must be an array",
+    );
+  }
+  const reasons = health.reasons.map((entry, index) => {
+    const reason = readCodeString(entry, `snapshot.summary.controlLane.reasons[${index}]`);
+    if (
+      reason !== "missing_visible_delivery" &&
+      reason !== "stale_ingress" &&
+      reason !== "queue_pressure" &&
+      reason !== "slow_visible_delivery" &&
+      reason !== "slow_pre_delivery_tool" &&
+      reason !== "blocked_tool_call" &&
+      reason !== "stale_session"
+    ) {
+      throw new Error(`Invalid stability bundle: snapshot.summary.controlLane.reasons[${index}]`);
+    }
+    return reason;
+  });
+  return {
+    status,
+    reasons,
+    deliveryRequired: readNumber(
+      health.deliveryRequired,
+      "snapshot.summary.controlLane.deliveryRequired",
+    ),
+    deliverySent: readNumber(health.deliverySent, "snapshot.summary.controlLane.deliverySent"),
+    deliveryFailed: readNumber(
+      health.deliveryFailed,
+      "snapshot.summary.controlLane.deliveryFailed",
+    ),
+    missingVisibleDelivery: readNumber(
+      health.missingVisibleDelivery,
+      "snapshot.summary.controlLane.missingVisibleDelivery",
+    ),
+    slowIngress: readNumber(health.slowIngress, "snapshot.summary.controlLane.slowIngress"),
+    slowQueue: readNumber(health.slowQueue, "snapshot.summary.controlLane.slowQueue"),
+    slowVisibleDelivery: readNumber(
+      health.slowVisibleDelivery,
+      "snapshot.summary.controlLane.slowVisibleDelivery",
+    ),
+    slowPreDeliveryTools: readNumber(
+      health.slowPreDeliveryTools,
+      "snapshot.summary.controlLane.slowPreDeliveryTools",
+    ),
+    blockedSessions: readNumber(
+      health.blockedSessions,
+      "snapshot.summary.controlLane.blockedSessions",
+    ),
+    stuckSessions: readNumber(health.stuckSessions, "snapshot.summary.controlLane.stuckSessions"),
+    ...(health.maxMessageAgeMs !== undefined
+      ? {
+          maxMessageAgeMs: readNumber(
+            health.maxMessageAgeMs,
+            "snapshot.summary.controlLane.maxMessageAgeMs",
+          ),
+        }
+      : {}),
+    ...(health.maxQueueWaitMs !== undefined
+      ? {
+          maxQueueWaitMs: readNumber(
+            health.maxQueueWaitMs,
+            "snapshot.summary.controlLane.maxQueueWaitMs",
+          ),
+        }
+      : {}),
+    ...(health.maxReceiveToStartMs !== undefined
+      ? {
+          maxReceiveToStartMs: readNumber(
+            health.maxReceiveToStartMs,
+            "snapshot.summary.controlLane.maxReceiveToStartMs",
+          ),
+        }
+      : {}),
+    ...(health.maxStartToDeliveryMs !== undefined
+      ? {
+          maxStartToDeliveryMs: readNumber(
+            health.maxStartToDeliveryMs,
+            "snapshot.summary.controlLane.maxStartToDeliveryMs",
+          ),
+        }
+      : {}),
+    guidance: readString(health.guidance, "snapshot.summary.controlLane.guidance"),
+  };
+}
+
+function readOptionalRecommendations(
+  value: unknown,
+): DiagnosticStabilitySnapshot["summary"]["recommendations"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("Invalid stability bundle: snapshot.summary.recommendations must be an array");
+  }
+  const recommendations = value.map((entry, index) => {
+    const recommendation = readObject(entry, `snapshot.summary.recommendations[${index}]`);
+    const code = readCodeString(
+      recommendation.code,
+      `snapshot.summary.recommendations[${index}].code`,
+    ) as NonNullable<DiagnosticStabilitySnapshot["summary"]["recommendations"]>[number]["code"];
+    if (
+      code !== "send_early_ack" &&
+      code !== "inspect_gateway_ingress" &&
+      code !== "clear_queue_pressure" &&
+      code !== "inspect_blocked_tool" &&
+      code !== "recover_stale_session" &&
+      code !== "inspect_missing_delivery"
+    ) {
+      throw new Error(`Invalid stability bundle: snapshot.summary.recommendations[${index}].code`);
+    }
+    const priority = readCodeString(
+      recommendation.priority,
+      `snapshot.summary.recommendations[${index}].priority`,
+    ) as NonNullable<DiagnosticStabilitySnapshot["summary"]["recommendations"]>[number]["priority"];
+    if (priority !== "high" && priority !== "medium" && priority !== "low") {
+      throw new Error(
+        `Invalid stability bundle: snapshot.summary.recommendations[${index}].priority`,
+      );
+    }
+    const source = readCodeString(
+      recommendation.source,
+      `snapshot.summary.recommendations[${index}].source`,
+    ) as NonNullable<DiagnosticStabilitySnapshot["summary"]["recommendations"]>[number]["source"];
+    if (source !== "channel_turns" && source !== "sessions" && source !== "queues") {
+      throw new Error(
+        `Invalid stability bundle: snapshot.summary.recommendations[${index}].source`,
+      );
+    }
+    return {
+      code,
+      priority,
+      source,
+      reason: readCodeString(
+        recommendation.reason,
+        `snapshot.summary.recommendations[${index}].reason`,
+      ),
+      ...(recommendation.count !== undefined
+        ? {
+            count: readNumber(
+              recommendation.count,
+              `snapshot.summary.recommendations[${index}].count`,
+            ),
+          }
+        : {}),
+      ...(recommendation.metric !== undefined
+        ? {
+            metric: readCodeString(
+              recommendation.metric,
+              `snapshot.summary.recommendations[${index}].metric`,
+            ),
+          }
+        : {}),
+      ...(recommendation.valueMs !== undefined
+        ? {
+            valueMs: readNumber(
+              recommendation.valueMs,
+              `snapshot.summary.recommendations[${index}].valueMs`,
+            ),
+          }
+        : {}),
+      guidance: readString(
+        recommendation.guidance,
+        `snapshot.summary.recommendations[${index}].guidance`,
+      ),
+    };
+  });
+  return recommendations.length > 0 ? recommendations : undefined;
+}
+
 function readStabilityEventRecord(
   value: unknown,
   label: string,
@@ -690,6 +1574,10 @@ function readStabilityEventRecord(
   assignOptionalCodeString(sanitized, "channel", record.channel, `${label}.channel`);
   assignOptionalCodeString(sanitized, "pluginId", record.pluginId, `${label}.pluginId`);
   assignOptionalCodeString(sanitized, "source", record.source, `${label}.source`);
+  assignOptionalCodeString(sanitized, "target", record.target, `${label}.target`);
+  assignOptionalCodeString(sanitized, "turnId", record.turnId, `${label}.turnId`);
+  assignOptionalCodeString(sanitized, "sessionKey", record.sessionKey, `${label}.sessionKey`);
+  assignOptionalCodeString(sanitized, "messageId", record.messageId, `${label}.messageId`);
   assignOptionalCodeString(sanitized, "surface", record.surface, `${label}.surface`);
   assignOptionalCodeString(sanitized, "action", record.action, `${label}.action`);
   assignOptionalCodeString(sanitized, "reason", record.reason, `${label}.reason`);
@@ -697,7 +1585,14 @@ function readStabilityEventRecord(
   assignOptionalCodeString(sanitized, "level", record.level, `${label}.level`);
   assignOptionalCodeString(sanitized, "phase", record.phase, `${label}.phase`);
   assignOptionalCodeString(sanitized, "detector", record.detector, `${label}.detector`);
+  assignOptionalCodeString(
+    sanitized,
+    "classification",
+    record.classification,
+    `${label}.classification`,
+  );
   assignOptionalCodeString(sanitized, "toolName", record.toolName, `${label}.toolName`);
+  assignOptionalCodeString(sanitized, "toolCallId", record.toolCallId, `${label}.toolCallId`);
   assignOptionalCodeString(
     sanitized,
     "activeWorkKind",
@@ -744,6 +1639,56 @@ function readStabilityEventRecord(
   assignOptionalNumber(sanitized, "queueSize", record.queueSize, `${label}.queueSize`);
   assignOptionalNumber(sanitized, "queueLength", record.queueLength, `${label}.queueLength`);
   assignOptionalNumber(sanitized, "waitMs", record.waitMs, `${label}.waitMs`);
+  assignOptionalNumber(
+    sanitized,
+    "nativeMessageTimestamp",
+    record.nativeMessageTimestamp,
+    `${label}.nativeMessageTimestamp`,
+  );
+  assignOptionalNumber(
+    sanitized,
+    "messageReceivedAt",
+    record.messageReceivedAt,
+    `${label}.messageReceivedAt`,
+  );
+  assignOptionalNumber(sanitized, "messageAgeMs", record.messageAgeMs, `${label}.messageAgeMs`);
+  assignOptionalNumber(
+    sanitized,
+    "receivedToTurnStartMs",
+    record.receivedToTurnStartMs,
+    `${label}.receivedToTurnStartMs`,
+  );
+  assignOptionalNumber(
+    sanitized,
+    "startToDeliveryMs",
+    record.startToDeliveryMs,
+    `${label}.startToDeliveryMs`,
+  );
+  assignOptionalNumber(
+    sanitized,
+    "startToCompletionMs",
+    record.startToCompletionMs,
+    `${label}.startToCompletionMs`,
+  );
+  assignOptionalBoolean(
+    sanitized,
+    "completionAllowed",
+    record.completionAllowed,
+    `${label}.completionAllowed`,
+  );
+  assignOptionalBoolean(
+    sanitized,
+    "visibleDeliveryRequired",
+    record.visibleDeliveryRequired,
+    `${label}.visibleDeliveryRequired`,
+  );
+  assignOptionalBoolean(
+    sanitized,
+    "visibleDeliverySent",
+    record.visibleDeliverySent,
+    `${label}.visibleDeliverySent`,
+  );
+  assignOptionalBoolean(sanitized, "isError", record.isError, `${label}.isError`);
   assignOptionalNumber(sanitized, "active", record.active, `${label}.active`);
   assignOptionalNumber(sanitized, "waiting", record.waiting, `${label}.waiting`);
   assignOptionalNumber(sanitized, "queued", record.queued, `${label}.queued`);
@@ -858,6 +1803,19 @@ function readStabilitySnapshot(value: unknown): DiagnosticStabilitySnapshot {
         : {}),
       ...(summary.payloadLarge !== undefined
         ? { payloadLarge: readOptionalPayloadLargeSummary(summary.payloadLarge) }
+        : {}),
+      ...(summary.channelTurns !== undefined
+        ? { channelTurns: readOptionalChannelTurnsSummary(summary.channelTurns) }
+        : {}),
+      ...(summary.sessions !== undefined
+        ? { sessions: readOptionalSessionAttentionSummary(summary.sessions) }
+        : {}),
+      ...(summary.queues !== undefined ? { queues: readOptionalQueueSummary(summary.queues) } : {}),
+      ...(summary.controlLane !== undefined
+        ? { controlLane: readOptionalControlLaneHealth(summary.controlLane) }
+        : {}),
+      ...(summary.recommendations !== undefined
+        ? { recommendations: readOptionalRecommendations(summary.recommendations) }
         : {}),
     },
   };

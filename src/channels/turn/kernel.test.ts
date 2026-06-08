@@ -10,6 +10,7 @@ import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
+  type DiagnosticChannelTurnEvent,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import {
@@ -28,6 +29,8 @@ import {
   dispatchAssembledChannelTurn,
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
+  InMemoryTurnEventStore,
+  materializeTurnState,
   resolveChannelTurnDispatchCounts,
   runPreparedChannelTurn,
   runChannelTurn,
@@ -143,12 +146,26 @@ type FinalizeResult = {
   admission?: unknown;
   dispatched?: boolean;
   routeSessionKey?: string;
+  turnState?: {
+    completionAllowed?: boolean;
+    currentState?: string;
+    errors?: string[];
+    visibleDeliveryRequired?: boolean;
+    visibleDeliverySent?: boolean;
+  };
 };
 
 type TurnLogEvent = {
   event?: string;
   messageId?: string;
   stage?: string;
+  turnState?: {
+    completionAllowed?: boolean;
+    currentState?: string;
+    errors?: string[];
+    visibleDeliveryRequired?: boolean;
+    visibleDeliverySent?: boolean;
+  };
 };
 
 function latestDurableSendRequest(): DurableSendRequest {
@@ -186,6 +203,7 @@ function loggedEvents(log: ReturnType<typeof vi.fn>): TurnLogEvent[] {
       stage: entry.stage,
       event: entry.event,
       ...(entry.messageId === undefined ? {} : { messageId: entry.messageId }),
+      ...(entry.turnState === undefined ? {} : { turnState: entry.turnState }),
     };
   });
 }
@@ -1282,7 +1300,585 @@ describe("channel turn kernel", () => {
     expect(finalizedResult.dispatched).toBe(true);
   });
 
+  it("marks telegram direct turns without visible delivery as invalid", async () => {
+    const log = vi.fn();
+    const onFinalize = vi.fn();
+    const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
+    const result = await runChannelTurn({
+      channel: "telegram",
+      raw: {},
+      log,
+      turnEvents,
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "hello" }),
+        resolveTurn: () => ({
+          channel: "telegram",
+          routeSessionKey: "agent:main:telegram:peer",
+          storePath: "/tmp/sessions.json",
+          ctxPayload: createCtx({
+            ChatType: "dm",
+            SessionKey: "agent:main:telegram:peer",
+            To: "sebastian",
+          }),
+          recordInboundSession: createRecordInboundSession(),
+          runDispatch: async () => ({
+            queuedFinal: false,
+            counts: { tool: 0, block: 0, final: 0 },
+          }),
+        }),
+        onFinalize,
+      },
+    });
+
+    expect(result.dispatched).toBe(true);
+    if (!result.dispatched) {
+      throw new Error("expected dispatch");
+    }
+    expect(result.turnState).toMatchObject({
+      currentState: "failed",
+      visibleDeliveryRequired: true,
+      visibleDeliverySent: false,
+      completionAllowed: false,
+    });
+    expect(result.turnState?.errors).toContain("missing_visible_delivery");
+    expect(onFinalize).toHaveBeenCalledTimes(1);
+    const [finalized] = requireFirstMockCall(onFinalize, "finalize");
+    expect(finalizeResult(finalized).turnState).toMatchObject({
+      currentState: "failed",
+      visibleDeliveryRequired: true,
+      visibleDeliverySent: false,
+      completionAllowed: false,
+    });
+    expect(finalizeResult(finalized).turnState?.errors).toContain("missing_visible_delivery");
+    expect(loggedEvents(log).at(-1)).toMatchObject({
+      stage: "finalize",
+      event: "done",
+      messageId: "msg-1",
+      turnState: {
+        visibleDeliveryRequired: true,
+        visibleDeliverySent: false,
+        completionAllowed: false,
+        errors: ["missing_visible_delivery"],
+      },
+    });
+    const events = turnEvents.list("telegram:message:msg-1");
+    expect(events.map((event) => event.type)).toEqual([
+      "message.received",
+      "turn.started",
+      "delivery.required",
+      "delivery.failed",
+      "turn.failed",
+    ]);
+    const state = materializeTurnState(events);
+    expect(state.visibleDeliveryRequired).toBe(true);
+    expect(state.visibleDeliverySent).toBe(false);
+    expect(state.completionAllowed).toBe(false);
+    expect(state.errors).toContain("missing_visible_delivery");
+  });
+
+  it("records payload-free channel turn latency timing", async () => {
+    let now = 1_800_000_100_000;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const turnEvents = new InMemoryTurnEventStore({ now: () => now });
+    try {
+      await runChannelTurn({
+        channel: "telegram",
+        raw: {},
+        turnEvents,
+        adapter: {
+          ingest: () => ({ id: "msg-1", rawText: "hello", timestamp: 1_800_000_070_000 }),
+          resolveTurn: () => {
+            now = 1_800_000_105_000;
+            return {
+              channel: "telegram",
+              routeSessionKey: "agent:main:telegram:peer",
+              storePath: "/tmp/sessions.json",
+              ctxPayload: createCtx({
+                ChatType: "direct",
+                SessionKey: "agent:main:telegram:peer",
+                To: "sebastian",
+              }),
+              recordInboundSession: createRecordInboundSession(),
+              runDispatch: async () => {
+                now = 1_800_000_106_000;
+                return {
+                  queuedFinal: true,
+                  counts: { tool: 0, block: 0, final: 1 },
+                };
+              },
+            };
+          },
+        },
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    const events = turnEvents.list("telegram:message:msg-1");
+    expect(events.find((event) => event.type === "message.received")?.metadata).toMatchObject({
+      nativeMessageTimestamp: 1_800_000_070_000,
+      messageReceivedAt: 1_800_000_100_000,
+      messageAgeMs: 30_000,
+    });
+    expect(events.find((event) => event.type === "turn.started")?.metadata).toMatchObject({
+      nativeMessageTimestamp: 1_800_000_070_000,
+      messageReceivedAt: 1_800_000_100_000,
+      receivedToTurnStartMs: 5_000,
+      messageAgeMs: 35_000,
+    });
+    expect(events.find((event) => event.type === "delivery.sent")?.metadata).toMatchObject({
+      startToDeliveryMs: 1_000,
+    });
+    expect(events.find((event) => event.type === "turn.completed")?.metadata).toMatchObject({
+      startToCompletionMs: 1_000,
+    });
+  });
+
+  it("blocks materialized turn completion when required delivery was not sent", () => {
+    const turnEvents = new InMemoryTurnEventStore({ now: () => 1, createId: () => "evt" });
+    turnEvents.append({
+      type: "message.received",
+      turnId: "telegram:message:msg-1",
+      actor: "user",
+      channel: "telegram",
+      status: "received",
+    });
+    turnEvents.append({
+      type: "turn.started",
+      turnId: "telegram:message:msg-1",
+      actor: "runtime",
+      channel: "telegram",
+      status: "started",
+    });
+    turnEvents.append({
+      type: "delivery.required",
+      turnId: "telegram:message:msg-1",
+      actor: "runtime",
+      channel: "telegram",
+      status: "required",
+    });
+
+    const state = materializeTurnState(turnEvents.list("telegram:message:msg-1"));
+
+    expect(state.visibleDeliveryRequired).toBe(true);
+    expect(state.visibleDeliverySent).toBe(false);
+    expect(state.completionAllowed).toBe(false);
+    expect(state.errors).toContain("missing_visible_delivery");
+  });
+
+  it("allows materialized turn completion after required delivery was sent", () => {
+    const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
+    turnEvents.append({
+      type: "delivery.required",
+      turnId: "telegram:message:msg-1",
+      actor: "runtime",
+      channel: "telegram",
+      status: "required",
+    });
+    turnEvents.append({
+      type: "delivery.sent",
+      turnId: "telegram:message:msg-1",
+      actor: "runtime",
+      channel: "telegram",
+      status: "sent",
+    });
+    turnEvents.append({
+      type: "turn.completed",
+      turnId: "telegram:message:msg-1",
+      actor: "runtime",
+      channel: "telegram",
+      status: "valid",
+    });
+
+    const state = materializeTurnState(turnEvents.list("telegram:message:msg-1"));
+
+    expect(state.currentState).toBe("completed");
+    expect(state.completionAllowed).toBe(true);
+    expect(state.errors).toEqual([]);
+  });
+
+  it("keeps delivery failures visible in materialized turn state", () => {
+    const state = materializeTurnState([
+      {
+        id: "evt-1",
+        type: "delivery.required",
+        timestamp: 1,
+        turnId: "telegram:message:msg-1",
+        actor: "runtime",
+        channel: "telegram",
+        status: "required",
+      },
+      {
+        id: "evt-2",
+        type: "delivery.failed",
+        timestamp: 2,
+        turnId: "telegram:message:msg-1",
+        actor: "runtime",
+        channel: "telegram",
+        status: "failed",
+        metadata: { reason: "missing_visible_delivery" },
+      },
+    ]);
+
+    expect(state.currentState).toBe("failed");
+    expect(state.completionAllowed).toBe(false);
+    expect(state.errors).toContain("missing_visible_delivery");
+  });
+
+  it("deduplicates materialized turn errors while preserving first-seen order", () => {
+    const state = materializeTurnState([
+      {
+        id: "evt-1",
+        type: "delivery.required",
+        timestamp: 1,
+        turnId: "telegram:message:msg-1",
+        actor: "runtime",
+        channel: "telegram",
+        status: "required",
+      },
+      {
+        id: "evt-2",
+        type: "delivery.failed",
+        timestamp: 2,
+        turnId: "telegram:message:msg-1",
+        actor: "runtime",
+        channel: "telegram",
+        status: "failed",
+        metadata: { reason: "missing_visible_delivery" },
+      },
+      {
+        id: "evt-3",
+        type: "turn.failed",
+        timestamp: 3,
+        turnId: "telegram:message:msg-1",
+        actor: "runtime",
+        channel: "telegram",
+        status: "invalid",
+        metadata: { reason: "missing_visible_delivery" },
+      },
+    ]);
+
+    expect(state.errors).toEqual(["missing_visible_delivery"]);
+  });
+
+  it("models tool call and result causality inside the same turn", () => {
+    const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
+    const called = turnEvents.append({
+      id: "tool-call-1",
+      type: "tool.called",
+      turnId: "telegram:message:msg-1",
+      actor: "agent",
+      channel: "telegram",
+      status: "started",
+      metadata: { tool: "message.send" },
+    });
+    const result = turnEvents.append({
+      type: "tool.result",
+      turnId: "telegram:message:msg-1",
+      parentId: called.id,
+      actor: "tool",
+      channel: "telegram",
+      status: "completed",
+      metadata: { tool: "message.send" },
+    });
+
+    expect(result.parentId).toBe("tool-call-1");
+    expect(turnEvents.list("telegram:message:msg-1").map((event) => event.type)).toEqual([
+      "tool.called",
+      "tool.result",
+    ]);
+  });
+
+  it("records runtime tool lifecycle events inside dispatched channel turns", async () => {
+    const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
+    await runChannelTurn({
+      channel: "telegram",
+      raw: {},
+      turnEvents,
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "run a tool" }),
+        resolveTurn: () => ({
+          cfg,
+          channel: "telegram",
+          agentId: "main",
+          routeSessionKey: "agent:main:telegram:peer",
+          storePath: "/tmp/sessions.json",
+          ctxPayload: createCtx({
+            ChatType: "direct",
+            SessionKey: "agent:main:telegram:peer",
+            To: "sebastian",
+          }),
+          recordInboundSession: createRecordInboundSession(),
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (params) => {
+            await params.replyOptions?.onToolLifecycleEvent?.({
+              phase: "start",
+              toolName: "exec",
+              toolCallId: "call-1",
+              runId: "run-1",
+              sessionKey: "agent:main:telegram:peer",
+              status: "started",
+            });
+            await params.replyOptions?.onToolLifecycleEvent?.({
+              phase: "end",
+              toolName: "exec",
+              toolCallId: "call-1",
+              runId: "run-1",
+              sessionKey: "agent:main:telegram:peer",
+              durationMs: 42,
+              isError: false,
+              status: "completed",
+            });
+            return {
+              queuedFinal: true,
+              counts: { tool: 0, block: 0, final: 1 },
+            };
+          }) as DispatchReplyWithBufferedBlockDispatcher,
+          delivery: createNoopChannelEventDeliveryAdapter(),
+        }),
+      },
+    });
+
+    const events = turnEvents.list("telegram:message:msg-1");
+    expect(events.map((event) => event.type)).toEqual([
+      "message.received",
+      "turn.started",
+      "delivery.required",
+      "tool.called",
+      "tool.result",
+      "delivery.sent",
+      "turn.completed",
+    ]);
+    const called = events.find((event) => event.type === "tool.called");
+    const result = events.find((event) => event.type === "tool.result");
+    expect(called).toMatchObject({
+      id: "turn-event:telegram:message:msg-1:tool:call-1:called",
+      actor: "agent",
+      runId: "run-1",
+      metadata: {
+        toolName: "exec",
+        toolCallId: "call-1",
+        phase: "start",
+        sessionKey: "agent:main:telegram:peer",
+      },
+    });
+    expect(result).toMatchObject({
+      actor: "tool",
+      parentId: "turn-event:telegram:message:msg-1:tool:call-1:called",
+      runId: "run-1",
+      metadata: {
+        toolName: "exec",
+        toolCallId: "call-1",
+        phase: "end",
+        durationMs: 42,
+        isError: false,
+      },
+    });
+  });
+
+  it("emits bounded diagnostic turn events without requiring a custom recorder", async () => {
+    const diagnostics: DiagnosticChannelTurnEvent[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "channel.turn.event") {
+        diagnostics.push(event);
+      }
+    });
+
+    try {
+      await runChannelTurn({
+        channel: "telegram",
+        accountId: "acct",
+        raw: {},
+        adapter: {
+          ingest: () => ({ id: "msg-1", rawText: "hello" }),
+          resolveTurn: () => ({
+            channel: "telegram",
+            accountId: "acct",
+            routeSessionKey: "agent:main:telegram:peer",
+            storePath: "/tmp/sessions.json",
+            ctxPayload: createCtx({
+              ChatType: "direct",
+              SessionKey: "agent:main:telegram:peer",
+              To: "sebastian",
+            }),
+            recordInboundSession: createRecordInboundSession(),
+            runDispatch: async () => ({
+              queuedFinal: false,
+              counts: { tool: 0, block: 0, final: 0 },
+            }),
+          }),
+        },
+      });
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(diagnostics.map((event) => event.turnEventType)).toEqual([
+      "message.received",
+      "turn.started",
+      "delivery.required",
+      "delivery.failed",
+      "turn.failed",
+    ]);
+    expect(diagnostics.at(-1)).toMatchObject({
+      type: "channel.turn.event",
+      channel: "telegram",
+      accountId: "acct",
+      turnId: "telegram:acct:message:msg-1",
+      turnEventType: "turn.failed",
+      reason: "missing_visible_delivery",
+      completionAllowed: false,
+      visibleDeliveryRequired: true,
+      visibleDeliverySent: false,
+    });
+  });
+
+  it("marks telegram direct turns with visible delivery as completed", async () => {
+    const log = vi.fn();
+    const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
+    const result = await runChannelTurn({
+      channel: "telegram",
+      raw: {},
+      log,
+      turnEvents,
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "hello" }),
+        resolveTurn: () => ({
+          channel: "telegram",
+          routeSessionKey: "agent:main:telegram:peer",
+          storePath: "/tmp/sessions.json",
+          ctxPayload: createCtx({
+            ChatType: "direct",
+            SessionKey: "agent:main:telegram:peer",
+            To: "sebastian",
+          }),
+          recordInboundSession: createRecordInboundSession(),
+          runDispatch: async () => ({
+            queuedFinal: true,
+            counts: { tool: 0, block: 0, final: 1 },
+          }),
+        }),
+      },
+    });
+
+    expect(result.dispatched).toBe(true);
+    if (!result.dispatched) {
+      throw new Error("expected dispatch");
+    }
+    expect(result.turnState).toMatchObject({
+      currentState: "completed",
+      visibleDeliveryRequired: true,
+      visibleDeliverySent: true,
+      completionAllowed: true,
+      errors: [],
+    });
+    const events = turnEvents.list("telegram:message:msg-1");
+    expect(events.map((event) => event.type)).toEqual([
+      "message.received",
+      "turn.started",
+      "delivery.required",
+      "delivery.sent",
+      "turn.completed",
+    ]);
+    const state = materializeTurnState(events);
+    expect(state.currentState).toBe("completed");
+    expect(state.visibleDeliverySent).toBe(true);
+    expect(state.completionAllowed).toBe(true);
+    const finalizeLog = loggedEvents(log).at(-1);
+    expect(finalizeLog).toMatchObject({
+      stage: "finalize",
+      event: "done",
+      messageId: "msg-1",
+      turnState: {
+        completionAllowed: true,
+        errors: [],
+      },
+    });
+    expect(finalizeLog).not.toHaveProperty("reason");
+  });
+
+  it("does not require direct-message delivery for telegram group turns", async () => {
+    const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
+    await runChannelTurn({
+      channel: "telegram",
+      raw: {},
+      turnEvents,
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "hello" }),
+        resolveTurn: () => ({
+          channel: "telegram",
+          routeSessionKey: "agent:main:telegram:group",
+          storePath: "/tmp/sessions.json",
+          ctxPayload: createCtx({
+            ChatType: "group",
+            SessionKey: "agent:main:telegram:group",
+          }),
+          recordInboundSession: createRecordInboundSession(),
+          runDispatch: async () => ({
+            queuedFinal: false,
+            counts: { tool: 0, block: 0, final: 0 },
+          }),
+        }),
+      },
+    });
+
+    const events = turnEvents.list("telegram:message:msg-1");
+    expect(events.map((event) => event.type)).toEqual([
+      "message.received",
+      "turn.started",
+      "turn.completed",
+    ]);
+    expect(materializeTurnState(events).completionAllowed).toBe(true);
+  });
+
+  it("includes turn state in finalize error logs", async () => {
+    const log = vi.fn();
+    const finalizeError = new Error("finalize failed");
+
+    await expect(
+      runChannelTurn({
+        channel: "telegram",
+        raw: {},
+        log,
+        adapter: {
+          ingest: () => ({ id: "msg-1", rawText: "hello" }),
+          resolveTurn: () => ({
+            channel: "telegram",
+            routeSessionKey: "agent:main:telegram:peer",
+            storePath: "/tmp/sessions.json",
+            ctxPayload: createCtx({
+              ChatType: "direct",
+              SessionKey: "agent:main:telegram:peer",
+              To: "sebastian",
+            }),
+            recordInboundSession: createRecordInboundSession(),
+            runDispatch: async () => ({
+              queuedFinal: true,
+              counts: { tool: 0, block: 0, final: 1 },
+            }),
+          }),
+          onFinalize: () => {
+            throw finalizeError;
+          },
+        },
+      }),
+    ).rejects.toThrow(finalizeError);
+
+    expect(loggedEvents(log).at(-1)).toMatchObject({
+      stage: "finalize",
+      event: "error",
+      messageId: "msg-1",
+      turnState: {
+        visibleDeliveryRequired: true,
+        visibleDeliverySent: true,
+        completionAllowed: true,
+        errors: [],
+      },
+    });
+  });
+
   it("finalizes failed dispatches before rethrowing", async () => {
+    const log = vi.fn();
     const onFinalize = vi.fn();
     const dispatchError = new Error("dispatch failed");
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => {
@@ -1293,6 +1889,7 @@ describe("channel turn kernel", () => {
       runChannelTurn({
         channel: "test",
         raw: {},
+        log,
         adapter: {
           ingest: () => ({ id: "msg-1", rawText: "hello" }),
           resolveTurn: () => ({
@@ -1320,5 +1917,18 @@ describe("channel turn kernel", () => {
     expect(finalizedResult.admission).toEqual({ kind: "dispatch" });
     expect(finalizedResult.dispatched).toBe(false);
     expect(finalizedResult.routeSessionKey).toBe("agent:main:test:peer");
+    const dispatchErrorLog = loggedEvents(log).find(
+      (event) => event.stage === "dispatch" && event.event === "error",
+    );
+    expect(dispatchErrorLog).toMatchObject({
+      stage: "dispatch",
+      event: "error",
+      messageId: "msg-1",
+      turnState: {
+        currentState: "failed",
+        completionAllowed: false,
+        errors: ["dispatch_error"],
+      },
+    });
   });
 });

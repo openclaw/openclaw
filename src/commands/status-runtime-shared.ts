@@ -4,6 +4,7 @@
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
+import type { DiagnosticStabilitySnapshot } from "../logging/diagnostic-stability.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { HealthSummary } from "./health.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
@@ -136,7 +137,7 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
     return null;
   }
   const { callGateway } = await loadGatewayCallModule();
-  return await callGateway<unknown>({
+  return await callGateway<DiagnosticStabilitySnapshot>({
     method: "diagnostics.stability",
     params: { limit: 1000 },
     timeoutMs: params.timeoutMs,
@@ -170,6 +171,7 @@ export async function resolveStatusServiceSummaries() {
 
 type StatusUsageSummary = Awaited<ReturnType<typeof resolveStatusUsageSummary>>;
 type StatusGatewayHealth = Awaited<ReturnType<typeof resolveStatusGatewayHealth>>;
+type StatusGatewayDiagnostics = Awaited<ReturnType<typeof resolveStatusGatewayDiagnosticsSafe>>;
 type StatusLastHeartbeat = Awaited<ReturnType<typeof resolveStatusLastHeartbeat>>;
 type StatusGatewayServiceSummary = Awaited<ReturnType<typeof getDaemonStatusSummary>>;
 type StatusNodeServiceSummary = Awaited<ReturnType<typeof getNodeDaemonStatusSummary>>;
@@ -188,6 +190,11 @@ export async function resolveStatusRuntimeDetails(params: {
     config: OpenClawConfig;
     timeoutMs?: number;
   }) => Promise<StatusGatewayHealth>;
+  resolveDiagnostics?: (input: {
+    config: OpenClawConfig;
+    timeoutMs?: number;
+    gatewayReachable: boolean;
+  }) => Promise<StatusGatewayDiagnostics>;
 }) {
   const resolveUsageSummary = params.resolveUsage ?? resolveStatusUsageSummary;
   const resolveGatewayHealthSummary = params.resolveHealth ?? resolveStatusGatewayHealth;
@@ -208,6 +215,13 @@ export async function resolveStatusRuntimeDetails(params: {
           timeoutMs: params.timeoutMs,
         })
     : undefined;
+  const gatewayDiagnostics = params.deep
+    ? await (params.resolveDiagnostics ?? resolveStatusGatewayDiagnosticsSafe)({
+        config: params.config,
+        timeoutMs: params.timeoutMs,
+        gatewayReachable: params.gatewayReachable,
+      })
+    : null;
   // Last heartbeat is a deep-only gateway call; fast status should not spend network time here.
   const lastHeartbeat = params.deep
     ? await resolveStatusLastHeartbeat({
@@ -220,6 +234,7 @@ export async function resolveStatusRuntimeDetails(params: {
   const result = {
     usage,
     health,
+    gatewayDiagnostics,
     lastHeartbeat,
     gatewayService,
     nodeService,
@@ -227,6 +242,7 @@ export async function resolveStatusRuntimeDetails(params: {
   return result satisfies {
     usage?: StatusUsageSummary;
     health?: StatusGatewayHealth;
+    gatewayDiagnostics: StatusGatewayDiagnostics;
     lastHeartbeat: StatusLastHeartbeat;
     gatewayService: StatusGatewayServiceSummary;
     nodeService: StatusNodeServiceSummary;
@@ -253,6 +269,11 @@ export async function resolveStatusRuntimeSnapshot(params: {
     config: OpenClawConfig;
     timeoutMs?: number;
   }) => Promise<StatusGatewayHealth>;
+  resolveDiagnostics?: (input: {
+    config: OpenClawConfig;
+    timeoutMs?: number;
+    gatewayReachable: boolean;
+  }) => Promise<StatusGatewayDiagnostics>;
 }) {
   const securityAudit = params.includeSecurityAudit
     ? await (params.resolveSecurityAudit ?? resolveStatusSecurityAudit)({
@@ -270,6 +291,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
     suppressHealthErrors: params.suppressHealthErrors,
     resolveUsage: params.resolveUsage,
     resolveHealth: params.resolveHealth,
+    resolveDiagnostics: params.resolveDiagnostics,
   });
   return {
     securityAudit,

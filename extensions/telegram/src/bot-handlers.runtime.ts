@@ -244,6 +244,35 @@ export const registerTelegramHandlers = ({
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
   const FORWARD_BURST_DEBOUNCE_MS = 80;
+  const resolveTelegramInboundPolicyChatType = (msg: Message): "direct" | "group" | "channel" => {
+    if (msg.chat.type === "private") {
+      return "direct";
+    }
+    if (msg.chat.type === "group" || msg.chat.type === "supergroup") {
+      return "group";
+    }
+    return "channel";
+  };
+  const shouldBypassInboundDebounceForPrivateControlDm = (params: {
+    msg: Message;
+    botUsername?: string;
+  }): boolean => {
+    if (params.msg.chat.type !== "private") {
+      return false;
+    }
+    const text = getTelegramTextParts(params.msg).text;
+    if (!text.trim()) {
+      return false;
+    }
+    // Media payloads are non-debounceable for attachment-safety reasons, but media alone is not a
+    // control-lane signal. Evaluate only the text here so ordinary captioned DMs keep their key.
+    return !shouldDebounceTextInbound({
+      text,
+      cfg,
+      chatType: "direct",
+      commandOptions: { botUsername: params.botUsername },
+    });
+  };
   type TelegramDebounceLane = "default" | "forward";
   type TelegramDebounceEntry = {
     ctx: TelegramContext;
@@ -490,6 +519,7 @@ export const registerTelegramHandlers = ({
       const hasDebounceableText = shouldDebounceTextInbound({
         text,
         cfg,
+        chatType: resolveTelegramInboundPolicyChatType(entry.msg),
         commandOptions: { botUsername: entry.botUsername },
       });
       if (entry.debounceLane === "forward") {
@@ -1943,7 +1973,14 @@ export const registerTelegramHandlers = ({
       allMedia,
       storeAllowFrom,
       receivedAtMs: Date.now(),
-      debounceKey: isAbortControlMessage ? null : debounceKey,
+      debounceKey:
+        isAbortControlMessage ||
+        shouldBypassInboundDebounceForPrivateControlDm({
+          msg,
+          botUsername,
+        })
+          ? null
+          : debounceKey,
       debounceLane,
       botUsername,
       ...promptContextBoundaryOptions(promptContextMinTimestampMs),

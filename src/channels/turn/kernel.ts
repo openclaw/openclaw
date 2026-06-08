@@ -1,23 +1,37 @@
 // Channel turn kernel for normalized inbound event dispatch, history, and delivery.
+import type { ToolLifecycleEvent } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryWithMedia,
 } from "../../auto-reply/reply/history.js";
+import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContextFromActiveScope,
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { normalizeChatType } from "../chat-type.js";
 import { toHistoryMediaEntries } from "../inbound-event/media.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
-import { EMPTY_CHANNEL_TURN_DISPATCH_COUNTS } from "./dispatch-result.js";
+import {
+  EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
+  hasVisibleChannelTurnDispatch,
+} from "./dispatch-result.js";
+import type { ChannelTurnDispatchResultLike } from "./dispatch-result.js";
 import {
   deliverInboundReplyWithMessageSendContext,
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
 } from "./durable-delivery.js";
+import {
+  materializeTurnState,
+  sanitizeTurnEvent,
+  sanitizeTurnEventMetadata,
+  validateTurnCompletion,
+} from "./turn-event-state.js";
+import type { AppendTurnEventInput, TurnEvent, TurnEventRecorder } from "./turn-event-state.js";
 export {
   buildChannelInboundEventContext,
   filterChannelInboundSupplementalContext,
@@ -46,6 +60,7 @@ import type {
   AssembledChannelTurn,
   ChannelEventClass,
   ChannelTurnAdmission,
+  ChannelTurnDispatchRuntimeContext,
   ChannelEventDeliveryAdapter,
   ChannelTurnHistoryFinalizeOptions,
   ChannelTurnLogEvent,
@@ -66,6 +81,18 @@ export {
   type ChannelTurnDispatchResultLike,
   type ChannelTurnVisibleDeliverySignals,
 } from "./dispatch-result.js";
+export {
+  InMemoryTurnEventStore,
+  materializeTurnState,
+  validateTurnCompletion,
+} from "./turn-event-state.js";
+export type {
+  AppendTurnEventInput,
+  TurnEvent,
+  TurnEventRecorder,
+  TurnState,
+  TurnStateStatus,
+} from "./turn-event-state.js";
 export type {
   AccessFacts,
   AssembledChannelTurn,
@@ -145,6 +172,229 @@ function emit(params: {
     accountId: params.accountId,
     ...params.event,
   });
+}
+
+function projectTurnStateLogFields(
+  turnState: ChannelTurnLogEvent["turnState"],
+): Pick<ChannelTurnLogEvent, "reason" | "turnState"> {
+  if (!turnState) {
+    return {};
+  }
+  const reason = turnState.errors[0];
+  return {
+    ...(reason ? { reason } : {}),
+    turnState,
+  };
+}
+
+function resolveTurnEventTurnId(params: {
+  accountId?: string;
+  channel: string;
+  messageId?: string;
+  routeSessionKey?: string;
+  sessionKey?: string;
+}): string {
+  const scope = params.accountId ? `${params.channel}:${params.accountId}` : params.channel;
+  if (params.messageId) {
+    return `${scope}:message:${params.messageId}`;
+  }
+  return `${scope}:session:${params.sessionKey ?? params.routeSessionKey ?? "unknown"}`;
+}
+
+function normalizeDiagnosticTimestamp(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  const normalized = value < 10_000_000_000 ? value * 1000 : value;
+  const now = Date.now();
+  if (normalized > now + 60_000) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function computePositiveDurationMs(
+  endMs: number | undefined,
+  startMs: number | undefined,
+): number | undefined {
+  if (
+    endMs === undefined ||
+    startMs === undefined ||
+    !Number.isFinite(endMs) ||
+    !Number.isFinite(startMs)
+  ) {
+    return undefined;
+  }
+  const duration = Math.round(endMs - startMs);
+  return duration >= 0 ? duration : undefined;
+}
+
+async function appendTurnEvent(params: {
+  accountId?: string;
+  event: AppendTurnEventInput;
+  events?: TurnEvent[];
+  recorder?: TurnEventRecorder;
+}): Promise<void> {
+  const safeEvent: AppendTurnEventInput = {
+    ...params.event,
+    metadata: sanitizeTurnEventMetadata(params.event.metadata),
+  };
+  const recorded = sanitizeTurnEvent(
+    params.recorder
+      ? await params.recorder.append(safeEvent)
+      : ({
+          id: safeEvent.id ?? `turn-event:${safeEvent.turnId}:${safeEvent.type}`,
+          timestamp: safeEvent.timestamp ?? Date.now(),
+          ...safeEvent,
+        } satisfies TurnEvent),
+  );
+  emitTrustedDiagnosticEvent({
+    type: "channel.turn.event",
+    channel: recorded.channel,
+    accountId: params.accountId,
+    turnId: recorded.turnId,
+    sessionKey:
+      typeof recorded.metadata?.sessionKey === "string" ? recorded.metadata.sessionKey : undefined,
+    messageId:
+      typeof recorded.metadata?.messageId === "string" ? recorded.metadata.messageId : undefined,
+    target: recorded.target,
+    turnEventType: recorded.type,
+    status: recorded.status,
+    reason: typeof recorded.metadata?.reason === "string" ? recorded.metadata.reason : undefined,
+    visibleDeliveryRequired:
+      typeof recorded.metadata?.visibleDeliveryRequired === "boolean"
+        ? recorded.metadata.visibleDeliveryRequired
+        : undefined,
+    visibleDeliverySent:
+      typeof recorded.metadata?.visibleDeliverySent === "boolean"
+        ? recorded.metadata.visibleDeliverySent
+        : undefined,
+    completionAllowed:
+      typeof recorded.metadata?.completionAllowed === "boolean"
+        ? recorded.metadata.completionAllowed
+        : undefined,
+    nativeMessageTimestamp:
+      typeof recorded.metadata?.nativeMessageTimestamp === "number"
+        ? recorded.metadata.nativeMessageTimestamp
+        : undefined,
+    messageReceivedAt:
+      typeof recorded.metadata?.messageReceivedAt === "number"
+        ? recorded.metadata.messageReceivedAt
+        : undefined,
+    messageAgeMs:
+      typeof recorded.metadata?.messageAgeMs === "number"
+        ? recorded.metadata.messageAgeMs
+        : undefined,
+    receivedToTurnStartMs:
+      typeof recorded.metadata?.receivedToTurnStartMs === "number"
+        ? recorded.metadata.receivedToTurnStartMs
+        : undefined,
+    startToDeliveryMs:
+      typeof recorded.metadata?.startToDeliveryMs === "number"
+        ? recorded.metadata.startToDeliveryMs
+        : undefined,
+    startToCompletionMs:
+      typeof recorded.metadata?.startToCompletionMs === "number"
+        ? recorded.metadata.startToCompletionMs
+        : undefined,
+    toolName:
+      typeof recorded.metadata?.toolName === "string" ? recorded.metadata.toolName : undefined,
+    toolCallId:
+      typeof recorded.metadata?.toolCallId === "string" ? recorded.metadata.toolCallId : undefined,
+    durationMs:
+      typeof recorded.metadata?.durationMs === "number" ? recorded.metadata.durationMs : undefined,
+    isError:
+      typeof recorded.metadata?.isError === "boolean" ? recorded.metadata.isError : undefined,
+    deniedReason:
+      typeof recorded.metadata?.deniedReason === "string"
+        ? recorded.metadata.deniedReason
+        : undefined,
+    errorCategory:
+      typeof recorded.metadata?.errorCategory === "string"
+        ? recorded.metadata.errorCategory
+        : undefined,
+  });
+  if (recorded) {
+    params.events?.push(recorded);
+  }
+}
+
+function buildToolCallParentEventId(params: { turnId: string; toolCallId: string }): string {
+  return `turn-event:${params.turnId}:tool:${params.toolCallId}:called`;
+}
+
+async function appendChannelTurnToolLifecycleEvent(params: {
+  accountId?: string;
+  channel: string;
+  event: ToolLifecycleEvent;
+  events: TurnEvent[];
+  recorder?: TurnEventRecorder;
+  target?: string;
+  turnId: string;
+}): Promise<void> {
+  const toolCallId = typeof params.event.toolCallId === "string" ? params.event.toolCallId : "";
+  const parentId = toolCallId
+    ? buildToolCallParentEventId({ turnId: params.turnId, toolCallId })
+    : undefined;
+  const type = params.event.phase === "start" ? "tool.called" : "tool.result";
+  await appendTurnEvent({
+    accountId: params.accountId,
+    recorder: params.recorder,
+    events: params.events,
+    event: {
+      ...(type === "tool.called" && parentId ? { id: parentId } : {}),
+      type,
+      turnId: params.turnId,
+      runId: params.event.runId,
+      ...(type === "tool.result" && parentId ? { parentId } : {}),
+      actor: type === "tool.called" ? "agent" : "tool",
+      channel: params.channel,
+      target: params.target,
+      status:
+        params.event.phase === "start"
+          ? "started"
+          : params.event.phase === "end"
+            ? "completed"
+            : "failed",
+      metadata: {
+        toolName: params.event.toolName,
+        toolCallId: params.event.toolCallId,
+        phase: params.event.phase,
+        sessionKey: params.event.sessionKey,
+        sessionId: params.event.sessionId,
+        durationMs: params.event.durationMs,
+        isError: params.event.isError,
+        status: params.event.status,
+        deniedReason: params.event.deniedReason,
+        errorCategory: params.event.errorCategory,
+      },
+    },
+  });
+}
+
+function mergeToolLifecycleCallbacks(params: {
+  first?: (event: ToolLifecycleEvent) => Promise<void> | void;
+  second?: (event: ToolLifecycleEvent) => Promise<void> | void;
+}): ((event: ToolLifecycleEvent) => Promise<void>) | undefined {
+  if (!params.first && !params.second) {
+    return undefined;
+  }
+  return async (event) => {
+    await params.first?.(event);
+    await params.second?.(event);
+  };
+}
+
+function isTelegramDirectDispatchRequired(params: {
+  admission: ChannelTurnAdmission;
+  channel: string;
+  chatType?: string;
+}): boolean {
+  return (
+    params.admission.kind === "dispatch" &&
+    params.channel === "telegram" &&
+    normalizeChatType(params.chatType) === "direct"
+  );
 }
 
 export function createNoopChannelEventDeliveryAdapter(): ChannelEventDeliveryAdapter {
@@ -377,8 +627,9 @@ export async function dispatchAssembledChannelTurn(
       admission: params.admission,
       botLoopProtection: params.botLoopProtection,
       log: params.log,
+      turnEvents: params.turnEvents,
       messageId: params.messageId,
-      runDispatch: async () =>
+      runDispatch: async (runtimeContext?: ChannelTurnDispatchRuntimeContext) =>
         await params.dispatchReplyWithBufferedBlockDispatcher({
           ctx: params.ctxPayload,
           cfg: params.cfg,
@@ -426,7 +677,13 @@ export async function dispatchAssembledChannelTurn(
             onError: params.delivery.onError,
           },
           toolsAllow: params.toolsAllow,
-          replyOptions: replyPipeline.replyOptions,
+          replyOptions: {
+            ...replyPipeline.replyOptions,
+            onToolLifecycleEvent: mergeToolLifecycleCallbacks({
+              first: runtimeContext?.onToolLifecycleEvent,
+              second: replyPipeline.replyOptions?.onToolLifecycleEvent,
+            }),
+          },
           replyResolver: params.replyResolver,
         }),
     },
@@ -448,6 +705,7 @@ async function dispatchResolvedChannelTurn<TDispatchResult>(
   params: ChannelTurnResolved<TDispatchResult> & {
     admission: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
     log?: (event: ChannelTurnLogEvent) => void;
+    turnEvents?: TurnEventRecorder;
     messageId?: string;
   },
 ): Promise<ChannelTurnResult<TDispatchResult>> {
@@ -476,10 +734,83 @@ async function runPreparedChannelTurnCoreInTrace<
   options: { suppressObserveOnlyDispatch: boolean },
 ): Promise<ChannelTurnResult<TDispatchResult>> {
   const admission = params.admission ?? ({ kind: "dispatch" } as const);
+  const turnEventTurnId = resolveTurnEventTurnId({
+    accountId: params.accountId,
+    channel: params.channel,
+    messageId: params.messageId,
+    routeSessionKey: params.routeSessionKey,
+    sessionKey: params.ctxPayload.SessionKey,
+  });
+  const recordedTurnEvents: TurnEvent[] = [];
+  const turnStartedAt = Date.now();
+  const onToolLifecycleEvent = async (event: ToolLifecycleEvent) => {
+    await appendChannelTurnToolLifecycleEvent({
+      accountId: params.accountId,
+      channel: params.channel,
+      event,
+      events: recordedTurnEvents,
+      recorder: params.turnEvents,
+      target: params.ctxPayload.To,
+      turnId: turnEventTurnId,
+    });
+  };
+  const visibleDeliveryRequired = isTelegramDirectDispatchRequired({
+    admission,
+    channel: params.channel,
+    chatType: params.ctxPayload.ChatType,
+  });
   const botLoopDrop = resolveBotLoopProtectionDrop(params);
   if (botLoopDrop) {
     clearPendingHistoryAfterTurn(params.history);
     return botLoopDrop;
+  }
+  await appendTurnEvent({
+    accountId: params.accountId,
+    recorder: params.turnEvents,
+    events: recordedTurnEvents,
+    event: {
+      type: "turn.started",
+      turnId: turnEventTurnId,
+      actor: "runtime",
+      channel: params.channel,
+      target: params.ctxPayload.To,
+      status: "started",
+      metadata: {
+        admission: admission.kind,
+        messageId: params.messageId,
+        routeSessionKey: params.routeSessionKey,
+        sessionKey: params.ctxPayload.SessionKey,
+        nativeMessageTimestamp: params.turnTiming?.nativeMessageTimestamp,
+        messageReceivedAt: params.turnTiming?.messageReceivedAt,
+        receivedToTurnStartMs: computePositiveDurationMs(
+          turnStartedAt,
+          params.turnTiming?.messageReceivedAt,
+        ),
+        messageAgeMs: computePositiveDurationMs(
+          turnStartedAt,
+          params.turnTiming?.nativeMessageTimestamp,
+        ),
+      },
+    },
+  });
+  if (visibleDeliveryRequired) {
+    await appendTurnEvent({
+      accountId: params.accountId,
+      recorder: params.turnEvents,
+      events: recordedTurnEvents,
+      event: {
+        type: "delivery.required",
+        turnId: turnEventTurnId,
+        actor: "runtime",
+        channel: params.channel,
+        target: params.ctxPayload.To,
+        status: "required",
+        metadata: {
+          reason: "telegram_direct_message",
+          messageId: params.messageId,
+        },
+      },
+    });
   }
   emit({
     ...params,
@@ -547,8 +878,26 @@ async function runPreparedChannelTurnCoreInTrace<
     dispatchResult =
       options.suppressObserveOnlyDispatch && admission.kind === "observeOnly"
         ? resolveObserveOnlyDispatchResult(params)
-        : await params.runDispatch();
+        : await params.runDispatch({ onToolLifecycleEvent });
   } catch (err) {
+    await appendTurnEvent({
+      accountId: params.accountId,
+      recorder: params.turnEvents,
+      events: recordedTurnEvents,
+      event: {
+        type: "turn.failed",
+        turnId: turnEventTurnId,
+        actor: "runtime",
+        channel: params.channel,
+        target: params.ctxPayload.To,
+        status: "failed",
+        metadata: {
+          reason: "dispatch_error",
+          messageId: params.messageId,
+        },
+      },
+    });
+    const dispatchErrorTurnState = materializeTurnState(recordedTurnEvents);
     emit({
       ...params,
       event: {
@@ -557,11 +906,80 @@ async function runPreparedChannelTurnCoreInTrace<
         messageId: params.messageId,
         sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
         admission: admission.kind,
+        ...projectTurnStateLogFields(dispatchErrorTurnState),
         error: err,
       },
     });
     throw err;
   }
+  const visibleDispatch = hasVisibleChannelTurnDispatch(
+    dispatchResult as ChannelTurnDispatchResultLike,
+  );
+  if (visibleDispatch) {
+    const deliveryRecordedAt = Date.now();
+    await appendTurnEvent({
+      accountId: params.accountId,
+      recorder: params.turnEvents,
+      events: recordedTurnEvents,
+      event: {
+        type: "delivery.sent",
+        turnId: turnEventTurnId,
+        actor: "runtime",
+        channel: params.channel,
+        target: params.ctxPayload.To,
+        status: "sent",
+        metadata: {
+          messageId: params.messageId,
+          startToDeliveryMs: computePositiveDurationMs(deliveryRecordedAt, turnStartedAt),
+        },
+      },
+    });
+  } else if (visibleDeliveryRequired) {
+    const deliveryFailedAt = Date.now();
+    await appendTurnEvent({
+      accountId: params.accountId,
+      recorder: params.turnEvents,
+      events: recordedTurnEvents,
+      event: {
+        type: "delivery.failed",
+        turnId: turnEventTurnId,
+        actor: "runtime",
+        channel: params.channel,
+        target: params.ctxPayload.To,
+        status: "failed",
+        metadata: {
+          reason: "missing_visible_delivery",
+          messageId: params.messageId,
+          startToDeliveryMs: computePositiveDurationMs(deliveryFailedAt, turnStartedAt),
+        },
+      },
+    });
+  }
+  const preCompletionTurnState = materializeTurnState(recordedTurnEvents);
+  const completionErrors = validateTurnCompletion(preCompletionTurnState);
+  const turnCompletedAt = Date.now();
+  await appendTurnEvent({
+    accountId: params.accountId,
+    recorder: params.turnEvents,
+    events: recordedTurnEvents,
+    event: {
+      type: completionErrors.length > 0 ? "turn.failed" : "turn.completed",
+      turnId: turnEventTurnId,
+      actor: "runtime",
+      channel: params.channel,
+      target: params.ctxPayload.To,
+      status: completionErrors.length > 0 ? "invalid" : "valid",
+      metadata: {
+        reason: completionErrors[0],
+        messageId: params.messageId,
+        completionAllowed: completionErrors.length === 0,
+        visibleDeliveryRequired: preCompletionTurnState.visibleDeliveryRequired,
+        visibleDeliverySent: preCompletionTurnState.visibleDeliverySent,
+        startToCompletionMs: computePositiveDurationMs(turnCompletedAt, turnStartedAt),
+      },
+    },
+  });
+  const turnState = materializeTurnState(recordedTurnEvents);
   emit({
     ...params,
     event: {
@@ -580,6 +998,7 @@ async function runPreparedChannelTurnCoreInTrace<
     ctxPayload: params.ctxPayload,
     routeSessionKey: params.routeSessionKey,
     dispatchResult,
+    turnState,
   };
 }
 
@@ -627,6 +1046,8 @@ export async function runChannelTurn<
     event: { stage: "ingest", event: "start" },
   });
   const input = await params.adapter.ingest(params.raw);
+  const messageReceivedAt = Date.now();
+  const nativeMessageTimestamp = normalizeDiagnosticTimestamp(input?.timestamp);
   if (!input) {
     const admission: ChannelTurnAdmission = { kind: "drop", reason: "ingest-null" };
     emit({
@@ -643,6 +1064,28 @@ export async function runChannelTurn<
   emit({
     ...params,
     event: { stage: "ingest", event: "done", messageId: input.id },
+  });
+  await appendTurnEvent({
+    accountId: params.accountId,
+    recorder: params.turnEvents,
+    event: {
+      type: "message.received",
+      turnId: resolveTurnEventTurnId({
+        accountId: params.accountId,
+        channel: params.channel,
+        messageId: input.id,
+      }),
+      actor: "user",
+      channel: params.channel,
+      target: params.accountId,
+      status: "received",
+      metadata: {
+        messageId: input.id,
+        nativeMessageTimestamp,
+        messageReceivedAt,
+        messageAgeMs: computePositiveDurationMs(messageReceivedAt, nativeMessageTimestamp),
+      },
+    },
   });
 
   const eventClass = (await params.adapter.classify?.(input)) ?? DEFAULT_EVENT_CLASS;
@@ -712,13 +1155,23 @@ export async function runChannelTurn<
             delivery: createNoopChannelEventDeliveryAdapter(),
             admission,
             log: params.log,
+            turnEvents: params.turnEvents,
             messageId: input.id,
+            turnTiming: {
+              messageReceivedAt,
+              nativeMessageTimestamp,
+            },
           }
         : {
             ...resolved,
             admission,
             log: params.log,
+            turnEvents: params.turnEvents,
             messageId: input.id,
+            turnTiming: {
+              messageReceivedAt,
+              nativeMessageTimestamp,
+            },
           },
     );
     result = dispatchResult.dispatched ? { ...dispatchResult, admission } : dispatchResult;
@@ -759,6 +1212,7 @@ export async function runChannelTurn<
         messageId: input.id,
         sessionKey: resolved.routeSessionKey,
         admission: admission.kind,
+        ...projectTurnStateLogFields(result.dispatched ? result.turnState : undefined),
       },
     });
   } catch (err) {
@@ -772,6 +1226,7 @@ export async function runChannelTurn<
         sessionKey: resolved.routeSessionKey,
         admission: admission.kind,
         error: err,
+        ...projectTurnStateLogFields(result.dispatched ? result.turnState : undefined),
       },
     });
     throw err;

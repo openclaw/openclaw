@@ -64,6 +64,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
+import { resolveDirectControlLanePriority } from "./control-lane-priority.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { isSystemEventProvider } from "./effective-reply-route.js";
@@ -730,6 +731,12 @@ export async function runPreparedReply(
     hasInboundHistoryBody(sessionCtx) ||
     hasCurrentReplyTargetContext;
   const hasMediaAttachment = hasInboundMedia(sessionCtx) || (opts?.images?.length ?? 0) > 0;
+  const directControlLanePriority = resolveDirectControlLanePriority({
+    text: rawBodyTrimmed || baseBodyFinal,
+    chatType: promptSessionCtx.ChatType,
+    isHeartbeat,
+    hasMedia: hasMediaAttachment,
+  });
   if (!hasUserBody && !hasMediaAttachment) {
     // Skip onReplyStart when typing is suppressed (e.g. sendPolicy deny) —
     // otherwise channels that wire onReplyStart to typing indicators leak
@@ -962,7 +969,7 @@ export async function runPreparedReply(
         cfg,
         channel: sessionCtx.Provider,
         sessionEntry,
-        inlineMode: perMessageQueueMode,
+        inlineMode: perMessageQueueMode ?? directControlLanePriority?.queueMode,
         inlineOptions: perMessageQueueOptions,
       });
   const embeddedAgentRuntime = useFastReplyRuntime

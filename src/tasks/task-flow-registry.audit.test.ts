@@ -168,6 +168,48 @@ describe("task-flow-registry audit", () => {
     });
   });
 
+  it("does not flag ended blocked flows as stale", async () => {
+    await withTaskFlowAuditStateDir(async () => {
+      const now = Date.parse("2026-03-30T01:00:00.000Z");
+      const blocked = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-audit",
+        goal: "Historical delivery-blocked flow",
+        status: "running",
+        createdAt: now - 2 * 60 * 60_000,
+        updatedAt: now - 2 * 60 * 60_000,
+      });
+      setFlowWaiting({
+        flowId: blocked.flowId,
+        expectedRevision: blocked.revision,
+        blockedTaskId: "task-delivery-failed",
+        blockedSummary: "Delivery failed after work completed",
+        updatedAt: now - 2 * 60 * 60_000,
+      });
+      const current = requireFinding(
+        listTaskFlowAuditFindings({
+          now,
+          staleBlockedMs: 30 * 60_000,
+        }),
+        "stale_blocked",
+        blocked.flowId,
+      );
+      expect(current.flow?.flowId).toBe(blocked.flowId);
+
+      const ended = {
+        ...current.flow!,
+        endedAt: now - 2 * 60 * 60_000,
+      };
+      const findings = listTaskFlowAuditFindings({
+        now,
+        flows: [ended],
+        staleBlockedMs: 30 * 60_000,
+      });
+
+      expect(findings.some((finding) => finding.code === "stale_blocked")).toBe(false);
+    });
+  });
+
   it("does not flag managed flows with active linked tasks as missing", async () => {
     await withTaskFlowAuditStateDir(async () => {
       const flow = createManagedTaskFlow({

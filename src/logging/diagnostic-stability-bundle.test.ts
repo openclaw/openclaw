@@ -3,7 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import {
+  emitDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import { resetFatalErrorHooksForTest, runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
 import {
   installDiagnosticStabilityFatalHook,
@@ -125,6 +129,455 @@ describe("diagnostic stability bundles", () => {
     expect(raw).not.toContain("message body");
     expect(raw).not.toContain(secret);
     expect(raw).not.toContain(os.hostname());
+  });
+
+  it("preserves sanitized channel turn health and latency diagnostics in bundles", async () => {
+    startDiagnosticStabilityRecorder();
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      messageId: "msg-1",
+      turnEventType: "delivery.required",
+      status: "required",
+      messageAgeMs: 65_000,
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      messageId: "msg-1",
+      turnEventType: "turn.failed",
+      status: "invalid",
+      reason: "missing_visible_delivery",
+      completionAllowed: false,
+      visibleDeliveryRequired: true,
+      visibleDeliverySent: false,
+      receivedToTurnStartMs: 12_000,
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      turnEventType: "tool.called",
+      status: "started",
+      toolName: "exec",
+      toolCallId: "call-1",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      turnEventType: "tool.result",
+      status: "failed",
+      toolName: "exec",
+      toolCallId: "call-1",
+      durationMs: 15_000,
+      isError: true,
+      errorCategory: "timeout",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-2",
+      sessionKey: "agent:main:telegram:direct:owner",
+      messageId: "msg-2",
+      turnEventType: "delivery.required",
+      status: "required",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-2",
+      sessionKey: "agent:main:telegram:direct:owner",
+      turnEventType: "tool.called",
+      status: "started",
+      toolName: "home_assistant",
+      toolCallId: "call-2",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-2",
+      sessionKey: "agent:main:telegram:direct:owner",
+      turnEventType: "tool.result",
+      status: "completed",
+      toolName: "home_assistant",
+      toolCallId: "call-2",
+      durationMs: 18_000,
+      isError: false,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const result = writeDiagnosticStabilityBundleSync({
+      reason: "gateway.restart_startup_failed",
+      stateDir: tempDir,
+      now: new Date("2026-04-22T12:00:00.000Z"),
+    });
+
+    if (result.status !== "written") {
+      throw new Error(`expected written bundle, got ${result.status}`);
+    }
+    const readResult = readDiagnosticStabilityBundleFileSync(result.path);
+    if (readResult.status !== "found") {
+      throw new Error(`expected readable bundle, got ${readResult.status}`);
+    }
+
+    expect(readResult.bundle.snapshot.events.at(3)).toMatchObject({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-1",
+      toolName: "exec",
+      toolCallId: "call-1",
+      durationMs: 15_000,
+      isError: true,
+      reason: "timeout",
+    });
+    expect(readResult.bundle.snapshot.events.at(1)).toMatchObject({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-1",
+      messageId: "msg-1",
+      reason: "missing_visible_delivery",
+      completionAllowed: false,
+      visibleDeliveryRequired: true,
+      visibleDeliverySent: false,
+      receivedToTurnStartMs: 12_000,
+    });
+    expect(readResult.bundle.snapshot.summary.channelTurns).toMatchObject({
+      totalEvents: 7,
+      missingVisibleDelivery: 1,
+      health: {
+        status: "degraded",
+        issues: [
+          {
+            code: "missing_visible_delivery",
+            level: "degraded",
+            count: 1,
+          },
+          {
+            code: "stale_message_at_receive",
+            level: "degraded",
+            metric: "messageAgeMs",
+            valueMs: 65_000,
+            count: 1,
+          },
+          {
+            code: "slow_receive_to_turn_start",
+            level: "warning",
+            metric: "receivedToTurnStartMs",
+            valueMs: 12_000,
+            count: 1,
+          },
+          {
+            code: "tool_result_failed",
+            level: "warning",
+            count: 1,
+          },
+          {
+            code: "slow_tool_result",
+            level: "warning",
+            count: 2,
+          },
+          {
+            code: "slow_tool_before_visible_delivery",
+            level: "warning",
+            count: 2,
+          },
+        ],
+      },
+      tools: {
+        called: 2,
+        results: 2,
+        failedResults: 1,
+        missingResults: 0,
+        slowResults: 2,
+        preDeliveryCalls: 2,
+        slowPreDeliveryResults: 2,
+        byTool: {
+          exec: {
+            called: 1,
+            results: 1,
+            failedResults: 1,
+            missingResults: 0,
+            slowResults: 1,
+            preDeliveryCalls: 1,
+            slowPreDeliveryResults: 1,
+            maxDurationMs: 15_000,
+          },
+          home_assistant: {
+            called: 1,
+            results: 1,
+            failedResults: 0,
+            missingResults: 0,
+            slowResults: 1,
+            preDeliveryCalls: 1,
+            slowPreDeliveryResults: 1,
+            maxDurationMs: 18_000,
+          },
+        },
+        recentPreDeliverySlow: [
+          {
+            seq: expect.any(Number),
+            ts: expect.any(Number),
+            channel: "telegram",
+            turnId: "telegram:acct:message:msg-1",
+            toolName: "exec",
+            durationMs: 15_000,
+          },
+          {
+            seq: expect.any(Number),
+            ts: expect.any(Number),
+            channel: "telegram",
+            turnId: "telegram:acct:message:msg-2",
+            toolName: "home_assistant",
+            durationMs: 18_000,
+          },
+        ],
+      },
+      latency: {
+        messageAgeMs: {
+          count: 1,
+          slowCount: 1,
+          latestMs: 65_000,
+          maxMs: 65_000,
+          p50Ms: 65_000,
+          p90Ms: 65_000,
+          p95Ms: 65_000,
+        },
+        receivedToTurnStartMs: {
+          count: 1,
+          slowCount: 1,
+          latestMs: 12_000,
+          maxMs: 12_000,
+          p50Ms: 12_000,
+          p90Ms: 12_000,
+          p95Ms: 12_000,
+        },
+        bottleneck: {
+          phase: "ingress",
+          metric: "messageAgeMs",
+          maxMs: 65_000,
+          slowCount: 1,
+          count: 1,
+        },
+      },
+    });
+    expect(JSON.stringify(readResult.bundle)).not.toContain("raw diagnostic");
+  });
+
+  it("preserves session attention summaries in bundles", async () => {
+    startDiagnosticStabilityRecorder();
+    emitDiagnosticEvent({
+      type: "session.stalled",
+      sessionKey: "agent:main:telegram:direct:owner",
+      state: "processing",
+      ageMs: 90_000,
+      queueDepth: 2,
+      reason: "blocked_tool_call",
+      classification: "blocked_tool_call",
+      activeWorkKind: "tool_call",
+      activeToolName: "home_assistant",
+      activeToolCallId: "call-secret",
+      activeToolAgeMs: 31_000,
+    });
+    emitDiagnosticEvent({
+      type: "session.recovery.requested",
+      sessionKey: "agent:main:telegram:direct:owner",
+      state: "processing",
+      ageMs: 91_000,
+      queueDepth: 2,
+      reason: "blocked_tool_call",
+      activeWorkKind: "tool_call",
+      allowActiveAbort: false,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const result = writeDiagnosticStabilityBundleSync({
+      reason: "gateway.restart_startup_failed",
+      stateDir: tempDir,
+      now: new Date("2026-04-22T12:00:00.000Z"),
+    });
+
+    if (result.status !== "written") {
+      throw new Error(`expected written bundle, got ${result.status}`);
+    }
+    const readResult = readDiagnosticStabilityBundleFileSync(result.path);
+    if (readResult.status !== "found") {
+      throw new Error(`expected readable bundle, got ${readResult.status}`);
+    }
+
+    expect(readResult.bundle.snapshot.events[0]).toMatchObject({
+      type: "session.stalled",
+      classification: "blocked_tool_call",
+      activeWorkKind: "tool_call",
+      toolName: "home_assistant",
+    });
+    expect(readResult.bundle.snapshot.events[0]).not.toHaveProperty("sessionKey");
+    expect(readResult.bundle.snapshot.events[0]).not.toHaveProperty("activeToolCallId");
+    expect(readResult.bundle.snapshot.summary.sessions?.attention).toMatchObject({
+      longRunning: 0,
+      stalled: 1,
+      stuck: 0,
+      recoveryRequested: 1,
+      recoveryCompleted: 0,
+      byClassification: {
+        blocked_tool_call: 2,
+      },
+      byActiveWorkKind: {
+        tool_call: 2,
+      },
+      recent: [
+        expect.objectContaining({
+          type: "session.stalled",
+          classification: "blocked_tool_call",
+          activeWorkKind: "tool_call",
+          toolName: "home_assistant",
+          ageMs: 90_000,
+          queueDepth: 2,
+        }),
+        expect.objectContaining({
+          type: "session.recovery.requested",
+          reason: "blocked_tool_call",
+          activeWorkKind: "tool_call",
+          ageMs: 91_000,
+          queueDepth: 2,
+        }),
+      ],
+    });
+    expect(JSON.stringify(readResult.bundle)).not.toContain("call-secret");
+  });
+
+  it("preserves queue lane summaries in bundles without raw session lanes", async () => {
+    startDiagnosticStabilityRecorder();
+    emitDiagnosticEvent({
+      type: "queue.lane.enqueue",
+      lane: "session:agent:main:telegram:direct:owner",
+      queueSize: 3,
+    });
+    emitDiagnosticEvent({
+      type: "queue.lane.dequeue",
+      lane: "session:agent:main:telegram:direct:owner",
+      queueSize: 2,
+      waitMs: 12_500,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const result = writeDiagnosticStabilityBundleSync({
+      reason: "gateway.restart_startup_failed",
+      stateDir: tempDir,
+      now: new Date("2026-04-22T12:00:00.000Z"),
+    });
+
+    if (result.status !== "written") {
+      throw new Error(`expected written bundle, got ${result.status}`);
+    }
+    const readResult = readDiagnosticStabilityBundleFileSync(result.path);
+    if (readResult.status !== "found") {
+      throw new Error(`expected readable bundle, got ${readResult.status}`);
+    }
+
+    expect(readResult.bundle.snapshot.summary.queues).toMatchObject({
+      enqueued: 1,
+      dequeued: 1,
+      slowDequeues: 1,
+      maxWaitMs: 12_500,
+      maxQueueSize: 3,
+      byLane: {
+        session: {
+          enqueued: 1,
+          dequeued: 1,
+          slowDequeues: 1,
+          maxWaitMs: 12_500,
+          maxQueueSize: 3,
+        },
+      },
+      recentSlow: [
+        {
+          seq: expect.any(Number),
+          ts: expect.any(Number),
+          lane: "session",
+          waitMs: 12_500,
+          queueSize: 2,
+        },
+      ],
+    });
+    expect(JSON.stringify(readResult.bundle.snapshot.summary.queues)).not.toContain(
+      "telegram:direct:owner",
+    );
+  });
+
+  it("preserves runtime recommendations in bundles without raw private context", async () => {
+    startDiagnosticStabilityRecorder();
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "turn-test",
+      messageId: "msg-test",
+      turnEventType: "delivery.failed",
+      status: "failed",
+      reason: "missing_visible_delivery",
+    });
+    emitDiagnosticEvent({
+      type: "queue.lane.dequeue",
+      lane: "session:agent:main:telegram:direct:owner",
+      queueSize: 2,
+      waitMs: 12_500,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const result = writeDiagnosticStabilityBundleSync({
+      reason: "gateway.restart_startup_failed",
+      stateDir: tempDir,
+      now: new Date("2026-04-22T12:00:00.000Z"),
+    });
+
+    if (result.status !== "written") {
+      throw new Error(`expected written bundle, got ${result.status}`);
+    }
+    const readResult = readDiagnosticStabilityBundleFileSync(result.path);
+    if (readResult.status !== "found") {
+      throw new Error(`expected readable bundle, got ${readResult.status}`);
+    }
+
+    expect(readResult.bundle.snapshot.summary.recommendations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "inspect_missing_delivery",
+          priority: "high",
+          source: "channel_turns",
+          reason: "missing_visible_delivery",
+          count: 1,
+        }),
+        expect.objectContaining({
+          code: "clear_queue_pressure",
+          priority: "medium",
+          source: "queues",
+          reason: "slow_queue_dequeue",
+          metric: "waitMs",
+          valueMs: 12_500,
+          count: 1,
+        }),
+      ]),
+    );
+    expect(readResult.bundle.snapshot.summary.controlLane).toMatchObject({
+      status: "degraded",
+      reasons: ["missing_visible_delivery", "queue_pressure"],
+      deliveryFailed: 1,
+      missingVisibleDelivery: 1,
+      slowQueue: 1,
+      maxQueueWaitMs: 12_500,
+    });
+    expect(JSON.stringify(readResult.bundle.snapshot.summary.recommendations)).not.toContain(
+      "telegram:direct:owner",
+    );
+    expect(JSON.stringify(readResult.bundle.snapshot.summary.controlLane)).not.toContain(
+      "telegram:direct:owner",
+    );
   });
 
   it("skips empty recorder snapshots by default", () => {

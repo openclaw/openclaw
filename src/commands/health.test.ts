@@ -9,6 +9,7 @@ import {
 import { formatHealthCheckFailure } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
 import {
+  formatControlLaneHealthLine,
   formatContextEngineHealthLine,
   formatHealthChannelLines,
   formatModelPricingHealthLine,
@@ -343,6 +344,34 @@ describe("healthCommand", () => {
 
     expect(formatModelPricingHealthLine(snapshot)).toBe(
       "Model pricing: warning (optional pricing refresh degraded) (OpenRouter pricing fetch failed: TypeError: fetch failed)",
+    );
+  });
+
+  it("formats degraded control-lane health as a warning", () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    snapshot.controlLane = {
+      status: "degraded",
+      reasons: ["missing_visible_delivery"],
+      deliveryRequired: 1,
+      deliverySent: 0,
+      deliveryFailed: 1,
+      missingVisibleDelivery: 1,
+      slowIngress: 0,
+      slowQueue: 0,
+      slowVisibleDelivery: 0,
+      slowPreDeliveryTools: 0,
+      blockedSessions: 0,
+      stuckSessions: 0,
+      guidance:
+        "Direct-control lane is degraded; inspect delivery, queue/session pressure, or blocked tools before treating physical-control turns as healthy.",
+    };
+
+    expect(formatControlLaneHealthLine(snapshot)).toBe(
+      "Control lane: degraded reasons=missing_visible_delivery missing=1 slowQueue=0 slowVisible=0 blockedSessions=0",
     );
   });
 

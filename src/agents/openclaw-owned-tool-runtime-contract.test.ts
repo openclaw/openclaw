@@ -114,12 +114,16 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
     const adjustedParams = { mode: "safe" };
     const mergedParams = { command: "pwd", mode: "safe" };
     const hooks = installOpenClawOwnedToolHooks({ adjustedParams });
+    const lifecycleEvents: unknown[] = [];
     const execute = vi.fn(async () => textToolResult("done", { ok: true }));
     const tool = wrapToolWithBeforeToolCallHook(createContractTool("exec", execute), {
       agentId: "agent-1",
       sessionId: "session-1",
       sessionKey: "agent:agent-1:session-1",
       runId: "run-contract",
+      onToolLifecycleEvent: (event) => {
+        lifecycleEvents.push(event);
+      },
     });
     const definition = toToolDefinitions([tool])[0];
     if (!definition) {
@@ -169,6 +173,27 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
     expect(afterContext.sessionKey).toBe("agent:agent-1:session-1");
     expect(afterContext.runId).toBe("run-contract");
     expect(afterContext.toolCallId).toBe(toolCallId);
+    expect(lifecycleEvents).toMatchObject([
+      {
+        phase: "start",
+        toolName: "exec",
+        toolCallId,
+        runId: "run-contract",
+        sessionKey: "agent:agent-1:session-1",
+        sessionId: "session-1",
+        status: "started",
+      },
+      {
+        phase: "end",
+        toolName: "exec",
+        toolCallId,
+        runId: "run-contract",
+        sessionKey: "agent:agent-1:session-1",
+        sessionId: "session-1",
+        status: "completed",
+        isError: false,
+      },
+    ]);
   });
 
   it("reports embedded agent dynamic tool execution errors through after_tool_call", async () => {

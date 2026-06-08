@@ -21,6 +21,7 @@ import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline
 import type { MessageReceipt } from "../message/types.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
 import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
+import type { TurnEventRecorder, TurnState } from "./turn-event-state.js";
 
 export type { InboundEventKind } from "../inbound-event/kind.js";
 
@@ -345,6 +346,12 @@ export type ChannelTurnHistoryFinalizeOptions = {
   limit?: number;
 };
 
+/** Payload-free timing facts used to diagnose channel turn latency. */
+export type ChannelTurnTimingFacts = {
+  messageReceivedAt?: number;
+  nativeMessageTimestamp?: number;
+};
+
 /** Options for recording history when an inbound event is dropped before dispatch. */
 export type ChannelTurnDroppedHistoryOptions = {
   key: string;
@@ -366,6 +373,10 @@ export type ChannelTurnReplyPipelineOptions = Omit<
   CreateChannelReplyPipelineParams,
   "cfg" | "agentId" | "channel" | "accountId"
 >;
+
+export type ChannelTurnDispatchRuntimeContext = {
+  onToolLifecycleEvent?: GetReplyOptions["onToolLifecycleEvent"];
+};
 
 /** Fully assembled channel turn ready to build the dispatch runner. */
 export type AssembledChannelTurn = {
@@ -389,7 +400,9 @@ export type AssembledChannelTurn = {
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   botLoopProtection?: ChannelBotLoopProtectionFacts;
   log?: (event: ChannelTurnLogEvent) => void;
+  turnEvents?: TurnEventRecorder;
   messageId?: string;
+  turnTiming?: ChannelTurnTimingFacts;
 };
 
 /** Channel turn with dispatch runner already prepared. */
@@ -403,12 +416,14 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   record?: ChannelTurnRecordOptions;
   history?: ChannelTurnHistoryFinalizeOptions;
   onPreDispatchFailure?: (err: unknown) => void | Promise<void>;
-  runDispatch: () => Promise<TDispatchResult>;
+  runDispatch: (context?: ChannelTurnDispatchRuntimeContext) => Promise<TDispatchResult>;
   observeOnlyDispatchResult?: TDispatchResult;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   botLoopProtection?: ChannelBotLoopProtectionFacts;
   log?: (event: ChannelTurnLogEvent) => void;
+  turnEvents?: TurnEventRecorder;
   messageId?: string;
+  turnTiming?: ChannelTurnTimingFacts;
 };
 
 /** Resolved turn shape returned by adapters before final run/dispatch handling. */
@@ -443,6 +458,8 @@ export type ChannelTurnLogEvent = {
   admission?: ChannelTurnAdmission["kind"];
   reason?: string;
   error?: unknown;
+  /** Payload-free health projection for finalized dispatched turns. */
+  turnState?: TurnState;
 };
 
 /** Final result for a channel turn, dispatched or admitted without dispatch. */
@@ -462,6 +479,8 @@ export type DispatchedChannelTurnResult<TDispatchResult = DispatchFromConfigResu
   ctxPayload: MsgContext;
   routeSessionKey: string;
   dispatchResult: TDispatchResult;
+  /** Materialized payload-free turn health derived from recorded runtime events. */
+  turnState?: TurnState;
 };
 
 /** Adapter contract for ingesting, classifying, resolving, and finalizing raw channel events. */
@@ -492,4 +511,5 @@ export type RunChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResul
   raw: TRaw;
   adapter: ChannelTurnAdapter<TRaw, TDispatchResult>;
   log?: (event: ChannelTurnLogEvent) => void;
+  turnEvents?: TurnEventRecorder;
 };

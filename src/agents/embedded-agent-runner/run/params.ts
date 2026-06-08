@@ -4,6 +4,7 @@
 import type {
   PartialReplyPayload,
   SourceReplyDeliveryMode,
+  ToolLifecycleEvent,
 } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
@@ -205,6 +206,7 @@ export type RunEmbeddedAgentParams = {
   }) => void | Promise<void>;
   onReasoningEnd?: () => void | Promise<void>;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
+  onToolLifecycleEvent?: (event: ToolLifecycleEvent) => void | Promise<void>;
   onAgentEvent?: (evt: {
     stream: string;
     data: Record<string, unknown>;

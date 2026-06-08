@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   }),
   checkGatewayHealth: vi.fn(),
   probeGatewayMemoryStatus: vi.fn(),
+  noteGatewayChannelTurnHealth: vi.fn(),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
   isRecord: vi.fn(
@@ -96,6 +97,10 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../commands/doctor-gateway-health.js", () => ({
   checkGatewayHealth: mocks.checkGatewayHealth,
   probeGatewayMemoryStatus: mocks.probeGatewayMemoryStatus,
+}));
+
+vi.mock("../commands/doctor-gateway-stability.js", () => ({
+  noteGatewayChannelTurnHealth: mocks.noteGatewayChannelTurnHealth,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -194,6 +199,7 @@ describe("doctor health contributions", () => {
     });
     mocks.checkGatewayHealth.mockReset();
     mocks.probeGatewayMemoryStatus.mockReset();
+    mocks.noteGatewayChannelTurnHealth.mockReset();
   });
 
   afterEach(() => {
@@ -235,6 +241,34 @@ describe("doctor health contributions", () => {
     expect(ctx.gatewayHealthAuthenticated).toBe(false);
     expect(ctx.gatewayMemoryProbe).toEqual({ checked: false, ready: false, skipped: true });
     expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
+  });
+
+  it("runs gateway stability after gateway health and before channel responsiveness checks", () => {
+    const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
+
+    expect(ids.indexOf("doctor:gateway-stability")).toBeGreaterThan(-1);
+    expect(ids.indexOf("doctor:gateway-health")).toBeLessThan(
+      ids.indexOf("doctor:gateway-stability"),
+    );
+    expect(ids.indexOf("doctor:gateway-stability")).toBeLessThan(
+      ids.indexOf("doctor:whatsapp-responsiveness"),
+    );
+  });
+
+  it("passes gateway health state to the gateway stability contribution", async () => {
+    const contribution = requireDoctorContribution("doctor:gateway-stability");
+
+    await contribution.run({
+      cfg: { gateway: { auth: { token: "token" } } },
+      options: { nonInteractive: true },
+      healthOk: true,
+    } as Parameters<(typeof contribution)["run"]>[0]);
+
+    expect(mocks.noteGatewayChannelTurnHealth).toHaveBeenCalledWith({
+      cfg: { gateway: { auth: { token: "token" } } },
+      timeoutMs: 3000,
+      gatewayHealthy: true,
+    });
   });
 
   it("keeps release configured plugin installs repair-only", async () => {

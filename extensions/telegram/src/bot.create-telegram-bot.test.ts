@@ -442,6 +442,59 @@ describe("createTelegramBot", () => {
     expect(events).toEqual(["busy:start", "status", "busy:end"]);
   });
 
+  it("lets private Telegram DMs reach the runtime lane without waiting behind a busy DM", async () => {
+    installPerKeySequentializer();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    const events: string[] = [];
+    let releaseFirstDm!: () => void;
+    const firstDmGate = new Promise<void>((resolve) => {
+      releaseFirstDm = resolve;
+    });
+
+    createTelegramBot({ token: "tok" });
+    const sequentializer = requireValue(
+      sequentializeSpy.mock.results[0]?.value as TelegramMiddleware | undefined,
+      "telegram sequentializer",
+    );
+
+    const privateMessageCtx = (messageId: number, text: string) => ({
+      ...harness.makeTelegramMessageCtx({
+        chat: { id: 123, type: "private" },
+        from: { id: 123, username: "sebastian" },
+        text,
+        messageId,
+      }),
+      update: { update_id: messageId },
+    });
+
+    const firstPromise = sequentializer(privateMessageCtx(201, "long task"), async () => {
+      events.push("first:start");
+      await firstDmGate;
+      events.push("first:end");
+    });
+
+    await flushTelegramTestMicrotasks();
+    expect(events).toEqual(["first:start"]);
+
+    await sequentializer(privateMessageCtx(202, "I switched it on manually"), async () => {
+      events.push("second");
+    });
+
+    expect(events).toEqual(["first:start", "second"]);
+
+    releaseFirstDm();
+    await firstPromise;
+    expect(events).toEqual(["first:start", "second", "first:end"]);
+  });
+
   it("lets Telegram topic messages without chat forum metadata use separate lanes", async () => {
     installPerKeySequentializer();
     loadConfig.mockReturnValue({
@@ -707,6 +760,308 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("lets private Telegram control DMs in interrupt queue mode reach the runtime while a DM is active", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        queue: {
+          byChannel: {
+            telegram: "interrupt",
+          },
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    installPerKeySequentializer();
+
+    const startedBodies: string[] = [];
+    let releaseFirstRun: (() => void) | undefined;
+    const firstRunGate = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+
+    replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onReplyStart?.();
+      const body = ctx.Body ?? "";
+      startedBodies.push(body);
+      if (body.includes("long task")) {
+        await firstRunGate;
+      }
+      return { text: `reply:${body}` };
+    });
+
+    const privateMessageCtx = (messageId: number, text: string): TelegramMiddlewareTestContext => ({
+      update: { update_id: messageId },
+      message: {
+        chat: { id: 7, type: "private" },
+        text,
+        date: 1736380800 + messageId,
+        message_id: messageId,
+        from: { id: 42, first_name: "Ada" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({}),
+    });
+
+    createTelegramBot({ token: "tok" });
+    const messageHandler = getOnHandler("message") as (
+      ctx: TelegramMiddlewareTestContext,
+    ) => Promise<void>;
+
+    const firstPromise = runTelegramMiddlewareChain({
+      ctx: privateMessageCtx(201, "long task"),
+      finalHandler: messageHandler,
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(startedBodies).toHaveLength(1);
+      },
+      { interval: 1, timeout: 500 },
+    );
+    expect(startedBodies[0]).toContain("long task");
+
+    await runTelegramMiddlewareChain({
+      ctx: privateMessageCtx(202, "Ich habe sie manuell eingeschaltet."),
+      finalHandler: messageHandler,
+    });
+
+    expect(startedBodies).toHaveLength(2);
+    expect(startedBodies[1]).toContain("Ich habe sie manuell eingeschaltet.");
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain(
+      "Ich habe sie manuell eingeschaltet.",
+    );
+
+    if (!releaseFirstRun) {
+      throw new Error("Expected first Telegram run release callback to be initialized");
+    }
+    releaseFirstRun();
+    await firstPromise;
+    expect(sendMessageSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps ordinary private Telegram DMs keyed in interrupt queue mode while a DM is active", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        queue: {
+          byChannel: {
+            telegram: "interrupt",
+          },
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    installPerKeySequentializer();
+
+    const startedBodies: string[] = [];
+    let releaseFirstRun: (() => void) | undefined;
+    const firstRunGate = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+
+    replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onReplyStart?.();
+      const body = ctx.Body ?? "";
+      startedBodies.push(body);
+      if (body.includes("long task")) {
+        await firstRunGate;
+      }
+      return { text: `reply:${body}` };
+    });
+
+    const privateMessageCtx = (messageId: number, text: string): TelegramMiddlewareTestContext => ({
+      update: { update_id: messageId },
+      message: {
+        chat: { id: 7, type: "private" },
+        text,
+        date: 1736380800 + messageId,
+        message_id: messageId,
+        from: { id: 42, first_name: "Ada" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({}),
+    });
+
+    createTelegramBot({ token: "tok" });
+    const messageHandler = getOnHandler("message") as (
+      ctx: TelegramMiddlewareTestContext,
+    ) => Promise<void>;
+
+    const firstPromise = runTelegramMiddlewareChain({
+      ctx: privateMessageCtx(201, "long task"),
+      finalHandler: messageHandler,
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(startedBodies).toHaveLength(1);
+      },
+      { interval: 1, timeout: 500 },
+    );
+
+    const secondPromise = runTelegramMiddlewareChain({
+      ctx: privateMessageCtx(202, "ordinary follow-up"),
+      finalHandler: messageHandler,
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(startedBodies).toHaveLength(1);
+    expect(startedBodies[0]).toContain("long task");
+    expect(sendMessageSpy).toHaveBeenCalledTimes(0);
+
+    if (!releaseFirstRun) {
+      throw new Error("Expected first Telegram run release callback to be initialized");
+    }
+    releaseFirstRun();
+    await Promise.all([firstPromise, secondPromise]);
+
+    expect(startedBodies).toHaveLength(2);
+    expect(startedBodies[0]).toContain("long task");
+    expect(startedBodies[1]).toContain("ordinary follow-up");
+    expect(sendMessageSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps ordinary captioned private Telegram media keyed in interrupt queue mode", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        queue: {
+          byChannel: {
+            telegram: "interrupt",
+          },
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    installPerKeySequentializer();
+
+    const startedBodies: string[] = [];
+    let releaseFirstRun: (() => void) | undefined;
+    const firstRunGate = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+
+    replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onReplyStart?.();
+      const body = ctx.Body ?? "";
+      startedBodies.push(body);
+      if (body.includes("long task")) {
+        await firstRunGate;
+      }
+      return { text: `reply:${body}` };
+    });
+
+    const privateTextCtx = (messageId: number, text: string): TelegramMiddlewareTestContext => ({
+      update: { update_id: messageId },
+      message: {
+        chat: { id: 7, type: "private" },
+        text,
+        date: 1736380800 + messageId,
+        message_id: messageId,
+        from: { id: 42, first_name: "Ada" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({}),
+    });
+    const privateCaptionedMediaCtx = (
+      messageId: number,
+      caption: string,
+    ): TelegramMiddlewareTestContext => ({
+      update: { update_id: messageId },
+      message: {
+        chat: { id: 7, type: "private" },
+        caption,
+        photo: [{ file_id: "photo-1", file_unique_id: "photo-1-u", width: 1, height: 1 }],
+        date: 1736380800 + messageId,
+        message_id: messageId,
+        from: { id: 42, first_name: "Ada" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ file_path: "photos/photo-1.jpg" }),
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+    );
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getOnHandler("message") as (
+        ctx: TelegramMiddlewareTestContext,
+      ) => Promise<void>;
+
+      const firstPromise = runTelegramMiddlewareChain({
+        ctx: privateTextCtx(201, "long task"),
+        finalHandler: messageHandler,
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(startedBodies).toHaveLength(1);
+        },
+        { interval: 1, timeout: 500 },
+      );
+
+      let secondResolved = false;
+      const secondPromise = runTelegramMiddlewareChain({
+        ctx: privateCaptionedMediaCtx(202, "ordinary photo follow-up"),
+        finalHandler: messageHandler,
+      }).finally(() => {
+        secondResolved = true;
+      });
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      expect(secondResolved).toBe(false);
+      expect(startedBodies).toHaveLength(1);
+      expect(startedBodies[0]).toContain("long task");
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(sendMessageSpy).toHaveBeenCalledTimes(0);
+
+      if (!releaseFirstRun) {
+        throw new Error("Expected first Telegram run release callback to be initialized");
+      }
+      releaseFirstRun();
+      await Promise.all([firstPromise, secondPromise]);
+
+      expect(secondResolved).toBe(true);
+      expect(startedBodies.length).toBeGreaterThanOrEqual(1);
+      expect(startedBodies[0]).toContain("long task");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it.each(["stop", "/stop@openclaw_bot"] as const)(
     "lets %s bypass and cancel pending same-chat inbound debounce",
     async (stopText) => {
@@ -760,7 +1115,7 @@ describe("createTelegramBot", () => {
             update: { update_id: 101 },
             message: {
               chat: { id: 7, type: "private" },
-              text: "first",
+              text: "hello there",
               date: 1736380800,
               message_id: 101,
               from: { id: 42, first_name: "Ada" },
@@ -796,7 +1151,7 @@ describe("createTelegramBot", () => {
         await Promise.resolve();
         expect(startedBodies).toHaveLength(1);
         expect(sendMessageSpy.mock.calls.map((call) => String(call[1])).join("\n")).not.toContain(
-          "reply:first",
+          "reply:hello there",
         );
 
         await runTelegramMiddlewareChain({
@@ -804,7 +1159,7 @@ describe("createTelegramBot", () => {
             update: { update_id: 103 },
             message: {
               chat: { id: 7, type: "private" },
-              text: "first",
+              text: "hello there",
               date: 1736380800,
               message_id: 101,
               from: { id: 42, first_name: "Ada" },
@@ -823,7 +1178,7 @@ describe("createTelegramBot", () => {
           },
           { interval: 1, timeout: 500 },
         );
-        expect(startedBodies[1]).toContain("first");
+        expect(startedBodies[1]).toContain("hello there");
       } finally {
         setTimeoutSpy.mockRestore();
       }

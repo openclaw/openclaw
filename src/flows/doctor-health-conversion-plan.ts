@@ -243,6 +243,12 @@ export const doctorHealthConversionRules = [
     rule: "Prepare shared Gateway status/memory facts before checks; dependent checks must consume facts instead of probing again.",
   },
   {
+    contributionId: "doctor:gateway-stability",
+    conversion: "detect-only",
+    target: ["core/doctor/gateway-stability/channel-turn-delivery"],
+    rule: "Detect degraded channel-turn delivery from payload-free Gateway stability diagnostics or the latest persisted stability bundle; never log message bodies.",
+  },
+  {
     contributionId: "doctor:whatsapp-responsiveness",
     conversion: "detect-only",
     target: ["core/doctor/whatsapp-responsiveness"],

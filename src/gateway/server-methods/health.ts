@@ -5,6 +5,10 @@ import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
 import { getStatusSummary } from "../../commands/status.js";
 import { listContextEngineQuarantines } from "../../context-engine/registry.js";
+import {
+  getDiagnosticStabilitySnapshot,
+  MAX_DIAGNOSTIC_STABILITY_LIMIT,
+} from "../../logging/diagnostic-stability.js";
 import { getGatewayModelPricingHealth } from "../model-pricing-cache-state.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
@@ -92,7 +96,11 @@ function mergeCachedHealthRuntimeState(params: {
   cached: HealthSummary;
   eventLoop?: HealthSummary["eventLoop"];
 }): HealthSummary {
-  const { contextEngines: _cachedContextEngines, ...cached } = params.cached;
+  const {
+    contextEngines: _cachedContextEngines,
+    controlLane: _cachedControlLane,
+    ...cached
+  } = params.cached;
   const quarantinedContextEngines: NonNullable<HealthSummary["contextEngines"]>["quarantined"] = [];
   for (const entry of listContextEngineQuarantines()) {
     const summary: NonNullable<HealthSummary["contextEngines"]>["quarantined"][number] = {
@@ -106,9 +114,13 @@ function mergeCachedHealthRuntimeState(params: {
     }
     quarantinedContextEngines.push(summary);
   }
+  const controlLane = getDiagnosticStabilitySnapshot({
+    limit: MAX_DIAGNOSTIC_STABILITY_LIMIT,
+  }).summary.controlLane;
   return {
     ...cached,
     ...(params.eventLoop ? { eventLoop: params.eventLoop } : {}),
+    ...(controlLane ? { controlLane } : {}),
     ...(quarantinedContextEngines.length > 0
       ? { contextEngines: { quarantined: quarantinedContextEngines } }
       : {}),

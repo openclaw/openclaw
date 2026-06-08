@@ -6,6 +6,7 @@
 import os from "node:os";
 import path from "node:path";
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
+import type { ToolLifecycleEvent } from "../auto-reply/get-reply-options.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import {
@@ -102,6 +103,7 @@ export type HookContext = {
   channelId?: string;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
+  onToolLifecycleEvent?: (event: ToolLifecycleEvent) => void | Promise<void>;
   skillsSnapshot?: SkillSnapshot;
   skillCommand?: {
     commandName: string;
@@ -277,6 +279,25 @@ function unwrapErrorCause(err: unknown): unknown {
     return err;
   }
   return err;
+}
+
+async function emitToolLifecycleEvent(
+  ctx: HookContext | undefined,
+  event: Omit<ToolLifecycleEvent, "runId" | "sessionKey" | "sessionId">,
+): Promise<void> {
+  if (!ctx?.onToolLifecycleEvent) {
+    return;
+  }
+  try {
+    await ctx.onToolLifecycleEvent({
+      ...(ctx.runId ? { runId: ctx.runId } : {}),
+      ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
+      ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
+      ...event,
+    });
+  } catch (err) {
+    log.warn(`tool lifecycle observer failed: tool=${event.toolName} error=${String(err)}`);
+  }
 }
 
 type ToolDiagnosticIdentity = {
@@ -1130,6 +1151,13 @@ export function wrapToolWithBeforeToolCallHook(
         : params;
       const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params: preparedParams });
       const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params: preparedParams });
+      const normalizedToolName = normalizeToolName(toolName || "tool");
+      await emitToolLifecycleEvent(ctx, {
+        phase: "start",
+        toolName: normalizedToolName,
+        ...(toolCallId ? { toolCallId } : {}),
+        status: "started",
+      });
       const outcome = await runBeforeToolCallHook({
         toolName,
         params: hookParams,
@@ -1140,10 +1168,17 @@ export function wrapToolWithBeforeToolCallHook(
         approvalMode: hookOptions.approvalMode,
       });
       if (outcome.blocked) {
+        await emitToolLifecycleEvent(ctx, {
+          phase: "blocked",
+          toolName: normalizedToolName,
+          ...(toolCallId ? { toolCallId } : {}),
+          status: "blocked",
+          deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
+          isError: true,
+        });
         if (outcome.kind !== "veto") {
           throw new Error(outcome.reason);
         }
-        const normalizedToolName = normalizeToolName(toolName || "tool");
         const trace = ctx?.trace
           ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace))
           : undefined;
@@ -1190,7 +1225,6 @@ export function wrapToolWithBeforeToolCallHook(
           preparedParams,
         ) ?? executeParams;
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
-      const normalizedToolName = normalizeToolName(toolName || "tool");
       const trace = ctx?.trace
         ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace))
         : undefined;
@@ -1241,16 +1275,25 @@ export function wrapToolWithBeforeToolCallHook(
             durationMs,
           });
         }
+        await emitToolLifecycleEvent(ctx, {
+          phase: "end",
+          toolName: normalizedToolName,
+          ...(toolCallId ? { toolCallId } : {}),
+          durationMs,
+          status: "completed",
+          isError: false,
+        });
         return result;
       } catch (err) {
         const cause = unwrapErrorCause(err);
         const errorCode = diagnosticHttpStatusCode(cause);
+        const errorCategory = diagnosticErrorCategory(cause);
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEvent({
             type: "tool.execution.error",
             ...eventBase,
             durationMs: Date.now() - startedAt,
-            errorCategory: diagnosticErrorCategory(cause),
+            errorCategory,
             ...(errorCode ? { errorCode } : {}),
           });
         }
@@ -1260,6 +1303,15 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
           toolCallId,
           error: err,
+        });
+        await emitToolLifecycleEvent(ctx, {
+          phase: "error",
+          toolName: normalizedToolName,
+          ...(toolCallId ? { toolCallId } : {}),
+          durationMs: Date.now() - startedAt,
+          status: "failed",
+          isError: true,
+          errorCategory,
         });
         throw err;
       }

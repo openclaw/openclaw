@@ -47,6 +47,23 @@ export type QueuedReplyLifecycle = {
 };
 
 /** Partial assistant payload emitted during streaming or replacement updates. */
+
+/** Payload-free lifecycle event for runtime-owned tool calls. */
+export type ToolLifecycleEvent = {
+  phase: "start" | "end" | "error" | "blocked";
+  toolName: string;
+  toolCallId?: string;
+  runId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  durationMs?: number;
+  isError?: boolean;
+  status?: string;
+  deniedReason?: string;
+  errorCategory?: string;
+};
+
+/** Partial assistant payload emitted during streaming or replacement updates. */
 export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
   delta?: string;
   replace?: true;
@@ -114,6 +131,8 @@ export type GetReplyOptions = {
   onBlockReplyQueued?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
+  /** Payload-free lifecycle observation for runtime-owned tool calls. */
+  onToolLifecycleEvent?: (event: ToolLifecycleEvent) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: {
     itemId?: string;

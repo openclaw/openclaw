@@ -98,6 +98,10 @@ export function isTelegramControlLaneText(params: {
   return isTelegramReadOnlyControlLaneText(params);
 }
 
+function isPrivateTelegramChat(type: string | undefined): boolean {
+  return type === "private";
+}
+
 export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
   const reaction = ctx.update?.message_reaction;
   if (reaction?.chat?.id) {
@@ -138,6 +142,16 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
       return `telegram:${chatId}:approval`;
     }
     return "telegram:approval";
+  }
+  if (isPrivateTelegramChat(msg?.chat?.type)) {
+    const messageId = msg?.message_id;
+    if (typeof chatId === "number" && typeof messageId === "number") {
+      return `telegram:${chatId}:dm:${messageId}`;
+    }
+    if (typeof chatId === "number") {
+      return `telegram:${chatId}:dm`;
+    }
+    return "telegram:dm";
   }
   const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
   const messageThreadId = msg?.message_thread_id;

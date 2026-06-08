@@ -65,6 +65,36 @@ describe("status-json-runtime", () => {
       securityAudit: { summary: { critical: 1 } },
       usage: { providers: [] },
       health: { ok: true },
+      gatewayDiagnostics: {
+        summary: {
+          controlLane: {
+            status: "warning",
+            reasons: ["slow_pre_delivery_tool"],
+            deliveryRequired: 1,
+            deliverySent: 1,
+            deliveryFailed: 0,
+            missingVisibleDelivery: 0,
+            slowIngress: 0,
+            slowQueue: 0,
+            slowVisibleDelivery: 0,
+            slowPreDeliveryTools: 1,
+            blockedSessions: 0,
+            stuckSessions: 0,
+            guidance:
+              "Direct-control lane has latency pressure; send early acknowledgements and move long work to Tasks/TaskFlow.",
+          },
+          recommendations: [
+            {
+              code: "send_early_ack",
+              priority: "high",
+              source: "channel_turns",
+              reason: "slow_tool_before_visible_delivery",
+              count: 1,
+              guidance: "Send a short visible acknowledgement before long tool work.",
+            },
+          ],
+        },
+      },
       lastHeartbeat: { status: "ok" },
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
@@ -101,6 +131,32 @@ describe("status-json-runtime", () => {
     expect(payloadInput.securityAudit).toStrictEqual({ summary: { critical: 1 } });
     expect(payloadInput.usage).toStrictEqual({ providers: [] });
     expect(payloadInput.health).toStrictEqual({ ok: true });
+    expect(payloadInput.runtimeRecommendations).toStrictEqual([
+      {
+        code: "send_early_ack",
+        priority: "high",
+        source: "channel_turns",
+        reason: "slow_tool_before_visible_delivery",
+        count: 1,
+        guidance: "Send a short visible acknowledgement before long tool work.",
+      },
+    ]);
+    expect(payloadInput.runtimeControlLane).toStrictEqual({
+      status: "warning",
+      reasons: ["slow_pre_delivery_tool"],
+      deliveryRequired: 1,
+      deliverySent: 1,
+      deliveryFailed: 0,
+      missingVisibleDelivery: 0,
+      slowIngress: 0,
+      slowQueue: 0,
+      slowVisibleDelivery: 0,
+      slowPreDeliveryTools: 1,
+      blockedSessions: 0,
+      stuckSessions: 0,
+      guidance:
+        "Direct-control lane has latency pressure; send early acknowledgements and move long work to Tasks/TaskFlow.",
+    });
     expect(payloadInput.lastHeartbeat).toStrictEqual({ status: "ok" });
     expect(payloadInput.pluginCompatibility).toStrictEqual([
       {
@@ -121,6 +177,7 @@ describe("status-json-runtime", () => {
       securityAudit: undefined,
       usage: undefined,
       health: undefined,
+      gatewayDiagnostics: null,
       lastHeartbeat: null,
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
@@ -149,6 +206,8 @@ describe("status-json-runtime", () => {
     expect(payloadInput.securityAudit).toBeUndefined();
     expect(payloadInput.usage).toBeUndefined();
     expect(payloadInput.health).toBeUndefined();
+    expect(payloadInput.runtimeRecommendations).toBeUndefined();
+    expect(payloadInput.runtimeControlLane).toBeUndefined();
     expect(payloadInput.lastHeartbeat).toBeNull();
     expect(payloadInput.pluginCompatibility).toBeUndefined();
   });
@@ -158,6 +217,7 @@ describe("status-json-runtime", () => {
       securityAudit: undefined,
       usage: undefined,
       health: undefined,
+      gatewayDiagnostics: null,
       lastHeartbeat: { status: "ok" },
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },

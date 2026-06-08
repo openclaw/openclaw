@@ -59,12 +59,16 @@ export type ContextEngineHealthSummary = {
 export type ModelPricingHealthSummary =
   import("../gateway/model-pricing-cache-state.js").GatewayModelPricingHealth;
 
+export type ControlLaneHealthSummary =
+  import("../logging/diagnostic-stability.js").DiagnosticStabilitySnapshot["summary"]["controlLane"];
+
 /** Full gateway health payload consumed by `openclaw health`. */
 export type HealthSummary = {
   ok: true;
   ts: number;
   durationMs: number;
   eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
+  controlLane?: ControlLaneHealthSummary;
   plugins?: PluginHealthSummary;
   contextEngines?: ContextEngineHealthSummary;
   modelPricing?: ModelPricingHealthSummary;

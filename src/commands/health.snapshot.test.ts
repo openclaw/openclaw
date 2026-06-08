@@ -5,6 +5,16 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import {
+  emitDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
+import {
+  resetDiagnosticStabilityRecorderForTest,
+  startDiagnosticStabilityRecorder,
+  stopDiagnosticStabilityRecorder,
+} from "../logging/diagnostic-stability.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { HealthSummary } from "./health.js";
@@ -472,6 +482,9 @@ describe("getHealthSnapshot", () => {
   });
 
   afterEach(() => {
+    stopDiagnosticStabilityRecorder();
+    resetDiagnosticStabilityRecorderForTest();
+    resetDiagnosticEventsForTest();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
@@ -873,6 +886,44 @@ describe("getHealthSnapshot", () => {
     expect(telegram.configured).toBe(true);
     expect(telegram.probe).toBeUndefined();
     expect(telegram.accounts?.default?.probe).toBeUndefined();
+  });
+
+  it("includes live control-lane health from stability diagnostics", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {};
+    resetDiagnosticStabilityRecorderForTest();
+    resetDiagnosticEventsForTest();
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:default:message:control-lane-health",
+      turnEventType: "delivery.failed",
+      status: "failed",
+      reason: "missing_visible_delivery",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:default:message:control-lane-health",
+      turnEventType: "turn.failed",
+      status: "invalid",
+      reason: "missing_visible_delivery",
+      completionAllowed: false,
+      visibleDeliveryRequired: true,
+      visibleDeliverySent: false,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const snap = await getHealthSnapshot({ probe: false });
+
+    expect(snap.controlLane).toMatchObject({
+      status: "degraded",
+      reasons: ["missing_visible_delivery"],
+      deliveryFailed: 1,
+      missingVisibleDelivery: 2,
+    });
   });
 
   it("returns structured telegram probe errors", async () => {

@@ -12,7 +12,7 @@ type DiscoveredBeacon = Awaited<
   ReturnType<typeof import("../infra/bonjour-discovery.js").discoverGatewayBeacons>
 >[number];
 
-const callGateway = vi.fn<(opts: unknown) => Promise<{ ok: true }>>(async () => ({ ok: true }));
+const callGateway = vi.fn<(opts: unknown) => Promise<unknown>>(async () => ({ ok: true }));
 const formatGatewayTransportErrorJson = vi.fn();
 const startGatewayServer = vi.fn<
   (port: number, opts?: unknown) => Promise<{ close: () => Promise<void> }>
@@ -187,6 +187,274 @@ describe("gateway-cli coverage", () => {
       limit: 5,
       type: "payload.large",
     });
+  });
+
+  it("prints channel turn delivery SLA failures in gateway stability output", async () => {
+    callGateway.mockClear();
+    callGateway.mockResolvedValueOnce({
+      generatedAt: "2026-06-03T12:00:00.000Z",
+      capacity: 1000,
+      count: 4,
+      dropped: 0,
+      firstSeq: 1,
+      lastSeq: 4,
+      events: [
+        {
+          seq: 4,
+          ts: Date.parse("2026-06-03T12:00:03.000Z"),
+          type: "channel.turn.event",
+          channel: "telegram",
+          turnId: "turn-test",
+          messageId: "msg-test",
+          action: "delivery.failed",
+          reason: "missing_visible_delivery",
+          visibleDeliveryRequired: true,
+          visibleDeliverySent: false,
+          completionAllowed: false,
+          receivedToTurnStartMs: 12_000,
+        },
+      ],
+      summary: {
+        byType: { "channel.turn.event": 4 },
+        sessions: {
+          attention: {
+            longRunning: 0,
+            stalled: 1,
+            stuck: 0,
+            recoveryRequested: 0,
+            recoveryCompleted: 0,
+            byClassification: {
+              blocked_tool_call: 1,
+            },
+            byActiveWorkKind: {
+              tool_call: 1,
+            },
+            recent: [
+              {
+                seq: 3,
+                ts: Date.parse("2026-06-03T12:00:02.000Z"),
+                type: "session.stalled",
+                sessionKey: "agent:main:telegram:direct:owner",
+                state: "processing",
+                reason: "blocked_tool_call",
+                classification: "blocked_tool_call",
+                activeWorkKind: "tool_call",
+                toolName: "home_assistant",
+                ageMs: 90_000,
+                queueDepth: 1,
+              },
+            ],
+          },
+        },
+        queues: {
+          enqueued: 2,
+          dequeued: 2,
+          slowDequeues: 1,
+          maxWaitMs: 12_500,
+          maxQueueSize: 3,
+          byLane: {
+            session: {
+              enqueued: 1,
+              dequeued: 1,
+              slowDequeues: 1,
+              maxWaitMs: 12_500,
+              maxQueueSize: 3,
+            },
+            main: {
+              enqueued: 1,
+              dequeued: 1,
+              slowDequeues: 0,
+              maxWaitMs: 250,
+              maxQueueSize: 1,
+            },
+          },
+          recentSlow: [
+            {
+              seq: 2,
+              ts: Date.parse("2026-06-03T12:00:01.000Z"),
+              lane: "session",
+              waitMs: 12_500,
+              queueSize: 2,
+            },
+          ],
+        },
+        recommendations: [
+          {
+            code: "inspect_missing_delivery",
+            priority: "high",
+            source: "channel_turns",
+            reason: "missing_visible_delivery",
+            count: 1,
+            guidance:
+              "Inspect the visible channel dispatch path; direct DMs must record delivery.sent before the turn is considered healthy.",
+          },
+          {
+            code: "clear_queue_pressure",
+            priority: "medium",
+            source: "queues",
+            reason: "slow_queue_dequeue",
+            metric: "waitMs",
+            valueMs: 12_500,
+            count: 1,
+            guidance:
+              "Inspect queue/session pressure, stale work, and overlapping background jobs; direct control messages should not wait behind long work.",
+          },
+        ],
+        controlLane: {
+          status: "degraded",
+          reasons: ["missing_visible_delivery", "queue_pressure", "blocked_tool_call"],
+          deliveryRequired: 1,
+          deliverySent: 0,
+          deliveryFailed: 1,
+          missingVisibleDelivery: 1,
+          slowIngress: 0,
+          slowQueue: 1,
+          slowVisibleDelivery: 0,
+          slowPreDeliveryTools: 0,
+          blockedSessions: 1,
+          stuckSessions: 0,
+          maxQueueWaitMs: 12_500,
+          maxReceiveToStartMs: 12_000,
+          maxStartToDeliveryMs: 2_500,
+          guidance:
+            "Direct-control lane is degraded; inspect delivery, queue/session pressure, or blocked tools before treating physical-control turns as healthy.",
+        },
+        channelTurns: {
+          totalEvents: 4,
+          deliveryRequired: 1,
+          deliverySent: 0,
+          deliveryFailed: 1,
+          invalidCompletions: 1,
+          missingVisibleDelivery: 1,
+          byChannel: {
+            telegram: {
+              deliveryRequired: 1,
+              deliverySent: 0,
+              deliveryFailed: 1,
+              invalidCompletions: 1,
+              missingVisibleDelivery: 1,
+            },
+          },
+          recentFailures: [
+            {
+              seq: 4,
+              ts: Date.parse("2026-06-03T12:00:03.000Z"),
+              channel: "telegram",
+              turnId: "turn-test",
+              messageId: "msg-test",
+              reason: "missing_visible_delivery",
+            },
+          ],
+          latency: {
+            receivedToTurnStartMs: {
+              count: 1,
+              slowCount: 1,
+              latestMs: 12_000,
+              maxMs: 12_000,
+              p95Ms: 12_000,
+            },
+            startToDeliveryMs: {
+              count: 1,
+              slowCount: 0,
+              latestMs: 2_500,
+              maxMs: 2_500,
+              p95Ms: 2_500,
+            },
+            bottleneck: {
+              phase: "queue",
+              metric: "receivedToTurnStartMs",
+              maxMs: 12_000,
+              slowCount: 1,
+              count: 1,
+            },
+            recentSlow: [
+              {
+                seq: 4,
+                ts: Date.parse("2026-06-03T12:00:03.000Z"),
+                channel: "telegram",
+                turnId: "turn-test",
+                messageId: "msg-test",
+                metric: "receivedToTurnStartMs",
+                valueMs: 12_000,
+              },
+            ],
+          },
+          health: {
+            status: "degraded",
+            issues: [
+              {
+                code: "missing_visible_delivery",
+                level: "degraded",
+                message: "Direct channel turn required a visible reply but none was recorded.",
+                count: 1,
+                guidance:
+                  "Treat direct DM delivery as unhealthy; inspect message(action=send) dispatch before declaring the turn complete.",
+              },
+              {
+                code: "slow_receive_to_turn_start",
+                level: "warning",
+                message: "A received channel message waited too long before a turn started.",
+                metric: "receivedToTurnStartMs",
+                valueMs: 12_000,
+                count: 1,
+                guidance:
+                  "Inspect queue/session pressure and background work; direct control messages should get a fast turn or cancellation path.",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    await runGatewayCommand(["gateway", "stability"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain("Channel turns");
+    expect(output).toContain("required=1");
+    expect(output).toContain("failed=1");
+    expect(output).toContain("missingVisible=1");
+    expect(output).toContain("health=degraded");
+    expect(output).toContain("telegram=required:1/sent:0/failed:1/missing:1");
+    expect(output).toContain("Health issues:");
+    expect(output).toContain("degraded:missing_visible_delivery");
+    expect(output).toContain("warning:slow_receive_to_turn_start");
+    expect(output).toContain(
+      "warning:slow_receive_to_turn_start receivedToTurnStartMs=12000ms count=1",
+    );
+    expect(output).toContain("Latency:");
+    expect(output).toContain(
+      "Latency bottleneck: phase=queue metric=receivedToTurnStartMs max=12000ms slow=1/1",
+    );
+    expect(output).toContain("receivedToStart latest:12000ms/max:12000ms/p95:12000ms/slow:1/1");
+    expect(output).toContain("receivedToTurnStartMs=12000ms");
+    expect(output).toContain("receivedToStart=12000ms");
+    expect(output).toContain("reason=missing_visible_delivery");
+    expect(output).toContain(
+      "Session attention: longRunning=0 stalled=1 stuck=0 recoveryRequested=0 recoveryCompleted=0",
+    );
+    expect(output).toContain("Classifications: blocked_tool_call:1");
+    expect(output).toContain("Active work: tool_call:1");
+    expect(output).toContain(
+      "session.stalled session=agent:main:telegram:direct:owner classification=blocked_tool_call reason=blocked_tool_call activeWork=tool_call tool=home_assistant age=90000ms queueDepth=1",
+    );
+    expect(output).toContain("Queues: enqueued=2 dequeued=2 slow=1 maxWait=12500ms maxQueue=3");
+    expect(output).toContain("session=enq:1/deq:1/slow:1/maxWait:12500ms/maxQueue:3");
+    expect(output).toContain("main=enq:1/deq:1/slow:0/maxWait:250ms/maxQueue:1");
+    expect(output).toContain("Recent slow queue waits:");
+    expect(output).toContain("lane=session wait=12500ms queueSize=2");
+    expect(output).toContain("Control lane: status=degraded");
+    expect(output).toContain(
+      "Reasons: missing_visible_delivery, queue_pressure, blocked_tool_call",
+    );
+    expect(output).toContain(
+      "Metrics: maxQueueWait=12500ms, maxReceiveToStart=12000ms, maxStartToDelivery=2500ms",
+    );
+    expect(output).toContain("Runtime recommendations:");
+    expect(output).toContain("high:inspect_missing_delivery source=channel_turns");
+    expect(output).toContain(
+      "medium:clear_queue_pressure source=queues reason=slow_queue_dequeue metric=waitMs value=12500ms count=1",
+    );
+    expect(output).not.toContain("chat text");
   });
 
   it("writes JSON for gateway health transport failures in JSON mode", async () => {

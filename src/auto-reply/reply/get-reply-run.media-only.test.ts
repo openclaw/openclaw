@@ -1320,6 +1320,49 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
+
+  it("uses the interrupt lane for direct manual override messages", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "collect",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+
+    const body = "Ich habe sie manuell eingeschaltet.";
+    const params = baseParams({
+      isNewSession: false,
+      sessionId: "session-manual-override",
+    });
+    params.ctx = {
+      ...params.ctx,
+      Body: body,
+      RawBody: body,
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:111",
+      ChatType: "direct",
+    } as never;
+    params.sessionCtx = {
+      ...params.sessionCtx,
+      Body: body,
+      BodyStripped: body,
+      MediaPath: undefined,
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:111",
+      ChatType: "direct",
+    } as never;
+
+    const result = await runPreparedReply(params);
+
+    expect(result).toEqual({ text: "ok" });
+    expect(queueSettings.resolveQueueSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ inlineMode: "interrupt" }),
+    );
+  });
+
   it("interrupts embedded-only active runs even without a reply operation", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });

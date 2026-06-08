@@ -46,6 +46,7 @@ export type {
   ChannelTurnRecordOptions,
   ChannelTurnRecordOptions as InboundReplyRecordOptions,
 } from "../turn/types.js";
+export type { TurnState, TurnStateStatus } from "../turn/kernel.js";
 export type { DurableInboundReplyDeliveryParams } from "../turn/kernel.js";
 export type { ChannelBotLoopProtectionFacts } from "../turn/kernel.js";
 export { recordChannelBotPairLoopAndCheckSuppression } from "../turn/kernel.js";

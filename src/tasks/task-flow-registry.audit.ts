@@ -82,6 +82,10 @@ function getReferenceAt(flow: TaskFlowRecord): number {
   return flow.updatedAt ?? flow.createdAt;
 }
 
+function isEndedFlow(flow: TaskFlowRecord): boolean {
+  return typeof flow.endedAt === "number";
+}
+
 function getLinkedTasks(flowId: string): TaskRecord[] {
   return listTasksForFlowId(flowId);
 }
@@ -168,7 +172,7 @@ export function listTaskFlowAuditFindings(
       (task) => task.status === "queued" || task.status === "running",
     );
 
-    if (flow.status === "running" && ageMs >= staleRunningMs) {
+    if (flow.status === "running" && !isEndedFlow(flow) && ageMs >= staleRunningMs) {
       findings.push(
         createFinding({
           severity: "error",
@@ -180,7 +184,7 @@ export function listTaskFlowAuditFindings(
       );
     }
 
-    if (flow.status === "waiting" && ageMs >= staleWaitingMs) {
+    if (flow.status === "waiting" && !isEndedFlow(flow) && ageMs >= staleWaitingMs) {
       findings.push(
         createFinding({
           severity: "warn",
@@ -192,7 +196,7 @@ export function listTaskFlowAuditFindings(
       );
     }
 
-    if (flow.status === "blocked" && ageMs >= staleBlockedMs) {
+    if (flow.status === "blocked" && !isEndedFlow(flow) && ageMs >= staleBlockedMs) {
       findings.push(
         createFinding({
           severity: "warn",
@@ -227,6 +231,7 @@ export function listTaskFlowAuditFindings(
     if (
       flow.syncMode === "managed" &&
       (flow.status === "running" || flow.status === "waiting" || flow.status === "blocked") &&
+      !isEndedFlow(flow) &&
       ageMs >=
         (flow.status === "running"
           ? staleRunningMs

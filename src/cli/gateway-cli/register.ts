@@ -2,6 +2,10 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
+import {
+  formatChannelTurnLatencyMetrics,
+  formatChannelTurnLatencyMs,
+} from "../../commands/channel-turn-latency-format.js";
 import type { HealthSummary } from "../../commands/health.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
@@ -211,10 +215,22 @@ function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {
     record.channel ? `channel=${record.channel}` : "",
     record.pluginId ? `plugin=${record.pluginId}` : "",
     record.reason ? `reason=${record.reason}` : "",
+    record.classification ? `classification=${record.classification}` : "",
+    record.activeWorkKind ? `activeWork=${record.activeWorkKind}` : "",
+    record.toolName ? `tool=${record.toolName}` : "",
+    record.ageMs !== undefined ? `age=${record.ageMs}ms` : "",
     record.bytes !== undefined ? `bytes=${formatBytes(record.bytes)}` : "",
     record.limitBytes !== undefined ? `limit=${formatBytes(record.limitBytes)}` : "",
     record.queueDepth !== undefined ? `queueDepth=${record.queueDepth}` : "",
     record.queueLength !== undefined ? `queueLength=${record.queueLength}` : "",
+    record.messageAgeMs !== undefined ? `messageAge=${record.messageAgeMs}ms` : "",
+    record.receivedToTurnStartMs !== undefined
+      ? `receivedToStart=${record.receivedToTurnStartMs}ms`
+      : "",
+    record.startToDeliveryMs !== undefined ? `startToDelivery=${record.startToDeliveryMs}ms` : "",
+    record.startToCompletionMs !== undefined
+      ? `startToCompletion=${record.startToCompletionMs}ms`
+      : "",
     record.droppedEvents !== undefined ? `dropped=${record.droppedEvents}` : "",
     record.maxQueueLength !== undefined ? `maxQueue=${record.maxQueueLength}` : "",
     record.queued !== undefined ? `queued=${record.queued}` : "",
@@ -222,6 +238,309 @@ function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {
     record.memory ? `heap=${formatBytes(record.memory.heapUsedBytes)}` : "",
   ].filter(Boolean);
   return parts.join(" ");
+}
+
+function formatSessionAttentionSummary(
+  sessions: NonNullable<DiagnosticStabilitySnapshot["summary"]["sessions"]>,
+  rich: boolean,
+): string[] {
+  const attention = sessions.attention;
+  const lines = [
+    `${colorize(rich, theme.muted, "Session attention:")} longRunning=${
+      attention.longRunning
+    } stalled=${attention.stalled} stuck=${attention.stuck} recoveryRequested=${
+      attention.recoveryRequested
+    } recoveryCompleted=${attention.recoveryCompleted}`,
+  ];
+  const classifications = Object.entries(attention.byClassification)
+    .toSorted((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 5)
+    .map(([classification, count]) => `${classification}:${count}`)
+    .join(", ");
+  if (classifications) {
+    lines.push(`  ${colorize(rich, theme.muted, "Classifications:")} ${classifications}`);
+  }
+  const activeWork = Object.entries(attention.byActiveWorkKind)
+    .toSorted((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 5)
+    .map(([kind, count]) => `${kind}:${count}`)
+    .join(", ");
+  if (activeWork) {
+    lines.push(`  ${colorize(rich, theme.muted, "Active work:")} ${activeWork}`);
+  }
+  if (attention.recent.length > 0) {
+    lines.push(`  ${colorize(rich, theme.muted, "Recent session attention:")}`);
+    for (const event of attention.recent.slice(-3)) {
+      const parts = [
+        new Date(event.ts).toISOString(),
+        `#${event.seq}`,
+        event.type,
+        event.sessionKey ? `session=${event.sessionKey}` : "",
+        event.classification ? `classification=${event.classification}` : "",
+        event.reason ? `reason=${event.reason}` : "",
+        event.activeWorkKind ? `activeWork=${event.activeWorkKind}` : "",
+        event.toolName ? `tool=${event.toolName}` : "",
+        event.ageMs !== undefined ? `age=${event.ageMs}ms` : "",
+        event.queueDepth !== undefined ? `queueDepth=${event.queueDepth}` : "",
+      ].filter(Boolean);
+      lines.push(`    ${parts.join(" ")}`);
+    }
+  }
+  return lines;
+}
+
+function formatQueueSummary(
+  queues: NonNullable<DiagnosticStabilitySnapshot["summary"]["queues"]>,
+  rich: boolean,
+): string[] {
+  const lines = [
+    `${colorize(rich, theme.muted, "Queues:")} enqueued=${queues.enqueued} dequeued=${
+      queues.dequeued
+    } slow=${queues.slowDequeues} maxWait=${formatChannelTurnLatencyMs(
+      queues.maxWaitMs,
+    )} maxQueue=${queues.maxQueueSize ?? "unknown"}`,
+  ];
+  const lanes = Object.entries(queues.byLane)
+    .toSorted((a, b) => {
+      const slowDelta = b[1].slowDequeues - a[1].slowDequeues;
+      if (slowDelta !== 0) {
+        return slowDelta;
+      }
+      return (b[1].maxWaitMs ?? 0) - (a[1].maxWaitMs ?? 0);
+    })
+    .slice(0, 5)
+    .map(
+      ([lane, summary]) =>
+        `${lane}=enq:${summary.enqueued}/deq:${summary.dequeued}/slow:${
+          summary.slowDequeues
+        }/maxWait:${formatChannelTurnLatencyMs(summary.maxWaitMs)}/maxQueue:${
+          summary.maxQueueSize ?? "unknown"
+        }`,
+    )
+    .join(", ");
+  if (lanes) {
+    lines.push(`  ${colorize(rich, theme.muted, "Lanes:")} ${lanes}`);
+  }
+  if (queues.recentSlow.length > 0) {
+    lines.push(`  ${colorize(rich, theme.muted, "Recent slow queue waits:")}`);
+    for (const slow of queues.recentSlow.slice(-3)) {
+      const parts = [
+        new Date(slow.ts).toISOString(),
+        `#${slow.seq}`,
+        `lane=${slow.lane}`,
+        `wait=${slow.waitMs}ms`,
+        slow.queueSize !== undefined ? `queueSize=${slow.queueSize}` : "",
+      ].filter(Boolean);
+      lines.push(`    ${parts.join(" ")}`);
+    }
+  }
+  return lines;
+}
+
+function formatChannelTurnSlaSummary(
+  channelTurns: NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>,
+  rich: boolean,
+): string[] {
+  const lines = [
+    `${colorize(rich, theme.muted, "Channel turns:")} events=${
+      channelTurns.totalEvents
+    } required=${channelTurns.deliveryRequired} sent=${channelTurns.deliverySent} failed=${
+      channelTurns.deliveryFailed
+    } invalid=${channelTurns.invalidCompletions} missingVisible=${
+      channelTurns.missingVisibleDelivery
+    } health=${channelTurns.health.status}`,
+  ];
+
+  const channelBreakdown = Object.entries(channelTurns.byChannel)
+    .toSorted((a, b) => {
+      const missingDelta = b[1].missingVisibleDelivery - a[1].missingVisibleDelivery;
+      if (missingDelta !== 0) {
+        return missingDelta;
+      }
+      return a[0].localeCompare(b[0]);
+    })
+    .slice(0, 5)
+    .map(
+      ([channel, counts]) =>
+        `${channel}=required:${counts.deliveryRequired}/sent:${counts.deliverySent}/failed:${counts.deliveryFailed}/missing:${counts.missingVisibleDelivery}`,
+    )
+    .join(", ");
+  if (channelBreakdown) {
+    lines.push(`  ${channelBreakdown}`);
+  }
+
+  const tools = channelTurns.tools;
+  if (tools && (tools.called > 0 || tools.results > 0)) {
+    lines.push(
+      `  ${colorize(rich, theme.muted, "Tools:")} called=${tools.called} results=${
+        tools.results
+      } failed=${tools.failedResults} missing=${tools.missingResults} slow=${
+        tools.slowResults
+      } preDelivery=${tools.preDeliveryCalls} slowPreDelivery=${tools.slowPreDeliveryResults}`,
+    );
+    const toolBreakdown = Object.entries(tools.byTool)
+      .toSorted((a, b) => {
+        const failureDelta =
+          b[1].failedResults + b[1].missingResults - (a[1].failedResults + a[1].missingResults);
+        if (failureDelta !== 0) {
+          return failureDelta;
+        }
+        const durationDelta = (b[1].maxDurationMs ?? 0) - (a[1].maxDurationMs ?? 0);
+        if (durationDelta !== 0) {
+          return durationDelta;
+        }
+        return a[0].localeCompare(b[0]);
+      })
+      .slice(0, 5)
+      .map(
+        ([toolName, counts]) =>
+          `${toolName}=called:${counts.called}/results:${counts.results}/failed:${
+            counts.failedResults
+          }/missing:${counts.missingResults}/preDelivery:${
+            counts.preDeliveryCalls
+          }/max:${formatChannelTurnLatencyMs(counts.maxDurationMs)}`,
+      )
+      .join(", ");
+    if (toolBreakdown) {
+      lines.push(`  ${toolBreakdown}`);
+    }
+  }
+
+  if (tools?.recentPreDeliverySlow.length) {
+    lines.push(`  ${colorize(rich, theme.muted, "Recent slow pre-delivery tools:")}`);
+    for (const slow of tools.recentPreDeliverySlow.slice(-3)) {
+      const parts = [
+        new Date(slow.ts).toISOString(),
+        `#${slow.seq}`,
+        slow.channel ? `channel=${slow.channel}` : "",
+        slow.turnId ? `turn=${slow.turnId}` : "",
+        slow.toolName ? `tool=${slow.toolName}` : "",
+        `duration=${slow.durationMs}ms`,
+      ].filter(Boolean);
+      lines.push(`    ${parts.join(" ")}`);
+    }
+  }
+
+  const latency = channelTurns.latency;
+  if (latency) {
+    const latencyParts = formatChannelTurnLatencyMetrics(latency, {
+      assign: ":",
+      separator: "/",
+    });
+    if (latencyParts.length > 0) {
+      lines.push(`  ${colorize(rich, theme.muted, "Latency:")} ${latencyParts.join(", ")}`);
+    }
+    if (latency.bottleneck) {
+      lines.push(
+        `  ${colorize(rich, theme.muted, "Latency bottleneck:")} phase=${
+          latency.bottleneck.phase
+        } metric=${latency.bottleneck.metric} max=${formatChannelTurnLatencyMs(
+          latency.bottleneck.maxMs,
+        )} slow=${latency.bottleneck.slowCount}/${latency.bottleneck.count}`,
+      );
+    }
+    if (latency.recentSlow.length > 0) {
+      lines.push(`  ${colorize(rich, theme.muted, "Recent slow channel turns:")}`);
+      for (const slow of latency.recentSlow.slice(-3)) {
+        const parts = [
+          new Date(slow.ts).toISOString(),
+          `#${slow.seq}`,
+          slow.channel ? `channel=${slow.channel}` : "",
+          slow.turnId ? `turn=${slow.turnId}` : "",
+          slow.messageId ? `message=${slow.messageId}` : "",
+          `${slow.metric}=${slow.valueMs}ms`,
+        ].filter(Boolean);
+        lines.push(`    ${parts.join(" ")}`);
+      }
+    }
+  }
+
+  if (channelTurns.health.issues.length > 0) {
+    lines.push(`  ${colorize(rich, theme.muted, "Health issues:")}`);
+    for (const issue of channelTurns.health.issues.slice(0, 5)) {
+      const parts = [
+        `${issue.level}:${issue.code}`,
+        issue.metric && issue.valueMs !== undefined ? `${issue.metric}=${issue.valueMs}ms` : "",
+        issue.count !== undefined ? `count=${issue.count}` : "",
+      ].filter(Boolean);
+      lines.push(`    ${parts.join(" ")} · ${issue.guidance}`);
+    }
+  }
+
+  if (channelTurns.recentFailures.length > 0) {
+    lines.push(`  ${colorize(rich, theme.muted, "Recent delivery failures:")}`);
+    for (const failure of channelTurns.recentFailures.slice(-3)) {
+      const parts = [
+        new Date(failure.ts).toISOString(),
+        `#${failure.seq}`,
+        failure.channel ? `channel=${failure.channel}` : "",
+        failure.turnId ? `turn=${failure.turnId}` : "",
+        failure.messageId ? `message=${failure.messageId}` : "",
+        failure.reason ? `reason=${failure.reason}` : "",
+      ].filter(Boolean);
+      lines.push(`    ${parts.join(" ")}`);
+    }
+  }
+
+  return lines;
+}
+
+function formatControlLaneHealthSummary(
+  controlLane: NonNullable<DiagnosticStabilitySnapshot["summary"]["controlLane"]>,
+  rich: boolean,
+): string[] {
+  const lines = [
+    `${colorize(rich, theme.muted, "Control lane:")} status=${
+      controlLane.status
+    } required=${controlLane.deliveryRequired} sent=${controlLane.deliverySent} failed=${
+      controlLane.deliveryFailed
+    } missing=${controlLane.missingVisibleDelivery} slowIngress=${
+      controlLane.slowIngress
+    } slowQueue=${controlLane.slowQueue} slowVisible=${controlLane.slowVisibleDelivery}`,
+  ];
+  if (controlLane.reasons.length > 0) {
+    lines.push(`  ${colorize(rich, theme.muted, "Reasons:")} ${controlLane.reasons.join(", ")}`);
+  }
+  const metrics = [
+    controlLane.maxMessageAgeMs !== undefined
+      ? `maxMessageAge=${formatChannelTurnLatencyMs(controlLane.maxMessageAgeMs)}`
+      : "",
+    controlLane.maxQueueWaitMs !== undefined
+      ? `maxQueueWait=${formatChannelTurnLatencyMs(controlLane.maxQueueWaitMs)}`
+      : "",
+    controlLane.maxReceiveToStartMs !== undefined
+      ? `maxReceiveToStart=${formatChannelTurnLatencyMs(controlLane.maxReceiveToStartMs)}`
+      : "",
+    controlLane.maxStartToDeliveryMs !== undefined
+      ? `maxStartToDelivery=${formatChannelTurnLatencyMs(controlLane.maxStartToDeliveryMs)}`
+      : "",
+  ].filter(Boolean);
+  if (metrics.length > 0) {
+    lines.push(`  ${colorize(rich, theme.muted, "Metrics:")} ${metrics.join(", ")}`);
+  }
+  lines.push(`  ${controlLane.guidance}`);
+  return lines;
+}
+
+function formatRuntimeRecommendations(
+  recommendations: NonNullable<DiagnosticStabilitySnapshot["summary"]["recommendations"]>,
+  rich: boolean,
+): string[] {
+  const lines = [colorize(rich, theme.muted, "Runtime recommendations:")];
+  for (const recommendation of recommendations.slice(0, 5)) {
+    const parts = [
+      `${recommendation.priority}:${recommendation.code}`,
+      `source=${recommendation.source}`,
+      `reason=${recommendation.reason}`,
+      recommendation.metric ? `metric=${recommendation.metric}` : "",
+      recommendation.valueMs !== undefined
+        ? `value=${formatChannelTurnLatencyMs(recommendation.valueMs)}`
+        : "",
+      recommendation.count !== undefined ? `count=${recommendation.count}` : "",
+    ].filter(Boolean);
+    lines.push(`  ${parts.join(" ")} · ${recommendation.guidance}`);
+  }
+  return lines;
 }
 
 function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boolean): string[] {
@@ -265,6 +584,31 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
         surfaces ? ` · ${surfaces}` : ""
       }`,
     );
+  }
+
+  const channelTurns = snapshot.summary.channelTurns;
+  if (channelTurns) {
+    lines.push(...formatChannelTurnSlaSummary(channelTurns, rich));
+  }
+
+  const sessions = snapshot.summary.sessions;
+  if (sessions) {
+    lines.push(...formatSessionAttentionSummary(sessions, rich));
+  }
+
+  const queues = snapshot.summary.queues;
+  if (queues) {
+    lines.push(...formatQueueSummary(queues, rich));
+  }
+
+  const controlLane = snapshot.summary.controlLane;
+  if (controlLane) {
+    lines.push(...formatControlLaneHealthSummary(controlLane, rich));
+  }
+
+  const recommendations = snapshot.summary.recommendations;
+  if (recommendations && recommendations.length > 0) {
+    lines.push(...formatRuntimeRecommendations(recommendations, rich));
   }
 
   if (snapshot.events.length > 0) {

@@ -19,10 +19,20 @@ describe("getTelegramSequentialKey", () => {
       {
         message: mockMessage({
           chat: mockChat({ id: 123, type: "private" }),
-          message_thread_id: 9,
+          message_id: 42,
         }),
       },
-      "telegram:123:topic:9",
+      "telegram:123:dm:42",
+    ],
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: 123, type: "private" }),
+          message_thread_id: 9,
+          message_id: 43,
+        }),
+      },
+      "telegram:123:dm:43",
     ],
     [
       {
