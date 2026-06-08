@@ -1,0 +1,103 @@
+// Sessions compact command tests cover non-zero exits on failure and param forwarding.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { sessionsCompactCommand } from "./sessions-compact.js";
+
+const callGatewayCli = vi.hoisted(() => vi.fn());
+
+vi.mock("../cli/gateway-cli/call.js", () => ({ callGatewayCli }));
+
+function createRuntime() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+    writeStdout: vi.fn(),
+    writeJson: vi.fn(),
+  };
+}
+
+function joinedArgs(mock: { mock: { calls: unknown[][] } }): string {
+  return mock.mock.calls.map((call) => String(call[0])).join("\n");
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("sessionsCompactCommand", () => {
+  it("prints the token delta and does not exit on a successful compaction", async () => {
+    callGatewayCli.mockResolvedValue({
+      ok: true,
+      key: "agent:main:main",
+      compacted: true,
+      result: { tokensBefore: 243868, tokensAfter: 34941 },
+    });
+    const runtime = createRuntime();
+
+    await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
+
+    expect(runtime.exit).not.toHaveBeenCalled();
+    const logged = joinedArgs(runtime.log);
+    expect(logged).toContain("243868");
+    expect(logged).toContain("34941");
+  });
+
+  it("exits non-zero when the gateway reports ok:false (no silent no-op)", async () => {
+    callGatewayCli.mockResolvedValue({
+      ok: false,
+      key: "agent:main:main",
+      compacted: false,
+      reason: "summarize interrupted",
+    });
+    const runtime = createRuntime();
+
+    await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(joinedArgs(runtime.error)).toContain("summarize interrupted");
+  });
+
+  it("exits non-zero and surfaces the error when the RPC throws", async () => {
+    callGatewayCli.mockRejectedValue(new Error("gateway unreachable"));
+    const runtime = createRuntime();
+
+    await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(joinedArgs(runtime.error)).toContain("gateway unreachable");
+  });
+
+  it("emits the payload and still exits non-zero in JSON mode when ok:false", async () => {
+    const payload = {
+      ok: false,
+      key: "agent:main:main",
+      compacted: false,
+      reason: "summarize interrupted",
+    };
+    callGatewayCli.mockResolvedValue(payload);
+    const runtime = createRuntime();
+
+    await sessionsCompactCommand({ key: "agent:main:main", json: true }, runtime);
+
+    expect(runtime.writeJson).toHaveBeenCalledTimes(1);
+    expect(runtime.writeJson.mock.calls[0][0]).toEqual(payload);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("forwards agentId and maxLines to the RPC params", async () => {
+    callGatewayCli.mockResolvedValue({
+      ok: true,
+      key: "agent:work:main",
+      compacted: true,
+      kept: 200,
+    });
+    const runtime = createRuntime();
+
+    await sessionsCompactCommand({ key: "agent:work:main", agent: "work", maxLines: 200 }, runtime);
+
+    expect(callGatewayCli).toHaveBeenCalledTimes(1);
+    const [method, , params] = callGatewayCli.mock.calls[0];
+    expect(method).toBe("sessions.compact");
+    expect(params).toEqual({ key: "agent:work:main", agentId: "work", maxLines: 200 });
+  });
+});
