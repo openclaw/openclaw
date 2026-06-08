@@ -916,6 +916,86 @@ describe("cron service timer regressions", () => {
     }
   });
 
+  it("keeps timed-out cron task runs from being overwritten by late cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      resetTaskRegistryForTests();
+      resetActiveCronTaskRunsForTests();
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-02-15T13:30:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "late-cancel-after-timeout",
+        name: "late cancel after timeout",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+      let now = scheduledAt;
+      const runnerStarted = createDeferred<void>();
+      const cleanupStarted = createDeferred<void>();
+      const releaseCleanup = createDeferred<void>();
+      const cleanupTimedOutAgentRun = vi.fn(async () => {
+        cleanupStarted.resolve();
+        await releaseCleanup.promise;
+      });
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        cleanupTimedOutAgentRun,
+        runIsolatedAgentJob: vi.fn(async ({ onExecutionStarted }) => {
+          onExecutionStarted?.();
+          runnerStarted.resolve();
+          return await new Promise<never>(() => {});
+        }),
+      });
+
+      const timerPromise = onTimer(state);
+      await runnerStarted.promise;
+      await vi.advanceTimersByTimeAsync(Math.ceil(FAST_TIMEOUT_SECONDS * 1_000) + 10);
+      now += Math.ceil(FAST_TIMEOUT_SECONDS * 1_000) + 10;
+      await cleanupStarted.promise;
+
+      const runId = `cron:late-cancel-after-timeout:${scheduledAt}`;
+      const task = listTaskRecords().find(
+        (entry) => entry.runtime === "cron" && entry.runId === runId,
+      );
+      if (!task) {
+        throw new Error("Expected timed-out cron task row");
+      }
+      expect(task.status).toBe("running");
+
+      const cancelResult = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+      expect(cancelResult.found).toBe(true);
+      expect(cancelResult.cancelled).toBe(false);
+      expect(cancelResult.reason).toBe("Cron task has no active cancellation handle.");
+      expect(listTaskRecords().find((entry) => entry.taskId === task.taskId)?.status).toBe(
+        "running",
+      );
+
+      releaseCleanup.resolve();
+      await timerPromise;
+
+      const finalTask = listTaskRecords().find((entry) => entry.taskId === task.taskId);
+      expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
+      expect(finalTask?.status).toBe("timed_out");
+      expect(finalTask?.error).toContain("timed out");
+    } finally {
+      vi.useRealTimers();
+      resetActiveCronTaskRunsForTests();
+      resetTaskRegistryForTests();
+    }
+  });
+
   it("does not spend isolated execution timeout while waiting for the runner lane (#41783)", async () => {
     vi.useFakeTimers();
     try {

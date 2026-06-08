@@ -34,9 +34,10 @@ export function cancelActiveCronTaskRun(params: {
   if (!handle) {
     return false;
   }
-  if (!handle.controller.signal.aborted) {
-    handle.controller.abort(params.reason?.trim() || "Cancelled by operator.");
+  if (handle.controller.signal.aborted) {
+    return false;
   }
+  handle.controller.abort(params.reason?.trim() || "Cancelled by operator.");
   return true;
 }
 
