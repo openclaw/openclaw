@@ -71,6 +71,7 @@ export const en: TranslationMap = {
       uptime: "Uptime",
       tickInterval: "Tick Interval",
       lastChannelsRefresh: "Last Channels Refresh",
+      configPath: "Config Path",
       channelsHint: "Use Channels to link WhatsApp, Telegram, Discord, Signal, or iMessage.",
     },
     stats: {
