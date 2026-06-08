@@ -166,6 +166,19 @@ async function waitForAgentCommandCall(expectedAdditionalCalls = 1) {
   expect(agentCommand.mock.calls.length).toBeGreaterThanOrEqual(expectedCalls);
 }
 
+async function waitForSignalListener(
+  signals: ReturnType<typeof createSignalProcess>,
+  signal: "SIGINT" | "SIGTERM",
+) {
+  const deadline = Date.now() + 10_000;
+  while (signals.listenerCount(signal) === 0 && Date.now() < deadline) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
+  expect(signals.listenerCount(signal)).toBeGreaterThan(0);
+}
+
 async function waitForGatewayCall(expectedCalls = 1) {
   for (
     let attempt = 0;
@@ -1119,7 +1132,6 @@ describe("agentCliCommand", () => {
   it("passes SIGTERM abort signals into local agent runs", async () => {
     await withTempStore(async () => {
       const signals = createSignalProcess();
-      const abortListenerAttached = createDeferredVoid();
       agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
         expect(opts.abortSignal).toBeInstanceOf(AbortSignal);
         if (opts.abortSignal?.aborted) {
@@ -1137,15 +1149,13 @@ describe("agentCliCommand", () => {
             },
             { once: true },
           );
-          abortListenerAttached.resolve();
         });
       });
 
       const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
         process: signals.processLike,
       });
-      await waitForAgentCommandCall();
-      await abortListenerAttached.promise;
+      await waitForSignalListener(signals, "SIGTERM");
       signals.emit("SIGTERM");
 
       await run;
@@ -1160,7 +1170,6 @@ describe("agentCliCommand", () => {
   it("exits for local runs that resolve after SIGTERM aborts them", async () => {
     await withTempStore(async () => {
       const signals = createSignalProcess();
-      const abortListenerAttached = createDeferredVoid();
       agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
         if (opts.abortSignal?.aborted) {
           return {
@@ -1179,15 +1188,13 @@ describe("agentCliCommand", () => {
             },
             { once: true },
           );
-          abortListenerAttached.resolve();
         });
       });
 
       const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
         process: signals.processLike,
       });
-      await waitForAgentCommandCall();
-      await abortListenerAttached.promise;
+      await waitForSignalListener(signals, "SIGTERM");
       signals.emit("SIGTERM");
 
       await expect(run).resolves.toBeUndefined();
