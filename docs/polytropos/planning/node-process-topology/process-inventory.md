@@ -292,6 +292,36 @@ The orchestration path for isolated cron runs is in-process in the gateway:
 What creates the extra process is the **CLI execution backend chosen inside that
 turn**, not the mere fact that the turn is isolated.
 
+### CLI backend decision logic
+
+The decision between embedded vs CLI execution is controlled by:
+
+- `src/agents/model-selection.ts` - `isCliProvider(provider, cfg)`
+- `src/agents/command/attempt-execution.ts` - the main `runAgentAttempt` function
+- CLI provider check: `isCliProvider(params.providerOverride, params.cfg)`
+- If true: calls `runCliAgent(...)` → `executePreparedCliRun(...)` → spawns child
+- If false: calls `runEmbeddedPiAgent(...)` → stays in-process
+
+The CLI backend check looks for:
+1. Runtime CLI backends loaded from `src/plugins/cli-backends.runtime.ts`
+2. Configured CLI backends in `cfg.agents.defaults.cliBackends`
+
+Common CLI backends include bundled providers like OpenAI, Anthropic, etc.
+
+### Joshua’s observation explained
+
+If Joshua is seeing one `openclaw` process per agent turn in htop, this is likely
+because:
+
+1. His deployment uses CLI-backed providers (OpenAI, Anthropic, etc.)
+2. Each qualifying agent turn spawns a child process via `runCliAgent(...)`
+3. The child process executes the actual provider CLI command (e.g., `openai`, `anthropic`)
+4. The parent gateway process continues running while the child executes
+
+This means the "many Node processes" observation is not about every turn
+automatically spawning a process, but about **CLI-backed turns** spawning
+a child process per turn.
+
 ### Memory relevance
 
 - this can create **at least one child process per qualifying agent turn**
