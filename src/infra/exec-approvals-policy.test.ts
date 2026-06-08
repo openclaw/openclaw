@@ -214,18 +214,48 @@ describe("exec approvals policy helpers", () => {
   });
 
   it.each([
-    { left: "deny" as const, right: "full" as const, expected: "deny" as const },
+    { left: "deny" as const, right: "full" as const, expected: "full" as const },
     {
       left: "allowlist" as const,
       right: "full" as const,
-      expected: "allowlist" as const,
+      expected: "full" as const,
     },
     {
       left: "full" as const,
       right: "allowlist" as const,
+      expected: "full" as const,
+    },
+    {
+      left: "deny" as const,
+      right: "allowlist" as const,
       expected: "allowlist" as const,
     },
-  ])("minSecurity picks the more restrictive value for %j", ({ left, right, expected }) => {
+    {
+      left: "allowlist" as const,
+      right: "deny" as const,
+      expected: "allowlist" as const,
+    },
+    {
+      left: "full" as const,
+      right: "deny" as const,
+      expected: "full" as const,
+    },
+    {
+      left: "deny" as const,
+      right: "deny" as const,
+      expected: "deny" as const,
+    },
+    {
+      left: "allowlist" as const,
+      right: "allowlist" as const,
+      expected: "allowlist" as const,
+    },
+    {
+      left: "full" as const,
+      right: "full" as const,
+      expected: "full" as const,
+    },
+  ])("minSecurity picks the less restrictive value for %j", ({ left, right, expected }) => {
     expect(minSecurity(left, right)).toBe(expected);
   });
 
