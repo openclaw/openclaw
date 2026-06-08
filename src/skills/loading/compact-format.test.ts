@@ -84,12 +84,18 @@ describe("formatSkillsCompact", () => {
     expect(formatSkillsCompact([])).toBe("");
   });
 
-  it("omits description, keeps name and location", () => {
+  it("shortens description, keeps name and location", () => {
     const out = formatSkillsCompact([makeSkill("weather", "Get weather data")]);
     expect(out).toContain("<name>weather</name>");
+    expect(out).toContain("<description>Get weather data</description>");
     expect(out).toContain("<location>/skills/weather/SKILL.md</location>");
-    expect(out).not.toContain("Get weather data");
-    expect(out).not.toContain("<description>");
+  });
+
+  it("truncates long descriptions in compact format", () => {
+    const out = formatSkillsCompact([makeSkill("weather", "A".repeat(300))], {
+      descriptionMaxChars: 20,
+    });
+    expect(out).toContain("<description>AAAAAAAAAAAAAAAAA...</description>");
   });
 
   it("renders all passed skills without reapplying visibility policy", () => {
@@ -105,11 +111,9 @@ describe("formatSkillsCompact", () => {
   });
 
   it("is significantly smaller than full format", () => {
-    const skills = Array.from({ length: 50 }, (_, i) =>
-      makeSkill(`skill-${i}`, "A moderately long description that takes up space in the prompt"),
-    );
+    const skills = Array.from({ length: 50 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
     const compact = formatSkillsCompact(skills);
-    expect(compact.length).toBeLessThan(6000);
+    expect(compact.length).toBeLessThan(formatSkillsForPrompt(skills).length / 2);
   });
 });
 
@@ -154,7 +158,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
   });
 
   it("tier 2: compact when full exceeds budget but compact fits", () => {
-    const skills = Array.from({ length: 20 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(200)));
+    const skills = Array.from({ length: 20 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
     const fullLen = formatSkillsForPrompt(skills).length;
     const compactLen = formatSkillsCompact(skills).length;
     const budget = Math.floor((fullLen + compactLen) / 2);
@@ -162,9 +166,9 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(fullLen).toBeGreaterThan(budget);
     expect(compactLen + 150).toBeLessThan(budget);
     const prompt = buildPrompt(skills, { maxChars: budget });
-    expect(prompt).not.toContain("<description>");
+    expect(prompt).toContain("<description>");
     // All skills preserved — distinct message, no "included X of Y"
-    expect(prompt).toContain("compact format (descriptions omitted)");
+    expect(prompt).toContain("compact format (descriptions shortened)");
     expect(prompt).not.toContain("included");
     expect(prompt).toContain("skill-0");
     expect(prompt).toContain("skill-19");
@@ -173,8 +177,8 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
   it("tier 3: compact + binary search when compact also exceeds budget", () => {
     const skills = Array.from({ length: 100 }, (_, i) => makeSkill(`skill-${i}`, "description"));
     const prompt = buildPrompt(skills, { maxChars: 2000 });
-    expect(prompt).toContain("compact format, descriptions omitted");
-    expect(prompt).not.toContain("<description>");
+    expect(prompt).toContain("compact format, descriptions shortened");
+    expect(prompt).toContain("<description>");
     expect(prompt).toContain("skill-0");
     const [included, total] = requireIncludedCounts(prompt);
     expect(included).toBeLessThan(total);
@@ -183,7 +187,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
   });
 
   it("compact preserves all skills where full format would drop some", () => {
-    const skills = Array.from({ length: 50 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(200)));
+    const skills = Array.from({ length: 50 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
     const compactLen = formatSkillsCompact(skills).length;
     const budget = compactLen + 250;
     // Verify precondition: full format must not fit so tier 2 is actually exercised
@@ -198,7 +202,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
 
   it("count truncation + compact: shows included X of Y with compact note", () => {
     // 30 skills but maxCount=10, and full format of 10 exceeds budget
-    const skills = Array.from({ length: 30 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(200)));
+    const skills = Array.from({ length: 30 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
     const tenSkills = skills.slice(0, 10);
     const fullLen = formatSkillsForPrompt(tenSkills).length;
     const compactLen = formatSkillsCompact(tenSkills).length;
@@ -208,8 +212,8 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     const prompt = buildPrompt(skills, { maxChars: budget, maxCount: 10 });
     // Count-truncated (30→10) AND compact (full format of 10 exceeds budget)
     expect(prompt).toContain("included 10 of 30");
-    expect(prompt).toContain("compact format, descriptions omitted");
-    expect(prompt).not.toContain("<description>");
+    expect(prompt).toContain("compact format, descriptions shortened");
+    expect(prompt).toContain("<description>");
   });
 
   it("extreme budget: even a single compact skill overflows", () => {
@@ -229,18 +233,20 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).toContain("<description>");
   });
 
-  it("compact budget reserves space for the warning line", () => {
+  it("compact budget reserves space for the warning line by shortening descriptions", () => {
     // Build skills whose compact output exactly equals the char budget.
     // Without overhead reservation the compact block would fit, but the
     // warning line prepended by the caller would push the total over budget.
-    const skills = Array.from({ length: 50 }, (_, i) => makeSkill(`s-${i}`, "A".repeat(200)));
+    const skills = Array.from({ length: 50 }, (_, i) => makeSkill(`s-${i}`, "A".repeat(800)));
     const compactLen = formatSkillsCompact(skills).length;
     // Set budget = compactLen + 50 — less than the 150-char overhead reserve.
-    // The function should NOT choose compact-only because the warning wouldn't fit.
+    // The function should NOT choose the default compact description length because
+    // the warning would not fit; it should shrink descriptions instead.
     const prompt = buildPrompt(skills, { maxChars: compactLen + 50 });
-    // Should fall through to compact + binary search (some skills dropped)
-    expect(prompt).toContain("included");
-    expect(prompt).not.toContain("<description>");
+    expect(prompt).toContain("compact format");
+    expect(prompt).not.toContain("included");
+    expect(prompt).toContain("<description>");
+    expect(prompt.length).toBeLessThanOrEqual(compactLen + 50);
   });
 
   it("budget check uses compacted home-dir paths, not canonical paths", () => {
@@ -252,7 +258,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     const skills = Array.from({ length: 30 }, (_, i) =>
       makeSkill(
         `skill-${i}`,
-        "A".repeat(200),
+        "A".repeat(800),
         `${home}/.openclaw/workspace/skills/skill-${i}/SKILL.md`,
       ),
     );
