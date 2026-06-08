@@ -810,7 +810,14 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (!listedLegacy) {
         continue;
       }
-      if (!this.canMigrateLegacyCollection(collection, listedLegacy)) {
+      // Custom (user-owned) legacy collections must be verified by path before removal;
+      // `collection list` omits the path, so enrich it via `collection show` so a name
+      // match alone never deletes a user collection.
+      const legacyMeta =
+        collection.kind === "custom"
+          ? await this.enrichLegacyCollectionPath(legacyName, listedLegacy)
+          : listedLegacy;
+      if (!this.canMigrateLegacyCollection(collection, legacyMeta)) {
         log.debug(
           `qmd legacy collection migration skipped for ${legacyName} (path/pattern mismatch)`,
         );
@@ -836,6 +843,33 @@ export class QmdMemoryManager implements MemorySearchManager {
     return `${unscopedName}-${agentSegment}`;
   }
 
+  // `qmd collection list` omits the filesystem path, so a custom legacy candidate can
+  // only be confirmed as ours by enriching its path via `collection show`. On failure
+  // the path stays undefined and canMigrateLegacyCollection fails closed (keeps it).
+  private async enrichLegacyCollectionPath(
+    name: string,
+    base: ListedCollection,
+  ): Promise<ListedCollection> {
+    if (base.path) {
+      return base;
+    }
+    try {
+      const showResult = await this.runQmd(["collection", "show", name], {
+        timeoutMs: this.qmd.update.commandTimeoutMs,
+      });
+      const shown = this.parseShownCollection(showResult.stdout);
+      if (shown.path) {
+        base.path = shown.path;
+      }
+      if (shown.pattern && !base.pattern) {
+        base.pattern = shown.pattern;
+      }
+    } catch {
+      // show failed (old qmd, timeout, missing) → path undefined → fail closed.
+    }
+    return base;
+  }
+
   private canMigrateLegacyCollection(
     collection: ManagedCollection,
     listedLegacy: ListedCollection,
@@ -849,11 +883,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (collection.kind === "memory" || collection.kind === "sessions") {
       return true;
     }
-    // User-owned kind (custom): the base name is user-supplied (e.g. "notes"
-    // → "notes-<agentId>"). Apply both guards before removing to avoid
-    // deleting a collection we may not own. The path guard is retained for
-    // forward-compat even though qmd 2.5.2 never emits a Path field.
-    if (listedLegacy.path && !this.pathsMatch(listedLegacy.path, collection.path)) {
+    // User-owned kind (custom): the base name is user-supplied (e.g. "notes" →
+    // "notes-<agentId>"). Remove ONLY after VERIFYING path ownership — a name (or
+    // even name+pattern) match alone could be a different user collection. `qmd
+    // collection list` omits the path, so the caller enriches it via `collection
+    // show`; with no verified matching path we fail closed and keep the collection.
+    if (!listedLegacy.path || !this.pathsMatch(listedLegacy.path, collection.path)) {
       return false;
     }
     if (

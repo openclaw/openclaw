@@ -1765,6 +1765,108 @@ describe("QmdMemoryManager", () => {
     expect(legacyCollections.has(legacyScopedName)).toBe(false);
   });
 
+  it("does not remove a custom legacy collection by name when show reveals a different path", async () => {
+    // "notes-<agentId>" matches the desired custom collection by name (and pattern), but
+    // `qmd collection list` omits the path. `collection show` reveals it lives elsewhere —
+    // a user's own collection — so it must NOT be deleted by name alone.
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, name: "notes", pattern: "**/*.md" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const legacyName = `notes-${agentId}`;
+    const removeCalls: string[] = [];
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        // qmd list omits the path; pattern matches the desired "notes".
+        emitAndClose(child, "stdout", JSON.stringify([{ name: legacyName, mask: "**/*.md" }]));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "show" && args[2] === legacyName) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          [
+            `Collection: ${legacyName}`,
+            "  Path:     /some/other/user/path",
+            "  Pattern:  **/*.md",
+          ].join("\n"),
+        );
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "remove") {
+        const child = createMockChild({ autoClose: false });
+        removeCalls.push(args[2] ?? "");
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    // Path mismatch (verified via show) → never delete a user collection by name.
+    expect(removeCalls).not.toContain(legacyName);
+  });
+
+  it("removes a custom legacy collection once show verifies it is at our path", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, name: "notes", pattern: "**/*.md" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const legacyName = `notes-${agentId}`;
+    const removeCalls: string[] = [];
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", JSON.stringify([{ name: legacyName, mask: "**/*.md" }]));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "show" && args[2] === legacyName) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          [`Collection: ${legacyName}`, `  Path:     ${workspaceDir}`, "  Pattern:  **/*.md"].join(
+            "\n",
+          ),
+        );
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "remove") {
+        const child = createMockChild({ autoClose: false });
+        removeCalls.push(args[2] ?? "");
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    // show confirms our path → the legacy custom collection is migrated.
+    expect(removeCalls).toContain(legacyName);
+  });
+
   it("always sets kind on collections produced by the bootstrap path (contract: sessions kind)", async () => {
     // canMigrateLegacyCollection gates removal on collection.kind. This
     // covers the sessions collection, which is added by the manager
