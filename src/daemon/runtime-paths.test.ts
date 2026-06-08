@@ -154,13 +154,12 @@ describe("resolvePreferredNodePath", () => {
     expect(execFile).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to version-manager execPath when no supported system node exists", async () => {
+  it("returns supported version-manager execPath immediately (regression #89376)", async () => {
     mockNodePathPresent(darwinNode);
 
     const execFile = vi
       .fn()
-      .mockResolvedValueOnce({ stdout: "24.11.1\n", stderr: "" })
-      .mockResolvedValueOnce({ stdout: "18.0.0\n", stderr: "" });
+      .mockResolvedValueOnce({ stdout: "24.11.1\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -171,7 +170,7 @@ describe("resolvePreferredNodePath", () => {
     });
 
     expect(result).toBe(fnmNode);
-    expect(execFile).toHaveBeenCalledTimes(2);
+    expect(execFile).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to system node when execPath version is unsupported", async () => {
