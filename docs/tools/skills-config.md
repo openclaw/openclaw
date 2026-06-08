@@ -364,6 +364,8 @@ To allow an intentional symlink layout, declare the trusted target:
 With this config, `<workspace>/skills/manager -> ~/Projects/manager/skills` is
 accepted after realpath resolution. `extraDirs` scans the sibling repo directly;
 `allowSymlinkTargets` preserves the symlinked path for existing layouts.
+Skill Workshop apply uses the same trust list before publishing proposals
+through symlinked workspace skill paths.
 
 Managed `~/.openclaw/skills` and personal `~/.agents/skills` directories
 already accept skill-directory symlinks (per-skill `SKILL.md` containment still
