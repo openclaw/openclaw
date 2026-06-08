@@ -138,7 +138,7 @@ export type AppViewState = {
   chatSessionPickerResult: SessionsListResult | null;
   chatSessionPickerRenameKey: string | null;
   chatSessionPickerRenameDraft: string;
-  chatSessionPickerRenamePendingKey: string | null;
+  chatSessionPickerRenamePendingKeys: Record<string, boolean>;
   chatSessionPickerRenameRequestId: number;
   sessionsResultAgentId?: string | null;
   chatAgentSessionRowsByAgent?: Record<string, SessionsListResult["sessions"]>;

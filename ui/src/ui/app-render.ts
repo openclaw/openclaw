@@ -1010,7 +1010,7 @@ function renderGuardedChatControls(state: AppViewState) {
       state.chatSessionPickerResult,
       state.chatSessionPickerRenameKey,
       state.chatSessionPickerRenameDraft,
-      state.chatSessionPickerRenamePendingKey,
+      state.chatSessionPickerRenamePendingKeys,
       state.sessionSwitchNotice?.id ?? null,
       state.sessionSwitchNotice?.text ?? null,
       state.sessionSwitchFlashKey,
