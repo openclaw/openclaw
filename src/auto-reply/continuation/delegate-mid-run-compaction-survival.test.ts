@@ -1,5 +1,5 @@
 /**
- * Martin-review-response :: Q2 (extension) — mid-run delegates survive
+ * Review Q2 (extension) — mid-run delegates survive
  * parent compaction.
  *
  * For delegates that were already DISPATCHED in prior turns (now executing
@@ -81,7 +81,7 @@ beforeEach(() => {
   mockState.spawnSubagentDirect.mockResolvedValue({ status: "accepted" });
 });
 
-describe("mid-run delegate survival under parent compaction (Martin Q2 extension)", () => {
+describe("mid-run delegate survival under parent compaction (Q2 extension)", () => {
   it("releasePostCompactionLifecycle ONLY touches staged delegates — no enumeration, kill, or abort of other sessions", async () => {
     // Two delegates were staged via continue_delegate(mode="post-compaction")
     // during the prior turn. They are what the lifecycle release MUST dispatch.
