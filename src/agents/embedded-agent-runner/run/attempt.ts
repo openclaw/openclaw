@@ -614,8 +614,19 @@ function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionM
 
 type OrphanRepairSessionManager = Pick<
   ReturnType<typeof guardSessionManager>,
-  "getLeafEntry" | "getEntry"
+  | "getLeafEntry"
+  | "getEntry"
+  | "appendThinkingLevelChange"
+  | "appendModelChange"
+  | "appendCustomEntry"
+  | "appendSessionInfo"
+  | "appendLabelChange"
 >;
+
+type OrphanRepairCandidate = {
+  messageEntry: SessionMessageEntry;
+  trailingEntries: SessionEntry[];
+};
 
 function canSkipTrailingEntryForOrphanRepair(entry: SessionEntry): boolean {
   return (
@@ -629,17 +640,55 @@ function canSkipTrailingEntryForOrphanRepair(entry: SessionEntry): boolean {
 
 function findTrailingMessageEntryForOrphanRepair(
   sessionManager: OrphanRepairSessionManager,
-): SessionMessageEntry | undefined {
+): OrphanRepairCandidate | undefined {
   const visited = new Set<string>();
+  const trailingEntries: SessionEntry[] = [];
   let entry = sessionManager.getLeafEntry();
   while (entry && entry.type !== "message" && canSkipTrailingEntryForOrphanRepair(entry)) {
     if (visited.has(entry.id)) {
       return undefined;
     }
     visited.add(entry.id);
+    trailingEntries.push(entry);
     entry = entry.parentId ? sessionManager.getEntry(entry.parentId) : undefined;
   }
-  return entry?.type === "message" ? entry : undefined;
+  return entry?.type === "message"
+    ? { messageEntry: entry, trailingEntries: trailingEntries.toReversed() }
+    : undefined;
+}
+
+function appendTrailingEntryForOrphanRepair(
+  sessionManager: OrphanRepairSessionManager,
+  entry: SessionEntry,
+): void {
+  if (entry.type === "thinking_level_change") {
+    sessionManager.appendThinkingLevelChange(entry.thinkingLevel);
+    return;
+  }
+  if (entry.type === "model_change") {
+    sessionManager.appendModelChange(entry.provider, entry.modelId);
+    return;
+  }
+  if (entry.type === "custom") {
+    sessionManager.appendCustomEntry(entry.customType, entry.data);
+    return;
+  }
+  if (entry.type === "session_info") {
+    sessionManager.appendSessionInfo(entry.name ?? "");
+    return;
+  }
+  if (entry.type === "label") {
+    sessionManager.appendLabelChange(entry.targetId, entry.label);
+  }
+}
+
+function replayTrailingEntriesForOrphanRepair(
+  sessionManager: OrphanRepairSessionManager,
+  trailingEntries: SessionEntry[],
+): void {
+  for (const entry of trailingEntries) {
+    appendTrailingEntryForOrphanRepair(sessionManager, entry);
+  }
 }
 
 function contentValuesEqual(left: unknown, right: unknown): boolean {
@@ -3739,9 +3788,10 @@ export async function runEmbeddedAttempt(
         let transcriptPromptForRuntimeSplit = effectiveTranscriptPrompt;
         let promptForRuntimeContextSplit = promptBeforePromptBuildHooks;
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
-        const leafEntry = isRawModelRun
-          ? null
+        const orphanRepair = isRawModelRun
+          ? undefined
           : findTrailingMessageEntryForOrphanRepair(sessionManager);
+        const leafEntry = orphanRepair?.messageEntry;
         if (leafEntry?.message.role === "user") {
           const messageMergeStrategy = resolveMessageMergeStrategy();
           const orphanPromptMerge = messageMergeStrategy.mergeOrphanedTrailingUserPrompt({
@@ -3773,6 +3823,10 @@ export async function runEmbeddedAttempt(
             } else {
               sessionManager.resetLeaf();
             }
+            replayTrailingEntriesForOrphanRepair(
+              sessionManager,
+              orphanRepair?.trailingEntries ?? [],
+            );
             activeSession.agent.state.messages = removeTrailingUserMessageForOrphanRepair(
               activeSession.messages,
               leafEntry.message,

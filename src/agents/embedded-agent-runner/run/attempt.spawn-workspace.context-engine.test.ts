@@ -1047,22 +1047,58 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const olderPrompt = "OLD_TURN_76888: answer the orphaned queued turn";
     const latestPrompt = "LATEST_TURN_76888: answer only the active channel prompt";
     const repairedPrompt = `${marker}\n${olderPrompt}\n\n${latestPrompt}`;
+    const modelSnapshotData = { provider: "deepseek", modelId: "deepseek-chat" };
     const orphanLeaf = {
       id: "orphan-leaf",
       parentId: "parent-leaf",
       type: "message",
       message: { role: "user", content: olderPrompt, timestamp: 1 },
     };
-    hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
-      id: "model-snapshot-leaf",
+    const thinkingEntry = {
+      id: "thinking-leaf",
       parentId: "orphan-leaf",
+      type: "thinking_level_change",
+      thinkingLevel: "high",
+    };
+    const modelEntry = {
+      id: "model-leaf",
+      parentId: "thinking-leaf",
+      type: "model_change",
+      provider: "deepseek",
+      modelId: "deepseek-chat",
+    };
+    const modelSnapshotEntry = {
+      id: "model-snapshot-leaf",
+      parentId: "model-leaf",
       type: "custom",
       customType: "model-snapshot",
-      data: { provider: "deepseek", modelId: "deepseek-chat" },
+      data: modelSnapshotData,
+    };
+    hoisted.sessionManager.getLeafEntry.mockReturnValueOnce(modelSnapshotEntry);
+    hoisted.sessionManager.getEntry.mockImplementation((id: unknown) => {
+      if (id === "model-leaf") {
+        return modelEntry;
+      }
+      if (id === "thinking-leaf") {
+        return thinkingEntry;
+      }
+      return id === "orphan-leaf" ? orphanLeaf : undefined;
     });
-    hoisted.sessionManager.getEntry.mockImplementation((id: unknown) =>
-      id === "orphan-leaf" ? orphanLeaf : undefined,
-    );
+    const replayedEntries: string[] = [];
+    hoisted.sessionManager.appendThinkingLevelChange.mockImplementation((...args: unknown[]) => {
+      replayedEntries.push(`thinking:${String(args[0])}`);
+      return "replayed-thinking";
+    });
+    hoisted.sessionManager.appendModelChange.mockImplementation((...args: unknown[]) => {
+      replayedEntries.push(`model:${String(args[0])}/${String(args[1])}`);
+      return "replayed-model";
+    });
+    hoisted.sessionManager.appendCustomEntry.mockImplementation((...args: unknown[]) => {
+      if (args[0] === "model-snapshot") {
+        replayedEntries.push(`custom:${args[0]}:${JSON.stringify(args[1])}`);
+      }
+      return "replayed-custom";
+    });
     const seen: { modelInputPrompt?: string } = {};
 
     const result = await createContextEngineAttemptRunner({
@@ -1093,6 +1129,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
     expect(finalAssistant.content).toBe(`stub-provider-target=${latestPrompt}`);
     expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(replayedEntries).toEqual([
+      "thinking:high",
+      "model:deepseek/deepseek-chat",
+      `custom:model-snapshot:${JSON.stringify(modelSnapshotData)}`,
+    ]);
   });
 
   it("keeps hidden runtime context hidden when orphan repair merges a transcript prompt", async () => {
