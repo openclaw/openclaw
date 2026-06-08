@@ -634,7 +634,7 @@ Periodic heartbeat runs.
       compaction: {
         mode: "safeguard", // default | safeguard
         provider: "my-provider", // id of a registered compaction provider plugin (optional)
-        timeoutSeconds: 900,
+        timeoutSeconds: 180,
         reserveTokensFloor: 24000,
         keepRecentTokens: 50000,
         identifierPolicy: "strict", // strict | off | custom
