@@ -172,14 +172,14 @@ run.
 
 Claude CLI also has its own noninteractive permission mode. OpenClaw maps that
 to the existing exec policy instead of adding Claude-specific policy config.
-For OpenClaw-managed Claude live sessions, the effective OpenClaw exec policy is
-authoritative: YOLO (`tools.exec.security: "full"` and
-`tools.exec.ask: "off"`) launches Claude with
-`--permission-mode bypassPermissions`, while restrictive effective exec policy
-launches Claude with `--permission-mode default`. Per-agent
-`agents.list[].tools.exec` settings override global `tools.exec` for that
-agent. Raw Claude backend args may still include `--permission-mode`, but live
-Claude launches normalize that flag to match the effective OpenClaw exec policy.
+For OpenClaw-managed Claude live sessions, an explicit YOLO exec policy
+(`tools.exec.security: "full"` and `tools.exec.ask: "off"`) launches Claude with
+`--permission-mode bypassPermissions`. Missing or restrictive exec policy leaves
+Claude permission mode unset while OpenClaw answers live tool permission requests
+through the Claude stdio permission prompt tool. Per-agent
+`agents.list[].tools.exec` settings override global `tools.exec` for that agent.
+Raw Claude backend args may still include `--permission-mode`, but live Claude
+launches strip that flag unless explicit OpenClaw YOLO policy enables bypass.
 
 The bundled Anthropic `claude-cli` backend also maps OpenClaw `/think` levels
 to Claude Code's native `--effort` flag for non-off levels. `minimal` and

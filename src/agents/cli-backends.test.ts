@@ -135,11 +135,14 @@ const NORMALIZED_CLAUDE_FALLBACK_RESUME_ARGS = [
 ];
 
 function isTestYoloConfig(context?: CliBackendNormalizeConfigContext): boolean {
+  if (!context) {
+    return false;
+  }
   const agentExec = context?.agentId
     ? context.config?.agents?.list?.find((agent) => agent.id === context.agentId)?.tools?.exec
     : undefined;
   const exec = agentExec ?? context?.config?.tools?.exec;
-  return (exec?.security ?? "full") === "full" && (exec?.ask ?? "off") === "off";
+  return Boolean(exec) && (exec?.security ?? "full") === "full" && (exec?.ask ?? "off") === "off";
 }
 
 function normalizeTestPermissionMode(context?: CliBackendNormalizeConfigContext): {
@@ -522,7 +525,7 @@ describe("resolveCliBackendLiveTest", () => {
 });
 
 describe("resolveCliBackendConfig claude-cli defaults", () => {
-  it("derives bypassPermissions from OpenClaw's default YOLO exec policy", () => {
+  it("leaves Claude permission mode unset without explicit OpenClaw YOLO exec policy", () => {
     const resolved = requireCliBackendConfig("claude-cli");
 
     expect(resolved?.bundleMcp).toBe(true);
@@ -535,8 +538,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.args).toContain("user");
     expect(resolved?.config.args).toContain("--allowedTools");
     expect(resolved?.config.args).toContain("mcp__openclaw__*");
-    expect(resolved?.config.args).toContain("--permission-mode");
-    expect(resolved?.config.args).toContain("bypassPermissions");
+    expect(resolved?.config.args).not.toContain("--permission-mode");
+    expect(resolved?.config.args).not.toContain("bypassPermissions");
     expect(resolved?.config.args).not.toContain("--dangerously-skip-permissions");
     expect(resolved?.config.input).toBe("stdin");
     expect(resolved?.config.imageArg).toBe("@");
@@ -548,8 +551,8 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.resumeArgs).toContain("user");
     expect(resolved?.config.resumeArgs).toContain("--allowedTools");
     expect(resolved?.config.resumeArgs).toContain("mcp__openclaw__*");
-    expect(resolved?.config.resumeArgs).toContain("--permission-mode");
-    expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
+    expect(resolved?.config.resumeArgs).not.toContain("--permission-mode");
+    expect(resolved?.config.resumeArgs).not.toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("--dangerously-skip-permissions");
   });
 
@@ -651,12 +654,12 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.command).toBe("/usr/local/bin/claude");
     expect(resolved?.config.args).toContain("--setting-sources");
     expect(resolved?.config.args).toContain("user");
-    expect(resolved?.config.args).toContain("--permission-mode");
-    expect(resolved?.config.args).toContain("bypassPermissions");
+    expect(resolved?.config.args).not.toContain("--permission-mode");
+    expect(resolved?.config.args).not.toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).toContain("--setting-sources");
     expect(resolved?.config.resumeArgs).toContain("user");
-    expect(resolved?.config.resumeArgs).toContain("--permission-mode");
-    expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
+    expect(resolved?.config.resumeArgs).not.toContain("--permission-mode");
+    expect(resolved?.config.resumeArgs).not.toContain("bypassPermissions");
     expect(resolved?.config.env).not.toHaveProperty("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST");
     expect(resolved?.config.clearEnv).toContain("ANTHROPIC_API_TOKEN");
     expect(resolved?.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
@@ -911,8 +914,6 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "json",
       "--setting-sources",
       "user",
-      "--permission-mode",
-      "bypassPermissions",
     ]);
     expect(resolved?.config.resumeArgs).toEqual([
       "-p",
@@ -922,8 +923,6 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "{sessionId}",
       "--setting-sources",
       "user",
-      "--permission-mode",
-      "bypassPermissions",
     ]);
     expect(resolved?.config.systemPromptFileArg).toBe("--append-system-prompt-file");
     expect(resolved?.config.systemPromptWhen).toBe("always"); // fix(#80374): was "first"

@@ -84,7 +84,7 @@ type ClaudeLiveOutputLimits = {
 type ClaudeLiveExecPermission = {
   security: ExecSecurity;
   ask: ExecAsk;
-  permissionMode: "bypassPermissions" | "default";
+  permissionMode?: "bypassPermissions";
 };
 type ClaudeLiveDiagnosticRefs = {
   runId: string;
@@ -189,6 +189,22 @@ function upsertArgValue(args: string[], flag: string, value: string): string[] {
   return normalized;
 }
 
+function stripArgValue(args: string[], flag: string): string[] {
+  const normalized: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] ?? "";
+    if (arg === flag) {
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith(`${flag}=`)) {
+      continue;
+    }
+    normalized.push(arg);
+  }
+  return normalized;
+}
+
 function appendArg(args: string[], flag: string): string[] {
   return args.includes(flag) ? args : [...args, flag];
 }
@@ -234,7 +250,7 @@ export function buildClaudeLiveArgs(params: {
       upsertArgValue(
         upsertArgValue(
           stripLiveProcessArgs(
-            params.args,
+            stripArgValue(params.args, "--permission-mode"),
             params.backend,
             params.useResume && params.backend.systemPromptWhen !== "always",
           ),
@@ -761,6 +777,7 @@ function readConfiguredExecPolicy(context: PreparedCliRunContext): {
   security: ExecSecurity;
   ask: ExecAsk;
   agentId: string;
+  explicitExecPolicy: boolean;
 } {
   const agentId = context.params.agentId ?? resolveAgentIdFromSessionKey(context.params.sessionKey);
   const agentExec = context.params.config?.agents?.list?.find((agent) => agent.id === agentId)
@@ -773,6 +790,7 @@ function readConfiguredExecPolicy(context: PreparedCliRunContext): {
     agentId,
     security,
     ask: sessionAsk ? maxAsk(configuredAsk, sessionAsk) : configuredAsk,
+    explicitExecPolicy: Boolean(exec),
   };
 }
 
@@ -791,7 +809,9 @@ function resolveClaudeLiveExecPermission(context: PreparedCliRunContext): Claude
   return {
     security,
     ask,
-    permissionMode: security === "full" && ask === "off" ? "bypassPermissions" : "default",
+    ...(configured.explicitExecPolicy && security === "full" && ask === "off"
+      ? { permissionMode: "bypassPermissions" as const }
+      : {}),
   };
 }
 

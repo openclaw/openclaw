@@ -1889,7 +1889,7 @@ ${JSON.stringify({
     expect(parsed.response.response.decisionClassification).toBe("user_reject");
     expect(parsed.response.response.message).toContain("security=allowlist");
     const spawnArg = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
-    expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("default");
+    expect(spawnArg.argv).not.toContain("--permission-mode");
   });
 
   it("does not create exec approvals file while resolving Claude live policy", async () => {
@@ -1943,7 +1943,7 @@ ${JSON.stringify({
 
       expect(result.text).toBe("ok");
       const spawnArg = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
-      expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("default");
+      expect(spawnArg.argv).not.toContain("--permission-mode");
       await expectPathMissing(approvalsPath);
     });
   });
@@ -1996,9 +1996,8 @@ ${JSON.stringify({
       };
     });
 
-    // No tools.exec configured at all — represents the default deployment
-    // that extensions/anthropic/cli-shared.ts already launches with
-    // --permission-mode bypassPermissions via normalizeClaudePermissionArgs.
+    // No tools.exec configured at all — default deployments should leave
+    // Claude permission mode unset while OpenClaw answers live tool requests.
     const result = await executePreparedCliRun(
       buildPreparedCliRunContext({
         provider: "claude-cli",
@@ -2108,7 +2107,7 @@ ${JSON.stringify({
         expect(parsed.response.response.decisionClassification).toBe("user_reject");
         expect(parsed.response.response.message).toContain("security=allowlist");
         const spawnArg = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
-        expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("default");
+        expect(spawnArg.argv).not.toContain("--permission-mode");
       },
     );
   });
@@ -2189,7 +2188,7 @@ ${JSON.stringify({
     expect(parsed.response.response.decisionClassification).toBe("user_reject");
     expect(parsed.response.response.message).toContain("ask=always");
     const spawnArg = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
-    expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("default");
+    expect(spawnArg.argv).not.toContain("--permission-mode");
   });
 
   it("answers Claude live control_request can_use_tool with deny when agent approvals are restrictive", async () => {
@@ -2280,7 +2279,7 @@ ${JSON.stringify({
         expect(parsed.response.response.decisionClassification).toBe("user_reject");
         expect(parsed.response.response.message).toContain("security=deny");
         const spawnArg = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
-        expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("default");
+        expect(spawnArg.argv).not.toContain("--permission-mode");
       },
     );
   });
@@ -2373,7 +2372,7 @@ ${JSON.stringify({
         expect(parsed.response.response.decisionClassification).toBe("user_reject");
         expect(parsed.response.response.message).toContain("security=deny");
         const spawnArg = supervisorSpawnMock.mock.calls.at(-1)?.[0] as { argv?: string[] };
-        expect(requireArgAfter(spawnArg.argv, "--permission-mode")).toBe("default");
+        expect(spawnArg.argv).not.toContain("--permission-mode");
       },
     );
   });
