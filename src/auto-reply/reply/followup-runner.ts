@@ -62,6 +62,7 @@ import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import { resolveReplyHookTrigger } from "./run-provenance.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -802,7 +803,7 @@ export function createFollowupRunner(params: {
                     sessionId: run.sessionId,
                     sessionKey: replySessionKey,
                     agentId: run.agentId,
-                    trigger: opts?.isHeartbeat === true ? "heartbeat" : "user",
+                    trigger: resolveReplyHookTrigger(opts),
                     sessionFile: run.sessionFile,
                     workspaceDir: run.workspaceDir,
                     cwd: run.cwd,
@@ -882,7 +883,7 @@ export function createFollowupRunner(params: {
                 sessionId: run.sessionId,
                 sessionKey: run.sessionKey,
                 agentId: run.agentId,
-                trigger: "user",
+                trigger: resolveReplyHookTrigger(opts),
                 messageChannel: queued.originatingChannel ?? undefined,
                 messageProvider: run.messageProvider,
                 agentAccountId: run.agentAccountId,
@@ -1172,11 +1173,48 @@ export function createFollowupRunner(params: {
       // --- continue_work processing ---
       // The election is durable TaskFlow state; the dispatcher only arms a
       // maturity timer and can replay it after gateway restart.
-      if (
-        attemptContinueWorkRequest &&
-        runtimeConfig?.agents?.defaults?.continuation?.enabled === true &&
-        sessionKey
-      ) {
+      const continuationEnabled = runtimeConfig?.agents?.defaults?.continuation?.enabled === true;
+      let effectiveContinueWorkRequest:
+        | { reason: string; delaySeconds?: number; traceparent?: string }
+        | undefined = attemptContinueWorkRequest;
+      if (!effectiveContinueWorkRequest && continuationEnabled && sessionKey) {
+        const [{ extractContinuationSignal }, { stripContinuationSignal }] = await Promise.all([
+          import("../continuation/signal.js"),
+          import("../tokens.js"),
+        ]);
+        const continuationPayloads = runResult.payloads ?? [];
+        const extraction = extractContinuationSignal({
+          payloads: continuationPayloads.map((payload) => ({ ...payload })),
+          enabled: true,
+          sessionKey,
+        });
+        if (extraction.signal?.kind === "work") {
+          if (extraction.fromBracket) {
+            for (let i = continuationPayloads.length - 1; i >= 0; i--) {
+              const payload = continuationPayloads[i];
+              if (!payload?.text) {
+                continue;
+              }
+              const stripped = stripContinuationSignal(payload.text);
+              if (stripped.signal?.kind !== "work") {
+                continue;
+              }
+              payload.text = stripped.text;
+              break;
+            }
+          }
+          effectiveContinueWorkRequest = {
+            reason: extraction.workReason ?? "",
+            ...(extraction.signal.delayMs !== undefined
+              ? { delaySeconds: extraction.signal.delayMs / 1000 }
+              : {}),
+            ...(extraction.signal.traceparent
+              ? { traceparent: extraction.signal.traceparent }
+              : {}),
+          };
+        }
+      }
+      if (effectiveContinueWorkRequest && continuationEnabled && sessionKey) {
         const [
           { resolveLiveContinuationRuntimeConfig },
           { loadContinuationChainState, persistContinuationChainState },
@@ -1198,7 +1236,14 @@ export function createFollowupRunner(params: {
         const scheduleResult = await scheduleContinuationWork({
           sessionKey,
           chainState,
-          request: attemptContinueWorkRequest,
+          request: {
+            reason: effectiveContinueWorkRequest.reason,
+            delaySeconds:
+              effectiveContinueWorkRequest.delaySeconds ?? continuationConfig.defaultDelayMs / 1000,
+            ...(effectiveContinueWorkRequest.traceparent
+              ? { traceparent: effectiveContinueWorkRequest.traceparent }
+              : {}),
+          },
           config: continuationConfig,
           parentRunId: runId,
           log: (message) => defaultRuntime.log(message),

@@ -132,6 +132,11 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
   });
 
   afterEach(async () => {
+    const { resetContinuationWorkDispatchForTests } =
+      await import("../../auto-reply/continuation/work-dispatch.js");
+    const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+    resetContinuationWorkDispatchForTests();
+    resetTaskFlowRegistryForTests({ persist: false });
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -240,6 +245,41 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
     const result = await runEmbeddedAttempt(makeContinuationEnabledConfig());
 
     expect(result.payloads?.[0]?.text).toContain("[[CONTINUE_DELEGATE: next hop]]");
+  });
+
+  it("lets bracket continue_work use the configured default delay when a tool delay also exists", async () => {
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      opts?.requestContinuation({ reason: "tool delay should not win", delaySeconds: 30 });
+      return {
+        payloads: [{ text: "done\nCONTINUE_WORK" }],
+        meta: {
+          durationMs: 1,
+          finalAssistantVisibleText: "done",
+          agentMeta: {
+            sessionId: "session-embedded",
+            provider: "anthropic",
+            model: "claude-sonnet-4.7",
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+          },
+        },
+      } satisfies EmbeddedAgentRunResult;
+    });
+
+    await runEmbeddedAttempt(makeContinuationEnabledConfig());
+
+    const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+    const [flow] = listTaskFlowsForOwnerKey(sessionKey);
+    expect(flow?.stateJson).toMatchObject({
+      kind: "continuation_work",
+      delayMs: 15000,
+    });
   });
 
   it("captured continue_work request is invocable end-to-end on spawn-init (turn-1 cure-mechanism pin)", async () => {

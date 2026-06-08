@@ -930,7 +930,7 @@ export async function runAgentAttempt(params: {
             reason: extraction.workReason ?? "",
             ...(extraction.signal.delayMs !== undefined
               ? { delaySeconds: extraction.signal.delayMs / 1000 }
-              : attemptContinueWorkRequest
+              : !extraction.fromBracket && attemptContinueWorkRequest
                 ? { delaySeconds: attemptContinueWorkRequest.delaySeconds }
                 : {}),
             ...(extraction.signal.traceparent
