@@ -116,11 +116,12 @@ export class TopicResolver {
   }
 
   /**
-   * Look up every topic a user owns (entity_auth.uid -> masterId/slaveId,
-   * many rows per uid) plus their feed_topic titles. The primary topic
-   * (top-level fields) is the most recently granted mapping. Results are
-   * cached per uid for CACHE_TTL_MS; on a DB failure a stale entry (if any)
-   * is served instead of throwing.
+   * Look up every topic a user may view plus their feed_topic titles.
+   * Superusers (su = 1) get every active daily-monitoring master topic;
+   * everyone else gets their entity_auth ownership (many rows per uid), with
+   * the primary topic (top-level fields) being the most recently granted
+   * mapping. Results are cached per uid for CACHE_TTL_MS; on a DB failure a
+   * stale entry (if any) is served instead of throwing.
    */
   async getTopicIdsByUser(userId: string): Promise<TopicResolution> {
     if (!userId) {
@@ -133,13 +134,16 @@ export class TopicResolver {
     }
 
     const pool = await this.getPool();
-    // id DESC = grant order, newest first, so mappings[0] is the user's
-    // most recent (current) project.
-    const sql = "SELECT masterId, slaveId FROM entity_auth WHERE uid = ? ORDER BY id DESC";
 
     try {
-      const [rows] = await pool.execute<mysql.RowDataPacket[]>(sql, [userId]);
-      const mappings = dedupeMappings(rows ?? []);
+      // Superusers (legal_user_role.su = 1) administer every active
+      // daily-monitoring project regardless of entity_auth grants; everyone
+      // else is scoped to their entity_auth ownership. Keep this branch in
+      // sync with extensions/feed-search/src/auth-topic-resolver.ts so the
+      // injected chat prefix and the feed_query tool agree on topic scope.
+      const mappings = (await this.isSuperUser(pool, userId))
+        ? await this.resolveSuperUserMappings(pool)
+        : await this.resolveEntityAuthMappings(pool, userId);
       const names = await this.lookupTopicNames(
         pool,
         mappings.map((m) => m.topicId),
@@ -170,6 +174,65 @@ export class TopicResolver {
         cause: error,
       });
     }
+  }
+
+  /** True when legal_user_role.su = 1 for this user (missing row => not super). */
+  private async isSuperUser(pool: mysql.Pool, userId: string): Promise<boolean> {
+    const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+      "SELECT su FROM legal_user_role WHERE id = ?",
+      [userId],
+    );
+    return Number(rows?.[0]?.su) === 1;
+  }
+
+  /** Normal-user path: entity_auth ownership, newest grant first (index 0). */
+  private async resolveEntityAuthMappings(
+    pool: mysql.Pool,
+    userId: string,
+  ): Promise<Omit<TopicInfo, "topicName">[]> {
+    // id DESC = grant order, newest first, so mappings[0] is the user's
+    // most recent (current) project.
+    const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+      "SELECT masterId, slaveId FROM entity_auth WHERE uid = ? ORDER BY id DESC",
+      [userId],
+    );
+    return dedupeMappings(rows ?? []);
+  }
+
+  /**
+   * Superuser path: the master feed_topic of every active (non-deleted)
+   * Running daily-monitoring report. These are always master topics, so they
+   * map to feed_monitor_item.topicId (useSlaveTopic = false, masterId =
+   * topicId). Ordered by topic id for a deterministic primary and a
+   * prompt-cache-stable prefix.
+   */
+  private async resolveSuperUserMappings(
+    pool: mysql.Pool,
+  ): Promise<Omit<TopicInfo, "topicName">[]> {
+    const [reportRows] = await pool.execute<mysql.RowDataPacket[]>(
+      "SELECT id FROM research_report WHERE status = 'Running' AND category = 'DailyMonitoring' AND deleted = 0",
+    );
+    const reportIds = (reportRows ?? []).map((r) => Number(r.id)).filter((id) => id > 0);
+    if (reportIds.length === 0) {
+      return [];
+    }
+
+    const placeholders = reportIds.map(() => "?").join(",");
+    const [topicRows] = await pool.execute<mysql.RowDataPacket[]>(
+      `SELECT id FROM feed_topic WHERE master = 1 AND reportId IN (${placeholders}) ORDER BY id ASC`,
+      reportIds,
+    );
+
+    const seen = new Set<number>();
+    const mappings: Omit<TopicInfo, "topicName">[] = [];
+    for (const row of topicRows ?? []) {
+      const topicId = Number(row.id) || 0;
+      if (topicId > 0 && !seen.has(topicId)) {
+        seen.add(topicId);
+        mappings.push({ topicId, useSlaveTopic: false, masterId: topicId });
+      }
+    }
+    return mappings;
   }
 
   /**
