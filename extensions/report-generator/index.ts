@@ -202,13 +202,25 @@ export default definePluginEntry({
               throw new Error(`Invalid dateScope in task params: ${task.params}`);
             }
 
-            // Load template (waterfall: topic-bound → user default → user any → system → code fallback)
-            const rawTemplate = await templateLoader.loadTemplate(
-              task.period,
-              task.uid,
-              logger,
-              task.topicId,
-            );
+            // Load template. An explicit templateId (the user picked one in the
+            // frontend's template panel, stored by the rabbitmq-consumer) loads
+            // that exact row; otherwise fall back to waterfall resolution
+            // (topic-bound → user default → user any → system → code fallback).
+            const explicitTemplateId =
+              typeof params.templateId === "number"
+                ? params.templateId
+                : typeof params.templateId === "string"
+                  ? parseInt(params.templateId, 10) || 0
+                  : 0;
+            const rawTemplate =
+              explicitTemplateId > 0
+                ? await templateLoader.loadTemplateById(
+                    explicitTemplateId,
+                    task.uid,
+                    task.period,
+                    logger,
+                  )
+                : await templateLoader.loadTemplate(task.period, task.uid, logger, task.topicId);
 
             // Generate report, streaming LLM deltas to the frontend in real
             // time. Data flows LLM-plan -> code-validated SQL -> digest:

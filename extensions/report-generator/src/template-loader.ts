@@ -182,6 +182,51 @@ export class TemplateLoader {
     }
   }
 
+  /**
+   * Load a specific template the user picked in the frontend's template panel.
+   * Ownership is enforced (own template or system template, enabled only); any
+   * miss — deleted, disabled, another user's id, empty content, or a DB error —
+   * degrades to the waterfall resolution so a report is still produced.
+   */
+  async loadTemplateById(
+    templateId: number,
+    userId: number,
+    period: ReportPeriod,
+    logger: PluginLogger,
+  ): Promise<string> {
+    try {
+      const pool = await this.getPool();
+      const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+        `SELECT id, user_id, topic_id, name, content
+         FROM report_template
+         WHERE id = ?
+           AND is_enable = 1
+           AND (user_id = ? OR user_id IS NULL)
+         LIMIT 1`,
+        [templateId, userId],
+      );
+
+      const row = rows[0] as TemplateRow | undefined;
+      if (!row || !row.content) {
+        logger.warn(
+          `[TEMPLATE_LOADER] Explicit template #${templateId} not usable for user ${userId} ` +
+            `(missing/disabled/empty); falling back to waterfall`,
+        );
+        return this.loadTemplate(period, userId, logger);
+      }
+
+      logger.info(
+        `[TEMPLATE_LOADER] Loaded explicit template "${row.name}" (#${row.id}) for ${period}`,
+      );
+      return row.content;
+    } catch (error) {
+      logger.error(
+        `[TEMPLATE_LOADER] Failed to load explicit template #${templateId}: ${String(error)}`,
+      );
+      return this.loadTemplate(period, userId, logger);
+    }
+  }
+
   async close(): Promise<void> {
     if (this.pool) {
       await this.pool.end();
