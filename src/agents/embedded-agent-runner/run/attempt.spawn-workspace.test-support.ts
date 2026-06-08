@@ -57,7 +57,11 @@ type SessionManagerMocks = {
   branch: UnknownMock;
   resetLeaf: UnknownMock;
   buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
+  appendThinkingLevelChange: UnknownMock;
+  appendModelChange: UnknownMock;
   appendCustomEntry: UnknownMock;
+  appendSessionInfo: UnknownMock;
+  appendLabelChange: UnknownMock;
   rewriteFile: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
@@ -209,7 +213,11 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     branch: vi.fn(),
     resetLeaf: vi.fn(),
     buildSessionContext: vi.fn<() => { messages: AgentMessage[] }>(() => ({ messages: [] })),
+    appendThinkingLevelChange: vi.fn(),
+    appendModelChange: vi.fn(),
     appendCustomEntry: vi.fn(),
+    appendSessionInfo: vi.fn(),
+    appendLabelChange: vi.fn(),
     rewriteFile: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
@@ -1037,7 +1045,11 @@ export function resetEmbeddedAttemptHarness(
   hoisted.sessionManager.buildSessionContext
     .mockReset()
     .mockReturnValue({ messages: params.sessionMessages ?? [] });
+  hoisted.sessionManager.appendThinkingLevelChange.mockReset();
+  hoisted.sessionManager.appendModelChange.mockReset();
   hoisted.sessionManager.appendCustomEntry.mockReset();
+  hoisted.sessionManager.appendSessionInfo.mockReset();
+  hoisted.sessionManager.appendLabelChange.mockReset();
   hoisted.sessionManager.rewriteFile.mockReset();
   if (params.subscribeImpl) {
     hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
