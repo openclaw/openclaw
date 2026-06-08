@@ -32,8 +32,8 @@ import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagn
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
-  freezeDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
+  freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import { formatErrorMessage } from "../../../infra/errors.js";

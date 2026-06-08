@@ -536,17 +536,6 @@ export function resolveActiveEmbeddedRunHandleSessionId(sessionKey: string): str
   return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey);
 }
 
-export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | undefined {
-  const normalizedSessionKey = sessionKey.trim();
-  if (!normalizedSessionKey) {
-    return undefined;
-  }
-  return (
-    resolveActiveReplyRunSessionId(normalizedSessionKey) ??
-    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
-  );
-}
-
 export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
   sessionFile: string,
 ): string | undefined {
@@ -556,6 +545,17 @@ export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
   }
   return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(
     resolveEmbeddedSessionFileKey(normalizedSessionFile),
+  );
+}
+
+export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | undefined {
+  const normalizedSessionKey = sessionKey.trim();
+  if (!normalizedSessionKey) {
+    return undefined;
+  }
+  return (
+    resolveActiveReplyRunSessionId(normalizedSessionKey) ??
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
   );
 }
 

@@ -13,8 +13,8 @@ export {
   resolveStorePath,
 } from "../config/sessions.js";
 export { callGateway } from "../gateway/call.js";
-export { dispatchGatewayMethodInProcess } from "../gateway/server-plugins.js";
 export { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
+export { dispatchGatewayMethodInProcess } from "../gateway/server-plugins.js";
 export {
   isEmbeddedAgentRunActive,
   waitForEmbeddedAgentRunEnd,
