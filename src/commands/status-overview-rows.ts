@@ -1,3 +1,4 @@
+// "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 // Builds overview table rows for `openclaw status` and `openclaw status --all`.
 // The row builders combine scan surfaces with health/session summaries while keeping rendering elsewhere.
 

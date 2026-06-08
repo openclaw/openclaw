@@ -1,3 +1,4 @@
+// "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 /** Tests auto-reply status message formatting. */
 import fs from "node:fs";
 import path from "node:path";

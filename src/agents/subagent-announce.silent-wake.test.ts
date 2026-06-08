@@ -1,3 +1,4 @@
+// "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 

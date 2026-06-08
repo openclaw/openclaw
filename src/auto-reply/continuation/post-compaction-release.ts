@@ -1,3 +1,4 @@
+// "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 /**
  * Post-compaction continuation lifecycle release (RFC §4.4).
  *

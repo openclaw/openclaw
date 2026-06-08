@@ -1,3 +1,4 @@
+// "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 /**
  * Resolves sandbox tool policies for agents, providers, sub-agents, and group
  * sessions. Keeps runtime tool filtering tied to canonical config, session
