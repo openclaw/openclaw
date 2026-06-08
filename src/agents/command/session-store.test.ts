@@ -74,13 +74,13 @@ vi.mock("../../utils/usage-format.js", () => ({
 
 vi.mock("../../config/sessions.js", async () => {
   const pathLocal = await import("node:path");
-  const { readSessionStoreForTest, writeSessionStoreForTestAsync } =
+  const { readSessionStoreForTest, writeSessionStoreForTestAsync: writeSessionStoreForMockAsync } =
     await import("../../config/sessions/test-helpers.js");
   const readStore = async (storePath: string): Promise<Record<string, SessionEntry>> => {
-    return readSessionStoreForTest<SessionEntry>(storePath);
+    return readSessionStoreForTest(storePath);
   };
   const writeStore = async (storePath: string, store: Record<string, SessionEntry>) => {
-    await writeSessionStoreForTestAsync(storePath, store);
+    await writeSessionStoreForMockAsync(storePath, store);
   };
   sessionStoreMocks.updateSessionStore.mockImplementation(
     async <T>(
@@ -123,7 +123,7 @@ vi.mock("../../config/sessions.js", async () => {
     },
     updateSessionStore: sessionStoreMocks.updateSessionStore,
     loadSessionStore: (storePath: string) => {
-      return readSessionStoreForTest<SessionEntry>(storePath);
+      return readSessionStoreForTest(storePath);
     },
     canonicalizeAbsoluteSessionFilePath: (filePath: string) => pathLocal.resolve(filePath),
     rewriteSessionFileForNewSessionId: (params: {

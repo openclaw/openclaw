@@ -128,7 +128,7 @@ function setSubagentControlDepsForTest(
       storePath: string,
       mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
     ) => {
-      const store = readSessionStoreForTest<SessionEntry>(storePath);
+      const store = readSessionStoreForTest(storePath);
       const result = await mutator(store);
       writeSessionStoreForTest(storePath, store);
       return result;

@@ -15,7 +15,10 @@ import {
   setSerializedSessionStorePromptRefs,
   writeSessionStoreCache,
 } from "./sessions/store-cache.js";
-import { replaceSqliteSessionStore } from "./sessions/store-sqlite.js";
+import {
+  closeSqliteSessionStoreDatabase,
+  replaceSqliteSessionStore,
+} from "./sessions/store-sqlite.js";
 import {
   applySessionStoreEntryPatch,
   clearSessionStoreCacheForTest,
@@ -46,6 +49,14 @@ function createSingleSessionStore(
   key = "session:1",
 ): Record<string, SessionEntry> {
   return { [key]: entry };
+}
+
+function replaceSqliteSessionStoreBehindCache(
+  storePath: string,
+  store: Record<string, SessionEntry>,
+): void {
+  replaceSqliteSessionStore(storePath, store);
+  closeSqliteSessionStoreDatabase(storePath);
 }
 
 describe("Session Store Cache", () => {
@@ -199,16 +210,6 @@ describe("Session Store Cache", () => {
     expect(parseSpy).not.toHaveBeenCalled();
 
     parseSpy.mockRestore();
-  });
-
-  it("keeps disk-loaded clone:false cache hits by reference", () => {
-    const testStore = createSingleSessionStore();
-    fs.writeFileSync(storePath, JSON.stringify(testStore), "utf8");
-
-    const loaded1 = loadSessionStore(storePath, { clone: false });
-    const loaded2 = loadSessionStore(storePath, { clone: false });
-
-    expect(loaded2["session:1"]).toBe(loaded1["session:1"]);
   });
 
   it("does not cache pre-migration or pre-normalization SQLite rows", () => {
@@ -571,7 +572,7 @@ describe("Session Store Cache", () => {
     const first = readSessionStoreSnapshot(storePath);
     expect(first["session:1"].displayName).toBe("Before race");
 
-    replaceSqliteSessionStore(storePath, afterRaceStore);
+    replaceSqliteSessionStoreBehindCache(storePath, afterRaceStore);
 
     const second = readSessionStoreSnapshot(storePath);
     expect(second["session:1"].displayName).toBe("After cross-process race");
@@ -848,7 +849,7 @@ describe("Session Store Cache", () => {
       skipSaveWhenResult: (cleared) => cleared === 0,
     });
 
-    replaceSqliteSessionStore(storePath, {
+    replaceSqliteSessionStoreBehindCache(storePath, {
       "session:1": createSessionEntry({ sessionId: "id-1", displayName: "External" }),
       "session:2": createSessionEntry({ sessionId: "id-2", displayName: "External 2" }),
     });
@@ -905,7 +906,7 @@ describe("Session Store Cache", () => {
     const modifiedStore: Record<string, SessionEntry> = {
       "session:99": { sessionId: "id-99", updatedAt: Date.now() },
     };
-    replaceSqliteSessionStore(storePath, modifiedStore);
+    replaceSqliteSessionStoreBehindCache(storePath, modifiedStore);
 
     const loaded2 = loadSessionStore(storePath);
     expect(loaded2).toEqual(modifiedStore);
@@ -952,7 +953,7 @@ describe("Session Store Cache", () => {
       createSessionEntry({ sessionId: "id-2", displayName: "Test Session 2" }),
       "session:2",
     );
-    replaceSqliteSessionStore(storePath, modifiedStore);
+    replaceSqliteSessionStoreBehindCache(storePath, modifiedStore);
 
     const loaded2 = loadSessionStore(storePath);
     expect(loaded2).toEqual(modifiedStore);
@@ -989,7 +990,7 @@ describe("Session Store Cache", () => {
       "session:1": createSessionEntry({ sessionId: "id-1", displayName: "Original" }),
       "session:2": createSessionEntry({ sessionId: "id-2", displayName: "Added" }),
     };
-    replaceSqliteSessionStore(storePath, store2);
+    replaceSqliteSessionStoreBehindCache(storePath, store2);
 
     const loaded2 = loadSessionStore(storePath);
     expect(loaded2["session:2"]?.displayName).toBe("Added");

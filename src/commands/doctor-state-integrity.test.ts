@@ -584,7 +584,7 @@ describe("doctor state integrity oauth dir checks", () => {
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
     const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-    const store = readSessionStoreForTest<SessionEntry>(storePath);
+    const store = readSessionStoreForTest(storePath);
     const recoveredKey = Object.keys(store).find((key) =>
       key.startsWith("agent:main:heartbeat-recovered-"),
     );
@@ -628,7 +628,7 @@ describe("doctor state integrity oauth dir checks", () => {
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
     const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-    const store = readSessionStoreForTest<SessionEntry>(storePath);
+    const store = readSessionStoreForTest(storePath);
     expect(store["agent:main:main"]?.sessionId).toBe("mixed-session");
     expect(Object.keys(store).filter((key) => key.includes("heartbeat-recovered"))).toEqual([]);
     expect(hasRepairPromptMessage(confirmRuntimeRepair, "Move heartbeat-owned main session")).toBe(

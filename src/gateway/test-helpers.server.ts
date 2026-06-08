@@ -15,7 +15,10 @@ import {
   resolveMainSessionKeyFromConfig,
   type SessionEntry,
 } from "../config/sessions.js";
-import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
+import {
+  readSessionStoreForTest,
+  writeSessionStoreForTestAsync,
+} from "../config/sessions/test-helpers.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -226,6 +229,14 @@ export async function writeSessionStore(params: {
   await persistTestSessionConfig();
   await writeSessionStoreForTestAsync(storePath, store);
   clearSessionStoreCacheForTest();
+}
+
+export function readSessionStore(storePath?: string): Record<string, SessionEntry> {
+  const resolvedStorePath = storePath ?? testState.sessionStorePath;
+  if (!resolvedStorePath) {
+    throw new Error("readSessionStore requires testState.sessionStorePath");
+  }
+  return readSessionStoreForTest(resolvedStorePath);
 }
 
 async function setupGatewayTestHome() {

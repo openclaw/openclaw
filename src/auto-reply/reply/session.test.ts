@@ -1618,7 +1618,7 @@ describe("initSessionState reset policy", () => {
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
 
-    const persisted = readSessionStoreForTest(storePath) as Record<string, SessionEntry>;
+    const persisted = readSessionStoreForTest(storePath);
     expect(persisted[sessionKey]?.sessionId).toBe(existingSessionId);
     expect(persisted[sessionKey]?.status).toBe("done");
     expect(persisted[sessionKey]?.startedAt).toBe(Date.now() - 10_000);
@@ -1712,7 +1712,7 @@ describe("initSessionState reset policy", () => {
     });
 
     expect(result.isNewSession).toBe(scenario.expectNewSession);
-    const persisted = readSessionStoreForTest(storePath) as Record<string, SessionEntry>;
+    const persisted = readSessionStoreForTest(storePath);
     const entry = persisted[scenario.sessionKey];
     if (scenario.expectNewSession) {
       expect(result.sessionId).not.toBe(existingSessionId);
@@ -4042,7 +4042,7 @@ describe("initSessionState dmScope delivery migration", () => {
     });
 
     expect(result.sessionKey).toBe("agent:main:telegram:direct:6101296751");
-    const persisted = readSessionStoreForTest(storePath) as Record<string, SessionEntry>;
+    const persisted = readSessionStoreForTest(storePath);
     expect(persisted["agent:main:main"]?.sessionId).toBe("legacy-main");
     expect(persisted["agent:main:main"]?.route).toBeUndefined();
     expect(persisted["agent:main:main"]?.deliveryContext).toBeUndefined();
@@ -4085,7 +4085,7 @@ describe("initSessionState dmScope delivery migration", () => {
       commandAuthorized: true,
     });
 
-    const persisted = readSessionStoreForTest(storePath) as Record<string, SessionEntry>;
+    const persisted = readSessionStoreForTest(storePath);
     expect(persisted["agent:main:main"]?.deliveryContext).toEqual({
       channel: "telegram",
       to: "1111",
@@ -4160,7 +4160,7 @@ describe("initSessionState internal channel routing preservation", () => {
       accountId: "default",
     });
 
-    const persisted = readSessionStoreForTest(storePath) as Record<string, SessionEntry>;
+    const persisted = readSessionStoreForTest(storePath);
     expect(persisted[sessionKey]?.lastThreadId).toBeUndefined();
     expect(persisted[sessionKey]?.deliveryContext).toEqual({
       channel: "mattermost",

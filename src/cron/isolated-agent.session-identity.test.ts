@@ -3,7 +3,6 @@ import "./isolated-agent.mocks.js";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
-import type { SessionEntry } from "../config/sessions.js";
 import {
   readSessionStoreForTest,
   writeSessionStoreForTestAsync,
@@ -186,7 +185,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         },
       });
       updateSessionStoreMock.mockImplementation(async (targetStorePath, update) => {
-        const store = readSessionStoreForTest<SessionEntry>(targetStorePath);
+        const store = readSessionStoreForTest(targetStorePath);
         update(store);
         await writeSessionStoreForTestAsync(targetStorePath, store);
       });

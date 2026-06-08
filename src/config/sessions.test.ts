@@ -24,7 +24,10 @@ import {
   updateSessionStoreEntry,
   upsertSessionEntry,
 } from "./sessions.js";
-import { replaceSqliteSessionStore } from "./sessions/store-sqlite.js";
+import {
+  closeSqliteSessionStoreDatabase,
+  replaceSqliteSessionStore,
+} from "./sessions/store-sqlite.js";
 
 describe("sessions", () => {
   let fixtureRoot = "";
@@ -57,6 +60,14 @@ describe("sessions", () => {
       skipMaintenance: true,
     });
     return { storePath };
+  }
+
+  function replaceSqliteSessionStoreBehindCache(
+    storePath: string,
+    store: Record<string, SessionEntry>,
+  ): void {
+    replaceSqliteSessionStore(storePath, store);
+    closeSqliteSessionStoreDatabase(storePath);
   }
 
   function expectedBot1FallbackSessionPath() {
@@ -1017,7 +1028,7 @@ describe("sessions", () => {
     expect(loadSessionStore(storePath)[mainSessionKey]?.thinkingLevel).toBe("low");
 
     // Simulate an external SQLite writer updating the store behind this process's cache.
-    replaceSqliteSessionStore(storePath, {
+    replaceSqliteSessionStoreBehindCache(storePath, {
       [mainSessionKey]: {
         sessionId: "sess-1",
         updatedAt: 124,

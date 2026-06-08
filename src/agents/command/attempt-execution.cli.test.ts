@@ -193,7 +193,7 @@ describe("CLI attempt execution", () => {
   }
 
   function readPersistedSessionStore(): Record<string, SessionEntry> {
-    return readSessionStoreForTest<SessionEntry>(storePath);
+    return readSessionStoreForTest(storePath);
   }
 
   async function runClaudeCliAttempt(params: {
