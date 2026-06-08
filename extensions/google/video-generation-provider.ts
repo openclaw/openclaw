@@ -573,7 +573,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           },
         });
       } catch (error) {
-        if (!isVertex && (hasReferenceInputs || extractGoogleApiErrorCode(error) !== 404)) {
+        if (hasReferenceInputs || extractGoogleApiErrorCode(error) !== 404) {
           throw error;
         }
         usedRestFallback = true;
