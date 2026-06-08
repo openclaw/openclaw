@@ -1177,6 +1177,42 @@ describe("loadOpenClawPlugins", () => {
     expect(registerFailMetrics.loadAndRegisterMs).toEqual(expect.any(Number));
   });
 
+  it("rolls back status providers registered by a plugin that later fails registration", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "status-provider-register-fail",
+      filename: "status-provider-register-fail.cjs",
+      body: `module.exports = {
+  id: "status-provider-register-fail",
+  register(api) {
+    api.registerStatusProvider({ id: "contextclaw", getStatus: () => "ready" });
+    throw new Error("register boom");
+  },
+};`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["status-provider-register-fail"],
+        },
+      },
+    });
+
+    expect(registry.statusProviders).toHaveLength(0);
+    expect(registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "error",
+          pluginId: "status-provider-register-fail",
+          message: expect.stringContaining("failed to register plugin"),
+        }),
+      ]),
+    );
+  });
+
   it("can load scoped plugins from a supplied manifest registry without rereading manifests", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

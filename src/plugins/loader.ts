@@ -371,6 +371,7 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
 type PluginRegistrySnapshot = {
   arrays: {
     tools: PluginRegistry["tools"];
+    statusProviders: PluginRegistry["statusProviders"];
     hooks: PluginRegistry["hooks"];
     typedHooks: PluginRegistry["typedHooks"];
     channels: PluginRegistry["channels"];
@@ -416,6 +417,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
   return {
     arrays: {
       tools: [...registry.tools],
+      statusProviders: [...registry.statusProviders],
       hooks: [...registry.hooks],
       typedHooks: [...registry.typedHooks],
       channels: [...registry.channels],
@@ -460,6 +462,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
 
 function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistrySnapshot): void {
   registry.tools = snapshot.arrays.tools;
+  registry.statusProviders = snapshot.arrays.statusProviders;
   registry.hooks = snapshot.arrays.hooks;
   registry.typedHooks = snapshot.arrays.typedHooks;
   registry.channels = snapshot.arrays.channels;
