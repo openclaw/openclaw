@@ -61,6 +61,7 @@ function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): strin
     return [];
   }
   const unsupportedKeysByEntry = Object.entries(entries)
+    .filter(([, entry]) => entry && typeof entry === "object" && !Array.isArray(entry))
     .map(([hookKey, entry]) => {
       const unsupportedKeys = ["handler", "module", "extraDirs", "installs"].filter((key) =>
         Object.hasOwn(entry, key),
