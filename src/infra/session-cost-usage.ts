@@ -1733,7 +1733,7 @@ export async function loadSessionCostSummaryFromCache(params: {
   const refreshRunning =
     usageCostRefreshes.has(cachePath) || (await isUsageCostCacheRefreshRunning(cachePath));
   const combinedEntry =
-    !stale && freshEntries.length > 0
+    freshEntries.length > 0
       ? ({
           filePath: canonicalSessionFile,
           size: freshEntries.reduce((total, item) => total + item.file.size, 0),
