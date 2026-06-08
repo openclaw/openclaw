@@ -2187,6 +2187,13 @@ export async function runAgentTurnWithFallback(params: {
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                     silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
+                    // Thread the computed silent-empty policy onto the CLI path too (the
+                    // embedded path already does). Without it, a clean empty Claude CLI
+                    // completion whose reply already shipped via the message tool throws
+                    // empty_response, re-runs on the fallback model, and posts a duplicate
+                    // user-visible reply (#91302).
+                    allowEmptyAssistantReplyAsSilent:
+                      params.followupRun.run.allowEmptyAssistantReplyAsSilent,
                     extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
                     ownerNumbers: params.followupRun.run.ownerNumbers,
                     cliSessionId: cliSessionBinding?.sessionId,
