@@ -277,6 +277,36 @@ describe("pw-session ensurePageState", () => {
     await expect(fs.readFile(result.path, "utf8")).resolves.toBe("attachment");
   });
 
+  it("validates captured navigation downloads before saving managed bytes", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const blocked = new Error("blocked download");
+    const beforeSave = vi.fn(async () => {
+      throw blocked;
+    });
+    const capture = createManagedDownloadCaptureForPage(page, 1_000, { beforeSave });
+    const saveAs = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "blocked", "utf8");
+    });
+    const download = {
+      url: () => "http://127.0.0.1:18080/export.csv",
+      suggestedFilename: () => "export.csv",
+      saveAs,
+    };
+
+    for (const handler of handlers.get("download") ?? []) {
+      handler(download);
+    }
+
+    await expect(capture.promise).rejects.toBe(blocked);
+    expect(beforeSave).toHaveBeenCalledWith({
+      triggered: true,
+      url: "http://127.0.0.1:18080/export.csv",
+      suggestedFilename: "export.csv",
+    });
+    expect(saveAs).not.toHaveBeenCalled();
+  });
+
   it("recognizes Playwright download-starting navigation aborts", () => {
     expect(isDownloadStartingNavigationError(new Error("page.goto: Download is starting"))).toBe(
       true,

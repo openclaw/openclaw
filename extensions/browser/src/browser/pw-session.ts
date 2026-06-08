@@ -145,11 +145,18 @@ type ConnectedBrowser = {
   onDisconnected?: () => void;
 };
 
-export type BrowserManagedDownload = {
+export type BrowserManagedDownloadCandidate = {
   triggered: true;
   url: string;
   suggestedFilename: string;
+};
+
+export type BrowserManagedDownload = BrowserManagedDownloadCandidate & {
   path: string;
+};
+
+export type BrowserManagedDownloadCaptureOptions = {
+  beforeSave?: (download: BrowserManagedDownloadCandidate) => Promise<void> | void;
 };
 
 type DownloadPayload = {
@@ -247,8 +254,15 @@ function buildManagedDownloadPath(fileName: string): string {
 
 async function saveManagedDownloadPayload(
   download: DownloadPayload,
+  opts: BrowserManagedDownloadCaptureOptions = {},
 ): Promise<BrowserManagedDownload> {
   const suggestedFilename = download.suggestedFilename?.() || "download.bin";
+  const candidate: BrowserManagedDownloadCandidate = {
+    triggered: true,
+    url: download.url?.() || "",
+    suggestedFilename,
+  };
+  await opts.beforeSave?.(candidate);
   const managedPath = buildManagedDownloadPath(suggestedFilename);
   await writeViaSiblingTempPath({
     rootDir: DEFAULT_DOWNLOAD_DIR,
@@ -258,9 +272,7 @@ async function saveManagedDownloadPayload(
     },
   });
   return {
-    triggered: true,
-    url: download.url?.() || "",
-    suggestedFilename,
+    ...candidate,
     path: managedPath,
   };
 }
@@ -279,6 +291,7 @@ export function isDownloadStartingNavigationError(err: unknown, expectedUrl?: st
 export function createManagedDownloadCaptureForPage(
   page: Page,
   timeoutMs: number,
+  opts: BrowserManagedDownloadCaptureOptions = {},
 ): {
   armed: boolean;
   promise: Promise<BrowserManagedDownload>;
@@ -321,7 +334,7 @@ export function createManagedDownloadCaptureForPage(
       }
       done = true;
       cleanup();
-      void saveManagedDownloadPayload(download as DownloadPayload).then(resolve, reject);
+      void saveManagedDownloadPayload(download as DownloadPayload, opts).then(resolve, reject);
     };
     page.on("download", handler as never);
     timer = setTimeout(
