@@ -25,6 +25,7 @@ import {
 } from "./approval-reactions.js";
 import { appendIMessageCliStderrTail, appendIMessageCliStdout } from "./cli-output.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
+import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
 import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
@@ -48,6 +49,7 @@ type IMessageSendOpts = {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  audioAsVoice?: boolean;
   maxBytes?: number;
   timeoutMs?: number;
   chatId?: number;
@@ -729,6 +731,8 @@ async function trySendAttachmentForTarget(params: {
   target: ReturnType<typeof parseIMessageTarget>;
   service?: IMessageService;
   filePath: string;
+  audioAsVoice?: boolean;
+  replyToId?: string;
   echoText?: string;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
@@ -758,6 +762,8 @@ async function trySendAttachmentForTarget(params: {
       attachmentChatTarget,
       "--file",
       params.filePath,
+      ...(params.audioAsVoice ? ["--audio"] : []),
+      ...(params.replyToId ? ["--reply-to", params.replyToId] : []),
       "--transport",
       "auto",
     ]);
@@ -822,7 +828,8 @@ async function trySendAttachmentForTarget(params: {
     receipt: createIMessageSendReceipt({
       messageId,
       target: params.target,
-      kind: "media",
+      kind: params.audioAsVoice ? "voice" : "media",
+      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     }),
   };
 }
@@ -851,7 +858,11 @@ export async function sendMessageIMessage(
     opts.service ??
     resolveTargetService(target) ??
     (account.config.service as IMessageService | undefined);
-  const timeoutMs = opts.timeoutMs ?? account.config.probeTimeoutMs;
+  // Sends use a dedicated longer default (not the 10s probe timeout) so macOS 26
+  // bridge stalls aren't aborted mid-send. Explicit opts/probeTimeoutMs still win
+  // for callers that tuned them. See DEFAULT_IMESSAGE_SEND_TIMEOUT_MS.
+  const timeoutMs =
+    opts.timeoutMs ?? account.config.probeTimeoutMs ?? DEFAULT_IMESSAGE_SEND_TIMEOUT_MS;
   const region = opts.region?.trim() || account.config.region?.trim() || "US";
   const maxBytes =
     typeof opts.maxBytes === "number"
@@ -905,7 +916,7 @@ export async function sendMessageIMessage(
     opts.runCliJson ??
     ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
 
-  if (filePath && !resolvedReplyToId) {
+  if (filePath && (!resolvedReplyToId || opts.audioAsVoice)) {
     const attachmentEchoText = message.trim()
       ? resolveOutboundEchoText("", mediaContentType)
       : echoText;
@@ -915,6 +926,8 @@ export async function sendMessageIMessage(
       target,
       service,
       filePath,
+      audioAsVoice: opts.audioAsVoice,
+      ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
       echoText: attachmentEchoText,
       runCliJson,
       resolveMessageGuidImpl: opts.resolveMessageGuidImpl,

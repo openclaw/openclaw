@@ -1053,6 +1053,7 @@ describe("iMessage monitor last-route updates", () => {
             id: 78,
             guid: "LIVE-GUID-78",
             text: "https://example.com",
+            balloon_bundle_id: "com.apple.messages.URLBalloonProvider",
             created_at: "2026-05-22T15:30:01.000Z",
           },
         ]) {
@@ -1104,5 +1105,155 @@ describe("iMessage monitor last-route updates", () => {
     await vi.waitFor(async () => {
       expect((await loadIMessageCatchupCursor("default"))?.lastSeenRowid).toBe(78);
     });
+  });
+
+  it("legacy-merges coalesce buckets when imsg emits no balloon metadata (older builds)", async () => {
+    // Back-compat: older imsg builds emit no balloon_bundle_id, so a Dump + URL
+    // split-send arrives as two fieldless rows. We cannot structurally tell that
+    // apart from separate sends, so we preserve the pre-metadata merge rather
+    // than regress split-send users to two turns. Removed once imsg coalesces
+    // upstream (openclaw/imsg#141, tracked by #91243).
+    debouncerControl.holdEntries = true;
+
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    const client = {
+      request: vi.fn(async (method: string) => {
+        if (method === "watch.subscribe") {
+          return { subscription: 1 };
+        }
+        throw new Error(`unexpected imsg method ${method}`);
+      }),
+      waitForClose: vi.fn(async () => {
+        for (const row of [
+          { id: 91, guid: "LIVE-GUID-91", text: "Dump", created_at: "2026-05-22T15:30:00.000Z" },
+          {
+            id: 92,
+            guid: "LIVE-GUID-92",
+            text: "https://example.com",
+            created_at: "2026-05-22T15:30:01.000Z",
+          },
+        ]) {
+          onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                ...row,
+                chat_id: 123,
+                sender: "+15550001111",
+                is_from_me: false,
+                is_group: false,
+              },
+            },
+          });
+        }
+        await vi.waitFor(() => {
+          expect(debouncerControl.flush).toBeDefined();
+        });
+        await debouncerControl.flush?.();
+        await Promise.resolve();
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (!params?.onNotification) {
+        throw new Error("expected iMessage notification handler");
+      }
+      onNotification = params.onNotification;
+      return client as never;
+    });
+
+    await monitorIMessageProvider({
+      config: {
+        channels: {
+          imessage: {
+            coalesceSameSenderDms: true,
+            dmPolicy: "allowlist",
+            allowFrom: ["+15550001111"],
+            sendReadReceipts: false,
+          },
+        },
+        messages: { inbound: { debounceMs: 2500 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    const mergedBody = dispatchInboundMessageMock.mock.calls[0]?.[0].ctx.Body ?? "";
+    expect(mergedBody).toContain("Dump");
+    expect(mergedBody).toContain("https://example.com");
+  });
+
+  it("merges coalesce buckets when imsg marks the URL balloon row structurally", async () => {
+    debouncerControl.holdEntries = true;
+
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    const client = {
+      request: vi.fn(async (method: string) => {
+        if (method === "watch.subscribe") {
+          return { subscription: 1 };
+        }
+        throw new Error(`unexpected imsg method ${method}`);
+      }),
+      waitForClose: vi.fn(async () => {
+        for (const row of [
+          { id: 93, guid: "LIVE-GUID-93", text: "Dump", created_at: "2026-05-22T15:30:00.000Z" },
+          {
+            id: 94,
+            guid: "LIVE-GUID-94",
+            text: "https://example.com",
+            balloon_bundle_id: "com.apple.messages.URLBalloonProvider",
+            created_at: "2026-05-22T15:30:01.000Z",
+          },
+        ]) {
+          onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                ...row,
+                chat_id: 123,
+                sender: "+15550001111",
+                is_from_me: false,
+                is_group: false,
+              },
+            },
+          });
+        }
+        await vi.waitFor(() => {
+          expect(debouncerControl.flush).toBeDefined();
+        });
+        await debouncerControl.flush?.();
+        await Promise.resolve();
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (!params?.onNotification) {
+        throw new Error("expected iMessage notification handler");
+      }
+      onNotification = params.onNotification;
+      return client as never;
+    });
+
+    await monitorIMessageProvider({
+      config: {
+        channels: {
+          imessage: {
+            coalesceSameSenderDms: true,
+            dmPolicy: "allowlist",
+            allowFrom: ["+15550001111"],
+            sendReadReceipts: false,
+          },
+        },
+        messages: { inbound: { debounceMs: 2500 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessageMock.mock.calls[0]?.[0].ctx.Body).toContain(
+      "Dump https://example.com",
+    );
   });
 });
