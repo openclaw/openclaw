@@ -259,7 +259,7 @@ function collectAssistantBoundaryMessageIds(params: {
     for (let candidateIndex = index - 1; candidateIndex >= 0; candidateIndex -= 1) {
       const candidate = branch[candidateIndex];
       if (candidate?.type !== "message") {
-        continue;
+        break;
       }
       if (candidate.message.role === "assistant" && summarizedBranchIds.has(candidate.id)) {
         ids.add(candidate.id);
