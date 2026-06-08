@@ -4,6 +4,7 @@ import type { ModelCandidate } from "../../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
+  resolveAgentModelInheritableFallbacksOverride,
   resolveEffectiveModelFallbacks,
   resolveSubagentModelFallbacksOverride,
 } from "./run-execution.runtime.js";
@@ -33,12 +34,21 @@ export function resolveCronFallbacksOverride(params: {
       return subagentFallbacksOverride;
     }
   }
-  return resolveEffectiveModelFallbacks({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    hasSessionModelOverride: hasCronPayloadModelOverride,
-    modelOverrideSource: hasCronPayloadModelOverride ? "auto" : undefined,
-  });
+  if (hasCronPayloadModelOverride) {
+    // A payload model override behaves like an auto model selection and keeps the
+    // configured agent/global fallback chain.
+    return resolveEffectiveModelFallbacks({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      hasSessionModelOverride: true,
+      modelOverrideSource: "auto",
+    });
+  }
+  // No payload model override: the job runs the agent's configured model. A plain-string
+  // or primary-only agent model has no explicit fallbacks, so leave the override unset and
+  // let the runner inherit agents.defaults.model.fallbacks instead of pinning the job to a
+  // single-model chain. An explicit agent `fallbacks` list (including []) stays authoritative.
+  return resolveAgentModelInheritableFallbacksOverride(params.cfg, params.agentId);
 }
 
 /** Builds the ordered model candidates used by cron preflight checks. */

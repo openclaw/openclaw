@@ -263,6 +263,70 @@ describe("resolveCronFallbacksOverride", () => {
     ).toBeUndefined();
   });
 
+  it("inherits configured default fallbacks for a plain-string agent model", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "anthropic/claude-opus-4-6",
+                fallbacks: ["openai/gpt-5.4", "google/gemini-3-pro"],
+              },
+            },
+            list: [{ id: "research", model: "deepseek/deepseek-v4-pro" }],
+          },
+        },
+        agentId: "research",
+        job: makeJob({ kind: "agentTurn", message: "summarize" }),
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps explicit empty agent fallbacks strict instead of inheriting defaults", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-4-6", fallbacks: ["openai/gpt-5.4"] },
+            },
+            list: [
+              { id: "research", model: { primary: "deepseek/deepseek-v4-pro", fallbacks: [] } },
+            ],
+          },
+        },
+        agentId: "research",
+        job: makeJob({ kind: "agentTurn", message: "summarize" }),
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("walks inherited default fallbacks for a plain-string agent model in cron preflight", () => {
+    expect(
+      resolveCronPreflightCandidates({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-4-6", fallbacks: ["openai/gpt-5.4"] },
+            },
+            list: [{ id: "research", model: "deepseek/deepseek-v4-pro" }],
+          },
+        },
+        agentId: "research",
+        provider: "deepseek",
+        model: "deepseek-v4-pro",
+        job: makeJob({ kind: "agentTurn", message: "summarize" }),
+      }),
+    ).toEqual([
+      { provider: "deepseek", model: "deepseek-v4-pro" },
+      { provider: "openai", model: "gpt-5.4" },
+      // The configured default primary trails as an auto fallback once the agent
+      // model overrides it, so the cron run is no longer a single-point-of-failure.
+      { provider: "anthropic", model: "claude-opus-4-6" },
+    ]);
+  });
+
   it("plans the full configured candidate chain for cron preflight", () => {
     expect(
       resolveCronPreflightCandidates({

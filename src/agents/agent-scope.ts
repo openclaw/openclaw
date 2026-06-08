@@ -426,6 +426,25 @@ function resolveSelectedModelFallbacksOverride(
   return Array.isArray(raw.fallbacks) ? raw.fallbacks : undefined;
 }
 
+/**
+ * Resolves an agent's fallback override for contexts that should inherit configured
+ * global defaults (isolated cron runs) instead of pinning a plain-string or
+ * primary-only agent model to a single-model chain. Returns `undefined` when the
+ * agent model has no explicit `fallbacks` field, so the caller/runner falls through
+ * to `agents.defaults.model.fallbacks`. An explicit `fallbacks` list (including `[]`)
+ * stays authoritative.
+ */
+export function resolveAgentModelInheritableFallbacksOverride(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string[] | undefined {
+  const raw = resolveAgentConfig(cfg, agentId)?.model;
+  if (typeof raw === "object" && raw !== null && Object.hasOwn(raw, "fallbacks")) {
+    return resolveSelectedModelFallbacksOverride(raw);
+  }
+  return undefined;
+}
+
 function resolveFirstModelFallbacksOverride(
   candidates: Array<AgentModelConfig | undefined>,
 ): string[] | undefined {

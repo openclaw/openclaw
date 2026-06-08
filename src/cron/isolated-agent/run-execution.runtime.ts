@@ -1,5 +1,6 @@
 /** Lazy runtime facade for isolated cron agent execution dependencies. */
 export {
+  resolveAgentModelInheritableFallbacksOverride,
   resolveEffectiveModelFallbacks,
   resolveSubagentModelFallbacksOverride,
 } from "../../agents/agent-scope.js";

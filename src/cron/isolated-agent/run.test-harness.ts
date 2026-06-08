@@ -44,6 +44,7 @@ export const buildWorkspaceSkillSnapshotMock = createMock();
 export const resolveAgentConfigMock = createMock();
 export const resolveEffectiveModelFallbacksMock = createMock();
 export const resolveSubagentModelFallbacksOverrideMock = createMock();
+export const resolveAgentModelInheritableFallbacksOverrideMock = createMock();
 export const resolveAgentModelFallbacksOverrideMock = createMock();
 export const resolveAgentSkillsFilterMock = createMock();
 export const getModelRefStatusMock = createMock();
@@ -229,6 +230,7 @@ vi.mock("./run-model-selection.runtime.js", () => ({
 vi.mock("./run-execution.runtime.js", () => ({
   resolveEffectiveModelFallbacks: resolveEffectiveModelFallbacksMock,
   resolveSubagentModelFallbacksOverride: resolveSubagentModelFallbacksOverrideMock,
+  resolveAgentModelInheritableFallbacksOverride: resolveAgentModelInheritableFallbacksOverrideMock,
   resolveBootstrapWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeenMock,
   getCliSessionId: getCliSessionIdMock,
   runCliAgent: runCliAgentMock,
@@ -405,6 +407,12 @@ function resetRunConfigMocks(): void {
       const defaultFallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.model);
       return agentFallbacksOverride ?? defaultFallbacks;
     },
+  );
+  resolveAgentModelInheritableFallbacksOverrideMock.mockReset();
+  // The no-payload-model cron path resolves the agent's inheritable fallbacks; mirror the
+  // agent-fallbacks source the suite stubs via resolveAgentModelFallbacksOverrideMock.
+  resolveAgentModelInheritableFallbacksOverrideMock.mockImplementation((cfg, agentId) =>
+    resolveAgentModelFallbacksOverrideMock(cfg, agentId),
   );
   resolveSubagentModelFallbacksOverrideMock.mockReset();
   resolveSubagentModelFallbacksOverrideMock.mockImplementation((cfg, agentId) => {
