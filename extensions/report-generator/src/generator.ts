@@ -197,39 +197,40 @@ export class ReportGenerator {
         limit: 20,
       });
 
-      // Prefer the newest assistant message that contains a markdown heading
-      // (the report body); fall back to the newest non-empty one (the model
-      // sometimes appends a short closing remark after the report).
-      let generatedText = "";
-      let newestNonEmpty = "";
+      // Collect every non-empty assistant message text. In autonomous mode the
+      // model often appends a short closing remark ("报告已生成，请查收") as a
+      // separate, NEWER assistant message after the report, so "newest" is the
+      // wrong pick — the report is the substantive body, not the chatter.
+      const assistantTexts: string[] = [];
       if (sessionMessages.messages && Array.isArray(sessionMessages.messages)) {
         for (const msg of sessionMessages.messages.toReversed()) {
           const m = msg as { role?: string; content?: unknown };
           if (m.role !== "assistant") {
             continue;
           }
-          const text = extractMessageText(m.content);
-          if (!text.trim()) {
-            continue;
-          }
-          if (!newestNonEmpty) {
-            newestNonEmpty = text;
-          }
-          if (/^#\s/m.test(text)) {
-            generatedText = text;
-            break;
+          const text = extractMessageText(m.content).trim();
+          if (text) {
+            assistantTexts.push(text);
           }
         }
       }
-      if (!generatedText) {
-        generatedText = newestNonEmpty;
-      }
+
+      // Pick the longest message that carries a markdown heading of ANY level
+      // (`#`..`######`) — older logic required a top-level `# ` and silently
+      // fell back to the closing remark when the report opened with `## `.
+      // The report dwarfs any remark in length, so longest-with-heading is a
+      // robust selector; degrade to the longest assistant text, then to the
+      // streamed text.
+      const byLengthDesc = (a: string, b: string) => b.length - a.length;
+      const withHeading = assistantTexts.filter((t) => /^#{1,6}\s/m.test(t));
+      let generatedText =
+        withHeading.toSorted(byLengthDesc)[0] ?? assistantTexts.toSorted(byLengthDesc)[0] ?? "";
 
       // Fallback: use the streamed text we collected ourselves, trimmed to the
-      // last top-level heading so working narration ("先查询数据库…") that
-      // precedes the report body is dropped.
+      // last heading so working narration ("先查询数据库…") that precedes the
+      // report body is dropped.
       if (!generatedText && streamedText.trim()) {
-        const headings = [...streamedText.matchAll(/^#\s/gm)];
+        const headings = [...streamedText.matchAll(/^#{1,6}\s/gm)];
         const lastHeading = headings.length > 0 ? headings[headings.length - 1].index : -1;
         generatedText = lastHeading >= 0 ? streamedText.slice(lastHeading) : streamedText;
         logger.warn(
@@ -241,8 +242,8 @@ export class ReportGenerator {
         throw new Error("No report content generated");
       }
 
-      // Extract title from first heading
-      const titleMatch = generatedText.match(/^#\s+(.+)/m);
+      // Extract title from first heading (any level)
+      const titleMatch = generatedText.match(/^#{1,6}\s+(.+)/m);
       const title = titleMatch ? titleMatch[1].trim() : `${period}舆情报告`;
 
       logger.info(`[REPORT_GENERATOR] Generated report: ${title}`);
