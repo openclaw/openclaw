@@ -24,6 +24,9 @@ describe("ports-format", () => {
     // "close the tunnel / change -L port" remediation does not apply to them.
     [{ command: "sshd" }, "unknown"],
     [{ commandLine: "/opt/fast-ssh/server --listen 18789" }, "unknown"],
+    // ssh-named non-tunnel that merely mentions the queried port with a colon: there
+    // is no -L/-R forward, so it must not classify as a tunnel or emit the hint.
+    [{ commandLine: "/opt/fast-ssh/server --listen 127.0.0.1:18789" }, "unknown"],
     [{ commandLine: "ssh -N -L 9999:remote:22 host" }, "unknown"],
     [{ command: "ssh" }, "unknown"],
     [{ commandLine: "node /Users/me/Projects/openclaw/dist/entry.js gateway" }, "gateway"],
