@@ -822,9 +822,13 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
   // Arm a one-shot diagnostic watchdog: if the HTTP server has not bound
   // within the threshold we dump the in-flight diagnostic phase stack to
   // stderr so operators can see WHICH startup step is wedged instead of
-  // just "silence for N minutes." Cancelled by listenGatewayHttpServer on
-  // listen-success and on hard failure paths below. No-op when the env
-  // var sets the threshold to 0.
+  // just "silence for N minutes." Disarmed in two places:
+  //   1. on listen-success via cancelStartupWatchdog() at the http.bound
+  //      mark in gateway/server.impl.ts (after ALL bind hosts complete —
+  //      deliberately not in the per-bind http-listen.ts callback, so a
+  //      multi-bind hang cannot silently disarm us between binds), and
+  //   2. on hard failure via the catch block below.
+  // No-op when the env var sets the threshold to 0.
   armStartupWatchdog({ thresholdMs: resolveStartupWatchdogThresholdMs() });
   let startupConfigSnapshotReadForNextStart = startupConfigSnapshotRead;
   const deferStartupSidecars =
