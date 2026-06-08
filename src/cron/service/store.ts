@@ -104,11 +104,11 @@ export async function ensureLoaded(
     previousJobsById.set(job.id, job);
   }
   const loaded = await loadCronJobsStoreWithConfigJobs(state.deps.storePath);
-  const loadedJobs = (loaded.store.jobs ?? []) as unknown as CronJob[];
+  const loadedJobs: CronJob[] = loaded.store.jobs ?? [];
   const jobs: CronJob[] = [];
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
   for (const [index, job] of loadedJobs.entries()) {
-    const decodedRaw = job as unknown as Record<string, unknown>;
+    const decodedRaw: Record<string, unknown> = job;
     const rawConfigJob = loaded.configJobs[index] ?? structuredClone(decodedRaw);
     const raw = decodedRaw;
     const sourceIndex = loaded.configJobIndexes[index] ?? index;
@@ -129,8 +129,9 @@ export async function ensureLoaded(
         "cron: job has invalid persisted sessionTarget; run openclaw doctor --fix to repair",
       );
     }
-    const hydrated =
-      normalized && typeof normalized === "object" ? (normalized as unknown as CronJob) : job;
+    const hydrated: CronJob = (normalized != null && typeof normalized === 'object')
+      ? normalized as CronJob
+      : job;
     const invalidReason = getInvalidPersistedCronJobReason(
       hydrated as unknown as Record<string, unknown>,
     );
