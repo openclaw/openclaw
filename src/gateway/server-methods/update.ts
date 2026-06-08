@@ -145,7 +145,10 @@ export const updateHandlers: GatewayRequestHandlers = {
           steps: [],
           durationMs: 0,
         };
-      } else if (installSurface.kind === "global") {
+      } else if (
+        installSurface.kind === "global" ||
+        (installSurface.kind === "git" && supervisor)
+      ) {
         const command = formatManagedServiceUpdateCommand({
           timeoutMs,
           channel: configChannel ?? undefined,
@@ -156,7 +159,8 @@ export const updateHandlers: GatewayRequestHandlers = {
             const handoffId = randomUUID();
             sentinelMeta.handoffId = handoffId;
             // Managed services update from a detached helper so the running
-            // gateway does not replace its own package while still serving RPCs.
+            // gateway does not replace its own package or git-built dist tree
+            // while still serving RPCs.
             const started = await startManagedServiceUpdateHandoff({
               root,
               timeoutMs,

@@ -459,7 +459,38 @@ describe("update.run restart scheduling", () => {
     );
   });
 
-  it("keeps git/dev updates on the in-process gateway update path", async () => {
+  it("hands supervised git/dev updates to the CLI path instead of rebuilding live dist in-process", async () => {
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    mockGitInstallSurface("/tmp/openclaw-git");
+
+    const payload = await captureUpdateRunPayload();
+
+    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: "/tmp/openclaw",
+        handoffId: expect.any(String),
+        supervisor: "launchd",
+        meta: expect.objectContaining({
+          handoffId: expect.any(String),
+        }),
+      }),
+    );
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    expect(payload?.ok).toBe(true);
+    expect(payload?.result?.status).toBe("skipped");
+    expect(payload?.result?.reason).toBe("managed-service-handoff-started");
+    expect(payload?.result?.mode).toBe("git");
+    expect(payload?.handoff).toEqual({
+      status: "started",
+      pid: 12345,
+      command: "openclaw update --yes --timeout 1800",
+    });
+    expect(readCapturedPayload().status).toBe("skipped");
+  });
+
+  it("keeps unsupervised git/dev updates on the in-process gateway update path", async () => {
     runGatewayUpdateMock.mockResolvedValueOnce({
       status: "ok",
       mode: "git",
