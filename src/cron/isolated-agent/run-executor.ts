@@ -155,6 +155,9 @@ export function createCronPromptExecutor(params: {
     info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
       Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
   ) => void;
+  deadlineAtMs?: number;
+  getDeadlineAtMs?: () => number | undefined;
+  fallbackMinRemainingMs?: number;
 }) {
   const sessionFile =
     params.cronSession.sessionEntry.sessionFile?.trim() ||
@@ -205,6 +208,29 @@ export function createCronPromptExecutor(params: {
         });
       },
       fallbacksOverride: cronFallbacksOverride,
+      beforeAttempt: ({ attempt }) => {
+        const deadlineAtMs =
+          params.getDeadlineAtMs !== undefined ? params.getDeadlineAtMs() : params.deadlineAtMs;
+        const fallbackMinRemainingMs = params.fallbackMinRemainingMs;
+        const hasFallbackTimeBudget =
+          attempt > 1 &&
+          typeof deadlineAtMs === "number" &&
+          Number.isFinite(deadlineAtMs) &&
+          typeof fallbackMinRemainingMs === "number" &&
+          fallbackMinRemainingMs > 0;
+        if (!hasFallbackTimeBudget) {
+          return undefined;
+        }
+        const remainingMs = deadlineAtMs - Date.now();
+        if (remainingMs >= fallbackMinRemainingMs) {
+          return undefined;
+        }
+        return {
+          type: "stop" as const,
+          reason: "timeout" as const,
+          error: `Skipping fallback: only ${Math.max(0, remainingMs)}ms remain before cron timeout (need at least ${fallbackMinRemainingMs}ms).`,
+        };
+      },
       run: async (providerOverride, modelOverride, runOptions) => {
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
@@ -399,6 +425,9 @@ export async function executeCronRun(params: {
   /** Set when the cron payload's `timeoutSeconds` was explicitly configured. */
   runTimeoutOverrideMs?: number;
   suppressExecNotifyOnExit: boolean;
+  deadlineAtMs?: number;
+  getDeadlineAtMs?: () => number | undefined;
+  fallbackMinRemainingMs?: number;
   runStartedAt?: number;
 }): Promise<CronExecutionResult> {
   const resolvedVerboseLevel: VerboseLevel =
@@ -437,6 +466,9 @@ export async function executeCronRun(params: {
     abortReason: params.abortReason,
     onExecutionStarted: params.onExecutionStarted,
     onExecutionPhase: params.onExecutionPhase,
+    deadlineAtMs: params.deadlineAtMs,
+    getDeadlineAtMs: params.getDeadlineAtMs,
+    fallbackMinRemainingMs: params.fallbackMinRemainingMs,
   });
 
   const runStartedAt = params.runStartedAt ?? Date.now();

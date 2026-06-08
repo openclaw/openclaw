@@ -279,6 +279,22 @@ type ModelFallbackResultClassifier<T> = (attempt: {
   total: number;
 }) => ModelFallbackResultClassification | Promise<ModelFallbackResultClassification>;
 
+type ModelFallbackBeforeAttemptResult = void | {
+  type: "stop";
+  reason?: FailoverReason | null;
+  error?: string;
+};
+
+type ModelFallbackBeforeAttemptHandler = (params: {
+  candidate: ModelCandidate;
+  attempt: number;
+  total: number;
+  previousAttempts: ReadonlyArray<FallbackAttempt>;
+  isPrimary: boolean;
+  requestedModelMatched: boolean;
+  fallbackConfigured: boolean;
+}) => ModelFallbackBeforeAttemptResult | Promise<ModelFallbackBeforeAttemptResult>;
+
 type ModelFallbackRunResult<T> = {
   result: T;
   provider: string;
@@ -590,6 +606,7 @@ function throwFallbackFailureSummary(params: {
   attempts: FallbackAttempt[];
   candidates: ModelCandidate[];
   lastError: unknown;
+  rethrowLastError?: boolean;
   label: string;
   formatAttempt: (attempt: FallbackAttempt) => string;
   soonestCooldownExpiry?: number | null;
@@ -597,7 +614,10 @@ function throwFallbackFailureSummary(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
 }): never {
-  if (params.attempts.length <= 1 && params.lastError) {
+  if (
+    params.lastError !== undefined &&
+    (params.rethrowLastError === true || params.attempts.length <= 1)
+  ) {
     throw toLintErrorObject(params.lastError, "Non-Error thrown");
   }
 
@@ -1230,6 +1250,7 @@ export async function runWithModelFallback<T>(
     classifyResult?: ModelFallbackResultClassifier<T>;
     skipAuthProfileRuntime?: boolean;
     abortSignal?: AbortSignal;
+    beforeAttempt?: ModelFallbackBeforeAttemptHandler;
   } & ModelManifestNormalizationContext,
 ): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveModelCandidateChain({
@@ -1253,6 +1274,7 @@ export async function runWithModelFallback<T>(
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
+  let rethrowLastError = false;
   const cooldownProbeUsedProviders = new Set<string>();
   const observeDecision = async (decision: ModelFallbackDecisionParams) => {
     if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
@@ -1515,6 +1537,38 @@ export async function runWithModelFallback<T>(
       }
     }
 
+    const beforeAttemptResult = await params.beforeAttempt?.({
+      candidate,
+      attempt: i + 1,
+      total: candidates.length,
+      previousAttempts: attempts,
+      isPrimary,
+      requestedModelMatched: requestedModel,
+      fallbackConfigured: hasFallbackCandidates,
+    });
+    if (beforeAttemptResult?.type === "stop") {
+      logModelFallbackDecision({
+        decision: "stop_before_candidate",
+        runId: params.runId,
+        requestedProvider: params.provider,
+        requestedModel: params.model,
+        candidate,
+        attempt: i + 1,
+        total: candidates.length,
+        reason: beforeAttemptResult.reason ?? "timeout",
+        error:
+          beforeAttemptResult.error ??
+          `Stopped fallback before ${candidate.provider}/${candidate.model}.`,
+        nextCandidate: candidates[i + 1],
+        isPrimary,
+        requestedModelMatched: requestedModel,
+        fallbackConfigured: hasFallbackCandidates,
+        previousAttempts: attempts,
+      });
+      rethrowLastError = lastError !== undefined;
+      break;
+    }
+
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
@@ -1688,6 +1742,7 @@ export async function runWithModelFallback<T>(
     attempts,
     candidates,
     lastError,
+    rethrowLastError,
     label: "models",
     formatAttempt: (attempt) =>
       `${attempt.provider}/${attempt.model}: ${attempt.error}${

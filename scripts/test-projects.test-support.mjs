@@ -2031,7 +2031,7 @@ function classifyTarget(arg, cwd) {
   if (relative.startsWith("src/config/")) {
     return "runtimeConfig";
   }
-  if (relative.startsWith("src/cron/")) {
+  if (relative === "src/cron" || relative.startsWith("src/cron/")) {
     return "cron";
   }
   if (relative.startsWith("src/daemon/")) {
