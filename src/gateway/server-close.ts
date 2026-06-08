@@ -148,6 +148,11 @@ type RestartRunAbortParams = {
   agentRunSeq: Map<string, number>;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  markMainSessionsAbortedForRestart?: (params: {
+    sessionKeys: Set<string>;
+    sessionIds: Set<string>;
+    reason: string;
+  }) => Promise<void> | void;
 };
 
 /** Wait for pending replies and active runs to drain before restart shutdown. */
@@ -182,6 +187,51 @@ async function waitForRestartReplyDrain(params: {
     if (counts.pendingReplies <= 0 && counts.activeRuns <= 0) {
       return { drained: true, elapsedMs: Date.now() - startedAt, counts };
     }
+  }
+}
+
+function collectActiveRestartSessionRefs(
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>,
+): { sessionKeys: Set<string>; sessionIds: Set<string> } {
+  const sessionKeys = new Set<string>();
+  const sessionIds = new Set<string>();
+  for (const entry of chatAbortControllers.values()) {
+    if (entry.controller.signal.aborted) {
+      continue;
+    }
+    const sessionKey = entry.sessionKey.trim();
+    const sessionId = entry.sessionId.trim();
+    if (sessionKey) {
+      sessionKeys.add(sessionKey);
+    }
+    if (sessionId) {
+      sessionIds.add(sessionId);
+    }
+  }
+  return { sessionKeys, sessionIds };
+}
+
+async function markActiveRunsForRestartRecovery(
+  params: RestartRunAbortParams & {
+    reason: string;
+    warnings: string[];
+  },
+): Promise<void> {
+  if (!params.markMainSessionsAbortedForRestart) {
+    return;
+  }
+  const refs = collectActiveRestartSessionRefs(params.chatAbortControllers);
+  if (refs.sessionKeys.size === 0 && refs.sessionIds.size === 0) {
+    return;
+  }
+  try {
+    await params.markMainSessionsAbortedForRestart({
+      ...refs,
+      reason: params.reason,
+    });
+  } catch (err) {
+    shutdownLog.warn(`failed to mark active main session(s) for restart recovery: ${String(err)}`);
+    recordShutdownWarning(params.warnings, "restart-main-session-marker");
   }
 }
 
@@ -243,6 +293,10 @@ async function drainRestartPendingRepliesForShutdown(
     return;
   }
 
+  await markActiveRunsForRestartRecovery({
+    ...params,
+    reason: "gateway restart shutdown",
+  });
   const abortedRuns = abortActiveRunsForRestart(params);
   if (abortedRuns <= 0) {
     return;
@@ -504,6 +558,7 @@ export function createGatewayCloseHandler(
                 agentRunSeq: params.agentRunSeq,
                 broadcast: params.broadcast,
                 nodeSendToSession: params.nodeSendToSession,
+                markMainSessionsAbortedForRestart: params.markMainSessionsAbortedForRestart,
                 timeoutMs: drainTimeoutMs,
                 warnings,
               }),

@@ -669,6 +669,79 @@ describe("createGatewayCloseHandler", () => {
     ).toBe(true);
   });
 
+  it("marks active main sessions for restart recovery before aborting restart-drained runs", async () => {
+    const events: string[] = [];
+    const controller = new AbortController();
+    const agentController = new AbortController();
+    const alreadyAbortedController = new AbortController();
+    alreadyAbortedController.abort();
+    const chatAbortControllers = new Map([
+      [
+        "run-1",
+        {
+          controller,
+          sessionId: "session-id-1",
+          sessionKey: "agent:main:main",
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+      [
+        "agent-run-1",
+        {
+          controller: agentController,
+          sessionId: "session-id-2",
+          sessionKey: "agent:main:test:direct:source",
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+          kind: "agent" as const,
+        },
+      ],
+      [
+        "stale-run",
+        {
+          controller: alreadyAbortedController,
+          sessionId: "stale-session-id",
+          sessionKey: "agent:main:stale",
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+    ]);
+    const markMainSessionsAbortedForRestart = vi.fn(async () => {
+      events.push("marker");
+    });
+    const removeChatRun = vi.fn(() => {
+      events.push("abort");
+      return { sessionKey: "agent:main:main", clientRunId: "run-1" };
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        chatAbortControllers,
+        markMainSessionsAbortedForRestart,
+        removeChatRun,
+      }),
+    );
+
+    const result = await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(result.warnings).toContain("restart-reply-drain");
+    expect(markMainSessionsAbortedForRestart).toHaveBeenCalledTimes(1);
+    expect(events[0]).toBe("marker");
+    const markerCall = firstMockCall(markMainSessionsAbortedForRestart);
+    expect(markerCall?.[0]?.reason).toBe("gateway restart shutdown");
+    expect(markerCall?.[0]?.sessionKeys).toStrictEqual(
+      new Set(["agent:main:main", "agent:main:test:direct:source"]),
+    );
+    expect(markerCall?.[0]?.sessionIds).toStrictEqual(new Set(["session-id-1", "session-id-2"]));
+    expect(controller.signal.aborted).toBe(true);
+    expect(agentController.signal.aborted).toBe(true);
+  });
+
   it("continues restart shutdown and records a warning when gateway pre-restart hook stalls", async () => {
     vi.useFakeTimers();
     mocks.triggerInternalHook.mockImplementation((event: InternalHookEvent) => {

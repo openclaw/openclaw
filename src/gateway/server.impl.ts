@@ -1049,6 +1049,19 @@ export async function startGatewayServer(
       removeChatRun,
       agentRunSeq,
       nodeSendToSession,
+      markMainSessionsAbortedForRestart: async ({ sessionKeys, sessionIds, reason }) => {
+        if (sessionKeys.size === 0 && sessionIds.size === 0) {
+          return;
+        }
+        const { markRestartAbortedMainSessions } =
+          await import("../agents/main-session-restart-recovery.js");
+        await markRestartAbortedMainSessions({
+          cfg: getRuntimeConfig(),
+          sessionKeys,
+          sessionIds,
+          reason,
+        });
+      },
       getPendingReplyCount: getTotalPendingReplies,
       clients,
       configReloader: runtimeState.configReloader,
