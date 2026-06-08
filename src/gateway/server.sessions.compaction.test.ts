@@ -565,6 +565,122 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
   ws.close();
 });
 
+test("sessions.compact maxLines truncates the transcript on disk and archives the original to .bak", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = Array.from({ length: 500 }, (_, index) =>
+    JSON.stringify({ role: "user", content: `line-${index}` }),
+  );
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{
+    ok: true;
+    key: string;
+    compacted: boolean;
+    kept?: number;
+    archived?: string;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(true);
+  expect(compacted.payload?.kept).toBe(50);
+
+  // Active transcript truncated in place on disk: 500 -> 50 lines, newest kept.
+  const truncated = (await fs.readFile(transcriptPath, "utf-8")).trim().split("\n");
+  expect(truncated).toHaveLength(50);
+  expect(truncated.at(-1)).toBe(JSON.stringify({ role: "user", content: "line-499" }));
+
+  // Original 500 lines preserved verbatim in the .bak archive.
+  const archivedPath = compacted.payload?.archived;
+  if (!archivedPath) {
+    throw new Error("expected archived transcript path");
+  }
+  const archived = (await fs.readFile(archivedPath, "utf-8")).trim().split("\n");
+  expect(archived).toHaveLength(500);
+  expect(archived.at(0)).toBe(JSON.stringify({ role: "user", content: "line-0" }));
+
+  // No active run present, so the interrupt guard short-circuits without aborting.
+  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.waitCalls).toEqual([]);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines interrupts an active run before truncating, matching the LLM compact path", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = Array.from({ length: 500 }, (_, index) =>
+    JSON.stringify({ role: "user", content: `line-${index}` }),
+  );
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  // Simulate an embedded agent run actively appending to this session transcript.
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", true);
+
+  const compacted = await rpcReq<{
+    ok: true;
+    compacted: boolean;
+    kept?: number;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  // Regression for the ClawSweeper finding: the maxLines truncate branch must
+  // run the same active-run interrupt guard as the LLM-summarize branch *before*
+  // archiving and overwriting the transcript, so an active runner cannot keep
+  // appending to the file being truncated (the data-loss mode tracked by #72765).
+  expect(embeddedRunMock.abortCalls).toEqual(["sess-main"]);
+  expect(embeddedRunMock.waitCalls).toEqual(["sess-main"]);
+
+  // The guard ran first; truncation still completed deterministically afterwards.
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(true);
+  expect(compacted.payload?.kept).toBe(50);
+  const truncated = (await fs.readFile(transcriptPath, "utf-8")).trim().split("\n");
+  expect(truncated).toHaveLength(50);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines aborts without truncating when an active run cannot be interrupted", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = Array.from({ length: 500 }, (_, index) =>
+    JSON.stringify({ role: "user", content: `line-${index}` }),
+  );
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  // Active embedded run that fails to end within the interrupt window.
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", false);
+
+  const compacted = await rpcReq<{ ok: boolean }>(ws, "sessions.compact", {
+    key: "main",
+    maxLines: 50,
+  });
+
+  // Order proof: the guard ran first and failed, so the RPC errors out *before*
+  // any archive/truncate. If the guard ran after truncation, the transcript
+  // would already be 50 lines here. It is still 500 with no .bak, proving the
+  // interrupt happens before the destructive tail-read/archive/write.
+  expect(compacted.ok).toBe(false);
+  expect(embeddedRunMock.abortCalls).toEqual(["sess-main"]);
+  expect(embeddedRunMock.waitCalls).toEqual(["sess-main"]);
+
+  const untouched = (await fs.readFile(transcriptPath, "utf-8")).trim().split("\n");
+  expect(untouched).toHaveLength(500);
+  const dirEntries = await fs.readdir(dir);
+  expect(dirEntries.some((name) => name.includes(".bak"))).toBe(false);
+  expect(storePath).toBeTruthy();
+
+  ws.close();
+});
+
 test("sessions.patch preserves nested model ids under provider overrides", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-sessions-nested-"));
   const storePath = path.join(dir, "sessions.json");

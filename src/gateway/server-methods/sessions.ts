@@ -2643,6 +2643,27 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    // Active-run safety parity with the LLM-summarize branch above. The
+    // maxLines truncate path archives the transcript and overwrites it in
+    // place, so an active runner could otherwise keep appending to the file we
+    // are about to archive and truncate, losing that output (the data-loss mode
+    // tracked by #72765). Interrupt any active run for this session *before*
+    // reading the tail and truncating, exactly as the summarize branch does.
+    const truncateInterrupt = await interruptSessionRunIfActive({
+      req,
+      context,
+      client,
+      isWebchatConnect,
+      requestedKey: key,
+      canonicalKey: target.canonicalKey,
+      agentId: requestedAgentId,
+      sessionId,
+    });
+    if (truncateInterrupt.error) {
+      respond(false, undefined, truncateInterrupt.error);
+      return;
+    }
+
     const tail = readRecentSessionTranscriptLines({
       sessionId,
       storePath,
