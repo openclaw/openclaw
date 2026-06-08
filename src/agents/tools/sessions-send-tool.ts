@@ -92,11 +92,6 @@ function normalizeSessionsSendArguments(args: unknown): Record<string, unknown> 
   return params;
 }
 
-function resolveRunScopedFallbackSessionKey(sessionKey: string): string | undefined {
-  const match = /^(agent:[^:]+:.+):run:[^:]+$/.exec(sessionKey.trim());
-  return match?.[1];
-}
-
 function resolveConfiguredAgentMainSessionKey(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -210,7 +205,7 @@ async function startAgentRun(params: {
   sendParams: Record<string, unknown>;
   sessionKey: string;
   deliveryTimeoutMs?: number;
-  allowActiveRunQueueFallback?: boolean;
+  allowActiveRunQueueDelivery?: boolean;
 }): Promise<
   | {
       ok: true;
@@ -222,15 +217,12 @@ async function startAgentRun(params: {
   | { ok: false; result: ReturnType<typeof jsonResult> }
 > {
   try {
-    const activeRunSessionId = params.allowActiveRunQueueFallback
+    const activeRunSessionId = params.allowActiveRunQueueDelivery
       ? resolveActiveEmbeddedRunSessionId(params.sessionKey)
-      : undefined;
-    const fallbackSessionKey = activeRunSessionId
-      ? resolveRunScopedFallbackSessionKey(params.sessionKey)
       : undefined;
     const messageText =
       typeof params.sendParams.message === "string" ? params.sendParams.message : undefined;
-    if (activeRunSessionId && fallbackSessionKey && messageText) {
+    if (activeRunSessionId && messageText) {
       const sourceReplyDeliveryMode =
         params.sendParams.sourceReplyDeliveryMode === "automatic" ||
         params.sendParams.sourceReplyDeliveryMode === "message_tool_only"
@@ -260,30 +252,9 @@ async function startAgentRun(params: {
       if (queueOutcome.queued) {
         return { ok: true, runId: params.runId, activeRunQueue: true };
       }
-      try {
-        const response = await params.callGateway<{ runId: string }>({
-          method: "agent",
-          params: {
-            ...params.sendParams,
-            sessionKey: fallbackSessionKey,
-            idempotencyKey: crypto.randomUUID(),
-          },
-          timeoutMs: 10_000,
-        });
-        return {
-          ok: true,
-          runId:
-            typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
-          a2aSessionKey: fallbackSessionKey,
-          a2aDisplayKey: fallbackSessionKey,
-        };
-      } catch (err) {
-        const queueSummary =
-          formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
-        throw new Error(`${queueSummary}; fallback_failed error=${formatErrorMessage(err)}`, {
-          cause: err,
-        });
-      }
+      const queueSummary =
+        formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
+      throw new Error(queueSummary);
     }
     const response = await params.callGateway<{ runId: string }>({
       method: "agent",
@@ -643,7 +614,7 @@ export function createSessionsSendTool(opts?: {
           sendParams,
           sessionKey: displayKey,
           deliveryTimeoutMs: announceTimeoutMs,
-          allowActiveRunQueueFallback: true,
+          allowActiveRunQueueDelivery: true,
         });
         if (!start.ok) {
           return start.result;

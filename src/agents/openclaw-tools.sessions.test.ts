@@ -1513,11 +1513,10 @@ describe("sessions tools", () => {
     expect(calls.find((call) => call.method === "send")).toBeUndefined();
   });
 
-  it("sessions_send reroutes run-scoped active deliveries when transcript steering is rejected", async () => {
+  it("sessions_send reports active-run queue rejection without durable-session fallback", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     const requesterKey = "agent:re-portal:main";
     const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
-    const durableCallerKey = "agent:leasing-ops:cron:monthly-utility";
     const queueMessage = vi.fn(async (_text: string, _options?: unknown) => {
       throw new Error("active session ended before queued steering message was committed");
     });
@@ -1538,13 +1537,6 @@ describe("sessions tools", () => {
       calls.push(request);
       if (request.method === "agent") {
         return { runId: "fallback-run", status: "accepted", acceptedAt: 2000 };
-      }
-      if (request.method === "agent.wait") {
-        const params = request.params as { runId?: string } | undefined;
-        return { runId: params?.runId ?? "fallback-run", status: "ok" };
-      }
-      if (request.method === "chat.history") {
-        return { messages: [] };
       }
       return {};
     });
@@ -1570,9 +1562,11 @@ describe("sessions tools", () => {
       timeoutSeconds: 0,
     });
     const details = sessionsSendDetails(result.details);
-    expect(details.status).toBe("accepted");
+    expect(details.status).toBe("error");
     expect(details.sessionKey).toBe(runScopedCallerKey);
-    expect(details.delivery?.status).toBe("pending");
+    expect(details.error).toContain("queue_message_failed reason=runtime_rejected");
+    expect(details.error).toContain("caller-active-session");
+    expect(details.error).not.toContain("fallback_failed");
     const queuedText = queueMessage.mock.calls[0]?.[0];
     expect(queuedText).toContain("[Inter-session message]");
     expect(queuedText).toContain("[TASK-COMPLETE] re-portal occupancy ready");
@@ -1583,47 +1577,7 @@ describe("sessions tools", () => {
       waitForTranscriptCommit: true,
       sourceReplyDeliveryMode: "message_tool_only",
     });
-
-    await vi.waitFor(() => {
-      const fallbackCall = calls.find(
-        (call) =>
-          call.method === "agent" &&
-          (call.params as { sessionKey?: string } | undefined)?.sessionKey === durableCallerKey,
-      );
-      expect(fallbackCall).toBeDefined();
-    });
-
-    const agentCalls = calls.filter((call) => call.method === "agent");
-    expect(
-      agentCalls.some(
-        (call) =>
-          (call.params as { sessionKey?: string } | undefined)?.sessionKey === runScopedCallerKey,
-      ),
-    ).toBe(false);
-    const fallbackParams = agentCalls.find(
-      (call) =>
-        (call.params as { sessionKey?: string } | undefined)?.sessionKey === durableCallerKey,
-    )?.params as { inputProvenance?: { sourceSessionKey?: string }; message?: string } | undefined;
-    expect(fallbackParams?.message).toContain("[Inter-session message]");
-    expect(fallbackParams?.message).toContain("[TASK-COMPLETE] re-portal occupancy ready");
-    expect(fallbackParams?.inputProvenance?.sourceSessionKey).toBe(requesterKey);
-
-    await vi.waitFor(() => {
-      const waitCall = calls.find(
-        (call) =>
-          call.method === "agent.wait" &&
-          (call.params as { runId?: string } | undefined)?.runId === "fallback-run",
-      );
-      expect(waitCall).toBeDefined();
-    });
-    await vi.waitFor(() => {
-      const historyCall = calls.find(
-        (call) =>
-          call.method === "chat.history" &&
-          (call.params as { sessionKey?: string } | undefined)?.sessionKey === durableCallerKey,
-      );
-      expect(historyCall).toBeDefined();
-    });
+    expect(calls.some((call) => call.method === "agent")).toBe(false);
   });
 
   it("sessions_send preserves active delivery when transcript commit wait is unsupported", async () => {
@@ -1677,7 +1631,7 @@ describe("sessions tools", () => {
     expect(calls.some((call) => call.method === "agent")).toBe(false);
   });
 
-  it("sessions_send reports run-scoped fallback admission failures", async () => {
+  it("sessions_send reports run-scoped queue admission failures without gateway fallback", async () => {
     const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
     const queueMessage = vi.fn(async () => {
       throw new Error("active session ended before queued steering message was committed");
@@ -1720,7 +1674,12 @@ describe("sessions tools", () => {
     expect(details.status).toBe("error");
     expect(details.sessionKey).toBe(runScopedCallerKey);
     expect(details.error).toContain("queue_message_failed reason=runtime_rejected");
-    expect(details.error).toContain("fallback_failed error=gateway request timeout for agent");
+    expect(details.error).not.toContain("fallback_failed");
+    expect(
+      callGatewayMock.mock.calls.some(
+        (call) => (call[0] as { method?: string } | undefined)?.method === "agent",
+      ),
+    ).toBe(false);
   });
 
   it("sessions_send preserves terminal timeouts without starting A2A", async () => {
