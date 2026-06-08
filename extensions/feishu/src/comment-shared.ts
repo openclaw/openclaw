@@ -160,9 +160,15 @@ export async function requestFeishuApi<T>(
       // Feishu SDK may fulfill with a rate-limit body (e.g. { code: 11232, ... })
       // instead of throwing. Classify before returning so retry covers both shapes.
       const fulfilledRateLimit = getFeishuSendRateLimitCodeFromResponse(result);
-      if (fulfilledRateLimit !== undefined && attempt < FEISHU_SEND_MAX_RETRIES) {
+      if (fulfilledRateLimit !== undefined) {
+        // Capture for the synthetic-error path below; on a non-final attempt
+        // continue retrying, on the final attempt fall through so the loop
+        // exits and the wrapped exhaustion error is thrown.
         lastFulfilledRateLimit = { response: result, code: fulfilledRateLimit };
-        continue;
+        if (attempt < FEISHU_SEND_MAX_RETRIES) {
+          continue;
+        }
+        break;
       }
       return result;
     } catch (error) {
