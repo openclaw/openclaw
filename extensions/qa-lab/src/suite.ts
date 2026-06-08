@@ -12,6 +12,7 @@ import {
   type QaReportScenario,
 } from "openclaw/plugin-sdk/qa-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { buildQaSuiteEvidenceSummary } from "./evidence-summary.js";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
   QaLabLatestReport,
@@ -44,7 +45,10 @@ import {
   type RuntimeParityCell,
   type RuntimeParityResult,
 } from "./runtime-parity.js";
-import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import {
+  readQaBootstrapScenarioCatalog,
+  type QaSeedScenarioWithSource,
+} from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import {
   applyQaMergePatch,
@@ -536,6 +540,7 @@ export type QaSuiteSummaryJsonParams = {
   startedAt: Date;
   finishedAt: Date;
   metrics?: QaSuiteSummaryJson["metrics"];
+  evidence?: QaSuiteSummaryJson["evidence"];
   providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
@@ -587,6 +592,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
       failed: countQaSuiteFailedScenarios(params.scenarios),
     },
     ...(params.metrics ? { metrics: params.metrics } : {}),
+    ...(params.evidence ? { evidence: params.evidence } : {}),
     run: {
       startedAt: params.startedAt.toISOString(),
       finishedAt: params.finishedAt.toISOString(),
@@ -785,6 +791,7 @@ async function runQaRuntimeParitySuite(params: {
       startedAt: params.startedAt,
       finishedAt,
       scenarios,
+      catalogScenarios: params.selectedCatalogScenarios,
       transport,
       providerMode: params.providerMode,
       primaryModel: params.primaryModel,
@@ -829,6 +836,7 @@ async function writeQaSuiteArtifacts(params: {
   startedAt: Date;
   finishedAt: Date;
   scenarios: QaSuiteScenarioResult[];
+  catalogScenarios?: readonly QaSeedScenarioWithSource[];
   metrics?: QaSuiteSummaryJson["metrics"];
   transport: QaTransportAdapter;
   // Reuse the canonical QaProviderMode union instead of re-declaring it
@@ -844,6 +852,8 @@ async function writeQaSuiteArtifacts(params: {
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
 }) {
+  const reportPath = path.join(params.outputDir, "qa-suite-report.md");
+  const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
   const report = renderQaMarkdownReport({
     title: "OpenClaw QA Scenario Suite",
     startedAt: params.startedAt,
@@ -857,12 +867,23 @@ async function writeQaSuiteArtifacts(params: {
     })) satisfies QaReportScenario[],
     notes: createQaSuiteReportNotes(params),
   });
-  const reportPath = path.join(params.outputDir, "qa-suite-report.md");
-  const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
+  const evidence =
+    params.catalogScenarios && params.catalogScenarios.length > 0
+      ? buildQaSuiteEvidenceSummary({
+          artifactPaths: [path.basename(summaryPath), path.basename(reportPath)],
+          catalogScenarios: params.catalogScenarios,
+          channelId: params.transport.id,
+          env: process.env,
+          generatedAt: params.finishedAt.toISOString(),
+          primaryModel: params.primaryModel,
+          providerMode: params.providerMode,
+          scenarios: params.scenarios,
+        })
+      : undefined;
   await fs.writeFile(reportPath, report, "utf8");
   await fs.writeFile(
     summaryPath,
-    `${JSON.stringify(buildQaSuiteSummaryJson(params), null, 2)}\n`,
+    `${JSON.stringify(buildQaSuiteSummaryJson({ ...params, evidence }), null, 2)}\n`,
     "utf8",
   );
   return { report, reportPath, summaryPath };
@@ -1114,6 +1135,9 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       const partialScenarios = completedScenarioResults.filter(
         (scenario): scenario is QaSuiteScenarioResult => scenario !== undefined,
       );
+      const partialCatalogScenarios = completedScenarioResults.flatMap((scenario, index) =>
+        scenario === undefined ? [] : [selectedCatalogScenarios[index]],
+      );
       if (partialScenarios.length === 0) {
         return;
       }
@@ -1125,6 +1149,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
             startedAt,
             finishedAt: partialFinishedAt,
             scenarios: partialScenarios,
+            catalogScenarios: partialCatalogScenarios,
             transport,
             providerMode,
             primaryModel,
@@ -1268,6 +1293,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         startedAt,
         finishedAt,
         scenarios,
+        catalogScenarios: selectedCatalogScenarios,
         transport,
         providerMode,
         primaryModel,
@@ -1529,6 +1555,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       finishedAt,
       scenarios,
       metrics,
+      catalogScenarios: selectedCatalogScenarios,
       transport,
       providerMode,
       primaryModel,

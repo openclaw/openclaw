@@ -14,6 +14,10 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
+import {
+  buildLiveTransportEvidenceSummary,
+  type QaEvidenceSummaryJson,
+} from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
@@ -182,6 +186,7 @@ type TelegramQaSummary = {
     passed: number;
     failed: number;
   };
+  evidence?: QaEvidenceSummaryJson;
   scenarios: TelegramQaScenarioResult[];
 };
 
@@ -540,6 +545,19 @@ const TELEGRAM_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCo
   alwaysOnStandardScenarioIds: ["canary"],
   scenarios: TELEGRAM_QA_SCENARIOS,
 });
+
+const TELEGRAM_QA_EVIDENCE_SCENARIOS = [
+  {
+    id: "telegram-canary",
+    standardId: "canary",
+    title: "Telegram canary",
+  },
+  ...TELEGRAM_QA_SCENARIOS,
+] satisfies readonly {
+  id: string;
+  standardId?: string;
+  title: string;
+}[];
 
 const TELEGRAM_QA_ENV_KEYS = [
   "OPENCLAW_QA_TELEGRAM_GROUP_ID",
@@ -2006,6 +2024,23 @@ export async function runTelegramQaLive(params: {
   if (cleanupIssues.length > 0) {
     writeTelegramQaProgress(progressEnabled, `cleanup issues: count=${cleanupIssues.length}`);
   }
+  const reportPath = path.join(outputDir, "telegram-qa-report.md");
+  const summaryPath = path.join(outputDir, "telegram-qa-summary.json");
+  const observedMessagesPath = path.join(outputDir, "telegram-qa-observed-messages.json");
+  const evidence = buildLiveTransportEvidenceSummary({
+    artifactPaths: [
+      path.basename(summaryPath),
+      path.basename(reportPath),
+      path.basename(observedMessagesPath),
+    ],
+    env: process.env,
+    generatedAt: finishedAt,
+    primaryModel,
+    providerMode,
+    scenarioDefinitions: TELEGRAM_QA_EVIDENCE_SCENARIOS,
+    scenarios: scenarioResults,
+    transportId: "telegram",
+  });
   const summary: TelegramQaSummary = {
     credentials: {
       source: credentialLease.source,
@@ -2023,11 +2058,9 @@ export async function runTelegramQaLive(params: {
       passed: passedCount,
       failed: failedCount,
     },
+    evidence,
     scenarios: scenarioResults,
   };
-  const reportPath = path.join(outputDir, "telegram-qa-report.md");
-  const summaryPath = path.join(outputDir, "telegram-qa-summary.json");
-  const observedMessagesPath = path.join(outputDir, "telegram-qa-observed-messages.json");
   await fs.writeFile(
     reportPath,
     `${renderTelegramQaMarkdown({
@@ -2095,6 +2128,7 @@ export async function runTelegramQaLive(params: {
 
 export const testing = {
   TELEGRAM_QA_SCENARIOS,
+  TELEGRAM_QA_EVIDENCE_SCENARIOS,
   TELEGRAM_QA_STANDARD_SCENARIO_IDS,
   buildTelegramQaConfig,
   buildObservedMessagesArtifact,
