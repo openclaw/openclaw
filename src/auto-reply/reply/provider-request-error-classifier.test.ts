@@ -37,11 +37,15 @@ describe("provider request error classifier", () => {
     expect(classifyProviderRequestError(new Error("429: rate limit exceeded"))).toBeUndefined();
   });
 
-  it("classifies structured HTTP 429 errors even when the body is generic", () => {
+  it.each([
+    ["top-level status", { status: 429 }],
+    ["response status", { response: { status: "429" } }],
+    ["cause statusCode", { cause: { statusCode: 429 } }],
+  ])("classifies generic HTTP 429 errors from %s metadata", (_label, metadata) => {
     const error = new Error(
       "Something went wrong while processing your request. Please try again.",
     );
-    Object.assign(error, { status: 429 });
+    Object.assign(error, metadata);
 
     expect(classifyProviderRequestError(error)).toEqual({
       code: "provider_rate_limit_or_quota_error",

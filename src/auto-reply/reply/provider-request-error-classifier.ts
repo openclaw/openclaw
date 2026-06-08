@@ -71,20 +71,30 @@ function isGenericProviderRuntimeErrorMessage(message: string): boolean {
 
 function hasHttp429Evidence(err: unknown, message: string): boolean {
   return (
-    readDirectHttp429Status(err) ||
+    readHttp429Status(err) ||
     /\b(?:http\s*)?429\b|["'](?:status|code)["']\s*:\s*429\b/iu.test(message)
   );
 }
 
-function readDirectHttp429Status(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
+function readHttp429Status(err: unknown, seen = new Set<unknown>()): boolean {
+  if (!err || typeof err !== "object" || seen.has(err)) {
     return false;
   }
+  seen.add(err);
   const candidate =
     (err as { status?: unknown; statusCode?: unknown }).status ??
     (err as { statusCode?: unknown }).statusCode;
   if (typeof candidate === "number" && Number.isFinite(candidate)) {
-    return candidate === 429;
+    if (candidate === 429) {
+      return true;
+    }
+  } else if (typeof candidate === "string" && Number(candidate.trim()) === 429) {
+    return true;
   }
-  return typeof candidate === "string" && Number(candidate.trim()) === 429;
+  const nested = err as { cause?: unknown; error?: unknown; response?: unknown };
+  return (
+    readHttp429Status(nested.response, seen) ||
+    readHttp429Status(nested.error, seen) ||
+    readHttp429Status(nested.cause, seen)
+  );
 }
