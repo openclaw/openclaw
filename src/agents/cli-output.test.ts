@@ -912,7 +912,6 @@ describe("createCliJsonlStreamingParser", () => {
     parser.push(
       [
         JSON.stringify({ type: "init", session_id: "session-commentary" }),
-        // Text delta accumulating assistant commentary
         JSON.stringify({
           type: "stream_event",
           event: {
@@ -927,7 +926,6 @@ describe("createCliJsonlStreamingParser", () => {
             delta: { type: "text_delta", text: "that for you." },
           },
         }),
-        // Tool use block starts -- should flush commentary
         JSON.stringify({
           type: "stream_event",
           event: {
@@ -941,7 +939,6 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(commentaryTexts).toEqual(["Let me check that for you."]);
-    // Assistant deltas should still have been emitted normally
     expect(deltas).toHaveLength(2);
     expect(deltas[1]?.text).toBe("Let me check that for you.");
   });
@@ -963,7 +960,6 @@ describe("createCliJsonlStreamingParser", () => {
     parser.push(
       [
         JSON.stringify({ type: "init", session_id: "session-no-commentary" }),
-        // Tool use block starts immediately without preceding text
         JSON.stringify({
           type: "stream_event",
           event: {
@@ -996,7 +992,6 @@ describe("createCliJsonlStreamingParser", () => {
     parser.push(
       [
         JSON.stringify({ type: "init", session_id: "session-multi-commentary" }),
-        // First commentary
         JSON.stringify({
           type: "stream_event",
           event: {
@@ -1004,7 +999,6 @@ describe("createCliJsonlStreamingParser", () => {
             delta: { type: "text_delta", text: "First, checking files." },
           },
         }),
-        // First tool_use -- should flush commentary
         JSON.stringify({
           type: "stream_event",
           event: {
@@ -1013,7 +1007,6 @@ describe("createCliJsonlStreamingParser", () => {
             content_block: { type: "tool_use", id: "toolu_1", name: "Read", input: {} },
           },
         }),
-        // Second tool_use immediately (no new text) -- should NOT duplicate
         JSON.stringify({
           type: "stream_event",
           event: {
@@ -1026,8 +1019,6 @@ describe("createCliJsonlStreamingParser", () => {
     );
     parser.finish();
 
-    // Commentary fires only once for the first tool_use. The second tool_use
-    // has no new accumulated text, so it does not fire again.
     expect(commentaryTexts).toEqual(["First, checking files."]);
   });
 
@@ -1048,7 +1039,6 @@ describe("createCliJsonlStreamingParser", () => {
     parser.push(
       [
         JSON.stringify({ type: "init", session_id: "session-segment" }),
-        // First commentary text
         JSON.stringify({
           type: "stream_event",
           event: {
@@ -1056,7 +1046,6 @@ describe("createCliJsonlStreamingParser", () => {
             delta: { type: "text_delta", text: "Reading the file now." },
           },
         }),
-        // First tool_use — flushes "Reading the file now."
         JSON.stringify({
           type: "stream_event",
           event: {
@@ -1065,7 +1054,6 @@ describe("createCliJsonlStreamingParser", () => {
             content_block: { type: "tool_use", id: "toolu_a", name: "Read", input: {} },
           },
         }),
-        // Second commentary text (new segment only)
         JSON.stringify({
           type: "stream_event",
           event: {
@@ -1073,7 +1061,6 @@ describe("createCliJsonlStreamingParser", () => {
             delta: { type: "text_delta", text: " Now searching." },
           },
         }),
-        // Second tool_use — should flush only "Now searching.", not the full cumulative
         JSON.stringify({
           type: "stream_event",
           event: {

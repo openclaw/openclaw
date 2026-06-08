@@ -280,8 +280,6 @@ export function createChannelProgressDraftCompositor(params: {
         text: normalized,
         label: "Commentary",
         prefix: false,
-        // Commentary is assistant prose — render it in full, not compacted like tool lines.
-        noCompact: true,
       };
       lines = mergeChannelProgressDraftLine(lines, line, {
         maxLines: resolveChannelProgressDraftMaxLines(params.entry),
