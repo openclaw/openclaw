@@ -937,7 +937,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("keeps timeout cleanup armed after operator cancellation", async () => {
+  it("unwinds timed cron runs immediately after operator cancellation", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -973,6 +973,10 @@ describe("cron service timer regressions", () => {
       const timerPromise = onTimer(state);
       const observedAbortSignal = await runnerStarted.promise;
       const runId = `cron:cancel-before-timeout:${scheduledAt}`;
+      let timerSettled = false;
+      void timerPromise.then(() => {
+        timerSettled = true;
+      });
       const cancelled = cancelActiveCronTaskRun({
         runId,
         reason: "Cancelled by operator.",
@@ -981,18 +985,17 @@ describe("cron service timer regressions", () => {
       expect(cancelled).toBe(true);
       expect(observedAbortSignal?.aborted).toBe(true);
 
-      await vi.advanceTimersByTimeAsync(Math.ceil(FAST_TIMEOUT_SECONDS * 1_000) + 10);
+      for (let attempt = 0; attempt < 5 && !timerSettled; attempt += 1) {
+        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
+      }
+      expect(timerSettled).toBe(true);
       await timerPromise;
 
-      expect(cleanupTimedOutAgentRun).toHaveBeenCalledWith(
-        expect.objectContaining({
-          job: expect.objectContaining({ id: "cancel-before-timeout" }),
-          timeoutMs: FAST_TIMEOUT_SECONDS * 1_000,
-        }),
-      );
+      expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
       const job = state.store?.jobs.find((entry) => entry.id === "cancel-before-timeout");
       expect(job?.state.lastStatus).toBe("error");
-      expect(job?.state.lastError).toContain("timed out");
+      expect(job?.state.lastError).toBe("Cancelled by operator.");
     } finally {
       vi.useRealTimers();
     }

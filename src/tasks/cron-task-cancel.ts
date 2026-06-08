@@ -2,6 +2,7 @@
 
 type CronTaskCancelHandle = {
   controller: AbortController;
+  onCancel?: (reason: string) => void;
 };
 
 const activeCronTaskRunsByRunId = new Map<string, CronTaskCancelHandle>();
@@ -9,12 +10,16 @@ const activeCronTaskRunsByRunId = new Map<string, CronTaskCancelHandle>();
 export function registerActiveCronTaskRun(params: {
   runId: string | undefined;
   controller: AbortController;
+  onCancel?: (reason: string) => void;
 }): (() => void) | undefined {
   const runId = params.runId?.trim();
   if (!runId) {
     return undefined;
   }
-  activeCronTaskRunsByRunId.set(runId, { controller: params.controller });
+  activeCronTaskRunsByRunId.set(runId, {
+    controller: params.controller,
+    onCancel: params.onCancel,
+  });
   return () => {
     if (activeCronTaskRunsByRunId.get(runId)?.controller === params.controller) {
       activeCronTaskRunsByRunId.delete(runId);
@@ -37,7 +42,9 @@ export function cancelActiveCronTaskRun(params: {
   if (handle.controller.signal.aborted) {
     return false;
   }
-  handle.controller.abort(params.reason?.trim() || "Cancelled by operator.");
+  const reason = params.reason?.trim() || "Cancelled by operator.";
+  handle.controller.abort(reason);
+  handle.onCancel?.(reason);
   return true;
 }
 

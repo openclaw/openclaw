@@ -125,6 +125,21 @@ export async function executeJobCoreWithTimeout(
   opts?: { runId?: string },
 ): Promise<Awaited<ReturnType<typeof executeJobCore>>> {
   const runAbortController = new AbortController();
+  const operatorCancellationMarker = Symbol("cron-operator-cancelled");
+  let resolveOperatorCancellation: ((value: typeof operatorCancellationMarker) => void) | undefined;
+  const operatorCancellationPromise = new Promise<typeof operatorCancellationMarker>((resolve) => {
+    resolveOperatorCancellation = resolve;
+  });
+  const createOperatorCancellationOutcome = () => {
+    const error = abortErrorMessage(runAbortController.signal);
+    return {
+      status: "error" as const,
+      error,
+      diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
+        nowMs: state.deps.nowMs,
+      }),
+    };
+  };
   // Main-session cron jobs enqueue work into a downstream child session. The
   // cron wrapper does not own that queued run, so it must not expose a task
   // cancellation handle that could make the wrapper row lie about child state.
@@ -133,20 +148,12 @@ export async function executeJobCoreWithTimeout(
       ? registerActiveCronTaskRun({
           runId: opts?.runId,
           controller: runAbortController,
+          onCancel: () => resolveOperatorCancellation?.(operatorCancellationMarker),
         })
       : undefined;
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   try {
     if (typeof jobTimeoutMs !== "number") {
-      const cancellationMarker = Symbol("cron-cancelled");
-      const cancellationPromise = new Promise<typeof cancellationMarker>((resolve) => {
-        const resolveCancelled = () => resolve(cancellationMarker);
-        if (runAbortController.signal.aborted) {
-          resolveCancelled();
-          return;
-        }
-        runAbortController.signal.addEventListener("abort", resolveCancelled, { once: true });
-      });
       const corePromise = executeJobCore(state, job, runAbortController.signal);
       void corePromise.catch((err: unknown) => {
         if (runAbortController.signal.aborted) {
@@ -156,18 +163,11 @@ export async function executeJobCoreWithTimeout(
           );
         }
       });
-      const first = await Promise.race([corePromise, cancellationPromise]);
-      if (first !== cancellationMarker) {
+      const first = await Promise.race([corePromise, operatorCancellationPromise]);
+      if (first !== operatorCancellationMarker) {
         return first;
       }
-      const error = abortErrorMessage(runAbortController.signal);
-      return {
-        status: "error",
-        error,
-        diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
-          nowMs: state.deps.nowMs,
-        }),
-      };
+      return createOperatorCancellationOutcome();
     }
 
     let timeoutReason: string | undefined;
@@ -207,7 +207,10 @@ export async function executeJobCoreWithTimeout(
       }
     });
     try {
-      const first = await Promise.race([corePromise, timeoutPromise]);
+      const first = await Promise.race([corePromise, timeoutPromise, operatorCancellationPromise]);
+      if (first === operatorCancellationMarker) {
+        return createOperatorCancellationOutcome();
+      }
       if (first !== timeoutMarker) {
         return first;
       }
