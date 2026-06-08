@@ -1222,6 +1222,7 @@ export async function runClaudeLiveSessionTurn(params: {
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
+  classifyCommentaryText?: boolean;
   onCommentaryText?: (text: string) => void;
   cleanup: () => Promise<void>;
 }): Promise<ClaudeLiveRunResult> {
@@ -1340,7 +1341,7 @@ export async function runClaudeLiveSessionTurn(params: {
       onAssistantDelta: params.onAssistantDelta,
       onToolUseStart: params.onToolUseStart,
       onToolResult: params.onToolResult,
-      classifyCommentaryText: params.context.params.classifyCommentaryText,
+      classifyCommentaryText: params.classifyCommentaryText,
       onCommentaryText: params.onCommentaryText,
       session: liveSession,
       execPermission,
