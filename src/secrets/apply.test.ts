@@ -1,3 +1,4 @@
+/** Tests secrets apply dry-run/write behavior across config and auth stores. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,15 +1,22 @@
+/**
+ * Local-model lean tool filtering.
+ * Removes high-latency or channel-dependent tools for local models while
+ * preserving explicitly required delivery tools.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
-// Local-model lean mode removes high-latency or channel-dependent tools unless
-// the caller explicitly preserves them for the current delivery path.
 const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set(["browser", "cron", "message"]);
+const LOCAL_MODEL_LEAN_TOOL_SEARCH_DEFAULTS = {
+  enabled: true,
+  mode: "tools",
+  searchDefaultLimit: 5,
+  maxSearchLimit: 10,
+} as const;
 
-// Preserve lists accept tool groups; normalize them to concrete tool names so
-// filtering stays aligned with the normal tool-policy path.
 function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>): Set<string> {
   if (!names) {
     return new Set();
@@ -89,4 +96,24 @@ export function filterLocalModelLeanTools(params: {
       !LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(normalizedName)
     );
   });
+}
+
+export function applyLocalModelLeanToolSearchDefaults(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+}): OpenClawConfig | undefined {
+  if (!params.config || !isLocalModelLeanEnabled(params)) {
+    return params.config;
+  }
+  if (params.config.tools?.toolSearch !== undefined) {
+    return params.config;
+  }
+  return {
+    ...params.config,
+    tools: {
+      ...params.config.tools,
+      toolSearch: LOCAL_MODEL_LEAN_TOOL_SEARCH_DEFAULTS,
+    },
+  };
 }

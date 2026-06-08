@@ -1,3 +1,8 @@
+/**
+ * Tests read behavior and schema aliases in assembled coding tools.
+ * Covers sandbox read guards, adaptive paging, and model-facing schema
+ * normalization.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -65,6 +70,26 @@ describe("createOpenClawCodingTools read behavior", () => {
       expect(text).toContain("line-5000");
       expect(text).not.toContain("Read output capped at");
       expect(text).not.toMatch(/Use offset=\d+ to continue\.\]$/);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("maps inbound media refs to sandbox-staged media for reads", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-media-sbx-"));
+    const mediaId = "webchat-upload.txt";
+    const mediaPath = path.join(tmpDir, "media", "inbound", mediaId);
+    await fs.mkdir(path.dirname(mediaPath), { recursive: true });
+    await fs.writeFile(mediaPath, "sandbox media", "utf8");
+    try {
+      const readTool = createSandboxedReadTool({
+        root: tmpDir,
+        bridge: createHostSandboxFsBridge(tmpDir),
+      });
+      const result = await readTool.execute("read-media-sbx", {
+        path: `media://inbound/${mediaId}`,
+      });
+      expect(extractToolText(result)).toContain("sandbox media");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

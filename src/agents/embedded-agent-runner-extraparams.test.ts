@@ -1,3 +1,4 @@
+// Covers extra-params stream wrapper composition across provider families.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
@@ -115,6 +116,8 @@ function createTestXaiFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
   fastMode: boolean,
 ): StreamFn {
+  // xAI fast mode swaps known model ids before the request reaches the base
+  // stream function, mirroring the provider wrapper without network calls.
   return (model, context, options) => {
     if (!fastMode || model.api !== "openai-completions" || model.provider !== "xai") {
       return (
@@ -154,6 +157,8 @@ function stripTestXaiUnsupportedStrictFlag(tool: unknown): unknown {
 }
 
 function createTestXaiPayloadCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  // xAI rejects OpenAI-specific reasoning and strict tool-schema fields, so the
+  // wrapper removes those from the outgoing payload.
   return (model, context, options) => {
     const underlying =
       baseStreamFn ??
@@ -237,6 +242,8 @@ function isDirectAnthropicModel(model: { provider?: string; baseUrl?: string }):
 }
 
 function createAnthropicBetaHeadersWrapper(baseStreamFn: StreamFn | undefined, betas: string[]) {
+  // Anthropic beta headers combine OAuth-required betas, default tool/thinking
+  // betas, and user-configured betas while stripping the managed 1M marker.
   const underlying = baseStreamFn ?? (() => ({}) as ReturnType<StreamFn>);
   return ((model, context, options) => {
     const configuredBetas = betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA);
@@ -320,6 +327,8 @@ type WrapProviderStreamFnParams = Parameters<
 >[0];
 
 function installFullProviderRuntimeDepsForTest() {
+  // Install a test-only provider runtime that composes the same wrapper families
+  // the production provider hook layer owns.
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: (params) => {
       if (params.provider !== "openai") {
@@ -552,6 +561,8 @@ describe("applyExtraParamsToAgent", () => {
     payload?: Record<string, unknown>;
     thinkingLevel?: Parameters<typeof applyExtraParamsToAgent>[5];
   }) {
+    // Mutates a caller-owned payload through onPayload, matching how the runtime
+    // finalizes provider request bodies.
     const payload = params.payload ?? { store: false };
     const baseStreamFn: StreamFn = (model, _context, options) => {
       options?.onPayload?.(payload, model);
@@ -609,6 +620,8 @@ describe("applyExtraParamsToAgent", () => {
     extraParamsOverride?: Record<string, unknown>;
     payload?: Record<string, unknown>;
   }) {
+    // This bypasses provider wrappers so the test observes only core
+    // parallel_tool_calls alias handling.
     return withMinimalProviderRuntimeDepsForTest(() => {
       const payload = params.payload ?? {};
       const baseStreamFn: StreamFn = (model, _context, options) => {
@@ -698,6 +711,153 @@ describe("applyExtraParamsToAgent", () => {
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toStrictEqual([
+      {
+        thinking: { type: "disabled" },
+      },
+    ]);
+  });
+
+  it("removes implicit disabled thinking for MiniMax-M3 anthropic-messages payloads", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "disabled" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toStrictEqual([{}]);
+  });
+
+  it("preserves explicit off thinking for MiniMax-M3 anthropic-messages payloads", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "disabled" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3", undefined, "off");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toStrictEqual([
+      {
+        thinking: { type: "disabled" },
+      },
+    ]);
+  });
+
+  it("rewrites MiniMax-M3 default budget thinking to adaptive", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "enabled", budget_tokens: 1024 },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3", undefined, "adaptive");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toStrictEqual([
+      {
+        thinking: { type: "adaptive" },
+      },
+    ]);
+  });
+
+  it("restores explicit MiniMax-M3 maxTokens when rewriting budget thinking", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        max_tokens: 8692,
+        thinking: { type: "enabled", budget_tokens: 8192 },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3", undefined, "adaptive");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, { maxTokens: 500 });
+
+    expect(payloads).toStrictEqual([
+      {
+        max_tokens: 500,
+        thinking: { type: "adaptive" },
+      },
+    ]);
+  });
+
+  it("preserves downstream explicit MiniMax-M3 thinking overrides", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        thinking: { type: "disabled" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M3");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M3",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {
+      onPayload: (payload) => {
+        (payload as Record<string, unknown>).thinking = { type: "disabled" };
+      },
+    });
 
     expect(payloads).toStrictEqual([
       {

@@ -1,3 +1,4 @@
+// Cron Mcp Cleanup Docker Client script supports OpenClaw repository automation.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -17,6 +18,7 @@ let mcpChannelsHarness: McpChannelsHarness | undefined;
 type CronJob = { id?: string };
 type CronRunResult = { ok?: boolean; enqueued?: boolean; runId?: string };
 type AgentRunResult = { runId?: string; status?: string };
+type CronFinishedPayload = { status?: unknown };
 
 async function loadMcpChannelsHarness(): Promise<McpChannelsHarness> {
   mcpChannelsHarness ??= await import("./mcp-channels-harness.ts");
@@ -25,6 +27,12 @@ async function loadMcpChannelsHarness(): Promise<McpChannelsHarness> {
 
 export function readCronMcpCleanupProbePidWaitMs(env: NodeJS.ProcessEnv = process.env): number {
   return readPositiveIntEnv("OPENCLAW_CRON_MCP_CLEANUP_PID_WAIT_MS", 120_000, env);
+}
+
+export function assertCronFinishedOk(finished: CronFinishedPayload | undefined): void {
+  if (finished?.status !== "ok") {
+    throw new Error(`cron cleanup run did not finish ok: ${JSON.stringify(finished)}`);
+  }
 }
 
 async function readProbePid(pidPath: string): Promise<number | undefined> {
@@ -213,6 +221,7 @@ async function runCronCleanupScenario(params: {
     240_000,
   );
   assert(finished, "missing cron finished event");
+  assertCronFinishedOk(finished);
 
   await waitForProbeExit({ pid, label: "cron" });
   return {

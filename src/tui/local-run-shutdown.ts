@@ -1,3 +1,4 @@
+// Coordinates graceful shutdown for local TUI runs.
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 
 // Local TUI runs get extra shutdown time because embedded agents/providers may still be closing.

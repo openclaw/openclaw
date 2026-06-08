@@ -1,3 +1,4 @@
+// Voice Call plugin module implements twilio behavior.
 import crypto from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
@@ -169,6 +170,7 @@ export class TwilioProvider implements VoiceCallProvider {
 
   registerCallStream(callSid: string, streamSid: string): void {
     this.callStreamMap.set(callSid, streamSid);
+    this.activeStreamCalls.add(callSid);
   }
 
   hasRegisteredStream(callSid: string): boolean {
@@ -432,10 +434,6 @@ export class TwilioProvider implements VoiceCallProvider {
     if (decision.consumeStoredTwimlCallId) {
       this.deleteStoredTwiml(decision.consumeStoredTwimlCallId);
     }
-    if (decision.activateStreamCallSid) {
-      this.activeStreamCalls.add(decision.activateStreamCallSid);
-    }
-
     switch (decision.kind) {
       case "stored":
         return storedTwiml ?? TwilioProvider.EMPTY_TWIML;

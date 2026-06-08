@@ -11,8 +11,6 @@ import {
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeHeadersInitForFetch } from "../infra/fetch-headers.js";
-import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import { logDebug } from "../logger.js";
 import {
   buildMcpHttpFetch,
@@ -64,121 +62,6 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
 type SseEventSourceFetch = NonNullable<
   NonNullable<SSEClientTransportOptions["eventSourceInit"]>["fetch"]
 >;
-
-const STREAMABLE_HTTP_MAX_REDIRECTS = 20;
-
-function isRedirectStatus(status: number): boolean {
-  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
-}
-
-function resolveFetchUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  return input.url;
-}
-
-function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
-  if (!headers) {
-    return headers;
-  }
-  const nextHeaders = new Headers(normalizeHeadersInitForFetch(headers));
-  nextHeaders.delete("content-encoding");
-  nextHeaders.delete("content-language");
-  nextHeaders.delete("content-length");
-  nextHeaders.delete("content-location");
-  nextHeaders.delete("content-type");
-  nextHeaders.delete("transfer-encoding");
-  return nextHeaders;
-}
-
-function rewriteRedirectInitForMethod(init: RequestInit | undefined, status: number) {
-  if (!init) {
-    return init;
-  }
-
-  const currentMethod = init.method?.toUpperCase() ?? "GET";
-  const shouldForceGet =
-    status === 303
-      ? currentMethod !== "GET" && currentMethod !== "HEAD"
-      : (status === 301 || status === 302) && currentMethod === "POST";
-
-  if (!shouldForceGet) {
-    return init;
-  }
-
-  return {
-    ...init,
-    method: "GET",
-    body: undefined,
-    headers: dropBodyHeaders(init.headers),
-  };
-}
-
-function getRedirectVisitKey(url: string, init: RequestInit | undefined): string {
-  return `${init?.method?.toUpperCase() ?? "GET"} ${url}`;
-}
-
-function buildStreamableHttpFetch(baseFetch: FetchLike): FetchLike {
-  return async (url, init) => {
-    let currentUrl = resolveFetchUrl(url);
-    let currentInit = init ? { ...init } : undefined;
-    const visited = new Set<string>([getRedirectVisitKey(currentUrl, currentInit)]);
-
-    for (
-      let redirectCount = 0;
-      redirectCount <= STREAMABLE_HTTP_MAX_REDIRECTS;
-      redirectCount += 1
-    ) {
-      const parsedUrl = new URL(currentUrl);
-      const response = await baseFetch(parsedUrl.toString(), {
-        ...(currentInit ? { ...currentInit } : {}),
-        redirect: "manual",
-      });
-      if (!isRedirectStatus(response.status)) {
-        return response;
-      }
-
-      const location = response.headers.get("location");
-      if (!location) {
-        return response;
-      }
-      if (redirectCount === STREAMABLE_HTTP_MAX_REDIRECTS) {
-        void response.body?.cancel();
-        throw new Error(`Too many redirects (limit: ${STREAMABLE_HTTP_MAX_REDIRECTS})`);
-      }
-
-      const nextParsedUrl = new URL(location, parsedUrl);
-      const nextUrl = nextParsedUrl.toString();
-      let nextInit = rewriteRedirectInitForMethod(currentInit, response.status);
-      if (nextParsedUrl.origin !== parsedUrl.origin) {
-        if (nextInit?.headers) {
-          // Cross-origin redirects must not forward auth or other unsafe headers.
-          nextInit = {
-            ...nextInit,
-            headers: retainSafeHeadersForCrossOriginRedirect(nextInit.headers),
-          };
-        }
-      }
-
-      const nextVisitKey = getRedirectVisitKey(nextUrl, nextInit);
-      if (visited.has(nextVisitKey)) {
-        void response.body?.cancel();
-        throw new Error("Redirect loop detected");
-      }
-
-      visited.add(nextVisitKey);
-      void response.body?.cancel();
-      currentUrl = nextUrl;
-      currentInit = nextInit;
-    }
-
-    throw new Error(`Too many redirects (limit: ${STREAMABLE_HTTP_MAX_REDIRECTS})`);
-  };
-}
 
 function buildSseEventSourceFetch(
   headers: Record<string, string>,
@@ -257,7 +140,7 @@ export function resolveMcpTransport(
     return {
       transport: new StreamableHTTPClientTransport(new URL(resolved.url), {
         requestInit: resolved.auth === "oauth" || !headers ? undefined : { headers },
-        fetch: buildStreamableHttpFetch(httpFetch),
+        fetch: httpFetch,
         authProvider,
       }),
       description: resolved.description,

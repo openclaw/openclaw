@@ -1,3 +1,8 @@
+/**
+ * Shared compact tool-call display helpers.
+ * Redacts and summarizes arguments into short labels/details for chat and UI
+ * tool update streams.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -7,13 +12,12 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
 import { asRecord } from "./tool-display-record.js";
 
-// Shared formatting helpers for compact tool-call display labels. Display text
-// is redacted and summarized so tool updates stay readable in chat/UI streams.
 type ToolDisplayActionSpec = {
   label?: string;
   detailKeys?: string[];
 };
 
+/** Display metadata for a tool and optional per-action labels/details. */
 export type ToolDisplaySpec = {
   title?: string;
   label?: string;
@@ -21,6 +25,7 @@ export type ToolDisplaySpec = {
   actions?: Record<string, ToolDisplayActionSpec>;
 };
 
+/** Normalized display target for code/search bridge tools. */
 export type ToolSearchCodeDisplayTarget = {
   toolName: string;
   displayToolName?: string;
@@ -345,8 +350,13 @@ function collectWebSearchQueries(record: Record<string, unknown>): string[] {
   add(record.q);
   add(record.search);
   add(record.input);
+  // Parallel's `web_search` provider uses the native Parallel Search shape
+  // (`objective` + `search_queries`). Surface those so CLI progress and
+  // Codex activity metadata render the query context instead of a bare
+  // `search`.
+  add(record.objective);
 
-  for (const key of ["search_query", "image_query", "queries"]) {
+  for (const key of ["search_query", "image_query", "queries", "search_queries"]) {
     const value = record[key];
     if (!Array.isArray(value)) {
       continue;

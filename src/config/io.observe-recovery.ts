@@ -1,3 +1,4 @@
+// Observes and recovers config files that appear missing, corrupt, or clobbered.
 import crypto from "node:crypto";
 import path from "node:path";
 import { isRecord } from "../utils.js";

@@ -1,3 +1,4 @@
+// Summarizes extra security audit findings for user-facing output.
 import { resolveProviderToolPolicy } from "../agents/agent-tools.policy.js";
 import { parseModelRef } from "../agents/model-selection-normalize.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";

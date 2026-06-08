@@ -1,3 +1,7 @@
+/**
+ * Shared session persistence and prompt-body helpers for agent attempt
+ * execution paths.
+ */
 import { updateSessionStore } from "../../config/sessions/store.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -17,10 +21,16 @@ export type PersistSessionEntryParams = {
   storePath: string;
   entry: SessionEntry;
   clearedFields?: string[];
+  preserveTranscriptMarkerUpdatedAt?: boolean;
   shouldPersist?: (entry: SessionEntry | undefined) => boolean;
 };
 
 /** Persists one session entry while keeping the caller's in-memory store aligned. */
+
+function normalizeTranscriptMarkerUpdatedAt(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 export async function persistSessionEntry(
   params: PersistSessionEntryParams,
 ): Promise<SessionEntry | undefined> {
@@ -32,6 +42,13 @@ export async function persistSessionEntry(
         return current;
       }
       const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
+      if (params.preserveTranscriptMarkerUpdatedAt) {
+        const currentUpdatedAt = normalizeTranscriptMarkerUpdatedAt(current?.updatedAt);
+        const markerUpdatedAt = normalizeTranscriptMarkerUpdatedAt(params.entry.updatedAt);
+        if (markerUpdatedAt !== undefined) {
+          merged.updatedAt = Math.max(currentUpdatedAt ?? 0, markerUpdatedAt);
+        }
+      }
       for (const field of params.clearedFields ?? []) {
         // Cleared fields only apply when the replacement entry did not set the
         // field again; this preserves explicit false/null updates.

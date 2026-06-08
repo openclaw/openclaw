@@ -1,3 +1,4 @@
+// Buffers streaming reply blocks before coalesced final delivery.
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,

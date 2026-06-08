@@ -1,6 +1,7 @@
 Sources/Calendar/CalendarService.swift
 Sources/Camera/CameraController.swift
 Sources/Capabilities/NodeCapabilityRouter.swift
+Sources/Chat/AppleReviewDemoChatTransport.swift
 Sources/Chat/IOSGatewayChatTransport.swift
 Sources/Contacts/ContactsService.swift
 Sources/Device/DeviceInfoHelper.swift
@@ -20,6 +21,7 @@ Sources/Design/SettingsProTab.swift
 Sources/Design/SettingsProTabSupport.swift
 Sources/Design/SettingsProTabSections.swift
 Sources/Design/SettingsProTabActions.swift
+Sources/Design/TalkRuntimeIssueBanner.swift
 Sources/Design/CommandCenterSupport.swift
 Sources/Design/AgentProTab+Overview.swift
 Sources/Design/AgentProTab+Destinations.swift

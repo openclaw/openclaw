@@ -1,3 +1,4 @@
+// Covers model catalog loading, plugin manifests, normalization, and suppression.
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -38,6 +39,8 @@ function isSuppressedModel(provider?: string, id?: string): boolean {
 }
 
 function mockCatalogImportFailThenRecover() {
+  // Simulates a transient discovery import failure so cache/error handling can
+  // prove the catalog loader recovers on the next attempt.
   let call = 0;
   setModelCatalogImportForTest(async () => {
     call += 1;
@@ -138,6 +141,8 @@ function manifestModelCatalogSnapshot(model: {
   reasoning?: boolean;
   contextWindow?: number;
 }) {
+  // Minimal plugin metadata snapshot containing a manifest-owned external
+  // provider model catalog.
   return {
     policyHash: "policy",
     index: {
@@ -205,6 +210,8 @@ function requireCatalogEntry(
   provider: string,
   id: string,
 ): ModelCatalogEntry {
+  // Most catalog tests need a narrowed entry before checking capabilities or
+  // normalized ids; fail loudly when the fixture model disappears.
   const entry = findCatalogEntry(entries, provider, id);
   if (!entry) {
     throw new Error(`expected catalog entry ${provider}/${id}`);
@@ -1296,6 +1303,61 @@ describe("loadModelCatalog", () => {
     expect(entry.contextWindow).toBe(1_000_000);
     expect(entry.input).toEqual(["text", "image"]);
     expect(entry.reasoning).toBe(true);
+  });
+
+  it("passes configured provider rows to provider catalog augment hooks", async () => {
+    mockAgentDiscoveryModels([]);
+    augmentCatalogMock.mockResolvedValueOnce([
+      {
+        provider: "ollama",
+        id: "minimax-m3:cloud",
+        name: "Minimax M3 Live",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_048_576,
+        compat: { supportsTools: true },
+      },
+    ]);
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama",
+              models: [
+                {
+                  id: "minimax-m3:cloud",
+                  name: "Minimax M3 Configured",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 8192,
+                  compat: { supportsTools: false },
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const entry = requireCatalogEntry(result, "ollama", "minimax-m3:cloud");
+    expect(entry.name).toBe("Minimax M3 Live");
+    expect(entry.contextWindow).toBe(128_000);
+    expect(entry.input).toEqual(["text"]);
+    expect(entry.reasoning).toBe(false);
+    expect(entry.compat).toEqual({ supportsTools: false });
+    expect(augmentCatalogMock.mock.calls[0]?.[0]?.context.entries).toContainEqual(
+      expect.objectContaining({
+        provider: "ollama",
+        id: "minimax-m3:cloud",
+        name: "Minimax M3 Configured",
+        contextWindow: 128_000,
+      }),
+    );
   });
 
   it("includes configured provider models missing from discovery", async () => {
