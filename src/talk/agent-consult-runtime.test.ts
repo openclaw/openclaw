@@ -194,6 +194,9 @@ describe("realtime voice agent consult runtime", () => {
         "Live voice request from the caller during a live phone call.",
         "Act as the configured OpenClaw agent on behalf of this user. Use available tools when the request asks you to do work.",
         "When finished, return only the concise result the realtime voice agent should speak back.",
+        "Do not greet the user, introduce yourself, use the user's name, or add a preface before the answer.",
+        'Do not say phrases like "Hey Tim", "Sam here", "I\'m here", "same guardrail", or "checking with OpenClaw".',
+        "Do not mention realtime, providers, forced consults, routing, tool calls, transcripts, or internal OpenClaw mechanics unless the user explicitly asks about them.",
         "Do not include markdown, tool logs, or private reasoning. Include citations only when the spoken answer needs them.",
         "Recent voice transcript for context:\nCaller: Can you check this?",
         "Additional realtime context:\nCaller asked about PR #123.",
@@ -201,7 +204,7 @@ describe("realtime voice agent consult runtime", () => {
       ].join("\n\n"),
     );
     expect(call.extraSystemPrompt).toBe(
-      "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.",
+      "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return only the brief speakable result. Do not greet, use the user's name, introduce yourself, or mention voice routing/realtime/provider/tool mechanics unless explicitly asked.",
     );
   });
 
