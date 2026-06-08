@@ -474,7 +474,12 @@ export async function runCommandWithTimeout(
             if (!processTreeForceKillTimer) {
               processTreeForceKillTimer = setTimeout(() => {
                 processTreeForceKillTimer = null;
-                if (settled) {
+                if (
+                  settled ||
+                  childExitState != null ||
+                  child.exitCode != null ||
+                  child.signalCode != null
+                ) {
                   return;
                 }
                 try {
@@ -566,6 +571,7 @@ export async function runCommandWithTimeout(
     });
     child.on("exit", (code, signalResult) => {
       childExitState = { code, signal: signalResult };
+      clearProcessTreeForceKillTimer();
       if (settled || closeFallbackTimer) {
         return;
       }
