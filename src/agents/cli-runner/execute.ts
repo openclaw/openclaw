@@ -48,6 +48,7 @@ import {
   LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
 } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
+import { applyBackendEstimateUsage } from "./usage-estimate.js";
 
 const executeDeps = {
   getProcessSupervisor: getProcessSupervisorImpl,
@@ -811,7 +812,7 @@ export async function executePreparedCliRun(
           );
         }
 
-        const parsed =
+        const parsedRaw =
           streamedJsonlOutput ??
           parseCliOutput({
             raw: stdout,
@@ -820,6 +821,10 @@ export async function executePreparedCliRun(
             outputMode,
             fallbackSessionId: resolvedSessionId,
           });
+        const parsed = applyBackendEstimateUsage(context.backendResolved, parsedRaw, {
+          promptText: prompt,
+          modelId: context.modelId,
+        });
         const rawText = parsed.text;
         cliBackendLog.info(
           `cli turn: provider=${params.provider} model=${context.modelId} durationMs=${Date.now() - cliTurnStartedAt} ${formatCliBackendOutputDigest(rawText)}`,
