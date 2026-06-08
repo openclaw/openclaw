@@ -152,6 +152,28 @@ async function readStreamChunkWithTimeout(
   }
 }
 
+async function expectPromiseResolvesWithin<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 async function readUntilInitialSseCommentFrame(
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): Promise<void> {
@@ -1229,6 +1251,32 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/event-stream");
     await expectInitialSseCommentFrame(res);
+  });
+
+  it("closes active GET notification streams during loopback shutdown", async () => {
+    server = await startMcpLoopbackServer(0);
+    const token = getActiveMcpLoopbackRuntime()?.ownerToken;
+    const res = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+      method: "GET",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+    expect(res.status).toBe(200);
+    const reader = res.body?.getReader();
+    if (!reader) {
+      throw new Error("expected SSE response body");
+    }
+
+    try {
+      await readUntilInitialSseCommentFrame(reader);
+      const closePromise = server.close();
+      server = undefined;
+      await expectPromiseResolvesWithin(closePromise, 500, "MCP loopback server close");
+      const closed = await readStreamChunkWithTimeout(reader);
+      expect(closed.done).toBe(true);
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
   });
 
   it("rejects a GET notification channel without a bearer token (401)", async () => {

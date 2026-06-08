@@ -111,6 +111,7 @@ export function validateMcpLoopbackRequest(params: {
   res: ServerResponse;
   ownerToken: string;
   nonOwnerToken: string;
+  onSseResponse?: (res: ServerResponse) => void;
 }): { senderIsOwner: boolean } | null {
   let url: URL;
   try {
@@ -164,6 +165,7 @@ export function validateMcpLoopbackRequest(params: {
     });
     params.res.flushHeaders();
     params.res.write(":\n\n");
+    params.onSseResponse?.(params.res);
     params.req.on("close", () => {
       if (!params.res.writableEnded) {
         params.res.end();
