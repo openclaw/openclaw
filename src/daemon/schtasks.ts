@@ -1025,30 +1025,34 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     state: "running" | "not-yet-run" | "other";
     signature: string;
   }> => {
-    const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
-    if (runtime?.status === "running") {
-      return {
-        state: "running",
-        signature: [runtime.state, runtime.lastRunTime, runtime.lastRunResult, runtime.detail]
-          .filter(Boolean)
-          .join("|"),
-      };
+    const taskName = resolveTaskName(params.env);
+    const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
+    if (res.code !== 0) {
+      const detail = (res.stderr || res.stdout).trim();
+      return { state: "other", signature: detail };
     }
-    const normalizedResult = normalizeTaskResultCode(runtime?.lastRunResult);
+    const parsed = parseSchtasksQuery(res.stdout || "");
+    const derived = deriveScheduledTaskRuntimeStatus(parsed);
+    const signature = [parsed.status, parsed.lastRunTime, parsed.lastRunResult, derived.detail]
+      .filter(Boolean)
+      .join("|");
+    if (!parsed.status && !parsed.lastRunTime && !parsed.lastRunResult) {
+      return { state: "not-yet-run", signature: "not-yet-run" };
+    }
+    if (derived.status === "running") {
+      return { state: "running", signature };
+    }
+    const normalizedResult = normalizeTaskResultCode(parsed.lastRunResult);
     if (normalizedResult && NOT_YET_RUN_RESULT_CODES.has(normalizedResult)) {
+      const defaultNeverRunTime = normalizeLowercaseStringOrEmpty(parsed.lastRunTime).includes(
+        "11/30/1999",
+      );
       return {
         state: "not-yet-run",
-        signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
-          .filter(Boolean)
-          .join("|"),
+        signature: !parsed.lastRunTime || defaultNeverRunTime ? "not-yet-run" : signature,
       };
     }
-    return {
-      state: "other",
-      signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
-        .filter(Boolean)
-        .join("|"),
-    };
+    return { state: "other", signature };
   };
 
   const hasLaunchEvidence = async (): Promise<boolean> => {
@@ -1059,12 +1063,6 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
       resolveConfiguredGatewayPort(params.env);
     const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
-    if (manageGatewayPort && taskPort) {
-      const listenerPids = await resolveScheduledTaskGatewayListenerPids(taskPort);
-      if (listenerPids.length > 0) {
-        return true;
-      }
-    }
 
     const scriptPathNeedle = normalizeLowercaseStringOrEmpty(
       params.scriptPath.replaceAll("/", "\\"),
