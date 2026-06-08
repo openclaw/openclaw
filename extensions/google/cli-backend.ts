@@ -91,6 +91,7 @@ export function buildGoogleAntigravityCliBackend(): CliBackendPlugin {
           resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
         },
       },
+      reseedFromRawTranscriptWhenUncompacted: true,
       serialize: true,
     },
   };
