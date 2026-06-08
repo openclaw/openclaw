@@ -69,7 +69,7 @@ Included in this category:
 - Inbound and outbound rich media including: Covers Inbound and outbound rich media including images, voice, video, files, STT/TTS, and native voice sends behavior.
 - Slash commands: Covers Slash commands, approval buttons, reminder/channel tools, and framework command registration behavior.
 - Multi-account gateway connections: Covers Multi-account gateway connections, token cache, credential backups, diagnostics, and reconnect behavior behavior.
-- Tencent Yuanbao external channel `openclaw-plugin-yuanbao: Evidence scope for Tencent Yuanbao external channel `openclaw-plugin-yuanbao`.
+- Tencent Yuanbao external channel `openclaw-plugin-yuanbao`: Evidence scope for Tencent Yuanbao external channel `openclaw-plugin-yuanbao`.
 - AppKey/AppSecret setup: Covers AppKey/AppSecret setup, login wizard, multi-account config, and default account routing behavior.
 - DMs: Covers DMs, groups, mention requirements, reply-to mode, group history context, slash-command menus, and fallback replies behavior.
 - Outbound queue strategy: Covers Outbound queue strategy, merge-text tuning, max chars, media caps, overflow behavior, and block-level streaming behavior.
@@ -80,7 +80,7 @@ Included in this category:
 - Group policy schema and fail-closed group: Covers Group policy schema and fail-closed group gates even where Marketplace groups are not usable behavior.
 - Text: Covers Text, media placeholders, outbound chunking, replay dedupe, rate limiting, webhook secrets, and proxy support behavior.
 - Status probes and troubleshooting for token/config/webhook problems: Evidence scope for Status probes and troubleshooting for token/config/webhook problems.
-- zalouser` channel plugin for Zalo Personal: Covers zalouser` channel plugin for Zalo Personal Account automation via native `zca-js behavior.
+- `zalouser` channel plugin for Zalo Personal: Covers `zalouser` channel plugin for Zalo Personal Account automation via native `zca-js` behavior.
 - QR login: Covers QR login, saved profiles, multi-account/profile selection, and gateway-local runtime behavior.
 - DM pairing: Covers DM pairing, group policy, group gating, directory peers, and sender/session routing behavior.
 - Message send: Covers Message send, image/link/document media, reactions, status, friends/groups/me tools, and text style normalization behavior.

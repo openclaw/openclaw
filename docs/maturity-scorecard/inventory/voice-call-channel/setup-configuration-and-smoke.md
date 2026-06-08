@@ -107,7 +107,7 @@ The implementation has a coherent Gateway-first setup model, explicit provider c
 - `/Users/kevinlin/.local/bin/discrawl --json search --limit 10 "voice-call twilio telnyx plivo"`: returned user-facing setup guidance for installing `@openclaw/voice-call`, configuring `plugins.entries["voice-call"].config`, choosing Twilio/Telnyx/Plivo, exposing a public webhook, and noting that the plugin runs inside Gateway.
 - `/Users/kevinlin/.local/bin/discrawl --json search --limit 10 "voice-call webhook guard public url"`: returned evidence that the webhook guard landed so external providers fail fast when they would fall back to loopback/private URLs.
 
-### Archive Freshness
+### Archived source snapshot
 
 - `gitcrawl doctor --json`: `version=0.2.1`, `api_supported=false`, `repository_count=2`, `thread_count=29810`, `open_thread_count=11181`, `cluster_count=18594`, `last_sync_at=2026-05-28T19:09:52.784704Z`, `github_token_present=false`, `openai_key_present=true`.
 - `/Users/kevinlin/.local/bin/discrawl status --json`: `state=current`, `generated_at=2026-05-29T16:49:09Z`, `last_sync_at=2026-05-29T15:59:50Z`, `messages=1487061`, `channels=25819`, `threads=25591`, `embedding_backlog=0`, `share.needs_update=true`.

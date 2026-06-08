@@ -107,7 +107,7 @@ This is one of the stronger components because it rejects unauthenticated traffi
 - `/Users/kevinlin/.local/bin/discrawl --json search --limit 10 "voice-call twilio telnyx plivo"`: returned repeated user-facing guidance that real carrier providers need a publicly reachable Gateway webhook.
 - `/Users/kevinlin/.local/bin/discrawl --json search --limit 10 "voice-call realtime twilio"`: returned review and PR discussion around outbound realtime TwiML interception, notify calls, and stream attachment behavior.
 
-### Archive Freshness
+### Archived source snapshot
 
 - `gitcrawl doctor --json`: `version=0.2.1`, `api_supported=false`, `repository_count=2`, `thread_count=29810`, `open_thread_count=11181`, `cluster_count=18594`, `last_sync_at=2026-05-28T19:09:52.784704Z`, `github_token_present=false`, `openai_key_present=true`.
 - `/Users/kevinlin/.local/bin/discrawl status --json`: `state=current`, `generated_at=2026-05-29T16:49:09Z`, `last_sync_at=2026-05-29T15:59:50Z`, `messages=1487061`, `channels=25819`, `threads=25591`, `embedding_backlog=0`, `share.needs_update=true`.

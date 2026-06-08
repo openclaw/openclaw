@@ -177,7 +177,7 @@ discrawl status --json
 
 Results:
 
-- Succeeded; recorded freshness: generated_at=2026-05-28T20:13:14Z, state=current, last_sync_at=2026-05-28T19:15:50Z, messages=1485267, channels=25766, threads=25539, members=173089, embedding_backlog=0, share remote git@github.com-personal:openclaw/discord-store.git.
+- Succeeded; recorded freshness: generated_at=2026-05-28T20:13:14Z, state=current, last_sync_at=2026-05-28T19:15:50Z, messages=1485267, channels=25766, threads=25539, members=173089, embedding_backlog=0, share remote `git@github.com-personal:openclaw/discord-store.git`.
 
 Query:
 

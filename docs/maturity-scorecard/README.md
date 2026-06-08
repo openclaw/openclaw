@@ -6,7 +6,7 @@ version: 3
 # Maturity scorecard process
 
 This directory is an artifact root maintained by the local `claw-score` skill
-at [SKILL.md](/Users/kevinlin/code/claw/maintainers/.agents/skills/claw-score/SKILL.md).
+defined in the external `claw-score` `SKILL.md`.
 
 The skill owns scoring policy, scoring workflow, validation, artifact shape,
 and renderer expectations. This README is the human-facing directory contract
@@ -210,5 +210,5 @@ contract or regeneration guidance changes.
   taxonomy.
 - Do not hand-edit taxonomy-derived `## Features` sections in category notes;
   update `taxonomy.yaml` and rerender the owning surface report instead.
-- Keep agent instructions in [SKILL.md](/Users/kevinlin/code/claw/maintainers/.agents/skills/claw-score/SKILL.md), not in this
+- Keep agent instructions in the external `claw-score` `SKILL.md`, not in this
   directory.

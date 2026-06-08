@@ -99,7 +99,7 @@ The code is careful about not mixing Twilio active media streams with Twilio Say
 - `/Users/kevinlin/.local/bin/discrawl --json search --limit 10 "google meet twilio voice-call"`: returned maintainer notes that fresh Twilio outbound audio worked, while stale Google Meet/voice-call state and DTMF/mode propagation required debugging.
 - `/Users/kevinlin/.local/bin/discrawl --json search --limit 10 "voice-call twilio telnyx plivo"`: returned setup guidance that core `messages.tts` can be used for calls, plugin-level TTS can override it, and Microsoft/Edge speech should not be counted as telephony support.
 
-### Archive Freshness
+### Archived source snapshot
 
 - `gitcrawl doctor --json`: `version=0.2.1`, `api_supported=false`, `repository_count=2`, `thread_count=29810`, `open_thread_count=11181`, `cluster_count=18594`, `last_sync_at=2026-05-28T19:09:52.784704Z`, `github_token_present=false`, `openai_key_present=true`.
 - `/Users/kevinlin/.local/bin/discrawl status --json`: `state=current`, `generated_at=2026-05-29T16:49:09Z`, `last_sync_at=2026-05-29T15:59:50Z`, `messages=1487061`, `channels=25819`, `threads=25591`, `embedding_backlog=0`, `share.needs_update=true`.

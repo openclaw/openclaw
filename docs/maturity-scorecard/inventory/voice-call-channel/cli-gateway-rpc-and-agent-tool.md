@@ -100,7 +100,7 @@ The CLI design is practical: Gateway-first delegation avoids local runtime dupli
 - `/Users/kevinlin/.local/bin/discrawl --json search --limit 10 "voice-call twilio telnyx plivo"`: returned user-facing guidance that the `openclaw voicecall call ...` command is real only when the plugin is installed and enabled.
 - `/Users/kevinlin/.local/bin/discrawl --json search --limit 10 "google meet twilio voice-call"`: returned live usage notes that `voice_call.initiate_call` was used for a fresh audible Twilio test while Google Meet transport state was debugged separately.
 
-### Archive Freshness
+### Archived source snapshot
 
 - `gitcrawl doctor --json`: `version=0.2.1`, `api_supported=false`, `repository_count=2`, `thread_count=29810`, `open_thread_count=11181`, `cluster_count=18594`, `last_sync_at=2026-05-28T19:09:52.784704Z`, `github_token_present=false`, `openai_key_present=true`.
 - `/Users/kevinlin/.local/bin/discrawl status --json`: `state=current`, `generated_at=2026-05-29T16:49:09Z`, `last_sync_at=2026-05-29T15:59:50Z`, `messages=1487061`, `channels=25819`, `threads=25591`, `embedding_backlog=0`, `share.needs_update=true`.
