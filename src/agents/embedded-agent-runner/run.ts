@@ -5,11 +5,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import {
-  FAST_MODE_AUTO_PROGRESS_KIND,
-  isFastModeAutoProgressPayload,
-  type ReplyPayload,
-} from "../../auto-reply/reply-payload.js";
+import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { resolveStorePath, updateSessionStoreEntry } from "../../config/sessions.js";
@@ -22,6 +18,7 @@ import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
   claimAgentRunContext,
+  emitAgentItemEvent,
   emitAgentPlanEvent,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
@@ -727,6 +724,24 @@ async function runEmbeddedAgentInternal(
       }) => {
         const summary = formatFastModeAutoProgressText(payload);
         try {
+          emitAgentItemEvent({
+            runId: params.runId,
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            data: {
+              itemId: `fast-mode-auto:${payload.enabled ? "on" : "off"}`,
+              kind: "status",
+              title: "Fast",
+              phase: "update",
+              status: "running",
+              summary,
+            },
+          });
+        } catch (error) {
+          log.debug(
+            `embedded run fast mode auto global event failed: ${formatErrorMessage(error)}`,
+          );
+        }
+        try {
           await params.onAgentEvent?.({
             stream: "item",
             data: {
@@ -764,24 +779,13 @@ async function runEmbeddedAgentInternal(
         fastModeAutoProgressState.offAnnounced = true;
         await emitFastModeAutoProgress(next);
       };
-      const isToolExecutionBoundaryEvent = (
-        event: Parameters<NonNullable<RunEmbeddedAgentParams["onAgentEvent"]>>[0],
-      ) =>
-        event.stream === "tool" &&
-        ["completed", "end", "error", "result"].includes(String(event.data?.phase));
       const notifyToolResult = async (payload: ReplyPayload) => {
         await params.onToolResult?.(payload);
-        if (!isFastModeAutoProgressPayload(payload)) {
-          await maybeAnnounceFastModeAutoOff();
-        }
       };
       const notifyAgentEvent = async (
         event: Parameters<NonNullable<RunEmbeddedAgentParams["onAgentEvent"]>>[0],
       ) => {
         await params.onAgentEvent?.(event);
-        if (isToolExecutionBoundaryEvent(event)) {
-          await maybeAnnounceFastModeAutoOff();
-        }
       };
       const resolveAttemptFastMode = (): boolean | undefined => {
         const resolved = resolveFastModeForElapsed({
@@ -1941,6 +1945,7 @@ async function runEmbeddedAgentInternal(
             beforeAgentStartResult,
             thinkLevel,
             onToolOutcome: observePostCompactionToolOutcome,
+            onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
             onRunProgress: notifyRunProgress,
             fastMode: attemptFastMode,
             ...(params.fastMode === "auto"

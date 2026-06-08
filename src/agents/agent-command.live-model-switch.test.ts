@@ -1,6 +1,7 @@
 /** Tests live model switching behavior in active agent command sessions. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import type { AgentCommandOpts } from "./command/types.js";
 import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./internal-events.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
@@ -946,10 +947,11 @@ function expectRecordFields(value: unknown, expected: Record<string, unknown>): 
   }
 }
 
-async function runBasicAgentCommand() {
+async function runBasicAgentCommand(opts: Partial<AgentCommandOpts> = {}) {
   await agentCommand({
     message: "hello",
     to: "+1234567890",
+    ...opts,
   });
 }
 
@@ -3132,6 +3134,52 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(secondAttempt.fastModeAutoOnSeconds).toBe(45);
     expect(typeof firstAttempt.fastModeStartedAtMs).toBe("number");
     expect(secondAttempt.fastModeStartedAtMs).toBe(firstAttempt.fastModeStartedAtMs);
+  });
+
+  it("keeps explicit fast auto cutoff across model fallback attempts", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+            "openai/gpt-5.4": { params: { fastMode: "auto", fastAutoOnSeconds: 45 } },
+          },
+        },
+      },
+    };
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: 0,
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    } as SessionEntry;
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await params.run(params.provider, params.model);
+      const fallbackResult = await params.run("openai", "gpt-5.4");
+      return {
+        result: fallbackResult,
+        provider: "openai",
+        model: "gpt-5.4",
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock
+      .mockResolvedValueOnce(makeEmptyResult("anthropic", "claude"))
+      .mockResolvedValueOnce(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand({
+      fastMode: "auto",
+      fastModeAutoOnSeconds: 5,
+    });
+
+    const firstAttempt = requireRecord(mockCallArg(state.runAgentAttemptMock, 0), "first attempt");
+    const secondAttempt = requireRecord(
+      mockCallArg(state.runAgentAttemptMock, 1),
+      "second attempt",
+    );
+    expect(firstAttempt.fastMode).toBe("auto");
+    expect(secondAttempt.fastMode).toBe("auto");
+    expect(firstAttempt.fastModeAutoOnSeconds).toBe(5);
+    expect(secondAttempt.fastModeAutoOnSeconds).toBe(5);
   });
 
   it("updates hasSessionModelOverride for fallback resolution after switch", async () => {

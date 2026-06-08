@@ -1830,6 +1830,7 @@ async function agentCommandInternal(
               agentId: sessionAgentId,
               sessionEntry,
             });
+            const fastMode = opts.fastMode ?? fastModeState.mode;
             return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
@@ -1846,9 +1847,12 @@ async function agentCommandInternal(
               body,
               isFallbackRetry,
               resolvedThinkLevel,
-              fastMode: fastModeState.mode,
+              fastMode,
               fastModeStartedAtMs,
-              fastModeAutoOnSeconds: fastModeState.fastAutoOnSeconds,
+              fastModeAutoOnSeconds:
+                fastMode === "auto"
+                  ? (opts.fastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds)
+                  : fastModeState.fastAutoOnSeconds,
               timeoutMs,
               runTimeoutOverrideMs,
               runId,
