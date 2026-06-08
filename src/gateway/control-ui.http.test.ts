@@ -1007,6 +1007,44 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  // Compatibility regression for configured-base-path deployments: when a
+  // `gateway.controlUi.basePath` is set (e.g. `/openclaw`), current main and
+  // v2026.6.1 serve the bootstrap config at `${basePath}/__openclaw/control-ui-config.json`
+  // (single underscore). #66946 moves the canonical path to
+  // `${basePath}/control-ui-config.json`; this case proves the old configured-base-path
+  // endpoint still returns config so older bundles and proxies that still request it
+  // do not 404 after upgrade. Without the configured-base-path legacy alias this
+  // request 404s, so the assertion is not vacuous.
+  it("still serves bootstrap config at the legacy ${basePath}/__openclaw/control-ui-config.json under a configured basePath (#66946)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          {
+            url: "/openclaw/__openclaw/control-ui-config.json",
+            method: "GET",
+          } as IncomingMessage,
+          res,
+          {
+            basePath: "/openclaw",
+            root: { kind: "resolved", path: tmp },
+            config: {
+              agents: { defaults: { workspace: tmp } },
+              ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+            },
+          },
+        );
+        expect(handled).toBe(true);
+        expect(res.statusCode).not.toBe(404);
+        const parsed = parseBootstrapPayload(end);
+        // The configured base path is reported back so the loader resolves
+        // base-path-relative URLs against it.
+        expect(parsed.basePath).toBe("/openclaw");
+        expect(parsed.assistantAgentId).toBe("main");
+      },
+    });
+  });
+
   it("does not serve bootstrap config from the doubled /__openclaw__/__openclaw path (#66946)", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {

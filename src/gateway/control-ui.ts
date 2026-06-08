@@ -866,22 +866,31 @@ const LEGACY_BOOTSTRAP_CONFIG_PATH = `${LEGACY_CONTROL_UI_NAMESPACE_PREFIX}${CON
  *
  * The canonical endpoint is the configured base path joined with the shared
  * bootstrap constant (or the bare constant when no base path is configured).
- * When no base path is configured we additionally accept the default-namespace
- * alias `/__openclaw__/control-ui-config.json`, which is what the default
- * `/__openclaw__/` entry requests after inferring its base path from the URL,
- * and the legacy single-underscore `/__openclaw/control-ui-config.json`, which
- * current main and v2026.6.1 serve and document under an empty base path. The
- * bare and legacy endpoints are preserved for compatibility; no path is removed.
+ * For every base path (configured or empty) we additionally accept the legacy
+ * single-underscore suffix `${basePath}/__openclaw/control-ui-config.json` that
+ * current main and v2026.6.1 serve and document, so older bundles and clients
+ * that still request the pre-#66946 endpoint keep receiving config after an
+ * upgrade instead of 404ing. When no base path is configured we further accept
+ * the default-namespace alias `/__openclaw__/control-ui-config.json`, which is
+ * what the default `/__openclaw__/` entry requests after inferring its base path
+ * from the URL. All compatibility endpoints are preserved; no path is removed.
  */
 function matchesControlUiBootstrapConfigPath(pathname: string, basePath: string): boolean {
-  if (basePath) {
-    return pathname === `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
+  // Canonical and legacy suffixes apply under both an empty and a configured
+  // base path. `LEGACY_BOOTSTRAP_CONFIG_PATH` already starts with the legacy
+  // `/__openclaw` namespace, so joining it with the base path yields
+  // `${basePath}/__openclaw/control-ui-config.json` (or the bare legacy path
+  // when no base path is configured).
+  if (
+    pathname === `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}` ||
+    pathname === `${basePath}${LEGACY_BOOTSTRAP_CONFIG_PATH}`
+  ) {
+    return true;
   }
-  return (
-    pathname === CONTROL_UI_BOOTSTRAP_CONFIG_PATH ||
-    pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH ||
-    pathname === LEGACY_BOOTSTRAP_CONFIG_PATH
-  );
+  // The default `/__openclaw__/` namespace alias only applies when no base path
+  // is configured; with a configured base path the canonical endpoint already
+  // lives under that base path and this inferred alias does not apply.
+  return basePath === "" && pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH;
 }
 
 export async function handleControlUiHttpRequest(
