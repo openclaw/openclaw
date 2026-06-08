@@ -121,7 +121,34 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
 function hasExplicitDenyPolicy(policy?: { deny?: string[] }): boolean {
-  return Array.isArray(policy?.deny) && policy.deny.some((entry) => entry.trim());
+  return (
+    Array.isArray(policy?.deny) &&
+    policy.deny.some((entry) => typeof entry === "string" && entry.trim())
+  );
+}
+
+type EffectiveCronCreatorTool = {
+  name: string;
+  pluginId?: string;
+};
+
+function replaceWithEffectiveCronCreatorToolAllowlist(
+  target: EffectiveCronCreatorTool[],
+  tools: AnyAgentTool[],
+): void {
+  target.length = 0;
+  const seen = new Set<string>();
+  for (const tool of tools) {
+    const name = normalizeToolName(tool.name);
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    const meta = getPluginToolMeta(tool);
+    const pluginId =
+      typeof meta?.pluginId === "string" ? normalizeToolName(meta.pluginId) : undefined;
+    target.push(pluginId ? { name, pluginId } : { name });
+  }
 }
 
 type GuardContainerMount = {
@@ -942,7 +969,7 @@ export function createOpenClawCodingTools(options?: {
   ];
   const shouldInheritEffectiveToolAllowlist =
     toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
-  const cronCreatorToolAllowlist: string[] = [];
+  const cronCreatorToolAllowlist: EffectiveCronCreatorTool[] = [];
   const shouldCaptureCronCreatorToolAllowlist = toolPolicyInheritanceSources.some(
     (policy) => hasRestrictiveAllowPolicy(policy) || hasExplicitDenyPolicy(policy),
   );
@@ -1179,7 +1206,7 @@ export function createOpenClawCodingTools(options?: {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered);
   }
   if (shouldCaptureCronCreatorToolAllowlist) {
-    replaceWithEffectiveToolAllowlist(cronCreatorToolAllowlist, subagentFiltered);
+    replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, subagentFiltered);
   }
   options?.recordToolPrepStage?.("authorization-policy");
   // Always normalize tool JSON Schemas before handing them to OpenClaw model runtime.
