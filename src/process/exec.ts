@@ -13,6 +13,7 @@ import {
 } from "../infra/windows-encoding.js";
 import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { logDebug, logError } from "../logger.js";
+import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 import { resolveWindowsCommandShim } from "./windows-command.js";
 
@@ -261,6 +262,7 @@ export type CommandOptions = {
 
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 const WINDOWS_CLOSE_STATE_POLL_MS = 10;
+const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
 const DEFAULT_COMMAND_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
 
 type CapturedOutputBuffers = {
@@ -462,16 +464,11 @@ export async function runCommandWithTimeout(
       }
       if (
         killProcessTree &&
-        process.platform !== "win32" &&
         typeof child.pid === "number" &&
         child.pid > 0
       ) {
-        try {
-          process.kill(-child.pid, "SIGKILL");
-          return;
-        } catch {
-          // Fall through to Node's direct child kill as a last resort.
-        }
+        terminateProcessTree(child.pid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
+        return;
       }
       child.kill("SIGKILL");
     };
