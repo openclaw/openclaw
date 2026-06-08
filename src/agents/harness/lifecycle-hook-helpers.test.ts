@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GlobalHookRunnerRegistry } from "../../plugins/hook-registry.types.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import type { PluginHookRegistration } from "../../plugins/hook-types.js";
 import {
   awaitAgentHarnessAgentEndHook,
+  awaitAgentHarnessLlmOutputHook,
   clearAgentHarnessFinalizeRetryBudget,
   runAgentHarnessAgentEndHook,
   runAgentHarnessBeforeAgentFinalizeHook,
@@ -27,9 +34,18 @@ const EVENT = {
   success: true,
 };
 
+function initializeTypedGlobalHooks(hooks: PluginHookRegistration[]): void {
+  initializeGlobalHookRunner({
+    hooks: [],
+    typedHooks: hooks,
+    plugins: hooks.map((hook) => ({ id: hook.pluginId, status: "loaded" })),
+  } satisfies GlobalHookRunnerRegistry);
+}
+
 describe("agent harness lifecycle hook helpers", () => {
   afterEach(() => {
     clearAgentHarnessFinalizeRetryBudget();
+    resetGlobalHookRunner();
   });
 
   it("ignores legacy hook runners that advertise llm_input without a runner method", () => {
@@ -93,6 +109,92 @@ describe("agent harness lifecycle hook helpers", () => {
     releaseHook();
     await expect(run).resolves.toBeUndefined();
     expect(resolved).toBe(true);
+  });
+
+  it("resolves after llm_output hooks settle", async () => {
+    let releaseHook: () => void = () => undefined;
+    const llmOutputSettled = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "llm_output"),
+      runLlmOutput: vi.fn(() => llmOutputSettled),
+    };
+
+    const run = awaitAgentHarnessLlmOutputHook({
+      ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+      event: { runId: "run-1", sessionId: "session-1", assistantTexts: ["done"] },
+      hookRunner: hookRunner as never,
+    });
+    let resolved = false;
+    void run.then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    expect(hookRunner.runLlmOutput).toHaveBeenCalledTimes(1);
+    expect(resolved).toBe(false);
+    releaseHook();
+    await expect(run).resolves.toBeUndefined();
+    expect(resolved).toBe(true);
+  });
+
+  it("falls back to the current global llm_output runner when the provided runner is stale", async () => {
+    const handler = vi.fn(async () => undefined);
+    initializeTypedGlobalHooks([
+      {
+        pluginId: "agentmemory",
+        hookName: "llm_output",
+        handler,
+        source: "test",
+      },
+    ]);
+    const staleHookRunner = {
+      hasHooks: vi.fn(() => false),
+      runLlmOutput: vi.fn(async () => undefined),
+    };
+
+    await awaitAgentHarnessLlmOutputHook({
+      ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+      event: { runId: "run-1", sessionId: "session-1", prompt: "hello", assistantTexts: ["done"] },
+      hookRunner: staleHookRunner as never,
+    });
+
+    expect(staleHookRunner.runLlmOutput).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "hello", assistantTexts: ["done"] }),
+      expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
+    );
+  });
+
+  it("falls back to the current global agent_end runner when the provided runner is stale", async () => {
+    const handler = vi.fn(async () => undefined);
+    initializeTypedGlobalHooks([
+      {
+        pluginId: "agentmemory",
+        hookName: "agent_end",
+        handler,
+        source: "test",
+      },
+    ]);
+    const staleHookRunner = {
+      hasHooks: vi.fn(() => false),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+
+    await awaitAgentHarnessAgentEndHook({
+      ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+      event: EVENT,
+      hookRunner: staleHookRunner as never,
+    });
+
+    expect(staleHookRunner.runAgentEnd).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-1", success: true }),
+      expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
+    );
   });
 
   it("can leave agent_end timeouts unref'd for fire-and-forget callers", async () => {

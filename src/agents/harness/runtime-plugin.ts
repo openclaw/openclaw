@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
+import { getActiveRuntimePluginRegistry } from "../../plugins/active-runtime-registry.js";
 import {
   resolveActivatableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds,
@@ -28,6 +29,18 @@ function dedupePluginIds(values: readonly string[]): string[] {
 function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, pluginId: string) {
   const allow = config?.plugins?.allow ?? [];
   return allow.length > 0 && !allow.includes(pluginId);
+}
+
+function resolveActiveRuntimePluginIds(): string[] {
+  const registry = getActiveRuntimePluginRegistry();
+  if (!registry) {
+    return [];
+  }
+  return dedupePluginIds(
+    (registry.plugins ?? [])
+      .filter((plugin) => plugin.status === undefined || plugin.status === "loaded")
+      .map((plugin) => plugin.id),
+  );
 }
 
 function resolveHarnessPluginIds(params: {
@@ -122,12 +135,15 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
 
   const { ensurePluginRegistryLoaded } =
     await import("../../plugins/runtime/runtime-registry-loader.js");
-  const pluginIds = resolveHarnessPluginIds({
-    runtime,
-    provider: params.provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-  });
+  const pluginIds = dedupePluginIds([
+    ...resolveActiveRuntimePluginIds(),
+    ...resolveHarnessPluginIds({
+      runtime,
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+    }),
+  ]);
   const configWithAllowedRuntimePlugins = withRuntimePluginIdsAllowed({
     config: params.config,
     requiredPluginId: runtime,

@@ -149,7 +149,7 @@ import {
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { isTimeoutError } from "../../failover-error.js";
-import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
+import { awaitAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -170,6 +170,7 @@ import {
   logAgentRuntimeToolDiagnostics,
   normalizeAgentRuntimeTools,
 } from "../../runtime-plan/tools.js";
+import { ensureRuntimePluginsLoaded } from "../../runtime-plugins.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
@@ -364,10 +365,13 @@ import {
 } from "./attempt.prompt-helpers.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
 import {
+  buildEmbeddedAttemptAgentEndHookEvent,
+  buildEmbeddedAttemptLlmOutputHookEvent,
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
   resolveEmbeddedAttemptSessionWriteLockOptions,
   resolveUnknownToolGuardThreshold,
+  selectHookRunnerForHook,
   shouldRunLlmOutputHooksForAttempt,
 } from "./attempt.run-decisions.js";
 import {
@@ -2085,6 +2089,29 @@ export async function runEmbeddedAttempt(
 
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
+      const selectTerminalHookRunner = (hookName: "llm_output" | "agent_end") => {
+        const currentBefore = getGlobalHookRunner();
+        const selected = selectHookRunnerForHook({
+          primary: hookRunner,
+          current: currentBefore,
+          hookName,
+        });
+        if (selected) {
+          return selected;
+        }
+        ensureRuntimePluginsLoaded({
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+          forceLoad: true,
+        });
+        const currentAfter = getGlobalHookRunner();
+        return selectHookRunnerForHook({
+          primary: currentAfter,
+          current: hookRunner,
+          hookName,
+        });
+      };
 
       const { customTools } = splitSdkTools({
         tools: effectiveTools,
@@ -4738,13 +4765,17 @@ export async function runEmbeddedAttempt(
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
 
         if (!beforeAgentFinalizeRevisionReason) {
-          runAgentEndSideEffects({
-            event: {
+          const agentEndHookRunner = selectTerminalHookRunner("agent_end");
+          await awaitAgentEndSideEffects({
+            event: buildEmbeddedAttemptAgentEndHookEvent({
               messages: messagesSnapshot,
+              prompt: params.prompt,
+              assistantTexts,
+              ...(lastAssistant ? { lastAssistant } : {}),
               success: !aborted && !promptError,
-              error: promptError ? formatErrorMessage(promptError) : undefined,
+              ...(promptError ? { error: formatErrorMessage(promptError) } : {}),
               durationMs: Date.now() - promptStartedAt,
-            },
+            }),
             ctx: {
               runId: params.runId,
               trace: freezeDiagnosticTraceContext(diagnosticTrace),
@@ -4756,7 +4787,7 @@ export async function runEmbeddedAttempt(
               ...(params.config ? { config: params.config } : {}),
               ...buildAgentHookContextChannelFields(params),
             },
-            hookRunner,
+            hookRunner: agentEndHookRunner,
           });
         }
       } finally {
@@ -4868,36 +4899,25 @@ export async function runEmbeddedAttempt(
         }
       }
 
+      const llmOutputHookRunner = selectTerminalHookRunner("llm_output");
       if (
-        hookRunner?.hasHooks("llm_output") &&
+        llmOutputHookRunner?.hasHooks("llm_output") &&
         shouldRunLlmOutputHooksForAttempt({ promptErrorSource })
       ) {
-        hookRunner
-          .runLlmOutput(
-            {
+        try {
+          await llmOutputHookRunner.runLlmOutput(
+            buildEmbeddedAttemptLlmOutputHookEvent({
               runId: params.runId,
               sessionId: params.sessionId,
               provider: params.provider,
-              model: params.modelId,
-              ...(params.contextWindowInfo?.tokens
-                ? { contextTokenBudget: params.contextWindowInfo.tokens }
-                : {}),
-              ...(params.contextWindowInfo?.source
-                ? { contextWindowSource: params.contextWindowInfo.source }
-                : {}),
-              ...(params.contextWindowInfo?.referenceTokens
-                ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
-                : {}),
-              resolvedRef:
-                params.runtimePlan?.observability.resolvedRef ??
-                `${params.provider}/${params.modelId}`,
-              ...(params.runtimePlan?.observability.harnessId
-                ? { harnessId: params.runtimePlan.observability.harnessId }
-                : {}),
+              modelId: params.modelId,
+              prompt: params.prompt,
+              contextWindowInfo: params.contextWindowInfo,
+              runtimePlan: params.runtimePlan,
               assistantTexts,
               lastAssistant,
               usage: attemptUsage,
-            },
+            }),
             {
               runId: params.runId,
               trace: freezeDiagnosticTraceContext(diagnosticTrace),
@@ -4917,10 +4937,10 @@ export async function runEmbeddedAttempt(
                 : {}),
               ...buildAgentHookContextChannelFields(params),
             },
-          )
-          .catch((err: unknown) => {
-            log.warn(`llm_output hook failed: ${String(err)}`);
-          });
+          );
+        } catch (err) {
+          log.warn(`llm_output hook failed: ${String(err)}`);
+        }
       }
 
       const acceptedSessionSpawns = getAcceptedSessionSpawns();

@@ -22,6 +22,7 @@ import {
   resolveSessionAgentIds,
   resolveUserPath,
   awaitAgentHarnessAgentEndHook,
+  awaitAgentHarnessLlmOutputHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
@@ -2034,7 +2035,9 @@ export async function runCodexAppServerAttempt(
       ];
       await runCodexAgentEndHook(params, {
         event: {
+          prompt: codexTurnPromptText,
           messages: turnStartFailureMessages,
+          assistantTexts: [],
           success: false,
           error: turnStartErrorMessage,
           durationMs: Date.now() - attemptStartedAt,
@@ -2393,12 +2396,13 @@ export async function runCodexAppServerAttempt(
         warn: (message) => embeddedAgentLog.warn(message),
       });
     }
-    runAgentHarnessLlmOutputHook({
+    await awaitAgentHarnessLlmOutputHook({
       event: {
         runId: params.runId,
         sessionId: params.sessionId,
         provider: params.provider,
         model: params.modelId,
+        prompt: codexTurnPromptText,
         ...hookContextWindowFields,
         resolvedRef:
           params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
@@ -2414,7 +2418,10 @@ export async function runCodexAppServerAttempt(
     });
     await runCodexAgentEndHook(params, {
       event: {
+        prompt: codexTurnPromptText,
         messages: result.messagesSnapshot,
+        assistantTexts: result.assistantTexts,
+        ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
         success: !finalAborted && !finalPromptError,
         ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
         durationMs: Date.now() - attemptStartedAt,

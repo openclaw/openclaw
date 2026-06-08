@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
   ensurePluginRegistryLoaded: vi.fn(),
+  getActiveRuntimePluginRegistry: vi.fn(),
   resolveActivatableProviderOwnerPluginIds: vi.fn(),
   resolveBundledProviderCompatPluginIds: vi.fn(),
   resolveOwningPluginIdsForProvider: vi.fn(),
@@ -10,6 +11,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../plugins/runtime/runtime-registry-loader.js", () => ({
   ensurePluginRegistryLoaded: mocks.ensurePluginRegistryLoaded,
+}));
+
+vi.mock("../../plugins/active-runtime-registry.js", () => ({
+  getActiveRuntimePluginRegistry: mocks.getActiveRuntimePluginRegistry,
 }));
 
 vi.mock("../../plugins/providers.js", () => ({
@@ -24,6 +29,8 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
 
   beforeEach(async () => {
     mocks.ensurePluginRegistryLoaded.mockReset();
+    mocks.getActiveRuntimePluginRegistry.mockReset();
+    mocks.getActiveRuntimePluginRegistry.mockReturnValue(null);
     mocks.resolveActivatableProviderOwnerPluginIds.mockReset();
     mocks.resolveBundledProviderCompatPluginIds.mockReset();
     mocks.resolveOwningPluginIdsForProvider.mockReset();
@@ -88,6 +95,40 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
         scope: "all",
         workspaceDir: "/tmp/workspace",
         onlyPluginIds: ["codex", "openai"],
+      }),
+    );
+  });
+
+  it("preserves already-active startup plugins when loading the Codex harness", async () => {
+    mocks.getActiveRuntimePluginRegistry.mockReturnValue({
+      plugins: [
+        { id: "agentmemory", status: "loaded" },
+        { id: "telegram", status: "loaded" },
+        { id: "disabled-sidecar", status: "disabled" },
+      ],
+    });
+
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      config: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["agentmemory", "telegram", "codex", "openai"],
       }),
     );
   });

@@ -1929,7 +1929,7 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(requireMockCallArg(routeReplyMock, 1).mirror).toBeUndefined();
   });
 
-  it("preserves queued verbose progress when default tool progress is suppressed", async () => {
+  it("preserves queued channel-owned progress callbacks while suppressing default tool progress", async () => {
     const onToolStart = vi.fn(async () => {});
     const onCommandOutput = vi.fn(async () => {});
     const queued = createQueuedRun({
@@ -1989,17 +1989,7 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(onCommandOutput).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "chunk", output: "queued output" }),
     );
-    expect(routeReplyMock).toHaveBeenCalledTimes(1);
-    expect(routeReplyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "discord",
-        to: "channel:C1",
-        accountId: "acct-1",
-        threadId: "thread-1",
-        mirror: false,
-        payload: expect.objectContaining({ text: "🛠️ Exec: echo queued-suppressed-preview" }),
-      }),
-    );
+    expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
   it("suppresses default tool-result payloads while preserving channel-owned progress callbacks", async () => {
@@ -2021,9 +2011,12 @@ describe("createFollowupRunner progress forwarding", () => {
         onToolResult?: (payload: { text: string }) => Promise<void>;
         shouldEmitToolResult?: () => boolean;
         shouldEmitToolOutput?: () => boolean;
+        suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
       }) => {
+        const shouldSuppress = args.suppressToolErrorWarnings as () => boolean | undefined;
         expect(args.shouldEmitToolResult?.()).toBe(true);
         expect(args.shouldEmitToolOutput?.()).toBe(false);
+        expect(shouldSuppress()).toBeUndefined();
         await args.onAgentEvent?.({
           stream: "tool",
           data: {
@@ -2032,10 +2025,12 @@ describe("createFollowupRunner progress forwarding", () => {
             args: { command: "echo progress-draft-only" },
           },
         });
-        await args.onAgentEvent?.({
+        const failedProgress = args.onAgentEvent?.({
           stream: "command_output",
           data: { phase: "end", name: "exec", status: "failed", exitCode: 1 },
         });
+        expect(shouldSuppress()).toBe(true);
+        await failedProgress;
         await args.onToolResult?.({ text: "⚠️ 🛠️ run tests failed" });
         return { payloads: [], meta: { agentMeta: {} } };
       },

@@ -345,7 +345,10 @@ export type PluginHookLlmOutputEvent = {
 
 export type PluginHookAgentEndEvent = {
   runId?: string;
+  prompt?: string;
   messages: unknown[];
+  assistantTexts?: string[];
+  lastAssistant?: unknown;
   success: boolean;
   error?: string;
   durationMs?: number;

@@ -1953,7 +1953,9 @@ export async function dispatchReplyFromConfig(
       return finishReplyOperationBusyDispatch();
     }
 
-    const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
+    const shouldSuppressDefaultToolProgressMessages = () =>
+      params.replyOptions?.suppressDefaultToolProgressMessages === true ||
+      !shouldEmitVerboseProgress();
     const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
     const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
     const shouldSendToolStartStatuses = false;

@@ -2063,7 +2063,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("allows group tool summaries when verbose is enabled during the run", async () => {
+  it("keeps group tool summaries suppressed when verbose is enabled during the run", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "off",
@@ -2099,8 +2099,7 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { suppressDefaultToolProgressMessages: true },
     });
 
-    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
-    expect(firstToolResultPayload(dispatcher)?.text).toBe("🔧 exec: whoami");
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
@@ -2805,7 +2804,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("delivers Slack non-DM verbose progress when verbose is enabled", async () => {
+  it("suppresses Slack non-DM verbose progress when channel-owned progress is enabled", async () => {
     setNoAbort();
     const cfg = {
       ...emptyConfig,
@@ -2849,7 +2848,7 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { suppressDefaultToolProgressMessages: true },
     });
 
-    expect(dispatcher.sendToolResult).toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
@@ -3410,7 +3409,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("delivers text-only tool summaries when verbose overrides preview suppression", async () => {
+  it("suppresses text-only tool summaries when channel-owned progress suppresses default messages", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "on",
@@ -3440,11 +3439,11 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { suppressDefaultToolProgressMessages: true },
     });
 
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "🔧 exec: ls" });
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("delivers plan status when verbose overrides preview suppression", async () => {
+  it("suppresses plan and approval status when channel-owned progress suppresses default messages", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "on",
@@ -3483,11 +3482,7 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { suppressDefaultToolProgressMessages: true },
     });
 
-    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(1, {
-      text: "1. Patch code",
-      isStatusNotice: true,
-    });
-    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 

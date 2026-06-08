@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadGatewayStartupPluginPlan } from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
@@ -28,10 +29,26 @@ function resolveStartupPluginIdsFromCurrentSnapshot(params: {
   return pluginIds.filter((pluginId): pluginId is string => typeof pluginId === "string");
 }
 
+function resolveStartupPluginIds(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+}): string[] {
+  return (
+    resolveStartupPluginIdsFromCurrentSnapshot(params) ??
+    loadGatewayStartupPluginPlan({
+      config: params.config ?? {},
+      activationSourceConfig: params.config ?? {},
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+    }).pluginIds
+  );
+}
+
 export function ensureRuntimePluginsLoaded(params: {
   config?: OpenClawConfig;
   workspaceDir?: string | null;
   allowGatewaySubagentBinding?: boolean;
+  forceLoad?: boolean;
 }): void {
   if (params.config && !normalizePluginsConfig(params.config.plugins).enabled) {
     return;
@@ -40,7 +57,7 @@ export function ensureRuntimePluginsLoaded(params: {
     typeof params.workspaceDir === "string" && params.workspaceDir.trim()
       ? resolveUserPath(params.workspaceDir)
       : undefined;
-  const startupPluginIds = resolveStartupPluginIdsFromCurrentSnapshot({
+  const startupPluginIds = resolveStartupPluginIds({
     config: params.config,
     workspaceDir,
   });
@@ -49,10 +66,11 @@ export function ensureRuntimePluginsLoaded(params: {
     getActivePluginRuntimeSubagentMode() === "gateway-bindable";
   ensureStandaloneRuntimePluginRegistryLoaded({
     requiredPluginIds: startupPluginIds,
+    ...(params.forceLoad ? { forceLoad: true } : {}),
     loadOptions: {
       config: params.config,
       workspaceDir,
-      ...(startupPluginIds === undefined ? {} : { onlyPluginIds: startupPluginIds }),
+      onlyPluginIds: startupPluginIds,
       runtimeOptions: allowGatewaySubagentBinding
         ? { allowGatewaySubagentBinding: true }
         : undefined,

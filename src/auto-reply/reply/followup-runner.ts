@@ -473,8 +473,7 @@ export function createFollowupRunner(params: {
       const shouldEmitToolOutputProgress = () =>
         resolveCurrentVerboseLevel() === "full" && !shouldSuppressDefaultToolProgressMessages();
       const shouldSuppressFollowupToolResultPayload = () =>
-        opts?.suppressDefaultToolProgressMessages === true &&
-        run.sourceReplyDeliveryMode !== "message_tool_only";
+        opts?.suppressDefaultToolProgressMessages === true;
       let observedVisibleToolErrorProgress = false;
       const markVisibleToolErrorProgress = () => {
         if (resolveCurrentVerboseLevel() === "on" && shouldEmitToolResultProgress()) {
@@ -975,8 +974,14 @@ export function createFollowupRunner(params: {
                       markVisibleToolErrorProgress();
                     }
                   }),
-                onAgentEvent: (evt) =>
-                  enqueueProgressDelivery(async () => {
+                onAgentEvent: (evt) => {
+                  const observedFailedVisibleProgress =
+                    hasFailedFollowupProgressEvent(evt) &&
+                    canForwardFailedFollowupProgressEvent(evt, opts);
+                  if (observedFailedVisibleProgress) {
+                    markVisibleToolErrorProgress();
+                  }
+                  return enqueueProgressDelivery(async () => {
                     await forwardFollowupProgressEvent({
                       evt,
                       opts,
@@ -986,13 +991,11 @@ export function createFollowupRunner(params: {
                         attemptCompactionCount += 1;
                       },
                     });
-                    if (
-                      hasFailedFollowupProgressEvent(evt) &&
-                      canForwardFailedFollowupProgressEvent(evt, opts)
-                    ) {
+                    if (observedFailedVisibleProgress) {
                       markVisibleToolErrorProgress();
                     }
-                  }),
+                  });
+                },
               });
               bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                 result.meta?.systemPromptReport,

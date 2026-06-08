@@ -1,9 +1,14 @@
 import type { OpenClawConfig } from "../../../config/config.js";
+import type {
+  PluginHookAgentEndEvent,
+  PluginHookLlmOutputEvent,
+} from "../../../plugins/hook-types.js";
 import {
   resolveSessionLockMaxHoldFromTimeout,
   resolveSessionWriteLockOptions,
 } from "../../session-write-lock.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
+import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export function resolveEmbeddedAttemptSessionWriteLockOptions(params: {
@@ -50,6 +55,78 @@ export function resolveUnknownToolGuardThreshold(loopDetection?: {
 
 export function shouldRunLlmOutputHooksForAttempt(params: { promptErrorSource: string | null }) {
   return params.promptErrorSource !== "hook:before_agent_run";
+}
+
+export function selectHookRunnerForHook<
+  THookRunner extends { hasHooks(hookName: string): boolean } | null | undefined,
+>(params: {
+  primary: THookRunner;
+  current: THookRunner;
+  hookName: string;
+}): THookRunner | undefined {
+  if (params.primary?.hasHooks(params.hookName)) {
+    return params.primary;
+  }
+  if (params.current?.hasHooks(params.hookName)) {
+    return params.current;
+  }
+  return undefined;
+}
+
+export function buildEmbeddedAttemptLlmOutputHookEvent(
+  params: Pick<
+    EmbeddedRunAttemptParams,
+    "runId" | "sessionId" | "provider" | "modelId" | "prompt" | "contextWindowInfo" | "runtimePlan"
+  > & {
+    assistantTexts: string[];
+    lastAssistant?: unknown;
+    usage?: NormalizedUsage;
+  },
+): PluginHookLlmOutputEvent {
+  return {
+    runId: params.runId,
+    sessionId: params.sessionId,
+    provider: params.provider,
+    model: params.modelId,
+    prompt: params.prompt,
+    ...(params.contextWindowInfo?.tokens
+      ? { contextTokenBudget: params.contextWindowInfo.tokens }
+      : {}),
+    ...(params.contextWindowInfo?.source
+      ? { contextWindowSource: params.contextWindowInfo.source }
+      : {}),
+    ...(params.contextWindowInfo?.referenceTokens
+      ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
+      : {}),
+    resolvedRef:
+      params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
+    ...(params.runtimePlan?.observability.harnessId
+      ? { harnessId: params.runtimePlan.observability.harnessId }
+      : {}),
+    assistantTexts: params.assistantTexts,
+    ...(params.lastAssistant ? { lastAssistant: params.lastAssistant } : {}),
+    ...(params.usage ? { usage: params.usage } : {}),
+  };
+}
+
+export function buildEmbeddedAttemptAgentEndHookEvent(params: {
+  messages: unknown[];
+  prompt: string;
+  assistantTexts: readonly string[];
+  lastAssistant?: unknown;
+  success: boolean;
+  error?: string;
+  durationMs: number;
+}): PluginHookAgentEndEvent {
+  return {
+    messages: params.messages,
+    prompt: params.prompt,
+    assistantTexts: [...params.assistantTexts],
+    ...(params.lastAssistant ? { lastAssistant: params.lastAssistant } : {}),
+    success: params.success,
+    ...(params.error ? { error: params.error } : {}),
+    durationMs: params.durationMs,
+  };
 }
 
 export function resolveAttemptToolPolicyMessageProvider(params: {

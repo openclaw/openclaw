@@ -160,6 +160,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
         lastAssistant?: { role?: string };
         model?: string;
         provider?: string;
+        prompt?: string;
         resolvedRef?: string;
         runId?: string;
         sessionId?: string;
@@ -179,6 +180,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(llmOutputPayload.sessionId).toBe("session-1");
     expect(llmOutputPayload.provider).toBe("codex");
     expect(llmOutputPayload.model).toBe("gpt-5.4-codex");
+    expect(llmOutputPayload.prompt).toBe("hello");
     expect(llmOutputPayload.contextTokenBudget).toBe(150_000);
     expect(llmOutputPayload.contextWindowSource).toBe("agentContextTokens");
     expect(llmOutputPayload.contextWindowReferenceTokens).toBe(200_000);
@@ -192,14 +194,77 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(llmOutputContext.contextWindowSource).toBe("agentContextTokens");
     expect(llmOutputContext.contextWindowReferenceTokens).toBe(200_000);
     const [agentEndPayload, agentEndContext] = mockCall(agentEnd, "agent_end") as [
-      { messages?: Array<{ role?: string }>; success?: boolean },
+      {
+        assistantTexts?: string[];
+        lastAssistant?: { role?: string };
+        messages?: Array<{ role?: string }>;
+        prompt?: string;
+        success?: boolean;
+      },
       { runId?: string; sessionId?: string },
     ];
     expect(agentEndPayload.success).toBe(true);
+    expect(agentEndPayload.prompt).toBe("hello");
+    expect(agentEndPayload.assistantTexts).toEqual(["hello back"]);
+    expect(agentEndPayload.lastAssistant?.role).toBe("assistant");
     expect(agentEndPayload.messages?.some((message) => message.role === "user")).toBe(true);
     expect(agentEndPayload.messages?.some((message) => message.role === "assistant")).toBe(true);
     expect(agentEndContext.runId).toBe("run-1");
     expect(agentEndContext.sessionId).toBe("session-1");
+  });
+
+  it("awaits llm_output before running agent_end", async () => {
+    let releaseLlmOutput: () => void = () => undefined;
+    const llmOutputSettled = new Promise<void>((resolve) => {
+      releaseLlmOutput = resolve;
+    });
+    let llmOutputDone = false;
+    const llmOutput = vi.fn(async () => {
+      await llmOutputSettled;
+      llmOutputDone = true;
+    });
+    const agentEnd = vi.fn(() => {
+      expect(llmOutputDone).toBe(true);
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "llm_output", handler: llmOutput },
+        { hookName: "agent_end", handler: agentEnd },
+      ]),
+    );
+    const sessionFile = path.join(tempDir, "session-await-llm-output.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-await-llm-output");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "msg-1",
+        delta: "delayed hook reply",
+      },
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    let runResolved = false;
+    void run.then(() => {
+      runResolved = true;
+    });
+
+    await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), fastWait);
+    expect(agentEnd).not.toHaveBeenCalled();
+    expect(runResolved).toBe(false);
+
+    releaseLlmOutput();
+    const result = await run;
+
+    expect(result.assistantTexts).toEqual(["delayed hook reply"]);
+    expect(agentEnd).toHaveBeenCalledTimes(1);
+    expect(runResolved).toBe(true);
   });
 
   it("emits gated model-call content diagnostics for codex turns", async () => {
@@ -469,10 +534,11 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(errorEvent?.data.error).toBe("codex exploded");
     expect(agentEvents.some((event) => event.stream === "assistant")).toBe(false);
     const [agentEndPayload, agentEndContext] = mockCall(agentEnd, "agent_end") as [
-      { error?: string; success?: boolean },
+      { error?: string; prompt?: string; success?: boolean },
       { runId?: string; sessionId?: string },
     ];
     expect(agentEndPayload.success).toBe(false);
+    expect(agentEndPayload.prompt).toBe("hello");
     expect(agentEndPayload.error).toBe("codex exploded");
     expect(agentEndContext.runId).toBe("run-1");
     expect(agentEndContext.sessionId).toBe("session-1");
@@ -538,10 +604,18 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(llmOutputPayload.runId).toBe("run-1");
     expect(llmOutputPayload.sessionId).toBe("session-1");
     const [agentEndPayload] = mockCall(agentEnd, "agent_end") as [
-      { error?: string; messages?: Array<{ role?: string }>; success?: boolean },
+      {
+        assistantTexts?: string[];
+        error?: string;
+        messages?: Array<{ role?: string }>;
+        prompt?: string;
+        success?: boolean;
+      },
       unknown,
     ];
     expect(agentEndPayload.success).toBe(false);
+    expect(agentEndPayload.prompt).toBe("hello");
+    expect(agentEndPayload.assistantTexts).toEqual([]);
     expect(agentEndPayload.error).toBe("turn start exploded");
     expect(agentEndPayload.messages?.some((message) => message.role === "assistant")).toBe(true);
     const userMessage = agentEndPayload.messages?.find((message) => message.role === "user") as

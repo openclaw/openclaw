@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildEmbeddedAttemptAgentEndHookEvent,
+  buildEmbeddedAttemptLlmOutputHookEvent,
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
   resolveEmbeddedAttemptSessionWriteLockOptions,
   resolveUnknownToolGuardThreshold,
+  selectHookRunnerForHook,
   shouldRunLlmOutputHooksForAttempt,
 } from "./attempt.run-decisions.js";
 
@@ -65,6 +68,113 @@ describe("shouldRunLlmOutputHooksForAttempt", () => {
     );
     expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: "prompt" })).toBe(true);
     expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: null })).toBe(true);
+  });
+});
+
+describe("selectHookRunnerForHook", () => {
+  const runner = (hooks: string[]) => ({
+    hooks,
+    hasHooks: (hookName: string) => hooks.includes(hookName),
+  });
+
+  it("uses the primary runner when it already has the requested hook", () => {
+    const primary = runner(["before_agent_start", "llm_output"]);
+    const current = runner(["llm_output"]);
+
+    expect(selectHookRunnerForHook({ primary, current, hookName: "llm_output" })).toBe(primary);
+  });
+
+  it("falls back to the current runner when the primary runner only has prompt hooks", () => {
+    const primary = runner(["before_agent_start"]);
+    const current = runner(["before_agent_start", "llm_output", "agent_end"]);
+
+    expect(selectHookRunnerForHook({ primary, current, hookName: "llm_output" })).toBe(current);
+    expect(selectHookRunnerForHook({ primary, current, hookName: "agent_end" })).toBe(current);
+  });
+
+  it("returns undefined when neither runner has the requested hook", () => {
+    expect(
+      selectHookRunnerForHook({
+        primary: runner(["before_agent_start"]),
+        current: null,
+        hookName: "llm_output",
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("buildEmbeddedAttemptLlmOutputHookEvent", () => {
+  it("carries the original prompt and resolved runtime metadata", () => {
+    const event = buildEmbeddedAttemptLlmOutputHookEvent({
+      runId: "run-1",
+      sessionId: "session-1",
+      provider: "openai",
+      modelId: "gpt-5.5",
+      prompt: "original user prompt",
+      contextWindowInfo: {
+        tokens: 272000,
+        referenceTokens: 400000,
+        source: "modelsConfig",
+      },
+      runtimePlan: {
+        observability: {
+          resolvedRef: "openai/gpt-5.5",
+          harnessId: "codex",
+        },
+      } as never,
+      assistantTexts: ["final answer"],
+      usage: {
+        input: 10,
+        output: 3,
+        total: 13,
+      },
+    });
+
+    expect(event).toMatchObject({
+      runId: "run-1",
+      sessionId: "session-1",
+      provider: "openai",
+      model: "gpt-5.5",
+      prompt: "original user prompt",
+      contextTokenBudget: 272000,
+      contextWindowReferenceTokens: 400000,
+      contextWindowSource: "modelsConfig",
+      resolvedRef: "openai/gpt-5.5",
+      harnessId: "codex",
+      assistantTexts: ["final answer"],
+      usage: {
+        input: 10,
+        output: 3,
+        total: 13,
+      },
+    });
+  });
+});
+
+describe("buildEmbeddedAttemptAgentEndHookEvent", () => {
+  it("carries the prompt and assistant output needed by memory hooks", () => {
+    const lastAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "final answer" }],
+    };
+
+    const event = buildEmbeddedAttemptAgentEndHookEvent({
+      messages: [{ role: "user", content: "original user prompt" }, lastAssistant],
+      prompt: "original user prompt",
+      assistantTexts: ["final answer"],
+      lastAssistant,
+      success: true,
+      durationMs: 123,
+    });
+
+    expect(event).toEqual({
+      messages: [{ role: "user", content: "original user prompt" }, lastAssistant],
+      prompt: "original user prompt",
+      assistantTexts: ["final answer"],
+      lastAssistant,
+      success: true,
+      durationMs: 123,
+    });
   });
 });
 

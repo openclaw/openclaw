@@ -18,10 +18,36 @@ const FINALIZE_RETRY_BUDGET_KEY = Symbol.for("openclaw.pluginFinalizeRetryBudget
 const FINALIZE_RETRY_BUDGET_MAX_ENTRIES = 2048;
 
 type AgentHarnessHookRunner = ReturnType<typeof getGlobalHookRunner>;
+type AgentHarnessHookRunnerMethod =
+  | "runLlmInput"
+  | "runLlmOutput"
+  | "runAgentEnd"
+  | "runBeforeAgentFinalize";
 type FinalizeRetryBudget = Map<string, Map<string, number>>;
 
 export function getAgentHarnessHookRunner(): AgentHarnessHookRunner {
   return getGlobalHookRunner();
+}
+
+function selectAgentHarnessHookRunner(params: {
+  hookName: string;
+  methodName: AgentHarnessHookRunnerMethod;
+  preferred?: AgentHarnessHookRunner;
+}): AgentHarnessHookRunner {
+  const current = getGlobalHookRunner();
+  const candidates =
+    params.preferred && params.preferred !== current
+      ? [params.preferred, current]
+      : [params.preferred ?? current];
+  for (const candidate of candidates) {
+    if (
+      candidate?.hasHooks(params.hookName) &&
+      typeof (candidate as unknown as Record<string, unknown>)[params.methodName] === "function"
+    ) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 function getFinalizeRetryBudget(): FinalizeRetryBudget {
@@ -71,8 +97,12 @@ export function runAgentHarnessLlmInputHook(params: {
   ctx: AgentHarnessHookContext;
   hookRunner?: AgentHarnessHookRunner;
 }): void {
-  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("llm_input") || typeof hookRunner.runLlmInput !== "function") {
+  const hookRunner = selectAgentHarnessHookRunner({
+    hookName: "llm_input",
+    methodName: "runLlmInput",
+    preferred: params.hookRunner,
+  });
+  if (!hookRunner) {
     return;
   }
   void hookRunner
@@ -87,15 +117,27 @@ export function runAgentHarnessLlmOutputHook(params: {
   ctx: AgentHarnessHookContext;
   hookRunner?: AgentHarnessHookRunner;
 }): void {
-  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("llm_output") || typeof hookRunner.runLlmOutput !== "function") {
+  void awaitAgentHarnessLlmOutputHook(params);
+}
+
+export async function awaitAgentHarnessLlmOutputHook(params: {
+  event: PluginHookLlmOutputEvent;
+  ctx: AgentHarnessHookContext;
+  hookRunner?: AgentHarnessHookRunner;
+}): Promise<void> {
+  const hookRunner = selectAgentHarnessHookRunner({
+    hookName: "llm_output",
+    methodName: "runLlmOutput",
+    preferred: params.hookRunner,
+  });
+  if (!hookRunner) {
     return;
   }
-  void hookRunner
-    .runLlmOutput(params.event, buildAgentHookContext(params.ctx))
-    .catch((error: unknown) => {
-      log.warn(`llm_output hook failed: ${String(error)}`);
-    });
+  try {
+    await hookRunner.runLlmOutput(params.event, buildAgentHookContext(params.ctx));
+  } catch (error) {
+    log.warn(`llm_output hook failed: ${String(error)}`);
+  }
 }
 
 async function executeAgentHarnessAgentEndHook(params: {
@@ -104,8 +146,12 @@ async function executeAgentHarnessAgentEndHook(params: {
   hookRunner?: AgentHarnessHookRunner;
   unrefTimeout?: boolean;
 }): Promise<void> {
-  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("agent_end") || typeof hookRunner.runAgentEnd !== "function") {
+  const hookRunner = selectAgentHarnessHookRunner({
+    hookName: "agent_end",
+    methodName: "runAgentEnd",
+    preferred: params.hookRunner,
+  });
+  if (!hookRunner) {
     return;
   }
   try {
@@ -142,11 +188,12 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(params: {
   ctx: AgentHarnessHookContext;
   hookRunner?: AgentHarnessHookRunner;
 }): Promise<AgentHarnessBeforeAgentFinalizeOutcome> {
-  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (
-    !hookRunner?.hasHooks("before_agent_finalize") ||
-    typeof hookRunner.runBeforeAgentFinalize !== "function"
-  ) {
+  const hookRunner = selectAgentHarnessHookRunner({
+    hookName: "before_agent_finalize",
+    methodName: "runBeforeAgentFinalize",
+    preferred: params.hookRunner,
+  });
+  if (!hookRunner) {
     return { action: "continue" };
   }
   try {

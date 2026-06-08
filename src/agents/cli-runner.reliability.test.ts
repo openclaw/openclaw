@@ -1127,6 +1127,7 @@ describe("runCliAgent reliability", () => {
       expect(llmOutputEvent.sessionId).toBe("s1");
       expect(llmOutputEvent.provider).toBe("codex-cli");
       expect(llmOutputEvent.model).toBe("gpt-5.4");
+      expect(llmOutputEvent.prompt).toBe("hi");
       expect(llmOutputEvent.contextTokenBudget).toBe(150_000);
       expect(llmOutputEvent.contextWindowSource).toBe("agentContextTokens");
       expect(llmOutputEvent.contextWindowReferenceTokens).toBe(200_000);
@@ -1149,6 +1150,9 @@ describe("runCliAgent reliability", () => {
         "agent_end event",
       );
       expect(agentEndEvent.success).toBe(true);
+      expect(agentEndEvent.prompt).toBe("hi");
+      expect(agentEndEvent.assistantTexts).toEqual(["hello from cli"]);
+      expect(agentEndEvent.lastAssistant).toEqual(lastAssistant);
       const messages = requireArray(agentEndEvent.messages, "agent_end messages");
       expect(messages).toHaveLength(2);
       expectTextMessage(messages[0], { role: "user", content: "hi" });
@@ -1159,6 +1163,52 @@ describe("runCliAgent reliability", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("waits for llm_output hooks before agent_end on successful CLI runs", async () => {
+    let releaseLlmOutput: () => void = () => undefined;
+    const llmOutputSettled = new Promise<void>((resolve) => {
+      releaseLlmOutput = resolve;
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => ["llm_output", "agent_end"].includes(hookName)),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(() => llmOutputSettled),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    let settled = false;
+    const run = runPreparedCliAgent(buildPreparedContext()).finally(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(hookRunner.runLlmOutput).toHaveBeenCalledTimes(1);
+    });
+    await Promise.resolve();
+    expect(hookRunner.runAgentEnd).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
+
+    releaseLlmOutput();
+    await expect(run).resolves.toMatchObject({
+      payloads: [{ text: "hello from cli" }],
+    });
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(true);
   });
 
   it("waits for agent_end hooks before resolving successful CLI runs", async () => {
@@ -1798,6 +1848,8 @@ describe("runCliAgent reliability", () => {
       "agent_end event",
     );
     expect(agentEndEvent.success).toBe(false);
+    expect(agentEndEvent.prompt).toBe("hi");
+    expect(agentEndEvent.assistantTexts).toEqual([]);
     expect(agentEndEvent.error).toBe("rate limit exceeded");
     const messages = requireArray(agentEndEvent.messages, "agent_end messages");
     expect(messages).toHaveLength(1);

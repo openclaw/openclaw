@@ -27,8 +27,8 @@ import {
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
 import {
+  awaitAgentHarnessLlmOutputHook,
   runAgentHarnessLlmInputHook,
-  runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { SessionManager } from "./sessions/session-manager.js";
@@ -414,6 +414,8 @@ export async function runPreparedCliAgent(
 
   const buildFailedAgentEndEvent = (error: string) => ({
     messages: buildAgentEndMessages(),
+    prompt: params.prompt,
+    assistantTexts: [],
     success: false,
     error,
     durationMs: Date.now() - context.started,
@@ -424,6 +426,8 @@ export async function runPreparedCliAgent(
       historyMessages,
       currentTurnMessages: [buildCliHookUserMessage(message)],
     }),
+    prompt: message,
+    assistantTexts: [],
     success: false,
     error: message,
     durationMs: Date.now() - context.started,
@@ -554,12 +558,13 @@ export async function runPreparedCliAgent(
           })
         : undefined;
     if (assistantText.length > 0 && hasLlmOutputHooks) {
-      runAgentHarnessLlmOutputHook({
+      await awaitAgentHarnessLlmOutputHook({
         event: {
           runId: params.runId,
           sessionId: params.sessionId,
           provider: params.provider,
           model: context.modelId,
+          prompt: params.prompt,
           ...(context.contextWindowInfo?.tokens
             ? { contextTokenBudget: context.contextWindowInfo.tokens }
             : {}),
@@ -717,6 +722,9 @@ export async function runPreparedCliAgent(
       await runCliAgentEndHook(params, {
         event: {
           messages: buildAgentEndMessages(lastAssistant),
+          prompt: params.prompt,
+          assistantTexts: assistantText ? [assistantText] : [],
+          ...(lastAssistant ? { lastAssistant } : {}),
           success: true,
           durationMs: Date.now() - context.started,
         },
