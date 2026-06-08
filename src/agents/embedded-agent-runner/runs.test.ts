@@ -306,7 +306,14 @@ describe("embedded-agent runner run registry", () => {
     const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
       "session-reply-run",
       "completion from child",
-      { waitForTranscriptCommit: true },
+      {
+        deliveryContext: {
+          channel: "bncr",
+          to: "Bncr:tgBot:chat:sender",
+          accountId: "Primary",
+        },
+        waitForTranscriptCommit: true,
+      },
     );
 
     expect(outcome.queued).toBe(true);
@@ -321,7 +328,14 @@ describe("embedded-agent runner run registry", () => {
     });
     expect(outcome.enqueuedAtMs).toEqual(expect.any(Number));
     expect(outcome.deliveredAtMs).toBeUndefined();
-    expect(queueMessage).toHaveBeenCalledWith("completion from child");
+    expect(queueMessage).toHaveBeenCalledWith("completion from child", {
+      deliveryContext: {
+        channel: "bncr",
+        to: "Bncr:tgBot:chat:sender",
+        accountId: "Primary",
+      },
+      waitForTranscriptCommit: true,
+    });
   });
 
   it("force-clears an aborted run that does not drain", async () => {

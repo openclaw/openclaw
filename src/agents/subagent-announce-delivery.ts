@@ -28,7 +28,11 @@ import {
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
-import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -596,6 +600,7 @@ export function loadSessionEntryByKey(sessionKey: string) {
 }
 
 async function maybeSteerSubagentAnnounce(params: {
+  deliveryContext?: DeliveryContext;
   deliveryTimeoutMs?: number;
   requesterSessionKey: string;
   steerMessage: string;
@@ -624,7 +629,12 @@ async function maybeSteerSubagentAnnounce(params: {
 
   // Subagent announcements are internal handoffs into an active requester turn.
   // Queue modes such as followup/collect apply to user prompts, not this path.
+  const queueDeliveryContext = resolveActiveWakeDeliveryContext(
+    params.deliveryContext,
+    deliveryContextFromSession(entry),
+  );
   const queueOptions: EmbeddedAgentQueueMessageOptions = {
+    ...(queueDeliveryContext ? { deliveryContext: queueDeliveryContext } : {}),
     deliveryTimeoutMs: params.deliveryTimeoutMs,
     steeringMode: "all",
     ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
@@ -1176,6 +1186,41 @@ function collectMessagingToolDeliveredMediaUrlsForTarget(
   return Array.from(urls);
 }
 
+function isExternalQueueDeliveryContext(context?: DeliveryContext): boolean {
+  const normalized = normalizeDeliveryContext(context);
+  const channel = normalizeMessageChannel(normalized?.channel);
+  return Boolean(
+    normalized?.to &&
+    channel &&
+    isDeliverableMessageChannel(channel) &&
+    !isInternalMessageChannel(channel),
+  );
+}
+
+function resolveActiveWakeDeliveryContext(
+  ...contexts: Array<DeliveryContext | undefined>
+): DeliveryContext | undefined {
+  const normalizedContexts = contexts
+    .map((context) => normalizeDeliveryContext(context))
+    .filter((context): context is DeliveryContext => Boolean(context));
+  const externalContext = normalizedContexts.find((context) =>
+    isExternalQueueDeliveryContext(context),
+  );
+  if (externalContext) {
+    const sameChannelFallback = normalizedContexts.find(
+      (context) =>
+        context !== externalContext &&
+        normalizeMessageChannel(context.channel) ===
+          normalizeMessageChannel(externalContext.channel),
+    );
+    return mergeDeliveryContext(externalContext, sameChannelFallback);
+  }
+  return normalizedContexts.reduce<DeliveryContext | undefined>(
+    (merged, context) => mergeDeliveryContext(merged, context),
+    undefined,
+  );
+}
+
 function stripNonDeliverableChannelForCompletionOrigin(
   context?: DeliveryContext,
 ): DeliveryContext | undefined {
@@ -1680,6 +1725,12 @@ export async function deliverSubagentAnnouncement(params: {
     signal: params.signal,
     steer: async () =>
       await maybeSteerSubagentAnnounce({
+        deliveryContext: resolveActiveWakeDeliveryContext(
+          params.completionDirectOrigin,
+          params.directOrigin,
+          params.requesterOrigin,
+          params.requesterSessionOrigin,
+        ),
         deliveryTimeoutMs: resolveSubagentAnnounceTimeoutMs(
           subagentAnnounceDeliveryDeps.getRuntimeConfig(),
         ),

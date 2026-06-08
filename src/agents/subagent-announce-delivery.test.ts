@@ -634,6 +634,18 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       accountId?: string;
       threadId?: string | number;
     };
+    completionDirectOrigin?: {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string | number;
+    };
+    directOrigin?: {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string | number;
+    };
   }) {
     const callGateway = createGatewayMock();
     let activityChecks = 0;
@@ -673,6 +685,8 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       triggerMessage: "child done",
       steerMessage: "child done",
       requesterOrigin: params.requesterOrigin,
+      completionDirectOrigin: params.completionDirectOrigin,
+      directOrigin: params.directOrigin,
       requesterIsSubagent: false,
       expectsCompletionMessage: false,
       directIdempotencyKey: "announce-no-external-route",
@@ -727,6 +741,32 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
+  it("preserves the requester external route when the completion origin is internal", async () => {
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    await deliverSteeredAnnouncement({
+      queueEmbeddedAgentMessageWithOutcome,
+      completionDirectOrigin: {
+        channel: "webchat",
+        to: "session:child-completion",
+        accountId: "webchat-account",
+      },
+      requesterOrigin: {
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "acct-1",
+        threadId: "171.222",
+      },
+    });
+
+    const options = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 0, 2);
+    expectRecordFields(options.deliveryContext, {
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "acct-1",
+      threadId: "171.222",
+    });
+  });
+
   it.each(["followup", "collect", "interrupt"] as const)(
     "steers active requester announces even in %s mode",
     async (mode) => {
@@ -777,6 +817,11 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       "paperclip-session",
       "child done",
       {
+        deliveryContext: {
+          channel: "slack",
+          to: "channel:C123",
+          accountId: "acct-1",
+        },
         steeringMode: "all",
         debounceMs: 0,
         waitForTranscriptCommit: true,
@@ -788,6 +833,11 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       "paperclip-session",
       "child done",
       {
+        deliveryContext: {
+          channel: "slack",
+          to: "channel:C123",
+          accountId: "acct-1",
+        },
         steeringMode: "all",
         debounceMs: 0,
         deliveryTimeoutMs: 120_000,

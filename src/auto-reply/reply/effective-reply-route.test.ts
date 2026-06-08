@@ -227,6 +227,40 @@ describe("resolveEffectiveReplyRoute", () => {
     });
   });
 
+  it("uses established external route for subagent completion wake handoffs", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "webchat",
+          Surface: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "session:dashboard",
+          AccountId: "webchat-account",
+          InputProvenance: {
+            kind: "inter_session",
+            sourceTool: "subagent_announce",
+            sourceChannel: "webchat",
+          },
+        }),
+        entry: entry({
+          deliveryContext: {
+            channel: "bncr",
+            to: "Bncr:tgBot:chat:sender",
+            accountId: "Primary",
+          },
+          lastChannel: "webchat",
+          lastTo: "session:dashboard",
+          lastAccountId: "webchat-account",
+        }),
+      }),
+    ).toEqual({
+      channel: "bncr",
+      to: "Bncr:tgBot:chat:sender",
+      accountId: "Primary",
+      inheritedExternalRoute: true,
+    });
+  });
+
   it("keeps normal webchat turns on their live route", () => {
     expect(
       resolveEffectiveReplyRoute({

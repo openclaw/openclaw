@@ -1,7 +1,10 @@
 /** Resolves the effective reply route from current context and persisted session route. */
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
+import {
+  shouldPreserveUserFacingSessionStateForInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
@@ -31,11 +34,16 @@ export function isSystemEventProvider(provider?: string): boolean {
   return provider === "heartbeat" || provider === "cron-event" || provider === "exec-event";
 }
 
-function isSessionsSendInterSessionHandoff(inputProvenance: InputProvenance | undefined): boolean {
-  return (
-    inputProvenance?.kind === "inter_session" &&
-    inputProvenance.sourceTool?.toLowerCase() === "sessions_send"
-  );
+function shouldInheritExternalRouteForInterSessionHandoff(
+  inputProvenance: InputProvenance | undefined,
+): boolean {
+  if (inputProvenance?.kind !== "inter_session") {
+    return false;
+  }
+  if (inputProvenance.sourceTool?.toLowerCase() === "sessions_send") {
+    return true;
+  }
+  return shouldPreserveUserFacingSessionStateForInputProvenance(inputProvenance);
 }
 
 function resolveTrustedInheritedThreadId(
@@ -70,7 +78,7 @@ export function resolveEffectiveReplyRoute(params: {
   const persistedDeliveryContext = params.entry?.deliveryContext;
   const persistedDeliveryChannel = normalizeMessageChannel(persistedDeliveryContext?.channel);
   if (
-    isSessionsSendInterSessionHandoff(params.ctx.InputProvenance) &&
+    shouldInheritExternalRouteForInterSessionHandoff(params.ctx.InputProvenance) &&
     currentSurface === INTERNAL_MESSAGE_CHANNEL &&
     persistedDeliveryChannel &&
     persistedDeliveryChannel !== INTERNAL_MESSAGE_CHANNEL &&
