@@ -28,9 +28,38 @@ import {
 export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
 
 /**
- * Speakable text returned to the realtime voice bridge after an agent consult.
+ * Speakable text returned to the realtime voice bridge after an agent consult, plus any trusted local
+ * media (file paths) the run produced — e.g. a screenshot or a generated image the caller asked to see.
+ * The voice bridge reads those files and shows them on the outbound video tile (CVI Phase 8).
  */
-export type RealtimeVoiceAgentConsultResult = { text: string };
+export type RealtimeVoiceAgentConsultResult = { text: string; mediaPaths?: string[] };
+
+/** Collect trusted-local media file paths from non-error, non-reasoning run payloads. */
+function collectRealtimeVoiceAgentConsultMediaPaths(
+  payloads: Array<{
+    mediaUrl?: string;
+    mediaUrls?: string[];
+    isError?: boolean;
+    isReasoning?: boolean;
+    trustedLocalMedia?: boolean;
+  }>,
+): string[] {
+  const paths: string[] = [];
+  for (const payload of payloads) {
+    // Only trusted, locally-produced media (the agent's own screenshot / generated image) — never a
+    // remote URL — so the bridge can read it as a local file without an SSRF surface.
+    if (payload.isError || payload.isReasoning || !payload.trustedLocalMedia) {
+      continue;
+    }
+    if (payload.mediaUrl) {
+      paths.push(payload.mediaUrl);
+    }
+    if (Array.isArray(payload.mediaUrls)) {
+      paths.push(...payload.mediaUrls);
+    }
+  }
+  return paths;
+}
 
 /**
  * Controls whether voice consults run in a fresh session or fork context from the requester.
@@ -323,10 +352,14 @@ export async function consultRealtimeVoiceAgent(params: {
   });
 
   const text = collectRealtimeVoiceAgentConsultVisibleText(result.payloads ?? []);
-  if (!text) {
+  const mediaPaths = collectRealtimeVoiceAgentConsultMediaPaths(result.payloads ?? []);
+  if (!text && mediaPaths.length === 0) {
     const reason = result.meta?.aborted ? "agent run aborted" : "agent returned no speakable text";
     params.logger.warn(`[talk] agent consult produced no answer: ${reason}`);
     return { text: params.fallbackText ?? "I need a moment to verify that before answering." };
   }
-  return { text };
+  return {
+    text: text ?? "",
+    ...(mediaPaths.length > 0 ? { mediaPaths } : {}),
+  };
 }

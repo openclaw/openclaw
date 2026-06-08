@@ -1,3 +1,6 @@
+import { rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -16,7 +19,11 @@ import { VisionBudget } from "./vision-budget.js";
 // Capture the transcript handed to the consult agent, while keeping the rest of
 // the realtime-voice SDK (createRealtimeVoiceBridgeSession, etc.) real.
 const consultSpy = vi.hoisted(() =>
-  vi.fn(async (_opts?: { transcript?: unknown }) => ({ text: "ok" })),
+  vi.fn(
+    async (_opts?: { transcript?: unknown }): Promise<{ text: string; mediaPaths?: string[] }> => ({
+      text: "ok",
+    }),
+  ),
 );
 vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/realtime-voice")>();
@@ -645,6 +652,63 @@ describe("createMsteamsRealtimeCall", () => {
       });
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("show_to_caller displays an agent-produced image on the tile", async () => {
+    consultSpy.mockClear();
+    // A real 1×1 PNG on disk — the agent run "produces" it; the bridge reads + displays it.
+    const imgPath = join(tmpdir(), `oc-show-test-${process.pid}-${Date.now()}.png`);
+    writeFileSync(
+      imgPath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        "base64",
+      ),
+    );
+    try {
+      consultSpy.mockResolvedValueOnce({ text: "Here's my screen.", mediaPaths: [imgPath] });
+      const ctx = createMockSession();
+      const mock = createMockProvider();
+      createMsteamsRealtimeCall({
+        session: ctx.session,
+        deps: {
+          provider: mock.provider,
+          providerConfig: {},
+          tools: [CONSULT_TOOL],
+          toolPolicy: "owner",
+          agentRuntime: { resolveThinkingDefault: () => "high" } as unknown as CoreAgentDeps,
+          voiceConfig: { realtime: {}, agentId: "main" } as unknown as VoiceCallConfig,
+          cfg: {} as unknown as OpenClawConfig,
+        },
+      });
+
+      mock.getRequest().onToolCall?.({
+        itemId: "i-show-1",
+        callId: "show-1",
+        name: "show_to_caller",
+        args: { request: "show me your screen" },
+      });
+
+      await vi.waitFor(() =>
+        expect(
+          ctx.sent.some(
+            (m) =>
+              typeof m === "object" &&
+              m !== null &&
+              (m as { type?: unknown }).type === "display.image",
+          ),
+        ).toBe(true),
+      );
+      const display = ctx.sent.find(
+        (m) =>
+          typeof m === "object" && m !== null && (m as { type?: unknown }).type === "display.image",
+      ) as { dataBase64: string; mime: string };
+      expect(display.mime).toBe("image/png");
+      expect(typeof display.dataBase64).toBe("string");
+      expect(display.dataBase64.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(imgPath, { force: true });
     }
   });
 });
