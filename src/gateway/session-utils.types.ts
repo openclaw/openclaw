@@ -78,6 +78,7 @@ export type GatewaySessionRow = {
   goal?: SessionGoal;
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
+  resumable?: boolean;
   hasActiveRun?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;

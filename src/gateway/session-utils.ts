@@ -2140,6 +2140,12 @@ export function buildGatewaySessionRow(params: {
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 
+  const resolvedStatus = (subagentRun ? subagentStatus : entry?.status) as
+    | SessionRunStatus
+    | undefined;
+  const resolvedResumable =
+    resolvedStatus != null && resolvedStatus !== "running" ? true : undefined;
+
   return {
     key,
     spawnedBy: subagentOwner || entry?.spawnedBy,
@@ -2180,7 +2186,8 @@ export function buildGatewaySessionRow(params: {
     totalTokensFresh,
     goal,
     estimatedCostUsd,
-    status: subagentRun ? subagentStatus : entry?.status,
+    status: resolvedStatus,
+    resumable: resolvedResumable,
     subagentRunState,
     hasActiveSubagentRun: subagentRun ? liveSubagentRunActive : undefined,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,

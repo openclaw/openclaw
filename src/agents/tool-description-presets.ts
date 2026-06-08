@@ -16,6 +16,7 @@ export function describeSessionsListTool(): string {
   return [
     "List visible sessions; filter by kind, label, agentId, search, activity.",
     "Use before sessions_history or sessions_send target selection.",
+    "Note: done/failed/timeout/killed sessions are resumable via sessions_send (see resumable field).",
   ].join(" ");
 }
 

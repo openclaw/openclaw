@@ -67,6 +67,7 @@ export type SessionListRow = {
   totalTokens?: number | null;
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
+  resumable?: boolean;
   startedAt?: number;
   endedAt?: number;
   runtimeMs?: number;
