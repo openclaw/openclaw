@@ -108,6 +108,13 @@ const ChannelStreamingProgressSchema = z
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
   nativeTaskCards: z.boolean().optional(),
 }).strict();
+const ChannelDeliveryStreamingConfigSchema = z
+  .object({
+    chunkMode: TextChunkModeSchema.optional(),
+    block: ChannelStreamingBlockSchema.optional(),
+  })
+  .strict();
+
 const ChannelPreviewStreamingConfigSchema = z
   .object({
     mode: UnifiedStreamingModeSchema.optional(),
@@ -1410,6 +1417,7 @@ export const IMessageAccountSchemaBase = z
     probeTimeoutMs: z.number().int().positive().optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    streaming: ChannelDeliveryStreamingConfigSchema.optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     sendReadReceipts: z.boolean().optional(),
