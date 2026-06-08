@@ -3427,7 +3427,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
+      const webchatAgentMediaIdempotencyKey = `${clientRunId}:assistant-media`;
       let appendedWebchatAgentMedia = false;
+      let webchatAgentMediaTranscriptEntry:
+        | { messageId: string; message: Record<string, unknown> }
+        | undefined;
+      let webchatAgentMediaFinalMessage: Record<string, unknown> | undefined;
       let agentRunStarted = false;
       const userTurnRecorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
         input: baseUserTurnInput,
@@ -3474,8 +3479,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       const persistGatewayUserTurnTranscriptBestEffort = async () => {
         await persistGatewayUserTurnTranscript().catch(() => undefined);
       };
-      const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
-        if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
+      const appendWebchatAgentMediaTranscriptIfNeeded = async (
+        payload: ReplyPayload,
+        deliveryKind: "block" | "final",
+      ) => {
+        if (!agentRunStarted || !isMediaBearingPayload(payload)) {
+          return;
+        }
+        const shouldBroadcastAsFinal = deliveryKind === "final";
+        if (appendedWebchatAgentMedia && !shouldBroadcastAsFinal) {
           return;
         }
         if (isSourceReplyTranscriptMirrorPayload(payload)) {
@@ -3543,32 +3555,140 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
           return;
         }
-        const appended = await appendAssistantTranscriptMessage({
-          sessionKey,
-          message: transcriptReply,
-          ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
-          sessionId,
-          storePath: latestStorePath,
-          sessionFile: latestEntry?.sessionFile,
-          agentId,
-          createIfMissing: true,
-          idempotencyKey: `${clientRunId}:assistant-media`,
-          ttsSupplement: ttsSupplementMarker,
-          cfg,
-        });
-        if (appended.ok) {
-          if (appended.messageId && assistantContent?.length) {
-            await attachManagedOutgoingImagesToMessage({
-              messageId: appended.messageId,
-              blocks: assistantContent,
-            });
+        const broadcastText =
+          extractAssistantDisplayTextFromContent(persistedContentForAppend) ?? transcriptReply;
+        let appendedMessage: Record<string, unknown> | undefined;
+        if (!appendedWebchatAgentMedia) {
+          const appended = await appendAssistantTranscriptMessage({
+            sessionKey,
+            message: transcriptReply,
+            ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
+            sessionId,
+            storePath: latestStorePath,
+            sessionFile: latestEntry?.sessionFile,
+            agentId,
+            createIfMissing: true,
+            idempotencyKey: webchatAgentMediaIdempotencyKey,
+            ttsSupplement: ttsSupplementMarker,
+            cfg,
+          });
+          if (appended.ok) {
+            if (appended.messageId && assistantContent?.length) {
+              await attachManagedOutgoingImagesToMessage({
+                messageId: appended.messageId,
+                blocks: assistantContent,
+              });
+            }
+            appendedMessage = appended.message;
+            if (appended.messageId && appended.message) {
+              webchatAgentMediaTranscriptEntry = {
+                messageId: appended.messageId,
+                message: appended.message,
+              };
+            }
+            appendedWebchatAgentMedia = true;
+          } else {
+            context.logGateway.warn(
+              `webchat transcript append failed for media reply: ${appended.error ?? "unknown error"}`,
+            );
+            return;
           }
-          appendedWebchatAgentMedia = true;
-          return;
+        } else if (shouldBroadcastAsFinal && resolvedTranscriptPath) {
+          const existingEntry =
+            webchatAgentMediaTranscriptEntry ??
+            (await findAssistantTranscriptMessageByIdempotencyKey(
+              resolvedTranscriptPath,
+              webchatAgentMediaIdempotencyKey,
+            )) ??
+            undefined;
+          if (existingEntry) {
+            const replacementMessage = {
+              ...existingEntry.message,
+              role: "assistant",
+              content: persistedContentForAppend,
+              ...(broadcastText ? { text: broadcastText } : {}),
+              ...(ttsSupplementMarker ? { openclawTtsSupplement: ttsSupplementMarker } : {}),
+            } as unknown as AgentMessage;
+            if (!ttsSupplementMarker) {
+              delete (replacementMessage as unknown as Record<string, unknown>)
+                .openclawTtsSupplement;
+            }
+            const replacements = [
+              {
+                entryId: existingEntry.messageId,
+                message: replacementMessage,
+              },
+            ];
+            const rewriteResult = await rewriteTranscriptEntriesInSessionFile({
+              sessionFile: resolvedTranscriptPath,
+              sessionKey,
+              config: cfg,
+              request: {
+                allowedRewriteSuffixEntryIds: [existingEntry.messageId],
+                replacements,
+              },
+            });
+            const finalRewriteResult =
+              !rewriteResult.changed && rewriteResult.reason === "rewrite suffix guard failed"
+                ? await rewriteTranscriptEntriesInSessionFile({
+                    sessionFile: resolvedTranscriptPath,
+                    sessionKey,
+                    config: cfg,
+                    request: { replacements },
+                  })
+                : rewriteResult;
+            if (finalRewriteResult.changed) {
+              const rewrittenEntry = await findAssistantTranscriptMessageByIdempotencyKey(
+                resolvedTranscriptPath,
+                webchatAgentMediaIdempotencyKey,
+              );
+              webchatAgentMediaTranscriptEntry = rewrittenEntry ?? {
+                messageId: existingEntry.messageId,
+                message: replacementMessage as unknown as Record<string, unknown>,
+              };
+              appendedMessage = webchatAgentMediaTranscriptEntry.message;
+              if (webchatAgentMediaTranscriptEntry.messageId && assistantContent?.length) {
+                await attachManagedOutgoingImagesToMessage({
+                  messageId: webchatAgentMediaTranscriptEntry.messageId,
+                  blocks: assistantContent,
+                });
+              }
+            } else {
+              context.logGateway.warn(
+                `webchat transcript rewrite skipped for final media reply: ${finalRewriteResult.reason ?? "unknown reason"}`,
+              );
+              appendedMessage = replacementMessage as unknown as Record<string, unknown>;
+            }
+          }
         }
-        context.logGateway.warn(
-          `webchat transcript append failed for media reply: ${appended.error ?? "unknown error"}`,
-        );
+        if (shouldBroadcastAsFinal) {
+          const appendedContent =
+            Array.isArray(appendedMessage?.content) &&
+            appendedMessage.content.some((block) => {
+              return block && typeof block === "object" && "type" in block;
+            })
+              ? (appendedMessage.content as typeof persistedContentForAppend)
+              : undefined;
+          const broadcastContent =
+            persistedContentForAppend.length > 0
+              ? persistedContentForAppend
+              : (appendedContent ?? persistedContentForAppend);
+          const finalBroadcastText =
+            extractAssistantDisplayTextFromContent(broadcastContent) ?? broadcastText;
+          webchatAgentMediaFinalMessage = {
+            ...appendedMessage,
+            role: "assistant",
+            content: broadcastContent,
+            ...(finalBroadcastText ? { text: finalBroadcastText } : {}),
+            timestamp:
+              typeof appendedMessage?.timestamp === "number"
+                ? appendedMessage.timestamp
+                : Date.now(),
+            ...(ttsSupplementMarker ? { openclawTtsSupplement: ttsSupplementMarker } : {}),
+            stopReason: "stop",
+            usage: { input: 0, output: 0, totalTokens: 0 },
+          };
+        }
       };
       const dispatcher = createReplyDispatcher({
         ...replyPipeline,
@@ -3583,7 +3703,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             case "block":
             case "final":
               deliveredReplies.push({ payload, kind: info.kind });
-              await appendWebchatAgentMediaTranscriptIfNeeded(payload);
+              await appendWebchatAgentMediaTranscriptIfNeeded(payload, info.kind);
               break;
             case "tool":
               // Tool results that carry audio (e.g. the TTS tool) must be promoted
@@ -3753,7 +3873,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               ) {
                 await persistGatewayUserTurnTranscriptBestEffort();
               }
-              let broadcastedSourceReplyFinal = false;
+              let broadcastedAgentRunFinal = false;
               // WebChat persistence has two owners. Agent runs persist model-visible turns
               // through OpenClaw runtime's SessionManager; this dispatcher only owns live delivery payloads.
               // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
@@ -4268,12 +4388,22 @@ export const chatHandlers: GatewayRequestHandlers = {
                       agentId,
                       message,
                     });
-                    broadcastedSourceReplyFinal = true;
+                    broadcastedAgentRunFinal = true;
                   }
+                }
+                if (!broadcastedAgentRunFinal && webchatAgentMediaFinalMessage) {
+                  broadcastChatFinal({
+                    context,
+                    runId: clientRunId,
+                    sessionKey,
+                    agentId,
+                    message: webchatAgentMediaFinalMessage,
+                  });
+                  broadcastedAgentRunFinal = true;
                 }
               }
               const shouldBroadcastAgentError =
-                returnedAgentErrorPayloads.length > 0 && !broadcastedSourceReplyFinal;
+                returnedAgentErrorPayloads.length > 0 && !broadcastedAgentRunFinal;
               if (shouldBroadcastAgentError) {
                 broadcastChatError({
                   context,

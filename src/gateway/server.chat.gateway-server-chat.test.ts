@@ -1518,6 +1518,168 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send broadcasts agent-run TTS audio over the running gateway", async () => {
+    await withMainSessionStore(async (dir) => {
+      const previousAgentConfig = testState.agentConfig;
+      const blockAudioPath = path.join(dir, "block.mp3");
+      const audioPath = path.join(dir, "tts.mp3");
+      await fs.writeFile(blockAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+      await fs.writeFile(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+      testState.agentConfig = { workspace: dir };
+      const spokenText = "This text is already in the model transcript.";
+
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: {
+                text?: string;
+                spokenText?: string;
+                mediaUrl?: string;
+                mediaUrls?: string[];
+                trustedLocalMedia?: boolean;
+                audioAsVoice?: boolean;
+                ttsSupplement?: { spokenText: string };
+              }) => boolean;
+              sendBlockReply: (payload: {
+                mediaUrl?: string;
+                mediaUrls?: string[];
+                trustedLocalMedia?: boolean;
+              }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+            replyOptions?: {
+              runId?: string;
+              onAgentRunStart?: (runId: string) => void;
+            };
+          },
+        ];
+        params.replyOptions?.onAgentRunStart?.(
+          params.replyOptions.runId ?? "idem-running-gateway-agent-tts",
+        );
+        params.dispatcher.sendBlockReply({
+          mediaUrl: blockAudioPath,
+          mediaUrls: [blockAudioPath],
+          trustedLocalMedia: true,
+        });
+        params.dispatcher.sendFinalReply({
+          text: spokenText,
+          spokenText,
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+          ttsSupplement: { spokenText },
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
+
+      try {
+        const finalPromise = onceMessage(
+          ws,
+          (o) =>
+            o.type === "event" &&
+            o.event === "chat" &&
+            o.payload?.state === "final" &&
+            o.payload?.runId === "idem-running-gateway-agent-tts",
+          8000,
+        );
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "read this aloud",
+          idempotencyKey: "idem-running-gateway-agent-tts",
+        });
+
+        expect(res.ok).toBe(true);
+        expect(res.payload?.runId).toBe("idem-running-gateway-agent-tts");
+        const finalEvent = await finalPromise;
+        const payload = expectRecordFields(finalEvent.payload, {
+          runId: "idem-running-gateway-agent-tts",
+          sessionKey: "agent:main:main",
+          state: "final",
+        });
+        const message = expectRecordFields(payload.message, {
+          role: "assistant",
+        });
+        const content = message.content;
+        expect(Array.isArray(content)).toBe(true);
+        const blocks = content as Array<Record<string, unknown>>;
+        expect(blocks[0]).toEqual({ type: "text", text: "Audio reply" });
+        expect(blocks[1]).toEqual({
+          type: "attachment",
+          attachment: {
+            url: await fs.realpath(audioPath),
+            kind: "audio",
+            label: "tts.mp3",
+            mimeType: "audio/mpeg",
+            isVoiceNote: true,
+          },
+        });
+        expect(JSON.stringify(message)).not.toContain(spokenText);
+
+        const source = encodeURIComponent(await fs.realpath(audioPath));
+        const mediaRoute = `http://127.0.0.1:${port}/__openclaw__/assistant-media`;
+        const metadata = await fetch(`${mediaRoute}?meta=1&source=${source}`, {
+          headers: { Authorization: "Bearer secret" },
+        });
+        expect(metadata.status).toBe(200);
+        const metadataPayload = (await metadata.json()) as {
+          available?: boolean;
+          mediaTicket?: string;
+        };
+        expect(metadataPayload.available).toBe(true);
+        expect(metadataPayload.mediaTicket).toMatch(/^v1\./);
+
+        const ticketed = await fetch(
+          `${mediaRoute}?source=${source}&mediaTicket=${encodeURIComponent(
+            metadataPayload.mediaTicket ?? "",
+          )}`,
+        );
+        expect(ticketed.status).toBe(200);
+        expect((await ticketed.arrayBuffer()).byteLength).toBe(4);
+
+        const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+          sessionKey: "main",
+        });
+        expect(historyRes.ok).toBe(true);
+        const assistantMessages = (historyRes.payload?.messages ?? []).filter(
+          (entry): entry is Record<string, unknown> =>
+            typeof entry === "object" &&
+            entry !== null &&
+            (entry as { role?: unknown }).role === "assistant",
+        );
+        expect(assistantMessages).toHaveLength(1);
+        const historyContent = (assistantMessages[0].content ?? []) as Array<
+          Record<string, unknown>
+        >;
+        expect(historyContent[0]).toEqual({ type: "text", text: "Audio reply" });
+        expect(historyContent[1]).toEqual({
+          type: "attachment",
+          attachment: {
+            url: await fs.realpath(audioPath),
+            kind: "audio",
+            label: "tts.mp3",
+            mimeType: "audio/mpeg",
+            isVoiceNote: true,
+          },
+        });
+        expect(JSON.stringify(assistantMessages[0])).not.toContain(spokenText);
+        expect(JSON.stringify(assistantMessages[0])).not.toContain(
+          await fs.realpath(blockAudioPath),
+        );
+      } finally {
+        testState.agentConfig = previousAgentConfig;
+      }
+    });
+  });
+
   test("chat.history hides assistant NO_REPLY-only entries and keeps mixed-content assistant entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture(true));
     const roleAndText = historyMessages

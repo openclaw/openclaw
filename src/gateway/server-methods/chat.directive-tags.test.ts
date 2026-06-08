@@ -55,6 +55,7 @@ const mockState = vi.hoisted(() => ({
       isReasoning?: boolean;
       isError?: boolean;
     };
+    afterIdle?: () => void | Promise<void>;
   }>,
   dispatchError: null as Error | null,
   dispatchWait: null as Promise<void> | null,
@@ -270,13 +271,15 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         for (const reply of mockState.dispatchedReplies) {
           if (reply.kind === "tool") {
             params.dispatcher.sendToolResult(reply.payload);
-            continue;
-          }
-          if (reply.kind === "block") {
+          } else if (reply.kind === "block") {
             params.dispatcher.sendBlockReply(reply.payload);
-            continue;
+          } else {
+            params.dispatcher.sendFinalReply(reply.payload);
           }
-          params.dispatcher.sendFinalReply(reply.payload);
+          if (reply.afterIdle) {
+            await params.dispatcher.waitForIdle();
+            await reply.afterIdle();
+          }
         }
       } else {
         params.dispatcher.sendFinalReply(mockState.finalPayload ?? { text: mockState.finalText });
@@ -1261,6 +1264,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
       });
     });
+    expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 
   it("persists auto-TTS final media as audio-only so webchat does not duplicate assistant text", async () => {
@@ -1292,13 +1296,33 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await runNonStreamingChatSend({
+    const payload = await runNonStreamingChatSend({
       context,
       respond,
       idempotencyKey: "idem-agent-tts",
-      expectBroadcast: false,
-      waitFor: "dedupe",
     });
+
+    expect(payload).toMatchObject({
+      runId: "idem-agent-tts",
+      sessionKey: "main",
+      state: "final",
+    });
+    const broadcastContent = getMessageContent(payload);
+    expect(getMessage(payload)?.role).toBe("assistant");
+    expect(broadcastContent[0]).toEqual({ type: "text", text: "Audio reply" });
+    expect(broadcastContent[1]).toEqual({
+      type: "attachment",
+      attachment: {
+        url: fs.realpathSync(audioPath),
+        kind: "audio",
+        label: "tts.mp3",
+        mimeType: "audio/mpeg",
+        isVoiceNote: true,
+      },
+    });
+    expect(JSON.stringify(payload?.message)).not.toContain(
+      "This text is already in the model transcript.",
+    );
 
     const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
       (update) =>
@@ -1327,6 +1351,310 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(assistantUpdates[0]?.message)).not.toContain(
       "This text is already in the model transcript.",
     );
+  });
+
+  it("broadcasts final agent media instead of an earlier media-bearing block", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-block-then-tts-");
+    const blockAudioPath = path.join(transcriptDir, "block.mp3");
+    const finalAudioPath = path.join(transcriptDir, "tts.mp3");
+    fs.writeFileSync(blockAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    fs.writeFileSync(finalAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    const spokenText = "This text is already in the model transcript.";
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          mediaUrl: blockAudioPath,
+          mediaUrls: [blockAudioPath],
+          trustedLocalMedia: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          text: spokenText,
+          spokenText,
+          mediaUrl: finalAudioPath,
+          mediaUrls: [finalAudioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+          ttsSupplement: { spokenText },
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-block-then-tts",
+    });
+
+    expect(payload).toMatchObject({
+      runId: "idem-agent-block-then-tts",
+      sessionKey: "main",
+      state: "final",
+    });
+    const broadcastContent = getMessageContent(payload);
+    expect(broadcastContent[0]).toEqual({ type: "text", text: "Audio reply" });
+    expect(broadcastContent[1]).toEqual({
+      type: "attachment",
+      attachment: {
+        url: fs.realpathSync(finalAudioPath),
+        kind: "audio",
+        label: "tts.mp3",
+        mimeType: "audio/mpeg",
+        isVoiceNote: true,
+      },
+    });
+    expect(JSON.stringify(payload?.message)).not.toContain(spokenText);
+    expect(JSON.stringify(payload?.message)).not.toContain(fs.realpathSync(blockAudioPath));
+
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(assistantUpdates).toHaveLength(1);
+
+    const transcriptIndex = await readSessionTranscriptIndex(mockState.transcriptPath);
+    const persistedAssistant = transcriptIndex?.entries
+      .toReversed()
+      .map((entry) => entry.record.message as Record<string, any> | undefined)
+      .find((message) => message?.idempotencyKey === "idem-agent-block-then-tts:assistant-media");
+    const persistedContent = Array.isArray(persistedAssistant?.content)
+      ? (persistedAssistant.content as Array<Record<string, any>>)
+      : [];
+    expect(persistedContent[0]).toEqual({ type: "text", text: "Audio reply" });
+    expect(persistedContent[1]).toEqual({
+      type: "attachment",
+      attachment: {
+        url: fs.realpathSync(finalAudioPath),
+        kind: "audio",
+        label: "tts.mp3",
+        mimeType: "audio/mpeg",
+        isVoiceNote: true,
+      },
+    });
+    expect(JSON.stringify(persistedAssistant)).not.toContain(fs.realpathSync(blockAudioPath));
+  });
+
+  it("keeps chat history on final agent media when the initial rewrite suffix is guarded", async () => {
+    const transcriptDir = createTranscriptFixture(
+      "openclaw-chat-send-agent-block-then-tts-suffix-",
+    );
+    const blockAudioPath = path.join(transcriptDir, "block.mp3");
+    const finalAudioPath = path.join(transcriptDir, "tts.mp3");
+    fs.writeFileSync(blockAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    fs.writeFileSync(finalAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    const spokenText = "This text is already in the model transcript.";
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          mediaUrl: blockAudioPath,
+          mediaUrls: [blockAudioPath],
+          trustedLocalMedia: true,
+        },
+        afterIdle: async () => {
+          await appendSessionTranscriptMessage({
+            transcriptPath: mockState.transcriptPath,
+            sessionId: mockState.sessionId,
+            now: 3,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "intervening transcript entry" }],
+              timestamp: 3,
+              stopReason: "stop",
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  total: 0,
+                },
+              },
+              api: "openai-responses",
+              provider: "openclaw",
+              model: "gateway-injected",
+            },
+          });
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          text: spokenText,
+          spokenText,
+          mediaUrl: finalAudioPath,
+          mediaUrls: [finalAudioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+          ttsSupplement: { spokenText },
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-block-then-tts-suffix",
+    });
+
+    const finalAudioRealPath = fs.realpathSync(finalAudioPath);
+    const blockAudioRealPath = fs.realpathSync(blockAudioPath);
+    expect(payload).toMatchObject({
+      runId: "idem-agent-block-then-tts-suffix",
+      sessionKey: "main",
+      state: "final",
+    });
+    const broadcastContent = getMessageContent(payload);
+    expect(broadcastContent[0]).toEqual({ type: "text", text: "Audio reply" });
+    expect(broadcastContent[1]).toEqual({
+      type: "attachment",
+      attachment: {
+        url: finalAudioRealPath,
+        kind: "audio",
+        label: "tts.mp3",
+        mimeType: "audio/mpeg",
+        isVoiceNote: true,
+      },
+    });
+
+    const historyRespond = vi.fn();
+    await chatHandlers["chat.history"]({
+      params: { sessionKey: "main" },
+      respond: historyRespond as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const [historyOk, historyPayload] = lastRespondCall(historyRespond) ?? [];
+    expect(historyOk).toBe(true);
+    const historyMessages = Array.isArray(historyPayload?.messages)
+      ? (historyPayload.messages as unknown[])
+      : [];
+    const serializedHistory = JSON.stringify(historyMessages);
+    expect(serializedHistory).toContain("intervening transcript entry");
+    expect(serializedHistory).toContain(finalAudioRealPath);
+    expect(serializedHistory).not.toContain(blockAudioRealPath);
+    expect(serializedHistory).not.toContain(spokenText);
+    const mediaAssistantMessages = historyMessages.filter(
+      (entry): entry is Record<string, unknown> =>
+        typeof entry === "object" &&
+        entry !== null &&
+        (entry as { role?: unknown }).role === "assistant" &&
+        JSON.stringify(entry).includes(finalAudioRealPath),
+    );
+    expect(mediaAssistantMessages).toHaveLength(1);
+    const historyContent = (mediaAssistantMessages[0].content ?? []) as Array<
+      Record<string, unknown>
+    >;
+    expect(historyContent[0]).toEqual({ type: "text", text: "Audio reply" });
+    expect(historyContent[1]).toEqual({
+      type: "attachment",
+      attachment: {
+        url: finalAudioRealPath,
+        kind: "audio",
+        label: "tts.mp3",
+        mimeType: "audio/mpeg",
+        isVoiceNote: true,
+      },
+    });
+  });
+
+  it("routes final agent media broadcasts to selected global agents", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-global-agent-tts-");
+    const audioPath = path.join(transcriptDir, "tts.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "work" }],
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+      session: { scope: "global" },
+    };
+    mockState.sessionEntry = { canonicalKey: "global" };
+    const spokenText = "This text is already in the model transcript.";
+    mockState.triggerAgentRunStart = true;
+    mockState.agentRunId = "run-work-global-media";
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: spokenText,
+          spokenText,
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+          ttsSupplement: { spokenText },
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "agent:work:main",
+      idempotencyKey: "idem-work-global-tts",
+    });
+
+    expect(payload).toMatchObject({
+      runId: "idem-work-global-tts",
+      sessionKey: "global",
+      agentId: "work",
+      state: "final",
+    });
+    const broadcastContent = getMessageContent(payload);
+    expect(broadcastContent[1]).toMatchObject({
+      attachment: {
+        url: fs.realpathSync(audioPath),
+        kind: "audio",
+        isVoiceNote: true,
+      },
+    });
+    const nodeSend = lastNodeSendCall(context);
+    expect(nodeSend?.[0]).toBe("agent:work:global");
+    expect(nodeSend?.[2]).toMatchObject({
+      runId: "idem-work-global-tts",
+      sessionKey: "global",
+      agentId: "work",
+      state: "final",
+    });
+    expect(context.nodeSendToSession).toHaveBeenCalledTimes(1);
   });
 
   it("does not mirror agent-run stale media final text from live delivery", async () => {

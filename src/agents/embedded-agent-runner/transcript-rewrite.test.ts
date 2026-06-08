@@ -49,6 +49,22 @@ function createTextContent(text: string) {
   return [{ type: "text", text }];
 }
 
+function createAudioContent(label: string, url: string) {
+  return [
+    { type: "text", text: "Audio reply" },
+    {
+      type: "attachment",
+      attachment: {
+        url,
+        kind: "audio",
+        label,
+        mimeType: "audio/mpeg",
+        isVoiceNote: true,
+      },
+    },
+  ];
+}
+
 function getMessageContent(message: AgentMessage): unknown {
   return "content" in message ? message.content : undefined;
 }
@@ -369,6 +385,72 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
         createTextContent("source reply text"),
         "concurrent append",
       ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("aborts assistant media rewrites when an intervening transcript entry follows the media entry", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-media-"));
+    const sessionManager = SessionManager.create(dir, dir);
+    const blockContent = createAudioContent("block.mp3", "/tmp/openclaw/block.mp3");
+    const finalContent = createAudioContent("tts.mp3", "/tmp/openclaw/tts.mp3");
+    const entryIds = appendSessionMessages(sessionManager, [
+      asAppendMessage({
+        role: "user",
+        content: "start",
+        timestamp: 1,
+      }),
+      asAppendMessage({
+        role: "assistant",
+        content: blockContent,
+        idempotencyKey: "run-tts:assistant-media",
+        timestamp: 2,
+      }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("intervening transcript entry"),
+        timestamp: 3,
+      }),
+    ]);
+    const sessionFile = requireString(sessionManager.getSessionFile(), "persisted session file");
+    const mediaEntryId = entryIds[1];
+    const listener = vi.fn();
+    const cleanup = onSessionTranscriptUpdate(listener);
+
+    try {
+      const result = await rewriteTranscriptEntriesInSessionFile({
+        sessionFile,
+        sessionKey: "agent:main:test",
+        request: {
+          allowedRewriteSuffixEntryIds: [mediaEntryId],
+          replacements: [
+            {
+              entryId: mediaEntryId,
+              message: asAppendMessage({
+                role: "assistant",
+                content: finalContent,
+                idempotencyKey: "run-tts:assistant-media",
+                timestamp: 2,
+              }) as AgentMessage,
+            },
+          ],
+        },
+      });
+
+      expect(result).toMatchObject({
+        changed: false,
+        reason: "rewrite suffix guard failed",
+      });
+      expect(listener).not.toHaveBeenCalled();
+
+      const unchangedSession = SessionManager.open(sessionFile);
+      expect(getBranchMessages(unchangedSession).map(getMessageContent)).toEqual([
+        "start",
+        blockContent,
+        createTextContent("intervening transcript entry"),
+      ]);
+      expect(JSON.stringify(getBranchMessages(unchangedSession))).not.toContain("tts.mp3");
     } finally {
       cleanup();
     }
