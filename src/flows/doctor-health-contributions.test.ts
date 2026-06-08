@@ -374,7 +374,7 @@ describe("doctor health contributions", () => {
     expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
   });
 
-  it("passes daemon-context plugin drift when gateway version used the fallback", async () => {
+  it("omits daemon-context plugin drift when gateway version used the fallback", async () => {
     const contribution = requireDoctorContribution("doctor:workspace-status");
     const pluginVersionDrift = {
       gatewayVersion: "2026.5.2-test",
@@ -398,7 +398,9 @@ describe("doctor health contributions", () => {
       options: { nonInteractive: true },
     } as unknown as Parameters<(typeof contribution)["run"]>[0]);
 
-    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionDrift: undefined,
+    });
   });
 
   it("omits daemon-context plugin drift when probe auth was skipped", async () => {
@@ -449,7 +451,7 @@ describe("doctor health contributions", () => {
     });
   });
 
-  it("uses non-probing daemon status for exec SecretRefs by default", async () => {
+  it("uses non-probing daemon status for exec SecretRefs without emitting fallback drift", async () => {
     const contribution = requireDoctorContribution("doctor:workspace-status");
     const pluginVersionDrift = {
       gatewayVersion: "2026.5.2-test",
@@ -493,7 +495,9 @@ describe("doctor health contributions", () => {
       deep: false,
       allowExecSecretRefs: false,
     });
-    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionDrift: undefined,
+    });
   });
 
   it("ignores remote-only exec SecretRefs for local daemon-context plugin drift probes", async () => {

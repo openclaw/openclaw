@@ -775,7 +775,9 @@ async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<v
         deep: ctx.options.deep === true,
         allowExecSecretRefs,
       });
-      if (status.pluginVersionDrift && !status.rpc?.authWarning) {
+      const hasProbedGatewayVersion =
+        typeof status.gateway?.version === "string" && status.gateway.version.trim() !== "";
+      if (status.pluginVersionDrift && hasProbedGatewayVersion && !status.rpc?.authWarning) {
         pluginVersionDrift = status.pluginVersionDrift;
       }
     } catch {
