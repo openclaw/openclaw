@@ -421,6 +421,10 @@ function sanitizeProgressMarkdownText(text: string): string {
   return text.replaceAll("`", "'");
 }
 
+function normalizeProgressMarkdownText(text: string): string {
+  return sanitizeProgressMarkdownText(text.replace(/`([^`]+)`/gu, "$1"));
+}
+
 function formatProgressAsMarkdownCode(text: string): string {
   const clipped = clipProgressMarkdownText(text);
   return `\`${sanitizeProgressMarkdownText(clipped)}\``;
@@ -1018,7 +1022,7 @@ export const dispatchTelegramMessage = async ({
       return false;
     }
     const rawText = typeof line === "string" ? line : line?.text;
-    const normalized = sanitizeProgressMarkdownText(rawText?.replace(/\s+/g, " ").trim() ?? "");
+    const normalized = normalizeProgressMarkdownText(rawText?.replace(/\s+/g, " ").trim() ?? "");
     if (streamToolProgressSuppressed) {
       return false;
     }
