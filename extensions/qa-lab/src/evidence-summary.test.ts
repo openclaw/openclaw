@@ -27,6 +27,7 @@ describe("evidence summary", () => {
       ],
       channelId: "qa-channel",
       env: {
+        OPENCLAW_QA_CHANNEL_DRIVER: "multipass",
         OPENCLAW_QA_REF: "abc123",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:00:00.000Z",
@@ -38,6 +39,7 @@ describe("evidence summary", () => {
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
     expect(evidence.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
     expect(evidence.entries).toHaveLength(1);
+    expect(evidence.entries[0]).not.toHaveProperty("tier");
     expect(evidence.entries[0]).toMatchObject({
       scenarioId: "dm-chat-baseline",
       coverageIds: ["channels.dm", "channels.qa-channel"],
@@ -46,7 +48,7 @@ describe("evidence summary", () => {
         surfaceIds: ["dm"],
         categoryIds: ["channels.dm"],
       },
-      tier: "core",
+      profile: "smoke-ci",
       provider: {
         id: "openai",
         live: false,
@@ -58,6 +60,10 @@ describe("evidence summary", () => {
         id: "qa-channel",
         live: false,
       },
+      channelDriver: {
+        id: "multipass",
+      },
+      runner: "host",
       packageSource: {
         kind: "source-checkout",
       },
@@ -112,7 +118,7 @@ describe("evidence summary", () => {
           surfaceIds: ["channels.telegram"],
           categoryIds: ["channels.telegram.live"],
         },
-        tier: "release",
+        profile: "release",
         provider: {
           id: "openai",
           live: true,
@@ -123,6 +129,9 @@ describe("evidence summary", () => {
         channel: {
           id: "telegram",
           live: true,
+        },
+        channelDriver: {
+          id: "native",
         },
         runner: "crabbox",
         artifactPaths: [
@@ -139,6 +148,43 @@ describe("evidence summary", () => {
         },
       }),
     ]);
+  });
+
+  it("uses explicit evidence profiles without treating Multipass as a runner", () => {
+    const evidence = buildQaSuiteEvidenceSummary({
+      artifactPaths: ["qa-suite-summary.json"],
+      catalogScenarios: [
+        {
+          id: "telegram-sdk-smoke",
+          title: "Telegram SDK smoke",
+          surface: "telegram",
+          coverage: {
+            primary: ["channels.telegram.mock"],
+          },
+        },
+      ],
+      channelDriver: "multipass",
+      channelId: "telegram",
+      generatedAt: "2026-06-07T12:08:00.000Z",
+      primaryModel: "mock-openai/gpt-5.5",
+      profile: "advisory",
+      providerMode: "mock-openai",
+      runner: "host",
+      scenarios: [{ id: "telegram-sdk-smoke", status: "pass" }],
+    });
+
+    expect(evidence.entries[0]).toMatchObject({
+      scenarioId: "telegram-sdk-smoke",
+      profile: "advisory",
+      channel: {
+        id: "telegram",
+        live: false,
+      },
+      channelDriver: {
+        id: "multipass",
+      },
+      runner: "host",
+    });
   });
 
   it("keeps mock non-OpenAI model refs attributed to their model provider", () => {

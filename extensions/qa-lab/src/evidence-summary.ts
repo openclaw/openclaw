@@ -6,7 +6,14 @@ import { getQaProvider, type QaProviderMode } from "./providers/index.js";
 export const QA_EVIDENCE_SUMMARY_KIND = "openclaw.qa.evidence-summary";
 export const QA_EVIDENCE_SUMMARY_SCHEMA_VERSION = 1;
 
-const qaEvidenceTierSchema = z.enum(["core", "extended", "release", "soak", "manual"]);
+const qaEvidenceProfileSchema = z.enum([
+  "smoke-ci",
+  "extended",
+  "release",
+  "soak",
+  "advisory",
+  "manual",
+]);
 const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
 
@@ -25,6 +32,12 @@ const qaEvidenceChannelSchema = z
   .object({
     id: nonEmptyStringSchema,
     live: z.boolean(),
+  })
+  .strict();
+
+const qaEvidenceChannelDriverSchema = z
+  .object({
+    id: nonEmptyStringSchema,
   })
   .strict();
 
@@ -76,9 +89,10 @@ export const qaEvidenceSummaryEntrySchema = z
         categoryIds: z.array(nonEmptyStringSchema),
       })
       .strict(),
-    tier: qaEvidenceTierSchema,
+    profile: qaEvidenceProfileSchema,
     provider: qaEvidenceProviderSchema,
     channel: qaEvidenceChannelSchema.optional(),
+    channelDriver: qaEvidenceChannelDriverSchema.optional(),
     surfaceId: nonEmptyStringSchema.optional(),
     runner: nonEmptyStringSchema,
     packageSource: qaEvidencePackageSourceSchema,
@@ -99,7 +113,7 @@ export const qaEvidenceSummarySchema = z
   })
   .strict();
 
-export type QaEvidenceTier = z.infer<typeof qaEvidenceTierSchema>;
+export type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileSchema>;
 export type QaEvidenceStatus = z.infer<typeof qaEvidenceStatusSchema>;
 export type QaEvidenceSummaryEntry = z.infer<typeof qaEvidenceSummaryEntrySchema>;
 export type QaEvidenceSummaryJson = z.infer<typeof qaEvidenceSummarySchema>;
@@ -140,8 +154,9 @@ type QaEvidenceBuildBase = {
   generatedAt: string;
   primaryModel: string;
   providerMode: QaProviderMode;
+  channelDriver?: string;
+  profile?: QaEvidenceProfile;
   runner?: string;
-  tier?: QaEvidenceTier;
 };
 
 function uniqueSortedStrings(values: readonly (string | undefined)[]) {
@@ -150,28 +165,36 @@ function uniqueSortedStrings(values: readonly (string | undefined)[]) {
   );
 }
 
-function normalizeQaEvidenceTier(value: string | undefined): QaEvidenceTier | undefined {
+function normalizeQaEvidenceProfile(value: string | undefined): QaEvidenceProfile | undefined {
   const normalized = value?.trim();
-  return qaEvidenceTierSchema.safeParse(normalized).success
-    ? (normalized as QaEvidenceTier)
+  return qaEvidenceProfileSchema.safeParse(normalized).success
+    ? (normalized as QaEvidenceProfile)
     : undefined;
 }
 
-function resolveQaEvidenceTier(params: {
+function resolveQaEvidenceProfile(params: {
   env?: NodeJS.ProcessEnv;
-  fallback: QaEvidenceTier;
-  explicit?: QaEvidenceTier;
+  fallback: QaEvidenceProfile;
+  explicit?: QaEvidenceProfile;
 }) {
   return (
     params.explicit ??
-    normalizeQaEvidenceTier(params.env?.OPENCLAW_E2E_TIER) ??
-    normalizeQaEvidenceTier(params.env?.OPENCLAW_QA_TIER) ??
+    normalizeQaEvidenceProfile(params.env?.OPENCLAW_E2E_PROFILE) ??
+    normalizeQaEvidenceProfile(params.env?.OPENCLAW_QA_PROFILE) ??
     params.fallback
   );
 }
 
 function resolveQaEvidenceRunner(params: { env?: NodeJS.ProcessEnv; fallback?: string }) {
   return params.env?.OPENCLAW_QA_RUNNER?.trim() || params.fallback || "host";
+}
+
+function resolveQaEvidenceChannelDriver(params: { env?: NodeJS.ProcessEnv; fallback?: string }) {
+  const id =
+    params.fallback?.trim() ||
+    params.env?.OPENCLAW_QA_CHANNEL_DRIVER?.trim() ||
+    params.env?.OPENCLAW_E2E_CHANNEL_DRIVER?.trim();
+  return id ? { id } : undefined;
 }
 
 function resolveQaEvidenceEnvironment(env: NodeJS.ProcessEnv | undefined) {
@@ -275,10 +298,14 @@ export function buildQaSuiteEvidenceSummary(
   const environment = resolveQaEvidenceEnvironment(params.env);
   const packageSource = resolveQaEvidencePackageSource(params.env);
   const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
-  const tier = resolveQaEvidenceTier({
+  const profile = resolveQaEvidenceProfile({
     env: params.env,
-    fallback: provider.live ? "release" : "core",
-    explicit: params.tier,
+    fallback: provider.live ? "release" : "smoke-ci",
+    explicit: params.profile,
+  });
+  const channelDriver = resolveQaEvidenceChannelDriver({
+    env: params.env,
+    fallback: params.channelDriver,
   });
   const entries = params.scenarios.map((result, index): QaEvidenceSummaryEntry => {
     const scenario = params.catalogScenarios[index];
@@ -300,12 +327,13 @@ export function buildQaSuiteEvidenceSummary(
         surfaceIds,
         categoryIds: uniqueSortedStrings([scenario?.category, ...primaryCoverageIds]),
       },
-      tier,
+      profile,
       provider,
       channel: {
         id: params.channelId,
         live: false,
       },
+      ...(channelDriver ? { channelDriver } : {}),
       surfaceId: surfaceIds[0],
       runner,
       packageSource,
@@ -334,10 +362,14 @@ export function buildLiveTransportEvidenceSummary(
   const environment = resolveQaEvidenceEnvironment(params.env);
   const packageSource = resolveQaEvidencePackageSource(params.env);
   const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
-  const tier = resolveQaEvidenceTier({
+  const profile = resolveQaEvidenceProfile({
     env: params.env,
     fallback: "release",
-    explicit: params.tier,
+    explicit: params.profile,
+  });
+  const channelDriver = resolveQaEvidenceChannelDriver({
+    env: params.env,
+    fallback: params.channelDriver ?? "native",
   });
   const definitionsById = new Map(
     params.scenarioDefinitions.map((definition) => [definition.id, definition]),
@@ -356,12 +388,13 @@ export function buildLiveTransportEvidenceSummary(
         surfaceIds: [`channels.${params.transportId}`],
         categoryIds: [`channels.${params.transportId}.live`],
       },
-      tier,
+      profile,
       provider,
       channel: {
         id: params.transportId,
         live: true,
       },
+      channelDriver,
       runner,
       packageSource,
       environment,
