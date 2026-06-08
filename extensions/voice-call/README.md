@@ -107,7 +107,8 @@ Supports **inbound and outbound** calls:
 
 Capabilities:
 
-- **Vision** — the agent can "see" the caller's camera / shared screen: `look_at_screen` (realtime) and automatic frame attachment (streaming), recording-gated. In meetings each frame is attributed to the participant it came from.
+- **Vision** — the agent can "see" the caller's camera / shared screen: `look_at_screen` (realtime), automatic frame attachment (streaming), and a realtime ambient frame push so the model is continuously visually aware. Recording-gated; in meetings each frame is attributed to the participant it came from. The per-call spend cap `msteams.maxVisionPerMinute` (default 30, 0 = unlimited) bounds all three across the minute.
+- **Expression cues** — the assistant's reply is mapped to a coarse emotion (`neutral`/`happy`/`sad`/`surprised`) and sent to the avatar worker so the rendered face smiles/frowns/reacts. Cheap lexical inference, best-effort, on both streaming (before TTS) and realtime (on the assistant transcript, cued early and self-correcting).
 - **Group/meeting gate** — in a group call (2+ humans) the assistant stays silent until addressed by name (`msteams.groupCall.wakePhrases`), mirroring the chat @mention gate; 1:1 calls respond to everything. Deterministic on streaming; instruction-based on realtime.
 
 Two modes:

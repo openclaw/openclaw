@@ -150,8 +150,10 @@ const MsteamsConfigSchema = z
       .strict()
       .default({ requireAddress: true, wakePhrases: ["assistant"], followUpWindowMs: 12_000 }),
     /**
-     * CVI vision spend cap: max vision-model calls per minute per call (the `look_at_screen` tool and
-     * the streaming per-turn frame attach). Bounds the cost of continuous perception. 0 = unlimited.
+     * CVI vision spend cap: max vision-model / frame consumptions per minute per call. Bounds the cost
+     * of continuous perception across all three consumers — the `look_at_screen` tool (realtime), the
+     * streaming per-turn frame attach, and the realtime ambient frame push (`sendImage`, ~every 6s on a
+     * changed frame). 0 = unlimited.
      */
     maxVisionPerMinute: z.number().int().nonnegative().default(30),
   })
