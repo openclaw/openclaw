@@ -895,7 +895,7 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("serves bootstrap config at the base-path-relative endpoint when mounted under /__openclaw__ (#66946)", async () => {
+  it("serves bootstrap config under the configured /__openclaw__ basePath (#66946)", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
@@ -923,6 +923,55 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  // Real reported scenario: the gateway has NO configured `gateway.controlUi.basePath`,
+  // so the SPA is served at the default `/__openclaw__/` namespace. The browser opens
+  // the default entry, `inferBasePathFromPathname("/__openclaw__/")` yields `/__openclaw__`,
+  // and the loader fetches `/__openclaw__/control-ui-config.json`. Before this fix the
+  // gateway only matched the bare `/control-ui-config.json` for an empty base path, so the
+  // default-entry request 404ed (issue #66946). This case fails without the namespace alias.
+  it("serves bootstrap config at the default /__openclaw__ entry with no configured basePath (#66946)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          {
+            url: "/__openclaw__/control-ui-config.json",
+            method: "GET",
+          } as IncomingMessage,
+          res,
+          {
+            // No basePath: simulates the default deployment from the issue report.
+            root: { kind: "resolved", path: tmp },
+            config: {
+              agents: { defaults: { workspace: tmp } },
+              ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+            },
+          },
+        );
+        expect(handled).toBe(true);
+        expect(res.statusCode).not.toBe(404);
+        const parsed = parseBootstrapPayload(end);
+        // Configured base path is empty, so the payload reports "" (the loader keeps
+        // its own inferred base path; it does not read this field back for the fetch).
+        expect(parsed.basePath).toBe("");
+        expect(parsed.assistantAgentId).toBe("main");
+      },
+    });
+  });
+
+  it("still serves bootstrap config at the bare /control-ui-config.json for compatibility (#66946)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, handled, end } = await runBootstrapConfigRequest({ rootPath: tmp });
+        expect(handled).toBe(true);
+        expect(res.statusCode).not.toBe(404);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.basePath).toBe("");
+        expect(parsed.assistantAgentId).toBe("main");
+      },
+    });
+  });
+
   it("does not serve bootstrap config from the doubled /__openclaw__/__openclaw path (#66946)", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -930,7 +979,6 @@ describe("handleControlUiHttpRequest", () => {
           url: "/__openclaw__/__openclaw/control-ui-config.json",
           method: "GET",
           rootPath: tmp,
-          basePath: "/__openclaw__",
         });
         expectNotFoundResponse({ handled, res, end });
       },

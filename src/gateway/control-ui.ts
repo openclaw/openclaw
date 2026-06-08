@@ -835,6 +835,37 @@ function isSafeRelativePath(relPath: string) {
   return true;
 }
 
+// Path served by the gateway under the default Control UI namespace when no
+// `gateway.controlUi.basePath` is configured. The SPA is mounted at
+// `/__openclaw__/`, so a browser that opens the default entry infers
+// `/__openclaw__` as its base path (see `inferBasePathFromPathname`) and fetches
+// `/__openclaw__/control-ui-config.json`. Accept that namespaced alias so the
+// default entry resolves its bootstrap config instead of 404ing.
+const CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH = `${CONTROL_UI_NAMESPACE_PREFIX.replace(
+  /\/$/,
+  "",
+)}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
+
+/**
+ * Whether `pathname` should be served the Control UI bootstrap config payload.
+ *
+ * The canonical endpoint is the configured base path joined with the shared
+ * bootstrap constant (or the bare constant when no base path is configured).
+ * When no base path is configured we additionally accept the default-namespace
+ * alias `/__openclaw__/control-ui-config.json`, which is what the default
+ * `/__openclaw__/` entry requests after inferring its base path from the URL.
+ * The bare endpoint is preserved for compatibility; no path is removed.
+ */
+function matchesControlUiBootstrapConfigPath(pathname: string, basePath: string): boolean {
+  if (basePath) {
+    return pathname === `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
+  }
+  return (
+    pathname === CONTROL_UI_BOOTSTRAP_CONFIG_PATH ||
+    pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH
+  );
+}
+
 export async function handleControlUiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -871,10 +902,7 @@ export async function handleControlUiHttpRequest(
 
   applyControlUiSecurityHeaders(res);
 
-  const bootstrapConfigPath = basePath
-    ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
-    : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
-  if (pathname === bootstrapConfigPath) {
+  if (matchesControlUiBootstrapConfigPath(pathname, basePath)) {
     if (
       !(await authorizeControlUiReadRequest(req, res, {
         auth: opts?.auth,
