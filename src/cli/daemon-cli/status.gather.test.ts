@@ -790,7 +790,7 @@ describe("gatherDaemonStatus", () => {
       },
     };
 
-    await gatherDaemonStatus({
+    const status = await gatherDaemonStatus({
       rpc: {},
       probe: true,
       deep: false,
@@ -798,9 +798,17 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
-    const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
+    const probeInput = callArg(callGatewayStatusProbe) as {
+      token?: string;
+      password?: string;
+      allowRpcConfigCredentials?: boolean;
+    };
     expect(probeInput.token).toBeUndefined();
     expect(probeInput.password).toBeUndefined();
+    expect(probeInput.allowRpcConfigCredentials).toBe(false);
+    expect(status.rpc?.authWarning).toContain(
+      "gateway credentials use an exec SecretRef and exec SecretRefs are disabled",
+    );
   });
 
   it("ignores remote exec SecretRefs for local probes when exec refs are disabled", async () => {

@@ -627,6 +627,8 @@ export async function gatherDaemonStatus(
     : undefined;
   let daemonProbeAuth: { token?: string; password?: string } | undefined;
   let rpcAuthWarning: string | undefined;
+  let allowRpcConfigCredentials = true;
+  let skippedProbeAuthForDisabledExecSecretRef = false;
   if (opts.probe) {
     const probeMode = daemonCfg.gateway?.mode === "remote" ? "remote" : "local";
     const explicitAuth = {
@@ -654,6 +656,8 @@ export async function gatherDaemonStatus(
       daemonProbeAuth = probeAuthResolution.auth;
       rpcAuthWarning = probeAuthResolution.warning;
     } else {
+      allowRpcConfigCredentials = false;
+      skippedProbeAuthForDisabledExecSecretRef = true;
       rpcAuthWarning =
         "Gateway probe auth skipped because gateway credentials use an exec SecretRef and exec SecretRefs are disabled for this status request.";
     }
@@ -674,11 +678,12 @@ export async function gatherDaemonStatus(
           timeoutMs,
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,
+          allowRpcConfigCredentials,
           configPath: daemonConfigSummary.path,
         }),
       )
     : undefined;
-  if (rpc?.ok) {
+  if (rpc?.ok && !skippedProbeAuthForDisabledExecSecretRef) {
     rpcAuthWarning = undefined;
   }
   const health =
