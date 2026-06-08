@@ -153,6 +153,12 @@ function expectListIncludes(
   }
 }
 
+function cronCreatorToolNames(
+  list: OpenClawToolsOptions["cronCreatorToolAllowlist"] | undefined,
+): string[] | undefined {
+  return list?.map((entry) => (typeof entry === "string" ? entry : entry.name));
+}
+
 describe("createOpenClawCodingTools", () => {
   const testConfig: OpenClawConfig = {};
 
@@ -730,9 +736,10 @@ describe("createOpenClawCodingTools", () => {
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
-    expectListIncludes(cronAllow, ["read", "cron"]);
-    expect(cronAllow?.includes("exec")).toBe(false);
-    expect(cronAllow?.includes("process")).toBe(false);
+    const cronAllowNames = cronCreatorToolNames(cronAllow);
+    expectListIncludes(cronAllowNames, ["read", "cron"]);
+    expect(cronAllowNames?.includes("exec")).toBe(false);
+    expect(cronAllowNames?.includes("process")).toBe(false);
   });
 
   it("passes deny-restricted tool surface to cron-created agent turns", () => {
@@ -757,9 +764,10 @@ describe("createOpenClawCodingTools", () => {
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
-    expectListIncludes(cronAllow, ["read", "cron"]);
-    expect(cronAllow?.includes("exec")).toBe(false);
-    expect(cronAllow?.includes("process")).toBe(false);
+    const cronAllowNames = cronCreatorToolNames(cronAllow);
+    expectListIncludes(cronAllowNames, ["read", "cron"]);
+    expect(cronAllowNames?.includes("exec")).toBe(false);
+    expect(cronAllowNames?.includes("process")).toBe(false);
   });
 
   it("records core tool-prep stages for hot-path diagnostics", () => {

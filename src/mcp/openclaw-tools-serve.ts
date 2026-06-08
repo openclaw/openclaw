@@ -12,7 +12,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
 export function resolveOpenClawToolsForMcp(): AnyAgentTool[] {
-  return [createCronTool({ creatorToolAllowlist: ["cron"] })];
+  return [createCronTool({ creatorToolAllowlist: [{ name: "cron" }] })];
 }
 
 function createOpenClawToolsMcpServer(
