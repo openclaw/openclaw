@@ -1912,10 +1912,9 @@ export abstract class MemoryManagerSyncOps {
       await flushPendingIndexItems();
       await deleteStaleRows();
       return this.emptySourceSyncPlan();
-    } else {
-      if ((params.prefixIndexItems?.length ?? 0) > 0) {
-        throw new Error("Memory session sync prefix requires deferred source-wide indexing.");
-      }
+    }
+    if ((params.prefixIndexItems?.length ?? 0) > 0) {
+      throw new Error("Memory session sync prefix requires deferred source-wide indexing.");
     }
 
     const tasks = files.map((absPath) => async () => {
