@@ -253,7 +253,7 @@ function isChatResetCommand(text: string) {
   if (normalized === "/new" || normalized === "/reset") {
     return true;
   }
-  if (normalized.startsWith("/reset soft")) {
+  if (normalized.match(/^\/reset soft(?:\s|$)/)) {
     return false;
   }
   return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
