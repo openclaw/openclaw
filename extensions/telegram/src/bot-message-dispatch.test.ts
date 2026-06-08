@@ -2290,7 +2290,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         );
         await dispatcherOptions.deliver(
           setReplyPayloadMetadata({ text: "Repeated block." }, { assistantMessageIndex: 1 }),
-          { kind: "block", assistantMessageIndex: 1 } as { kind: "block" },
+          { kind: "block", assistantMessageIndex: 1 },
         );
         return { queuedFinal: true };
       },
@@ -2740,7 +2740,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
             { mediaUrls: ["https://example.test/site-a.png"] },
             { assistantMessageIndex: 0 },
           ),
-          { kind: "block", assistantMessageIndex: 0 } as { kind: "block" },
+          { kind: "block", assistantMessageIndex: 0 },
         );
         await replyOptions?.onPartialReply?.({ text: "Site B partial" });
         return { queuedFinal: true };

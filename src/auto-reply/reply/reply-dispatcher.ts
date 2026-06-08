@@ -14,6 +14,7 @@ import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normaliz
 import type {
   ReplyDispatchBeforeDeliver,
   ReplyDispatchKind,
+  ReplyDispatchRuntimeInfo,
   ReplyDispatcher,
 } from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
@@ -23,22 +24,22 @@ export type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.type
 
 type ReplyDispatchErrorHandler = (
   err: unknown,
-  info: { kind: ReplyDispatchKind },
+  info: ReplyDispatchRuntimeInfo,
 ) => Promise<void> | void;
 
 type ReplyDispatchSkipHandler = (
   payload: ReplyPayload,
-  info: { kind: ReplyDispatchKind; reason: NormalizeReplySkipReason },
+  info: ReplyDispatchRuntimeInfo & { reason: NormalizeReplySkipReason },
 ) => void;
 
 type ReplyDispatchCancelHandler = (
   payload: ReplyPayload,
-  info: { kind: ReplyDispatchKind },
+  info: ReplyDispatchRuntimeInfo,
 ) => Promise<void> | void;
 
 type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
-  info: { kind: ReplyDispatchKind },
+  info: ReplyDispatchRuntimeInfo,
 ) => Promise<unknown>;
 
 export type { ReplyDispatchBeforeDeliver };
@@ -46,8 +47,6 @@ export type { ReplyDispatchBeforeDeliver };
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
 const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
-
-type ReplyDispatchRuntimeInfo = { kind: ReplyDispatchKind; assistantMessageIndex?: number };
 
 function buildReplyDispatchRuntimeInfo(
   payload: ReplyPayload,

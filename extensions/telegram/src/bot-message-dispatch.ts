@@ -1266,10 +1266,7 @@ export const dispatchTelegramMessage = async ({
     recomputeQueuedAnswerBlockRotations();
     return shouldRotateBeforeDelivery;
   };
-  const dropQueuedAnswerBlockRotation = (
-    payload: ReplyPayload,
-    assistantMessageIndex?: number,
-  ) => {
+  const dropQueuedAnswerBlockRotation = (payload: ReplyPayload, assistantMessageIndex?: number) => {
     let matchIndex = queuedAnswerBlockRotations.findIndex((entry) =>
       queuedAnswerBlockRotationMatchesDelivery(entry, payload, assistantMessageIndex),
     );
@@ -1292,10 +1289,6 @@ export const dispatchTelegramMessage = async ({
       }
       recomputeQueuedAnswerBlockRotations();
     }
-  };
-  const getReplyDispatchAssistantMessageIndex = (info: object): number | undefined => {
-    const value = (info as { assistantMessageIndex?: unknown }).assistantMessageIndex;
-    return typeof value === "number" ? value : undefined;
   };
   const updateDraftFromPartial = (lane: DraftLaneState, update: DraftPartialTextUpdate) => {
     const laneStream = lane.stream;
@@ -1763,10 +1756,7 @@ export const dispatchTelegramMessage = async ({
       if (!text?.trim()) {
         return false;
       }
-      // A block skipped by the duplicate-draft dedup was never rendered to its
-      // own draft update. Force the full delivery path (not the no-op finalize
-      // fast path) so the preserved intermediate block is materialized as a
-      // visible draft before the lane rotates for the next message.
+      // Skipped duplicate blocks must materialize before the next draft takes over.
       const wasSkippedDuplicate = skippedDuplicateAnswerBlockDraftDelivery;
       skippedDuplicateAnswerBlockDraftDelivery = false;
       const deliveredText = answerLane.stream.lastDeliveredText?.();
@@ -1901,10 +1891,7 @@ export const dispatchTelegramMessage = async ({
                   onBeforeDeliverCancelled: (payload, info) => {
                     if (info.kind === "block") {
                       return enqueueDraftLaneEvent(async () => {
-                        dropQueuedAnswerBlockRotation(
-                          payload,
-                          getReplyDispatchAssistantMessageIndex(info),
-                        );
+                        dropQueuedAnswerBlockRotation(payload, info.assistantMessageIndex);
                       });
                     }
                     return undefined;
@@ -2021,10 +2008,7 @@ export const dispatchTelegramMessage = async ({
                     let blockDelivered = false;
                     const hasAnswerSegment = segments.some((segment) => segment.lane === "answer");
                     if (info.kind === "block" && !hasAnswerSegment) {
-                      dropQueuedAnswerBlockRotation(
-                        effectivePayload,
-                        getReplyDispatchAssistantMessageIndex(info),
-                      );
+                      dropQueuedAnswerBlockRotation(effectivePayload, info.assistantMessageIndex);
                     }
                     for (const segment of segments) {
                       if (
@@ -2068,14 +2052,14 @@ export const dispatchTelegramMessage = async ({
                         await prepareAnswerLaneForToolProgress();
                       }
 
-                      const ownedByQueuedAnswerBlockRotation =
-                        queuedAnswerBlockRotations.some((entry) =>
+                      const ownedByQueuedAnswerBlockRotation = queuedAnswerBlockRotations.some(
+                        (entry) =>
                           queuedAnswerBlockRotationMatchesDelivery(
                             entry,
                             effectivePayload,
-                            getReplyDispatchAssistantMessageIndex(info),
+                            info.assistantMessageIndex,
                           ),
-                        );
+                      );
 
                       const skipTextOnlyBlock =
                         streamMode === "partial" &&
@@ -2090,13 +2074,7 @@ export const dispatchTelegramMessage = async ({
                         segment.update.text.trimEnd() === answerLane.lastPartialText.trimEnd();
 
                       if (skipTextOnlyBlock) {
-                        // Defer the duplicate block: do not emit a redundant draft
-                        // update now. Record it so that if a later rotation (tool
-                        // progress / next assistant message) follows, the skipped
-                        // block is materialized first instead of being lost, and so
-                        // that the dispatch-end finalize can commit it when nothing
-                        // else follows. Re-enable progress-draft state so a
-                        // following tool-progress step can still rotate the lane.
+                        // Keep duplicate blocks available for later rotation/finalization.
                         skippedDuplicateAnswerBlockDraftDelivery = true;
                         lastAnswerBlockPayload = effectivePayload;
                         lastAnswerBlockText = segment.update.text;
@@ -2111,7 +2089,7 @@ export const dispatchTelegramMessage = async ({
                         const preparedAnswerLane = await prepareAnswerLaneForText();
                         const shouldRotateQueuedBlock = takeQueuedAnswerBlockRotation(
                           effectivePayload,
-                          getReplyDispatchAssistantMessageIndex(info),
+                          info.assistantMessageIndex,
                         );
                         if (shouldRotateQueuedBlock && !preparedAnswerLane) {
                           await rotateAnswerLaneForNewMessage();
@@ -2220,10 +2198,7 @@ export const dispatchTelegramMessage = async ({
                   onSkip: (payload, info) => {
                     if (info.kind === "block") {
                       void enqueueDraftLaneEvent(async () => {
-                        dropQueuedAnswerBlockRotation(
-                          payload,
-                          getReplyDispatchAssistantMessageIndex(info),
-                        );
+                        dropQueuedAnswerBlockRotation(payload, info.assistantMessageIndex);
                       });
                     }
                     if (payload.isError === true) {

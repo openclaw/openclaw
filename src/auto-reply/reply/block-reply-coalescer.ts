@@ -96,10 +96,7 @@ export function createBlockReplyCoalescer(params: {
       isFallbackNotice: bufferIsFallbackNotice,
       isStatusNotice: bufferIsStatusNotice,
     };
-    const metadataSource = bufferMetadataSource;
-    const payloadWithMetadata = metadataSource
-      ? copyReplyPayloadMetadata(metadataSource, payload)
-      : payload;
+    const payloadWithMetadata = copyReplyPayloadMetadata(bufferMetadataSource ?? payload, payload);
     resetBuffer();
     await onFlush(payloadWithMetadata);
   };
@@ -127,9 +124,10 @@ export function createBlockReplyCoalescer(params: {
       text: mergedText,
       replyToId: payload.replyToId ?? bufferReplyToId,
     };
-    const metadataMergedPayload = bufferMetadataSource
-      ? copyReplyPayloadMetadata(bufferMetadataSource, mergedPayload)
-      : mergedPayload;
+    const metadataMergedPayload = copyReplyPayloadMetadata(
+      bufferMetadataSource ?? mergedPayload,
+      mergedPayload,
+    );
     resetBuffer();
     return copyReplyPayloadMetadata(payload, metadataMergedPayload);
   };

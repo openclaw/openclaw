@@ -79,16 +79,14 @@ describe("beforeDeliver in reply dispatcher", () => {
       },
       onBeforeDeliverCancelled: (payload, info) => {
         cancelled.push({
-          assistantMessageIndex: (info as { assistantMessageIndex?: number })
-            .assistantMessageIndex,
+          assistantMessageIndex: info.assistantMessageIndex,
           kind: info.kind,
           text: payload.text ?? "",
         });
       },
       onError: (err, info) => {
         errors.push({
-          assistantMessageIndex: (info as { assistantMessageIndex?: number })
-            .assistantMessageIndex,
+          assistantMessageIndex: info.assistantMessageIndex,
           kind: info.kind,
           message: err instanceof Error ? err.message : String(err),
         });
@@ -105,9 +103,7 @@ describe("beforeDeliver in reply dispatcher", () => {
     await dispatcher.waitForIdle();
 
     expect(delivered).toEqual([]);
-    expect(cancelled).toEqual([
-      { assistantMessageIndex: 9, kind: "block", text: "blocked block" },
-    ]);
+    expect(cancelled).toEqual([{ assistantMessageIndex: 9, kind: "block", text: "blocked block" }]);
     expect(errors).toEqual([
       { assistantMessageIndex: 9, kind: "block", message: "pre-delivery failed" },
     ]);
@@ -145,9 +141,7 @@ describe("beforeDeliver in reply dispatcher", () => {
     const dispatcher = createReplyDispatcher({
       deliver: async (payload, info) => {
         deliveredMetadata = getReplyPayloadMetadata(payload);
-        deliveredAssistantMessageIndex = (
-          info as { assistantMessageIndex?: unknown }
-        ).assistantMessageIndex;
+        deliveredAssistantMessageIndex = info.assistantMessageIndex;
       },
       beforeDeliver: async () => ({ text: "rewritten" }),
     });
