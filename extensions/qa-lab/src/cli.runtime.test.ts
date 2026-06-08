@@ -541,6 +541,49 @@ describe("qa cli runtime", () => {
     });
   });
 
+  it("passes Crabline channel-driver selection into host suite runs", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      outputDir: ".artifacts/qa/multipass-telegram",
+      providerMode: "mock-openai",
+      channelDriver: "crabline",
+      channel: "telegram",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(runQaSuite).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/multipass-telegram"),
+      transportId: "qa-channel",
+      channelDriverSelection: {
+        capabilityMatrixPath: "crabline-channel-capability-matrix.json",
+        channel: "telegram",
+        channelDriver: "crabline",
+        channelDriverId: "telegram-local-v1",
+        channelLive: false,
+      },
+      providerMode: "mock-openai",
+      primaryModel: undefined,
+      alternateModel: undefined,
+      fastMode: undefined,
+      scenarioIds: ["channel-chat-baseline"],
+    });
+  });
+
+  it("keeps Crabline channel-driver independent from the VM runner", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        providerMode: "mock-openai",
+        channelDriver: "crabline",
+        channel: "telegram",
+        runner: "multipass",
+      }),
+    ).rejects.toThrow("--channel-driver crabline requires --runner host.");
+    expect(runQaSuite).not.toHaveBeenCalled();
+    expect(runQaMultipass).not.toHaveBeenCalled();
+  });
+
   it("passes explicit suite plugin enablements into the host gateway run", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",

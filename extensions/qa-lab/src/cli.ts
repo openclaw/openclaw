@@ -62,6 +62,8 @@ const QA_RUN_PROFILE_ONLY_OPTIONS = [
 const QA_RUN_SELF_CHECK_ONLY_OPTIONS = [{ optionName: "output", flag: "--output" }] as const;
 
 type QaSuiteCliOptions = QaScenarioRunCliOptions & {
+  channelDriver?: QaSuiteCommandOptions["channelDriver"];
+  channel?: QaSuiteCommandOptions["channel"];
   runner?: QaSuiteCommandOptions["runner"];
   thinking?: QaSuiteCommandOptions["thinking"];
   cliAuthMode?: QaSuiteCommandOptions["cliAuthMode"];
@@ -453,6 +455,8 @@ export function registerQaLabCli(program: Command) {
     .option("--output-dir <path>", "Suite artifact directory")
     .option("--runner <kind>", "Execution runner: host or multipass", "host")
     .option("--transport <id>", "QA transport id", "qa-channel")
+    .option("--channel-driver <id>", "Channel SDK driver id; currently crabline")
+    .option("--channel <id>", "Channel id for --channel-driver; currently telegram")
     .option("--provider-mode <mode>", formatQaProviderModeHelp())
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
@@ -504,6 +508,8 @@ export function registerQaLabCli(program: Command) {
         repoRoot: opts.repoRoot,
         outputDir: opts.outputDir,
         transportId: opts.transport,
+        channelDriver: opts.channelDriver,
+        channel: opts.channel,
         runner: opts.runner,
         providerMode: opts.providerMode,
         primaryModel: opts.model,

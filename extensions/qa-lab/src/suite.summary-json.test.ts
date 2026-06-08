@@ -34,7 +34,31 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.alternateModelName).toBe("gpt-5.5-alt");
     expect(json.run.fastMode).toBe(true);
     expect(json.run.concurrency).toBe(2);
+    expect(json.run.channelDriver).toBeNull();
+    expect(json.run.channel).toBeNull();
+    expect(json.run.channelLive).toBeNull();
+    expect(json.run.channelDriverId).toBeNull();
+    expect(json.run.channelCapabilityMatrixPath).toBeNull();
     expect(json.run.scenarioIds).toBeNull();
+  });
+
+  it("records Crabline channel-driver metadata when selected", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      channelDriverSelection: {
+        capabilityMatrixPath: "crabline-channel-capability-matrix.json",
+        channel: "telegram",
+        channelDriver: "crabline",
+        channelDriverId: "telegram-local-v1",
+        channelLive: false,
+      },
+    });
+
+    expect(json.run.channelDriver).toBe("crabline");
+    expect(json.run.channel).toBe("telegram");
+    expect(json.run.channelLive).toBe(false);
+    expect(json.run.channelDriverId).toBe("telegram-local-v1");
+    expect(json.run.channelCapabilityMatrixPath).toBe("crabline-channel-capability-matrix.json");
   });
 
   it("includes scenarioIds in run metadata when provided", () => {

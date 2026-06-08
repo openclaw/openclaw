@@ -27,6 +27,7 @@ import {
   renderQaCoverageMarkdownReport,
   renderQaScenarioMatchesMarkdownReport,
 } from "./coverage-report.js";
+import { resolveQaCrablineChannelDriverSelection } from "./crabline-channel-driver.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
@@ -134,6 +135,8 @@ export type QaProfileCommandOptions = QaScenarioRunCommandOptions & {
 };
 
 export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
+  channelDriver?: string;
+  channel?: string;
   runner?: string;
   thinking?: string;
   cliAuthMode?: string;
@@ -791,6 +794,10 @@ async function withTemporaryQaProfileEnv<T>(profile: string, run: () => Promise<
 export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
+  const channelDriverSelection = resolveQaCrablineChannelDriverSelection({
+    channel: opts.channel,
+    channelDriver: opts.channelDriver,
+  });
   const runner = (opts.runner ?? "host").trim().toLowerCase();
   const explicitScenarioIds = resolveQaScenarioPackScenarioIds({
     pack: opts.pack,
@@ -815,6 +822,9 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   }
   if (opts.preflight === true && runner !== "host") {
     throw new Error("--preflight requires --runner host.");
+  }
+  if (channelDriverSelection && runner !== "host") {
+    throw new Error("--channel-driver crabline requires --runner host.");
   }
   if (
     runner === "host" &&
@@ -884,6 +894,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
       evidenceMode: opts.evidenceMode,
       transportId,
+      ...(channelDriverSelection ? { channelDriverSelection } : {}),
       ...(opts.providerMode !== undefined ? { providerMode } : {}),
       primaryModel,
       alternateModel,
