@@ -1144,6 +1144,7 @@ async function finalizeCronRun(params: {
     timeoutMs: prepared.timeoutMs,
     resolvedDelivery: prepared.resolvedDelivery,
     deliveryRequested: prepared.deliveryRequested,
+    deliveryTargetExplicit: hasExplicitCronDeliveryTarget(prepared.deliveryPlan),
     skipHeartbeatDelivery,
     sourceDeliveryOutcome,
     deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
