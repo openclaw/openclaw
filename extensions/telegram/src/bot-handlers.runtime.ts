@@ -61,7 +61,6 @@ import {
 } from "./bot-handlers.debounce-key.js";
 import {
   hasInboundMedia,
-  hasReplyTargetMedia,
   isMediaSizeLimitError,
   isRecoverableMediaGroupError,
   resolveInboundMediaFileId,
@@ -103,7 +102,7 @@ import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
-import { enforceTelegramDmAccess } from "./dm-access.js";
+import { enforceTelegramDmAccess, isTelegramDmAccessAllowed } from "./dm-access.js";
 import { resolveTelegramExecApproval } from "./exec-approval-resolver.js";
 import {
   isTelegramExecApprovalApprover,
@@ -2766,6 +2765,47 @@ export const registerTelegramHandlers = ({
       messageThreadId: normalizedMsg.message_thread_id,
     });
     const dmThreadId = !isGroup ? normalizedMsg.message_thread_id : undefined;
+    if (!isGroup) {
+      const senderId = normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "";
+      const eventAuthContext = await resolveTelegramEventAuthorizationContext({
+        chatId: normalizedMsg.chat.id,
+        isGroup,
+        isForum,
+        senderId,
+        messageThreadId: normalizedMsg.message_thread_id,
+      });
+      const { dmPolicy, storeAllowFrom, groupConfig, groupAllowOverride } = eventAuthContext;
+      const requireTopic =
+        groupConfig && "requireTopic" in groupConfig ? groupConfig.requireTopic : undefined;
+      if (requireTopic === true && dmThreadId == null) {
+        logVerbose(
+          `Blocked telegram DM ${normalizedMsg.chat.id}: requireTopic=true but no topic present`,
+        );
+        return;
+      }
+      const dmAllowFrom = groupAllowOverride ?? allowFrom;
+      const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+        cfg,
+        allowFrom: dmAllowFrom,
+        accountId,
+        senderId,
+      });
+      const effectiveDmAllow = normalizeDmAllowFromWithStore({
+        allowFrom: expandedDmAllowFrom,
+        storeAllowFrom,
+        dmPolicy,
+      });
+      const dmAuthorized = await isTelegramDmAccessAllowed({
+        dmPolicy,
+        msg: normalizedMsg,
+        chatId: normalizedMsg.chat.id,
+        effectiveDmAllow,
+        accountId,
+      });
+      if (!dmAuthorized) {
+        return;
+      }
+    }
     await recordMessageForReplyChain(normalizedMsg, resolvedThreadId ?? dmThreadId);
   };
 
@@ -2829,7 +2869,16 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      if (!event.isGroup && (hasInboundMedia(event.msg) || hasReplyTargetMedia(event.msg))) {
+      const requireTopic =
+        !event.isGroup && groupConfig && "requireTopic" in groupConfig
+          ? groupConfig.requireTopic
+          : undefined;
+      if (!event.isGroup && requireTopic === true && dmThreadId == null) {
+        logVerbose(`Blocked telegram DM ${event.chatId}: requireTopic=true but no topic present`);
+        return;
+      }
+
+      if (!event.isGroup) {
         const dmAuthorized = await enforceTelegramDmAccess({
           isGroup: event.isGroup,
           dmPolicy,
