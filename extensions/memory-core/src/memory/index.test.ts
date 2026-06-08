@@ -70,6 +70,8 @@ vi.mock("./embeddings.js", () => {
         };
       },
     ) => config?.models?.providers?.[providerId]?.api ?? providerId,
+    resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
+      providerId === "local" ? "local" : "remote",
     createEmbeddingProvider: async (options: {
       provider?: string;
       model?: string;
@@ -317,7 +319,7 @@ describe("memory index", () => {
         defaults: {
           workspace: workspaceDir,
           memorySearch: {
-            provider: params.provider ?? "openai",
+            ...(params.provider !== undefined ? { provider: params.provider } : {}),
             model: params.model ?? "mock-embed",
             fallback: params.fallback,
             outputDimensionality: params.outputDimensionality,
