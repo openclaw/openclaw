@@ -1713,6 +1713,7 @@ describe("doctor config flow", () => {
               enabled: true,
               paths: ["./tracked"],
             },
+            "null-hook": null,
           },
         },
       },
@@ -1723,6 +1724,7 @@ describe("doctor config flow", () => {
     expect(warning).toContain("unsupported loader keys handler, extraDirs will not load hook modules");
     expect(warning).toContain("hooks.internal.load.extraDirs for extra roots");
     expect(warning).not.toContain("hooks.internal.entries.valid-hook");
+    expect(warning).not.toContain("hooks.internal.entries.null-hook");
   });
 
   it("does not warn about sender-based group allowlist for googlechat", async () => {
