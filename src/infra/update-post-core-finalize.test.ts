@@ -78,7 +78,9 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
     expect(outcome).toEqual({ status: "ok", entrypoint: ENTRYPOINT });
     expect(spawnFinalize).toHaveBeenCalledTimes(1);
     const call = spawnFinalize.mock.calls[0][0];
-    // Reconcile runs through the designed finalizer; never restarts (RPC owns restart).
+    // Reconcile runs through the designed finalizer; never restarts (RPC owns
+    // restart). No `--channel` — the channel is passed as effective-only via env
+    // so the finalizer does not persist it.
     expect(call.argv).toEqual([
       expect.any(String),
       ENTRYPOINT,
@@ -87,11 +89,12 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
       "--json",
       "--yes",
       "--no-restart",
-      "--channel",
-      "stable",
       "--timeout",
       "120",
     ]);
+    expect(call.argv).not.toContain("--channel");
+    // Configured channel is carried as the effective convergence channel via env.
+    expect(call.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL).toBe("stable");
     // Host-compat resolution is pinned to the just-installed core version.
     expect(call.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.6.1");
     // Outer whole-process timeout is decoupled from the per-step --timeout (120s):
@@ -119,7 +122,7 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
     expect(env.OPENCLAW_GATEWAY_SERVICE_PID).toBeUndefined();
   });
 
-  it("omits --channel (no config mutation) and --timeout when not provided", async () => {
+  it("carries effective git/dev channel via env without --channel for a no-config update", async () => {
     const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({ code: 0 }));
     await runPostCoreFinalizeAfterGatewayUpdate({
       result: gitOkResult(),
@@ -127,8 +130,10 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
       spawnFinalize,
     });
     const call = spawnFinalize.mock.calls[0][0];
-    // No `--channel` unless the caller has a configured channel: `update finalize`
-    // persists any `--channel`, so a defaulted one would mutate openclaw.json.
+    // No configured channel → effective channel defaults to the git/dev channel
+    // the core update ran on, carried via env (convergence-only, not persisted),
+    // never as `--channel` (which `update finalize` would persist to openclaw.json).
+    expect(call.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL).toBe("dev");
     expect(call.argv).not.toContain("--channel");
     expect(call.argv).not.toContain("--timeout");
     // No per-step timeout requested → outer backstop is the floor.

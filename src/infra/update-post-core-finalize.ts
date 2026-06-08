@@ -21,7 +21,11 @@ import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
-import type { UpdateChannel } from "./update-channels.js";
+import {
+  DEFAULT_GIT_CHANNEL,
+  type UpdateChannel,
+  UPDATE_EFFECTIVE_CHANNEL_ENV,
+} from "./update-channels.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
 // Whole-process backstop for the finalizer. `update finalize` runs several timed
@@ -36,14 +40,20 @@ const FINALIZE_PROCESS_STEP_BUDGET_MULTIPLIER = 6;
 
 // Strip the running gateway's service identity from the finalizer child so it is
 // not mistaken for the managed service process (matches the CLI post-core spawn).
+// Also carry the effective update channel so convergence runs on the channel the
+// core update actually used (git/dev for an unconfigured source update) — passed
+// as the *effective* channel, never a *requested* one, so `update finalize` does
+// not persist `update.channel`.
 function buildFinalizeEnv(
   baseEnv: NodeJS.ProcessEnv,
+  effectiveChannel: UpdateChannel,
   compatHostVersion?: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv };
   delete env.OPENCLAW_SERVICE_MARKER;
   delete env.OPENCLAW_SERVICE_KIND;
   delete env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
+  env[UPDATE_EFFECTIVE_CHANNEL_ENV] = effectiveChannel;
   if (compatHostVersion) {
     env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatHostVersion;
   }
@@ -113,9 +123,10 @@ function isGitUpdateNeedingFinalize(
 function buildFinalizeArgv(params: {
   nodePath: string;
   entrypoint: string;
-  channel?: UpdateChannel;
   timeoutMs?: number;
 }): string[] {
+  // No `--channel`: the effective channel is passed via env (convergence-only,
+  // not persisted). `update finalize` would persist any `--channel` it sees.
   const argv = [
     params.nodePath,
     params.entrypoint,
@@ -125,9 +136,6 @@ function buildFinalizeArgv(params: {
     "--yes",
     "--no-restart",
   ];
-  if (params.channel) {
-    argv.push("--channel", params.channel);
-  }
   if (typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
     // `update finalize --timeout` is per-step seconds.
     argv.push("--timeout", String(Math.max(1, Math.ceil(params.timeoutMs / 1000))));
@@ -158,23 +166,23 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
       ? params.timeoutMs
       : undefined;
-  // Only forward `--channel` when the caller actually has a configured channel.
-  // `update finalize` treats any `--channel` as an explicit request and persists
-  // it to `openclaw.json` (`persistRequestedUpdateChannel`); emitting a defaulted
-  // channel here would write a channel the user never requested. When omitted,
-  // the finalizer converges on the stored/default channel — the reconcile still
-  // resolves a host-compatible version, it just does not mutate config.
+  // This helper only runs for git/source updates, where `runGatewayUpdate` ran
+  // the core update on `configChannel ?? DEFAULT_GIT_CHANNEL` (dev). Carry that
+  // same effective channel into the finalizer so plugin convergence matches the
+  // core update instead of falling back to the package (stable) channel. It is
+  // passed via env as the *effective* (not requested) channel, so the finalizer
+  // does not persist `update.channel` when the user never configured one.
+  const effectiveChannel: UpdateChannel = params.channel ?? DEFAULT_GIT_CHANNEL;
   const nodePath = await resolveStableNodePath(process.execPath);
   const argv = buildFinalizeArgv({
     nodePath,
     entrypoint,
-    ...(params.channel ? { channel: params.channel } : {}),
     ...(perStepTimeoutMs === undefined ? {} : { timeoutMs: perStepTimeoutMs }),
   });
   // Pin the finalizer's host-compat resolution to the just-installed core
   // version so plugins reconcile against the new core, not the running process.
   const compatHostVersion = result.after?.version ?? undefined;
-  const env = buildFinalizeEnv(params.env ?? process.env, compatHostVersion);
+  const env = buildFinalizeEnv(params.env ?? process.env, effectiveChannel, compatHostVersion);
   // Outer whole-process backstop, decoupled from the per-step `--timeout` above.
   const processTimeoutMs = Math.max(
     FINALIZE_PROCESS_TIMEOUT_FLOOR_MS,
