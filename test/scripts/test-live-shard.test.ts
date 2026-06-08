@@ -251,6 +251,140 @@ describe("scripts/test-live-shard", () => {
     });
   });
 
+  it("requires each selected live shard file to have a passing assertion", () => {
+    const payload = {
+      numPassedTests: 1,
+      numTotalTests: 2,
+      testResults: [
+        {
+          name: path.join(process.cwd(), "src/gateway/gateway-acp-bind.live.test.ts"),
+          assertionResults: [{ status: "passed" }],
+        },
+        {
+          name: path.join(process.cwd(), "src/agents/openai-reasoning-compat.live.test.ts"),
+          assertionResults: [{ status: "skipped" }],
+        },
+      ],
+    };
+
+    expect(
+      validateLiveShardReportPayload(payload, [
+        "src/gateway/gateway-acp-bind.live.test.ts",
+        "src/agents/openai-reasoning-compat.live.test.ts",
+      ]),
+    ).toEqual({
+      ok: false,
+      reason:
+        "Vitest report selected live test files had no passing assertions: src/agents/openai-reasoning-compat.live.test.ts",
+    });
+  });
+
+  it("allows explicitly opt-in live shard files to be skipped until their env is enabled", () => {
+    const payload = {
+      numPassedTests: 1,
+      numTotalTests: 2,
+      testResults: [
+        {
+          name: path.join(process.cwd(), "src/gateway/gateway-codex-harness.live.test.ts"),
+          assertionResults: [{ status: "passed" }],
+        },
+        {
+          name: path.join(process.cwd(), "src/gateway/gateway-cli-backend.live.test.ts"),
+          assertionResults: [{ status: "skipped" }],
+        },
+      ],
+    };
+    const expectedFiles = [
+      "src/gateway/gateway-codex-harness.live.test.ts",
+      "src/gateway/gateway-cli-backend.live.test.ts",
+    ];
+
+    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
+      ok: true,
+    });
+    expect(
+      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
+        OPENCLAW_LIVE_CLI_BACKEND: "1",
+      }),
+    ).toEqual({
+      ok: false,
+      reason:
+        "Vitest report selected live test files had no passing assertions: src/gateway/gateway-cli-backend.live.test.ts",
+    });
+  });
+
+  it("allows gateway core opt-in live files to be skipped until their env is enabled", () => {
+    const payload = {
+      numPassedTests: 1,
+      numTotalTests: 2,
+      testResults: [
+        {
+          name: path.join(process.cwd(), "src/gateway/gateway-codex-harness.live.test.ts"),
+          assertionResults: [{ status: "passed" }],
+        },
+        {
+          name: path.join(process.cwd(), "src/gateway/gateway-acp-spawn-defaults.live.test.ts"),
+          assertionResults: [{ status: "skipped" }],
+        },
+      ],
+    };
+    const expectedFiles = [
+      "src/gateway/gateway-codex-harness.live.test.ts",
+      "src/gateway/gateway-acp-spawn-defaults.live.test.ts",
+    ];
+
+    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
+      ok: true,
+    });
+    expect(
+      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
+        OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS: "1",
+      }),
+    ).toEqual({
+      ok: false,
+      reason:
+        "Vitest report selected live test files had no passing assertions: src/gateway/gateway-acp-spawn-defaults.live.test.ts",
+    });
+  });
+
+  it("does not count disabled opt-in sentinel assertions as live shard proof", () => {
+    const payload = {
+      numPassedTests: 1,
+      numTotalTests: 2,
+      testResults: [
+        {
+          name: path.join(process.cwd(), "src/gateway/gateway-codex-harness.live.test.ts"),
+          assertionResults: [
+            {
+              ancestorTitles: ["gateway live (Codex harness disabled)"],
+              status: "passed",
+              title: "is opt-in",
+            },
+          ],
+        },
+        {
+          name: path.join(process.cwd(), "src/gateway/gateway-cli-backend.live.test.ts"),
+          assertionResults: [{ status: "skipped" }],
+        },
+      ],
+    };
+
+    expect(
+      validateLiveShardReportPayload(
+        payload,
+        [
+          "src/gateway/gateway-codex-harness.live.test.ts",
+          "src/gateway/gateway-cli-backend.live.test.ts",
+        ],
+        process.cwd(),
+        {},
+      ),
+    ).toEqual({
+      ok: false,
+      reason: "Vitest report has no enabled selected live test files with passing assertions.",
+    });
+  });
+
   it("removes stale live shard reports before running a shard", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-shard-"));
     const reportPath = path.join(root, "stale.vitest.json");

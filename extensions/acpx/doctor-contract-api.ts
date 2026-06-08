@@ -47,7 +47,7 @@ async function readLegacyGatewayInstanceId(filePath: string): Promise<string | n
 async function readLegacyOpenProcessLeases(filePath: string): Promise<AcpxProcessLease[]> {
   try {
     const leaseFile = normalizeAcpxProcessLeaseFile(
-      JSON.parse(await fs.readFile(filePath, "utf8")) as unknown,
+      JSON.parse(await fs.readFile(filePath, "utf8")),
     );
     return leaseFile.leases.filter((lease) => lease.state === "open" || lease.state === "closing");
   } catch {
@@ -124,7 +124,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         .map((entry) => normalizeAcpxProcessLease(entry.value))
         .filter(
           (lease): lease is AcpxProcessLease =>
-            lease !== undefined && (lease.state === "open" || lease.state === "closing"),
+            lease != null && (lease.state === "open" || lease.state === "closing"),
         );
       const leaseGatewayIds = new Set(openLeases.map((lease) => lease.gatewayInstanceId));
       const onlyLeaseGatewayId = leaseGatewayIds.size === 1 ? [...leaseGatewayIds][0] : null;

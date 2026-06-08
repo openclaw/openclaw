@@ -633,6 +633,101 @@ describe("scripts/test-group-report child process guard", () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("streams large child output to a log path without retaining it", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-log-"));
+    const logPath = path.join(tempDir, "child.log");
+    try {
+      const result = await spawnText(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          [
+            "const chunk = Buffer.alloc(1024 * 1024, 120);",
+            "for (let index = 0; index < 65; index += 1) process.stdout.write(chunk);",
+            'process.stderr.write("Maximum resident set size (kbytes): 12345\\n");',
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          env: process.env,
+          killGraceMs: 50,
+          logPath,
+          outputTailBytes: 4096,
+          timeoutMs: 10_000,
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.output.length).toBeLessThan(8 * 1024);
+      expect(result.output).toContain("Maximum resident set size (kbytes): 12345");
+      expect(fs.statSync(logPath).size).toBeGreaterThan(64 * 1024 * 1024);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps no-log child output bounded to a tail", async () => {
+    const result = await spawnText(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        [
+          "const chunk = Buffer.alloc(1024 * 1024, 120);",
+          "for (let index = 0; index < 3; index += 1) process.stdout.write(chunk);",
+        ].join("\n"),
+      ],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        killGraceMs: 50,
+        maxBufferBytes: 1024 * 1024,
+        outputTailBytes: 4096,
+        timeoutMs: 10_000,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.output.length).toBeLessThan(8 * 1024);
+    expect(result.output).toContain("output exceeded 1048576 bytes");
+  });
+
+  it("stops streamed child output after the configured log cap", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-log-cap-"));
+    const logPath = path.join(tempDir, "child.log");
+    try {
+      const result = await spawnText(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          [
+            "process.on('SIGTERM', () => {});",
+            "const chunk = Buffer.alloc(1024 * 1024, 120);",
+            "setInterval(() => process.stdout.write(chunk), 1);",
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          env: process.env,
+          killGraceMs: 50,
+          logPath,
+          maxLogBytes: 1024 * 1024,
+          outputTailBytes: 4096,
+          timeoutMs: 10_000,
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.signal).toBe("SIGKILL");
+      expect(result.output).toContain("output log exceeded 1048576 bytes");
+      expect(fs.statSync(logPath).size).toBeLessThan(2 * 1024 * 1024);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("scripts/test-group-report run plans", () => {

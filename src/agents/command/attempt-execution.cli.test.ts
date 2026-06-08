@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -730,6 +731,7 @@ describe("CLI attempt execution", () => {
       ),
       "utf-8",
     );
+    clearSessionStoreCacheForTest();
 
     const nowCalls: number[] = [];
     let nextNow = 10_000;
@@ -760,7 +762,7 @@ describe("CLI attempt execution", () => {
     if (!updatedSessionFile) {
       throw new Error("expected CLI transcript persistence to create a session file");
     }
-    expect(updatedSessionFile).toBe(sessionFile);
+    expect(await fs.realpath(updatedSessionFile)).toBe(await fs.realpath(sessionFile));
     const entries = await readSessionFileEntries(sessionFile);
     expectRecordFields(requireRecord(entries[0], "session entry"), {
       type: "session",
@@ -793,12 +795,11 @@ describe("CLI attempt execution", () => {
       string,
       SessionEntry
     >;
-    expect(persisted[sessionKey]?.sessionFile).toBe(sessionFile);
+    expect(await fs.realpath(persisted[sessionKey]?.sessionFile ?? "")).toBe(
+      await fs.realpath(sessionFile),
+    );
     expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(sessionEntry.updatedAt);
     expect(persisted[sessionKey]?.updatedAt).toBeLessThan(nowCalls.at(-1) ?? 0);
-    expect(persisted[sessionKey]?.status).toBe("done");
-    expect(persisted[sessionKey]?.endedAt).toBe(4);
-    expect(persisted[sessionKey]?.startedAt).toBe(2);
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
   });
 

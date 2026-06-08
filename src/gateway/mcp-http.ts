@@ -19,7 +19,9 @@ import {
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
 import {
   isMcpHttpBodyTooLargeError,
+  isMcpHttpBodyTimeoutError,
   readMcpHttpBody,
+  resolveMcpHttpBodyTimeoutMs,
   resolveMcpRequestContext,
   validateMcpLoopbackRequest,
 } from "./mcp-http.request.js";
@@ -152,7 +154,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
     void (async () => {
       let parsed: JsonRpcRequest | JsonRpcRequest[] | undefined;
       try {
-        const body = await readMcpHttpBody(req);
+        const body = await readMcpHttpBody(req, { timeoutMs: resolveMcpHttpBodyTimeoutMs() });
         parsed = parseMcpJsonBody(body);
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
@@ -235,6 +237,11 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           if (isMcpHttpBodyTooLargeError(error)) {
             res.writeHead(413, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: "payload_too_large" }), () => {
+              req.destroy();
+            });
+          } else if (isMcpHttpBodyTimeoutError(error)) {
+            res.writeHead(408, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "request_body_timeout" }), () => {
               req.destroy();
             });
           } else if (isMcpJsonParseError(error)) {

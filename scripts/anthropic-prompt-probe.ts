@@ -67,6 +67,7 @@ const CAPTURE_PROXY_MAX_BODY_BYTES = parseStrictIntegerOption({
   min: 1,
   raw: process.env.OPENCLAW_PROMPT_CAPTURE_MAX_BODY_BYTES,
 });
+const GATEWAY_LOG_TAIL_BYTES = 256 * 1024;
 const SETUP_TOKEN_RAW = process.env.OPENCLAW_LIVE_SETUP_TOKEN?.trim() ?? "";
 const SETUP_TOKEN_VALUE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE?.trim() ?? "";
 const SETUP_TOKEN_PROFILE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE?.trim() ?? "";
@@ -626,9 +627,29 @@ async function waitForGatewayReady(url: string, token: string): Promise<void> {
   throw new Error(lastError);
 }
 
-async function readLogTail(logPath: string): Promise<string> {
-  const raw = await fs.readFile(logPath, "utf8").catch(() => "");
-  return redactForDevToolLog(raw.split(/\r?\n/).slice(-40).join("\n").trim());
+async function readLogTail(logPath: string, maxBytes = GATEWAY_LOG_TAIL_BYTES): Promise<string> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new Error("maxBytes must be a positive integer");
+  }
+  const logFile = await fs.open(logPath, "r").catch(() => undefined);
+  if (!logFile) {
+    return "";
+  }
+  try {
+    const stat = await logFile.stat();
+    if (stat.size <= 0) {
+      return "";
+    }
+    const length = Math.min(stat.size, maxBytes);
+    const position = Math.max(0, stat.size - length);
+    const buffer = Buffer.allocUnsafe(length);
+    const { bytesRead } = await logFile.read(buffer, 0, length, position);
+    const raw = buffer.subarray(0, bytesRead).toString("utf8");
+    const lineAlignedRaw = position > 0 ? raw.replace(/^[^\n]*(?:\r?\n|$)/u, "") : raw;
+    return redactForDevToolLog(lineAlignedRaw.split(/\r?\n/).slice(-40).join("\n").trim());
+  } finally {
+    await logFile.close();
+  }
 }
 
 async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
@@ -815,6 +836,7 @@ export const testing = {
   cleanupPromptProbeTmpDir,
   matchesExtraUsage400,
   promptProbeTmpResult,
+  readLogTail,
   readRequestBody,
   resolveAnthropicUpstreamUrl,
   stopGatewayPromptChild,

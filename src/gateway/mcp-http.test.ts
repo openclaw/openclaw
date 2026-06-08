@@ -185,6 +185,75 @@ async function sendChunkedOversizedBody(params: {
   });
 }
 
+async function sendStalledBody(params: {
+  port: number;
+  token: string;
+}): Promise<{ status: number | undefined; body: string; closed: boolean }> {
+  return await new Promise((resolve, reject) => {
+    let sawResponse = false;
+    let closed = false;
+    let settled = false;
+    const req = request(
+      {
+        hostname: "127.0.0.1",
+        port: params.port,
+        path: "/mcp",
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${params.token}`,
+          "content-type": "application/json",
+          "transfer-encoding": "chunked",
+        },
+      },
+      (res) => {
+        sawResponse = true;
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
+        res.on("end", () => {
+          const waitForClose = new Promise<void>((closeResolve) => {
+            if (closed) {
+              closeResolve();
+              return;
+            }
+            req.once("close", () => closeResolve());
+            setTimeout(closeResolve, 250).unref();
+          });
+          void waitForClose.then(() => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            clearTimeout(timeout);
+            resolve({ status: res.statusCode, body, closed });
+          });
+        });
+      },
+    );
+    const timeout = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      req.destroy();
+      reject(new Error("stalled body test timed out"));
+    }, 2_000);
+    req.on("close", () => {
+      closed = true;
+    });
+    req.on("error", (error) => {
+      if (!sawResponse && !settled) {
+        settled = true;
+        clearTimeout(timeout);
+        reject(error);
+      }
+    });
+    req.write("{");
+  });
+}
+
 async function startLoopbackServerForTest(port = 0) {
   server = await startMcpLoopbackServer(port);
   const runtime = getActiveMcpLoopbackRuntime();
@@ -974,6 +1043,35 @@ describe("mcp loopback server", () => {
       body: '{"error":"payload_too_large"}',
       closed: true,
     });
+  });
+
+  it("times out stalled request bodies and closes uploads after flushing 408", async () => {
+    const previousTimeout = process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS;
+    process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS = "20";
+    try {
+      server = await startMcpLoopbackServer(0);
+      const runtime = getActiveMcpLoopbackRuntime();
+      if (!runtime) {
+        throw new Error("expected active MCP loopback runtime");
+      }
+
+      const response = await sendStalledBody({
+        port: server.port,
+        token: runtime.ownerToken,
+      });
+
+      expect(response).toEqual({
+        status: 408,
+        body: '{"error":"request_body_timeout"}',
+        closed: true,
+      });
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS = previousTimeout;
+      }
+    }
   });
 
   it("rejects cross-origin browser requests before auth", async () => {
