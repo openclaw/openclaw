@@ -13,7 +13,7 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../types.ts";
-import { saveConfig } from "./config.ts";
+import { saveConfig, stageDefaultAgentConfigEntry } from "./config.ts";
 import type { ConfigState } from "./config.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -244,5 +244,17 @@ export async function saveAgentsConfig(state: AgentsConfigSaveState) {
   await loadAgents(state);
   if (selectedBefore && state.agentsList?.agents.some((entry) => entry.id === selectedBefore)) {
     state.agentsSelectedId = selectedBefore;
+  }
+}
+
+export async function setDefaultAgent(
+  state: AgentsConfigSaveState,
+  agentId: string,
+): Promise<void> {
+  // Set Default is a one-click action: stage the canonical agents.list[].default flag,
+  // then persist through the shared save path. Staging the form draft alone is silently
+  // dropped on refresh, so without the save the default never sticks (impact:data-loss).
+  if (stageDefaultAgentConfigEntry(state, agentId)) {
+    await saveAgentsConfig(state);
   }
 }
