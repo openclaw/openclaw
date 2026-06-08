@@ -429,6 +429,12 @@ async function flushTasks() {
   await vi.dynamicImportSettled();
 }
 
+async function waitForTimerTurn() {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 function getChatModelSelect(container: Element): HTMLElement {
   const select = container.querySelector<HTMLElement>('[data-chat-model-select="true"]');
   expect(select).toBeInstanceOf(HTMLElement);
@@ -3596,7 +3602,7 @@ describe("chat session controls", () => {
     input!.dispatchEvent(new Event("input", { bubbles: true }));
     input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await flushTasks();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForTimerTurn();
 
     expect(patchSessionMock).toHaveBeenCalledWith(state, "agent:main:work", {
       label: "Renamed work",
@@ -3645,7 +3651,7 @@ describe("chat session controls", () => {
     input!.dispatchEvent(new Event("input", { bubbles: true }));
     input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await flushTasks();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForTimerTurn();
 
     expect(state.chatSessionPickerError).toBe("sessions.patch failed");
     expect(state.chatSessionPickerRenameKey).toBe("agent:main:work");
@@ -3706,7 +3712,7 @@ describe("chat session controls", () => {
 
     finishPatch();
     await flushTasks();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForTimerTurn();
 
     expect(state.chatSessionPickerRenamePendingKey).toBeNull();
   });
@@ -3761,7 +3767,7 @@ describe("chat session controls", () => {
 
     failPatch();
     await flushTasks();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForTimerTurn();
 
     expect(state.chatSessionPickerOpen).toBe(false);
     expect(state.chatSessionPickerRenameKey).toBeNull();
@@ -3829,7 +3835,7 @@ describe("chat session controls", () => {
 
     failFirstPatch();
     await flushTasks();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForTimerTurn();
 
     expect(state.chatSessionPickerError).toBeNull();
     expect(state.chatSessionPickerRenameKey).toBe("agent:main:side");
