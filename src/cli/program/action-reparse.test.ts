@@ -124,4 +124,25 @@ describe("reparseProgramFromActionArgs", () => {
     });
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
   });
+
+  it("falls back to fallbackArgv when Commander rawArgs is missing from parent command", async () => {
+    // #83893: rawArgs is accessed via unsafe cast — if Commander removes it,
+    // the cast returns undefined and parseArgv must fall back cleanly.
+    const program = new Command().name("openclaw");
+    const parseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
+    const actionCommand = {
+      name: () => "config",
+      parent: {} as Command,
+    } as unknown as Command;
+    resolveActionArgsMock.mockReturnValue(["set", "key", "value"]);
+
+    await reparseProgramFromActionArgs(program, [actionCommand]);
+
+    expect(buildParseArgvMock).toHaveBeenCalledWith({
+      programName: "openclaw",
+      rawArgs: undefined,
+      fallbackArgv: ["config", "set", "key", "value"],
+    });
+    expect(parseAsync).toHaveBeenCalled();
+  });
 });
