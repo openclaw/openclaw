@@ -116,9 +116,17 @@ export function stripReasoningTagsFromText(
         const before = cleaned.slice(lastIndex, idx);
         const after = cleaned.slice(afterIndex);
         if (hasOrphanReasoningCloseBoundary({ before, after })) {
-          // A lone close tag after visible preamble means the hidden opening tag was
-          // probably truncated; drop the preamble so partial reasoning is not leaked.
-          result = "";
+          const isLiteralReasoningCloseTag =
+            /^<\s*\/\s*(?:antml:)?reasoning(?=\s|\/|>)/i.test(match[0]) &&
+            /\S/.test(result + before) &&
+            /^\s+to\s+close\s+the\s+tag\b/i.test(after);
+          if (isLiteralReasoningCloseTag) {
+            result += before + match[0];
+          } else {
+            // A lone close tag after visible preamble means the hidden opening tag was
+            // probably truncated; drop the preamble so partial reasoning is not leaked.
+            result = "";
+          }
         } else {
           result += before;
         }

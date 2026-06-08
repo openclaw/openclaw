@@ -319,6 +319,18 @@ describe("stripReasoningTagsFromText", () => {
         opts: { mode: "strict" as const },
       },
       {
+        name: "preserves visible prose mentioning reasoning close tags",
+        input: "Use </reasoning> to close the tag.",
+        expected: "Use </reasoning> to close the tag.",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "hides truncated reasoning before reasoning close tags",
+        input: "Hidden reasoning </reasoning> final answer",
+        expected: "final answer",
+        opts: { mode: "strict" as const },
+      },
+      {
         name: "keeps visible prefix but hides unclosed reasoning tag prose",
         input: "Visible prefix <reasoning> tag should be hidden",
         expected: "Visible prefix",
