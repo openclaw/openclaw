@@ -278,8 +278,10 @@ openclaw gateway stop
 
 Native Windows managed startup uses a Scheduled Task named `OpenClaw Gateway`
 (or `OpenClaw Gateway (<profile>)` for named profiles). If Scheduled Task
-creation is denied, OpenClaw falls back to a per-user Startup-folder launcher
-that points at `gateway.cmd` inside the state directory.
+creation is denied, OpenClaw falls back to a per-user Startup-folder launcher.
+Current installs write a hidden `gateway.vbs` launcher that starts the state-dir
+task script without flashing a console window, and older `gateway.cmd` entries
+remain supported for cleanup and status detection.
 
   </Tab>
 

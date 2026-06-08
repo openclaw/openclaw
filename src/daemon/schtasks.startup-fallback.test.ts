@@ -73,7 +73,7 @@ const {
   uninstallScheduledTask,
 } = await import("./schtasks.js");
 
-function resolveStartupEntryPath(env: Record<string, string>, extension = "vbs") {
+function resolveStartupEntryPath(env: Record<string, string>, extension = "cmd") {
   const taskName = env.OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway";
   return path.join(
     env.APPDATA,
@@ -86,10 +86,14 @@ function resolveStartupEntryPath(env: Record<string, string>, extension = "vbs")
   );
 }
 
-async function writeStartupFallbackEntry(env: Record<string, string>) {
-  const startupEntryPath = resolveStartupEntryPath(env);
+async function writeStartupFallbackEntry(env: Record<string, string>, extension = "cmd") {
+  const startupEntryPath = resolveStartupEntryPath(env, extension);
   await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
-  await fs.writeFile(startupEntryPath, 'CreateObject("WScript.Shell")\r\n', "utf8");
+  if (extension === "vbs") {
+    await fs.writeFile(startupEntryPath, 'CreateObject("WScript.Shell")\r\n', "utf8");
+  } else {
+    await fs.writeFile(startupEntryPath, "@echo off\r\n", "utf8");
+  }
   return startupEntryPath;
 }
 
@@ -629,7 +633,7 @@ describe("Windows startup fallback", () => {
   it("treats an installed Startup-folder launcher as loaded", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses();
-      await writeStartupFallbackEntry(env);
+      await writeStartupFallbackEntry(env, "vbs");
 
       await expect(isScheduledTaskInstalled({ env })).resolves.toBe(true);
     });
@@ -672,7 +676,7 @@ describe("Windows startup fallback", () => {
   it("reports runtime from the gateway listener when using the Startup fallback", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses();
-      await writeStartupFallbackEntry(env);
+      await writeStartupFallbackEntry(env, "vbs");
       inspectPortUsage.mockResolvedValue({
         port: 18789,
         status: "busy",
@@ -690,7 +694,7 @@ describe("Windows startup fallback", () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const nodeEnv = makeNodeServiceEnv(env);
       addStartupFallbackMissingResponses();
-      await writeStartupFallbackEntry(nodeEnv);
+      await writeStartupFallbackEntry(nodeEnv, "vbs");
       inspectPortUsage.mockResolvedValue({
         port: 18789,
         status: "busy",
@@ -709,7 +713,7 @@ describe("Windows startup fallback", () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const nodeEnv = makeNodeServiceEnv(env);
       addStartupFallbackMissingResponses();
-      await writeStartupFallbackEntry(nodeEnv);
+      await writeStartupFallbackEntry(nodeEnv, "vbs");
       inspectPortUsage.mockResolvedValue({
         port: 18789,
         status: "busy",
@@ -728,7 +732,7 @@ describe("Windows startup fallback", () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const nodeEnv = makeNodeServiceEnv(env);
       addStartupFallbackMissingResponses();
-      await writeStartupFallbackEntry(nodeEnv);
+      await writeStartupFallbackEntry(nodeEnv, "vbs");
       await writeNodeScript(nodeEnv);
       mockWindowsNodeHostProcess();
 
@@ -747,7 +751,7 @@ describe("Windows startup fallback", () => {
         { code: 0, stdout: "", stderr: "" },
         { code: 0, stdout: "", stderr: "" },
       );
-      await writeStartupFallbackEntry(nodeEnv);
+      await writeStartupFallbackEntry(nodeEnv, "vbs");
       await writeNodeScript(nodeEnv);
       mockWindowsNodeHostProcess();
 
@@ -783,7 +787,7 @@ describe("Windows startup fallback", () => {
         { code: 1, stdout: "", stderr: "not found" },
       ]);
       await writeGatewayScript(env);
-      await writeStartupFallbackEntry(env);
+      await writeStartupFallbackEntry(env, "vbs");
       inspectPortUsage.mockResolvedValue({
         port: 18789,
         status: "busy",
