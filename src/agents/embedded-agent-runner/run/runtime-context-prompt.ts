@@ -60,7 +60,8 @@ export function buildCurrentInboundPrompt(params: {
   if (!params.prompt) {
     return prefix;
   }
-  return [prefix, params.prompt].join(params.context?.promptJoiner ?? "\n\n");
+  const joiner = params.context?.promptJoiner ?? "\n\n";
+  return `${prefix}${joiner}---openclaw:user-msg---\n${params.prompt}`;
 }
 
 function removeLastPromptOccurrence(text: string, prompt: string): string | null {

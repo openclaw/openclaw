@@ -266,3 +266,45 @@ describe("builder compatibility", () => {
     expect(stripInboundMetadata(input)).toBe("Actual user message");
   });
 });
+
+describe("user message separator", () => {
+  const separator = "---openclaw:user-msg---";
+
+  it("strips the separator after metadata blocks in stripInboundMetadata", () => {
+    const input = `${CONV_BLOCK}\n\n${separator}\nWhat is the weather today?`;
+    expect(stripInboundMetadata(input)).toBe("What is the weather today?");
+  });
+
+  it("strips the separator after metadata blocks in stripLeadingInboundMetadata", () => {
+    const input = `${CONV_BLOCK}\n\n${separator}\nWhat is the weather today?`;
+    expect(stripLeadingInboundMetadata(input)).toBe("What is the weather today?");
+  });
+
+  it("preserves the separator when no metadata is present (user may have typed it)", () => {
+    const input = `${separator}\nWhat is the weather today?`;
+    expect(stripInboundMetadata(input)).toBe(input);
+    expect(stripLeadingInboundMetadata(input)).toBe(input);
+  });
+
+  it("strips the separator with leading whitespace", () => {
+    const input = `${CONV_BLOCK}\n\n  ${separator}  \nWhat is the weather today?`;
+    expect(stripInboundMetadata(input)).toBe("What is the weather today?");
+  });
+
+  it("strips the separator with leading newlines after metadata removal", () => {
+    const input = `${CONV_BLOCK}\n\n\n${separator}\nWhat is the weather today?`;
+    expect(stripInboundMetadata(input)).toBe("What is the weather today?");
+  });
+
+  it("strips multiple metadata blocks and the separator", () => {
+    const input = `${CONV_BLOCK}\n\n${SENDER_BLOCK}\n\n${separator}\nCan you help me?`;
+    expect(stripInboundMetadata(input)).toBe("Can you help me?");
+  });
+
+  it("strips separator from legacy stored messages without metadata blocks", () => {
+    // Legacy messages may have had the separator injected but metadata already stripped
+    const input = `${separator}\nUser message from legacy session`;
+    // No metadata present, so didStripMetadata is false → separator is preserved
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+});
