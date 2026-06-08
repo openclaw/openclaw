@@ -895,6 +895,48 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("serves bootstrap config at the base-path-relative endpoint when mounted under /__openclaw__ (#66946)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          {
+            url: "/__openclaw__/control-ui-config.json",
+            method: "GET",
+          } as IncomingMessage,
+          res,
+          {
+            basePath: "/__openclaw__",
+            root: { kind: "resolved", path: tmp },
+            config: {
+              agents: { defaults: { workspace: tmp } },
+              ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+            },
+          },
+        );
+        expect(handled).toBe(true);
+        expect(res.statusCode).not.toBe(404);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.basePath).toBe("/__openclaw__");
+        expect(parsed.assistantAgentId).toBe("main");
+      },
+    });
+  });
+
+  it("does not serve bootstrap config from the doubled /__openclaw__/__openclaw path (#66946)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end, handled } = await runControlUiRequest({
+          url: "/__openclaw__/__openclaw/control-ui-config.json",
+          method: "GET",
+          rootPath: tmp,
+          basePath: "/__openclaw__",
+        });
+        expectNotFoundResponse({ handled, res, end });
+      },
+    });
+  });
+
   it("serves local avatar bytes through hardened avatar handler", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-http-"));
     try {
