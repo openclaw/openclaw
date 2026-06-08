@@ -129,11 +129,11 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       let compactionInFlight = true;
       const resultPromise = waitForCompactionRetryWithAggregateTimeout({
         waitForCompactionRetry: async () => {
-          await delay(35);
+          await delay(500);
           compactionInFlight = false;
         },
         abortable: async (promise) => await promise,
-        aggregateTimeoutMs: 1,
+        aggregateTimeoutMs: 10,
         isCompactionStillInFlight: () => compactionInFlight,
         onHeartbeat: () => {
           emitTrustedDiagnosticEvent({
