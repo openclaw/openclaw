@@ -140,6 +140,13 @@ describe("cron view", () => {
     const container = document.createElement("div");
     const onLoadRuns = vi.fn();
     const job = createJob("job-1");
+    const scrollIntoView = vi.fn();
+    const getElementSpy = vi.spyOn(document, "getElementById").mockImplementation((id: string) => {
+      if (id !== "cron-run-history") {
+        return null;
+      }
+      return { scrollIntoView } as unknown as HTMLElement;
+    });
     render(
       renderCron(
         createProps({
@@ -163,6 +170,8 @@ describe("cron view", () => {
 
     expect(onLoadRuns).toHaveBeenCalledTimes(1);
     expect(onLoadRuns).toHaveBeenCalledWith("job-1");
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start", behavior: "smooth" });
+    getElementSpy.mockRestore();
   });
 
   it("renders run chat links when session keys are present", () => {

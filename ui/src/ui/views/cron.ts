@@ -335,6 +335,16 @@ function focusFormField(id: string) {
   el.focus();
 }
 
+function scrollRunsHistoryIntoView() {
+  const el = document.getElementById("cron-run-history");
+  if (!(el instanceof HTMLElement)) {
+    return;
+  }
+  if (typeof el.scrollIntoView === "function") {
+    el.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
+}
+
 function renderFieldLabel(text: string, required = false) {
   return html`<span>
     ${text}
@@ -390,6 +400,10 @@ export function renderCron(props: CronProps) {
         ? t("cron.form.fixFields", { count: String(blockingFields.length) })
         : t("cron.form.fixFieldsPlural", { count: String(blockingFields.length) })
       : "";
+  const selectRuns = (jobId: string) => {
+    props.onLoadRuns(jobId);
+    scrollRunsHistoryIntoView();
+  };
   return html`
     <section class="card cron-summary-strip">
       <div class="cron-summary-strip__left">
@@ -426,7 +440,7 @@ export function renderCron(props: CronProps) {
 
     <section class="cron-workspace">
       <div class="cron-workspace-main">
-        <section class="card">
+        <section id="cron-run-history" class="card">
           <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 12px;">
             <div>
               <div class="card-title">${t("cron.jobs.title")}</div>
@@ -544,7 +558,7 @@ export function renderCron(props: CronProps) {
                 `
               : html`
                   <div class="list" style="margin-top: 12px;">
-                    ${props.jobs.map((job) => renderJob(job, props))}
+                    ${props.jobs.map((job) => renderJob(job, props, selectRuns))}
                   </div>
                 `
           }
@@ -1487,15 +1501,15 @@ function renderFieldError(message?: string, id?: string) {
   return html`<div id=${ifDefined(id)} class="cron-help cron-error">${t(message)}</div>`;
 }
 
-function renderJob(job: CronJob, props: CronProps) {
+function renderJob(job: CronJob, props: CronProps, selectRuns: (jobId: string) => void) {
   const isSelected = props.runsJobId === job.id;
   const itemClass = `list-item list-item-clickable cron-job${isSelected ? " list-item-selected" : ""}`;
   const selectAnd = (action: () => void) => {
-    props.onLoadRuns(job.id);
+    selectRuns(job.id);
     action();
   };
   return html`
-    <div class=${itemClass} @click=${() => props.onLoadRuns(job.id)}>
+    <div class=${itemClass} @click=${() => selectRuns(job.id)}>
       <div class="list-main">
         <div class="list-title">${job.name}</div>
         <div class="list-sub">${formatCronSchedule(job)}</div>
@@ -1569,7 +1583,7 @@ function renderJob(job: CronJob, props: CronProps) {
             ?disabled=${props.busy}
             @click=${(event: Event) => {
               event.stopPropagation();
-              selectAnd(() => props.onLoadRuns(job.id));
+              selectRuns(job.id);
             }}
           >
             ${t("cron.jobList.history")}
