@@ -20,6 +20,7 @@ export type AssistantAvatarOverrideState = {
   assistantAvatarSource?: string | null;
   assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   assistantAvatarReason?: string | null;
+  assistantAgentId?: string | null;
 };
 
 const assistantIdentityRequestVersions = new WeakMap<object, number>();
