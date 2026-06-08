@@ -541,7 +541,7 @@ async function prepareCronRunContext(params: {
   const agentId = normalizedRequested ?? defaultAgentId;
   const selectedAgentConfig = resolveAgentConfig(runtimeCfg, agentId);
   const agentConfigOverride = normalizedRequested ? selectedAgentConfig : undefined;
-  const inheritDefaultFallbacksForAgentStringModel =
+  const matchesDefaultFallbackAgentStringModel =
     typeof selectedAgentConfig?.model === "string" &&
     resolveAgentModelPrimaryValue(selectedAgentConfig.model) ===
       resolveAgentModelPrimaryValue(runtimeCfg.agents?.defaults?.model);
@@ -657,6 +657,10 @@ async function prepareCronRunContext(params: {
   let provider = resolvedModelSelection.provider;
   let model = resolvedModelSelection.model;
   const useSubagentFallbacks = resolvedModelSelection.modelSource === "subagent";
+  const inheritDefaultFallbacksForAgentStringModel =
+    matchesDefaultFallbackAgentStringModel &&
+    (resolvedModelSelection.modelSource === "default" ||
+      resolvedModelSelection.modelSource === "agent");
 
   const modelPreflightRuntime = await loadCronModelPreflightRuntime();
   const preflightCandidates = resolveCronPreflightCandidates({
