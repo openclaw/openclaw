@@ -149,6 +149,11 @@ const MsteamsConfigSchema = z
       })
       .strict()
       .default({ requireAddress: true, wakePhrases: ["assistant"], followUpWindowMs: 12_000 }),
+    /**
+     * CVI vision spend cap: max vision-model calls per minute per call (the `look_at_screen` tool and
+     * the streaming per-turn frame attach). Bounds the cost of continuous perception. 0 = unlimited.
+     */
+    maxVisionPerMinute: z.number().int().nonnegative().default(30),
   })
   .strict();
 export type MsteamsConfig = z.infer<typeof MsteamsConfigSchema>;
@@ -805,6 +810,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
             answerTimeoutMs: config.msteams.outbound?.answerTimeoutMs,
           },
           groupCall: resolveGroupCallGateConfig(config.msteams.groupCall),
+          maxVisionPerMinute: config.msteams.maxVisionPerMinute ?? 30,
         }
       : config.msteams,
     webhookSecurity: {

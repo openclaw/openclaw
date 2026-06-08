@@ -48,6 +48,7 @@ import type {
   WebhookParseOptions,
   WebhookVerificationResult,
 } from "../types.js";
+import { VisionBudget } from "../vision-budget.js";
 import type { VoiceCallProvider } from "./base.js";
 
 export interface MsteamsProviderOptions {
@@ -176,6 +177,9 @@ export class MsteamsProvider implements VoiceCallProvider {
   >();
   /** Recording-active state per call (both paths), used to gate inbound video like audio. */
   private readonly recordingActiveByCall = new Map<string, boolean>();
+
+  /** Per-call vision spend cap (streaming frame attach). Lazily built from config. */
+  private visionBudgetInstance: VisionBudget | null = null;
 
   /** Shared secret (also used to sign the outbound place-call request). */
   private readonly sharedSecret?: string;
@@ -627,6 +631,14 @@ export class MsteamsProvider implements VoiceCallProvider {
     return resolveGroupCallGateConfig(this.responseRuntime?.voiceConfig.msteams?.groupCall);
   }
 
+  /** Per-call vision spend cap (built once from config; 0 = unlimited). */
+  private visionBudget(): VisionBudget {
+    this.visionBudgetInstance ??= new VisionBudget(
+      this.responseRuntime?.voiceConfig.msteams?.maxVisionPerMinute ?? 30,
+    );
+    return this.visionBudgetInstance;
+  }
+
   /**
    * Buffer the latest inbound video frame per source so the agent can "look" at it on demand.
    * Recording-gated (Media Access API): video is media-derived data and must not be processed
@@ -807,7 +819,13 @@ export class MsteamsProvider implements VoiceCallProvider {
     const frame = this.getLatestVideoFrame(state.providerCallId);
     let images: Array<{ type: "image"; data: string; mimeType: string }> | undefined;
     let userMessageForModel = userMessage;
-    if (frame && frame.dataBase64 !== state.lastVisionFrame) {
+    // Attach the latest (changed) frame so the agent is visually aware each turn — bounded by the
+    // per-call vision budget so continuous perception can't run up unbounded model cost.
+    if (
+      frame &&
+      frame.dataBase64 !== state.lastVisionFrame &&
+      this.visionBudget().tryConsume(state.providerCallId, Date.now())
+    ) {
       images = [{ type: "image", data: frame.dataBase64, mimeType: frame.mime }];
       state.lastVisionFrame = frame.dataBase64;
       // Tell the model whose tile it is (group calls): without attribution the agent can't reason
@@ -853,6 +871,7 @@ export class MsteamsProvider implements VoiceCallProvider {
   private handleSessionEnd(info: { callId: string; reason: string }): void {
     this.latestVideoFrames.delete(info.callId);
     this.recordingActiveByCall.delete(info.callId);
+    this.visionBudgetInstance?.release(info.callId);
     this.clearOutboundTimer(info.callId);
     this.clearTimedOutOutbound(info.callId);
     const realtimeCall = this.realtimeCalls.get(info.callId);
