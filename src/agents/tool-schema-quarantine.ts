@@ -8,6 +8,7 @@ import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import type { RuntimeToolSchemaDiagnostic } from "./tool-schema-projection.js";
+import { recordPersistedRuntimeToolSchemaQuarantine } from "./tool-schema-quarantine-health.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const log = createSubsystemLogger("agents/tools");
@@ -52,6 +53,19 @@ export function logRuntimeToolSchemaQuarantine(params: {
         deniedReason: "unsupported_tool_schema",
         reason: diagnostic.violations.join(", "),
       });
+      try {
+        recordPersistedRuntimeToolSchemaQuarantine({
+          toolName: diagnostic.toolName,
+          ...(pluginId ? { owner: `plugin:${pluginId}` } : {}),
+          reason: diagnostic.violations.join(", "),
+          failedAt: new Date(),
+          runId: params.runId,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        });
+      } catch {
+        // Diagnostic event/log output still carries the failure if persistence is unavailable.
+      }
       return `${diagnostic.toolName}${owner}: ${diagnostic.violations.join(", ")}`;
     })
     .join("; ");

@@ -3,10 +3,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import type { ContextEngineRuntimeQuarantine } from "./registry.js";
 
 const QUARANTINE_HEALTH_SCHEMA_VERSION = 1;
 const MAX_QUARANTINE_RECORDS = 64;
+
+export type PersistedContextEngineRuntimeQuarantine = {
+  engineId: string;
+  owner?: string;
+  operation: string;
+  reason: string;
+  failedAt: Date;
+};
 
 type PersistedContextEngineQuarantineRecord = {
   engineId: string;
@@ -124,7 +131,7 @@ function recordKey(record: Pick<PersistedContextEngineQuarantineRecord, "engineI
 }
 
 export function recordPersistedContextEngineQuarantine(
-  quarantine: ContextEngineRuntimeQuarantine,
+  quarantine: PersistedContextEngineRuntimeQuarantine,
 ): void {
   const records = readPersistedRecords();
   const key = recordKey({ engineId: quarantine.engineId, processId: process.pid });
@@ -143,7 +150,7 @@ export function recordPersistedContextEngineQuarantine(
   writePersistedRecords(records);
 }
 
-export function listPersistedContextEngineQuarantines(): ContextEngineRuntimeQuarantine[] {
+export function listPersistedContextEngineQuarantines(): PersistedContextEngineRuntimeQuarantine[] {
   const byEngineId = new Map<string, PersistedContextEngineQuarantineRecord>();
   for (const record of readPersistedRecords()) {
     const existing = byEngineId.get(record.engineId);
@@ -151,13 +158,18 @@ export function listPersistedContextEngineQuarantines(): ContextEngineRuntimeQua
       byEngineId.set(record.engineId, record);
     }
   }
-  return [...byEngineId.values()].map((record) => ({
-    engineId: record.engineId,
-    operation: record.operation,
-    reason: record.reason,
-    failedAt: new Date(record.failedAtMs),
-    ...(record.owner ? { owner: record.owner } : {}),
-  }));
+  return [...byEngineId.values()].map((record) => {
+    const quarantine: PersistedContextEngineRuntimeQuarantine = {
+      engineId: record.engineId,
+      operation: record.operation,
+      reason: record.reason,
+      failedAt: new Date(record.failedAtMs),
+    };
+    if (record.owner) {
+      quarantine.owner = record.owner;
+    }
+    return quarantine;
+  });
 }
 
 function removePersistedContextEngineQuarantineFile(): void {
