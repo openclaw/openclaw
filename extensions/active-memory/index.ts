@@ -40,6 +40,7 @@ import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-s
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_AGENT_ID = "main";
 const DEFAULT_MAX_SUMMARY_CHARS = 220;
+const DEFAULT_MAX_MEMORY_SEARCH_EVIDENCE_ITEMS = 3;
 const DEFAULT_RECENT_USER_TURNS = 2;
 const DEFAULT_RECENT_ASSISTANT_TURNS = 1;
 const DEFAULT_RECENT_USER_CHARS = 220;
@@ -1701,6 +1702,84 @@ function extractActiveMemorySearchDebugFromSessionRecord(
   };
 }
 
+function normalizeMemorySearchEvidenceText(value: string): string | undefined {
+  return normalizeActiveSummary(value) ?? undefined;
+}
+
+function extractMemorySearchEvidenceItemsFromResult(value: unknown): string[] {
+  const result = asRecord(value);
+  if (!result) {
+    const normalized = normalizeMemorySearchEvidenceText(
+      typeof value === "string" ? value : "",
+    );
+    return normalized ? [normalized] : [];
+  }
+  const title =
+    normalizeOptionalString(result.title) ?? normalizeOptionalString(result.path);
+  const body =
+    normalizeOptionalString(result.text) ??
+    normalizeOptionalString(result.content) ??
+    normalizeOptionalString(result.summary) ??
+    normalizeOptionalString(result.excerpt) ??
+    normalizeOptionalString(result.body);
+  const combined = [title, body]
+    .filter((part): part is string => Boolean(part))
+    .join(": ");
+  const normalized = normalizeMemorySearchEvidenceText(combined);
+  return normalized ? [normalized] : [];
+}
+
+function extractMemorySearchEvidenceFromSessionRecord(
+  value: unknown,
+): string | undefined {
+  const record = asRecord(value);
+  const nestedMessage = asRecord(record?.message);
+  const topLevelMessage =
+    record?.role === "toolResult" ||
+    record?.toolName === "memory_search" ||
+    record?.toolName === "memory_recall"
+      ? record
+      : undefined;
+  const message = nestedMessage ?? topLevelMessage;
+  if (!message) {
+    return undefined;
+  }
+  const role = normalizeOptionalString(message.role);
+  const toolName = normalizeOptionalString(message.toolName);
+  if (role !== "toolResult" || (toolName !== "memory_search" && toolName !== "memory_recall")) {
+    return undefined;
+  }
+  const details = asRecord(message.details);
+  const debug = extractActiveMemorySearchDebugFromSessionRecord(value);
+  if (details?.disabled === true || debug?.error || details?.error) {
+    return undefined;
+  }
+  const items: string[] = [];
+  const results = Array.isArray(details?.results) ? details.results : undefined;
+  if (results) {
+    for (const result of results) {
+      items.push(...extractMemorySearchEvidenceItemsFromResult(result));
+      if (items.length >= DEFAULT_MAX_MEMORY_SEARCH_EVIDENCE_ITEMS) {
+        break;
+      }
+    }
+  }
+  for (const candidate of [details?.text, details?.output, details?.summary, message.content]) {
+    const normalized = normalizeMemorySearchEvidenceText(extractTextContent(candidate));
+    if (normalized) {
+      items.push(normalized);
+    }
+    if (items.length >= DEFAULT_MAX_MEMORY_SEARCH_EVIDENCE_ITEMS) {
+      break;
+    }
+  }
+  const unique = uniqueStrings(items).slice(
+    0,
+    DEFAULT_MAX_MEMORY_SEARCH_EVIDENCE_ITEMS,
+  );
+  return unique.length > 0 ? unique.join(" | ") : undefined;
+}
+
 function extractTerminalMemorySearchResultFromSessionRecord(
   value: unknown,
 ): TerminalMemorySearchResult | undefined {
@@ -1747,6 +1826,33 @@ async function readActiveMemorySearchDebug(
     },
   });
   return found;
+}
+
+async function readMemorySearchEvidence(
+  sessionFile: string | undefined,
+  limits?: TranscriptReadLimits,
+): Promise<string | undefined> {
+  if (!sessionFile) {
+    return undefined;
+  }
+  const items: string[] = [];
+  await streamBoundedTranscriptJsonl({
+    sessionFile,
+    limits,
+    onRecord: (record) => {
+      const evidence = extractMemorySearchEvidenceFromSessionRecord(record);
+      if (evidence) {
+        items.push(evidence);
+        return items.length >= DEFAULT_MAX_MEMORY_SEARCH_EVIDENCE_ITEMS;
+      }
+      return false;
+    },
+  });
+  return (
+    uniqueStrings(items)
+      .slice(0, DEFAULT_MAX_MEMORY_SEARCH_EVIDENCE_ITEMS)
+      .join(" | ") || undefined
+  );
 }
 
 async function readTerminalMemorySearchResult(
@@ -2021,7 +2127,13 @@ async function buildTimeoutRecallResult(params: {
     params.searchDebug ??
     subagentPartialData.searchDebug ??
     (params.sessionFile ? await readActiveMemorySearchDebug(params.sessionFile) : undefined);
-  if (summary.length === 0) {
+  const fallbackSummary =
+    summary ||
+    truncateSummary(
+      (await readMemorySearchEvidence(params.sessionFile)) ?? "",
+      params.maxSummaryChars,
+    );
+  if (fallbackSummary.length === 0) {
     return {
       status: "timeout",
       elapsedMs: params.elapsedMs,
@@ -2032,7 +2144,7 @@ async function buildTimeoutRecallResult(params: {
   return {
     status: "timeout_partial",
     elapsedMs: params.elapsedMs,
-    summary,
+    summary: fallbackSummary,
     searchDebug,
   };
 }
@@ -2538,8 +2650,11 @@ async function runRecallSubagent(params: {
     const searchDebug =
       (await readActiveMemorySearchDebug(sessionFile)) ??
       readActiveMemorySearchDebugFromRunResult(result);
+    const memorySearchEvidence = await readMemorySearchEvidence(sessionFile);
     return {
-      rawReply: rawReply || "NONE",
+      rawReply: normalizeActiveSummary(rawReply)
+        ? rawReply
+        : (memorySearchEvidence ?? "NONE"),
       transcriptPath: params.config.persistTranscripts ? sessionFile : undefined,
       searchDebug,
     };
@@ -3128,6 +3243,7 @@ const testing = {
   isMissingRegisteredMemoryToolsError,
   normalizePluginConfig,
   readActiveMemorySearchDebug,
+  readMemorySearchEvidence,
   readPartialAssistantText,
   shouldCacheResult,
   resetActiveRecallCacheForTests() {
