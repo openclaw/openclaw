@@ -136,7 +136,11 @@ async function dispatchVcMeetingInvitedTurn(params: {
   >;
   const log = params.runtime?.log ?? console.log;
   const error = params.runtime?.error ?? console.error;
-  const runtime = (params.runtime ?? { log, error, exit: process.exit }) as RuntimeEnv;
+  const runtime: RuntimeEnv = params.runtime ?? {
+    log,
+    error,
+    exit: (code) => process.exit(code),
+  };
   const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const pairing = createChannelPairingController({
