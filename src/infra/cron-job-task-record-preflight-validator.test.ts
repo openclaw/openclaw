@@ -77,6 +77,60 @@ const workedExampleNeedsChangesWrongTypeExpected: CronJobTaskRecordValidationRes
   ],
 };
 
+// ===== Additional regression matrix cases (beyond next_action) =====
+
+// Completeness failure: another required string field is empty.
+// This must NOT be double-reported as drift mismatch even if the snapshot has a literal for it.
+const workedExampleNeedsChangesEmptyAssignedToInput = {
+  ...workedExamplePassInput,
+  assigned_to: "",
+} as const;
+
+const workedExampleNeedsChangesEmptyAssignedToExpected: CronJobTaskRecordValidationResult = {
+  verdict: "NEEDS_CHANGES",
+  summary: "missing fields: assigned_to",
+  missingFields: ["assigned_to"],
+  drift: [],
+  notes: [
+    "Missing required fields: assigned_to",
+    "Result: NEEDS_CHANGES (1 missing, 0 drift mismatches).",
+  ],
+};
+
+// Completeness failure: wrong runtime type for a required number field.
+const workedExampleNeedsChangesWrongTypePriorityInput = {
+  ...workedExamplePassInput,
+  priority: "3" as unknown as number,
+} as const;
+
+const workedExampleNeedsChangesWrongTypePriorityExpected: CronJobTaskRecordValidationResult = {
+  verdict: "NEEDS_CHANGES",
+  summary: "missing fields: priority",
+  missingFields: ["priority"],
+  drift: [],
+  notes: [
+    "Missing required fields: priority",
+    "Result: NEEDS_CHANGES (1 missing, 0 drift mismatches).",
+  ],
+};
+
+// Completeness failure: required field present but value is actually undefined.
+const workedExampleNeedsChangesMissingTitleInput = {
+  ...workedExamplePassInput,
+  title: undefined as unknown as string,
+} as const;
+
+const workedExampleNeedsChangesMissingTitleExpected: CronJobTaskRecordValidationResult = {
+  verdict: "NEEDS_CHANGES",
+  summary: "missing fields: title",
+  missingFields: ["title"],
+  drift: [],
+  notes: [
+    "Missing required fields: title",
+    "Result: NEEDS_CHANGES (1 missing, 0 drift mismatches).",
+  ],
+};
+
 describe("cron job task record preflight validator", () => {
   it("worked example: PASS", () => {
     expect(validateCronJobTaskRecordPreflight(workedExamplePassInput)).toEqual(
@@ -93,6 +147,24 @@ describe("cron job task record preflight validator", () => {
   it("worked example: NEEDS_CHANGES (wrong type required field)", () => {
     expect(validateCronJobTaskRecordPreflight(workedExampleNeedsChangesWrongTypeInput)).toEqual(
       workedExampleNeedsChangesWrongTypeExpected,
+    );
+  });
+
+  it("worked example: NEEDS_CHANGES (empty required string field: assigned_to)", () => {
+    expect(
+      validateCronJobTaskRecordPreflight(workedExampleNeedsChangesEmptyAssignedToInput),
+    ).toEqual(workedExampleNeedsChangesEmptyAssignedToExpected);
+  });
+
+  it("worked example: NEEDS_CHANGES (wrong runtime type required field: priority)", () => {
+    expect(
+      validateCronJobTaskRecordPreflight(workedExampleNeedsChangesWrongTypePriorityInput),
+    ).toEqual(workedExampleNeedsChangesWrongTypePriorityExpected);
+  });
+
+  it("worked example: NEEDS_CHANGES (missing required field: title)", () => {
+    expect(validateCronJobTaskRecordPreflight(workedExampleNeedsChangesMissingTitleInput)).toEqual(
+      workedExampleNeedsChangesMissingTitleExpected,
     );
   });
 });
