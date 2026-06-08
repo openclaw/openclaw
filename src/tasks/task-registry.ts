@@ -1968,7 +1968,7 @@ export async function cancelTaskById(params: {
   }
   const childSessionKey = task.childSessionKey?.trim();
   try {
-    if (task.runtime !== "cli" && task.runtime !== "cron") {
+    if (task.runtime !== "cli") {
       if (!childSessionKey) {
         if (!isChildlessCodexNativeSubagentTask(task)) {
           return {
@@ -2004,6 +2004,18 @@ export async function cancelTaskById(params: {
             task: cloneTaskRecord(task),
           };
         }
+      } else if (task.runtime === "cron") {
+        return {
+          found: true,
+          cancelled: false,
+          reason:
+            "Cron task cancellation is not supported. " +
+            "To stop a running cron job, disable or remove the cron job " +
+            "via openclaw cron disable <jobId> or openclaw cron remove <jobId>, " +
+            "then restart the gateway. For an in-progress cron run, " +
+            "send /stop from the Web UI session or wait for the cron timeout.",
+          task: cloneTaskRecord(task),
+        };
       } else {
         return {
           found: true,
