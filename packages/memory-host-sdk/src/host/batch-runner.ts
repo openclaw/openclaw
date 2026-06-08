@@ -14,6 +14,24 @@ export type EmbeddingBatchExecutionParams = {
   debug?: (message: string, data?: Record<string, unknown>) => void;
 };
 
+type EmbeddingBatchGroupRunArgs<TRequest> = {
+  group: TRequest[];
+  groupIndex: number;
+  groups: number;
+  byCustomId: Map<string, number[]>;
+  pollIntervalMs: number;
+  timeoutMs: number;
+};
+
+type EmbeddingBatchSplitArgs<TRequest> = {
+  error: unknown;
+  group: TRequest[];
+  parts: TRequest[][];
+  groupIndex: number;
+  groups: number;
+  depth: number;
+};
+
 /** Clamp polling to both configured poll interval and total timeout budget. */
 function resolveEmbeddingBatchPollIntervalMs(params: {
   pollIntervalMs: number;
@@ -40,14 +58,9 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
   concurrency: EmbeddingBatchExecutionParams["concurrency"];
   debugLabel: string;
   debug?: EmbeddingBatchExecutionParams["debug"];
-  runGroup: (args: {
-    group: TRequest[];
-    groupIndex: number;
-    groups: number;
-    byCustomId: Map<string, number[]>;
-    pollIntervalMs: number;
-    timeoutMs: number;
-  }) => Promise<void>;
+  shouldSplitGroupOnError?: (error: unknown, group: TRequest[]) => boolean;
+  onSplitGroup?: (args: EmbeddingBatchSplitArgs<TRequest>) => void;
+  runGroup: (args: EmbeddingBatchGroupRunArgs<TRequest>) => Promise<void>;
 }): Promise<Map<string, number[]>> {
   if (params.requests.length === 0) {
     return new Map();
@@ -58,15 +71,39 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
   });
   const byCustomId = new Map<string, number[]>();
   const pollIntervalMs = resolveEmbeddingBatchPollIntervalMs(params);
+  const runGroup = async (group: TRequest[], groupIndex: number, depth = 0): Promise<void> => {
+    try {
+      await params.runGroup({
+        group,
+        groupIndex,
+        groups: groups.length,
+        byCustomId,
+        pollIntervalMs,
+        timeoutMs: params.timeoutMs,
+      });
+    } catch (error) {
+      if (group.length <= 1 || !params.shouldSplitGroupOnError?.(error, group)) {
+        throw error;
+      }
+      const splitAt = Math.ceil(group.length / 2);
+      const parts = [group.slice(0, splitAt), group.slice(splitAt)].filter(
+        (part) => part.length > 0,
+      );
+      params.onSplitGroup?.({
+        error,
+        group,
+        parts,
+        groupIndex,
+        groups: groups.length,
+        depth,
+      });
+      for (const part of parts) {
+        await runGroup(part, groupIndex, depth + 1);
+      }
+    }
+  };
   const tasks = groups.map((group, groupIndex) => async () => {
-    await params.runGroup({
-      group,
-      groupIndex,
-      groups: groups.length,
-      byCustomId,
-      pollIntervalMs,
-      timeoutMs: params.timeoutMs,
-    });
+    await runGroup(group, groupIndex);
   });
 
   params.debug?.(params.debugLabel, {

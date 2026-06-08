@@ -4,9 +4,9 @@ import { parseOpenAiBatchOutput, runOpenAiEmbeddingBatches } from "./embedding-b
 
 const jsonlEncoder = new TextEncoder();
 
-function jsonResponse(body: unknown): Response {
+function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
-    status: 200,
+    status,
     headers: { "Content-Type": "application/json" },
   });
 }
@@ -127,6 +127,120 @@ describe("OpenAI embedding batch output", () => {
       ["0", [1]],
       ["1", [2]],
       ["2", [3]],
+    ]);
+  });
+
+  it("adapts OpenAI-compatible upload groups after payload-size rejection", async () => {
+    const requests: Parameters<typeof runOpenAiEmbeddingBatches>[0]["requests"] = Array.from(
+      { length: 4 },
+      (_, index) => ({
+        custom_id: String(index),
+        method: "POST" as const,
+        url: "/v1/embeddings",
+        body: {
+          model: "text-embedding-3-small",
+          input: `payload-${index}`,
+        },
+      }),
+    );
+    const uploadedGroups: string[][] = [];
+    const requestsByFileId = new Map<string, Array<{ custom_id?: string }>>();
+    const outputByFileId = new Map<string, string>();
+    const debug = vi.fn();
+    let fileIndex = 0;
+    let batchIndex = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = fetchInputUrl(input);
+      if (url.endsWith("/files") && init?.method === "POST") {
+        const form = init.body as FormData;
+        const file = form.get("file");
+        if (!(file instanceof Blob)) {
+          throw new Error("missing batch upload file");
+        }
+        const uploadedRequests = (await file.text())
+          .split("\n")
+          .map((line) => JSON.parse(line) as { custom_id?: string });
+        const customIds = uploadedRequests.map((request) => request.custom_id ?? "");
+        uploadedGroups.push(customIds);
+        if (uploadedRequests.length > 2) {
+          return jsonResponse(
+            {
+              error: {
+                message: "Request body too large. Maximum allowed: 10 MB",
+                type: "payload_too_large",
+                code: "PAYLOAD_TOO_LARGE",
+              },
+            },
+            413,
+          );
+        }
+        const fileId = `file-${fileIndex}`;
+        fileIndex += 1;
+        requestsByFileId.set(fileId, uploadedRequests);
+        return jsonResponse({ id: fileId });
+      }
+      if (url.endsWith("/batches") && init?.method === "POST") {
+        const body = parseStringBody(init) as { input_file_id?: string };
+        const batchId = `batch-${batchIndex}`;
+        const outputFileId = `output-${batchIndex}`;
+        batchIndex += 1;
+        const uploadedRequests = requestsByFileId.get(body.input_file_id ?? "") ?? [];
+        outputByFileId.set(
+          outputFileId,
+          uploadedRequests
+            .map((request) =>
+              JSON.stringify({
+                custom_id: request.custom_id,
+                response: {
+                  status_code: 200,
+                  body: { data: [{ embedding: [Number(request.custom_id) + 1] }] },
+                },
+              }),
+            )
+            .join("\n"),
+        );
+        return jsonResponse({ id: batchId, status: "completed", output_file_id: outputFileId });
+      }
+      const contentMatch = url.match(/\/files\/([^/]+)\/content$/);
+      if (contentMatch) {
+        return new Response(outputByFileId.get(contentMatch[1] ?? "") ?? "", { status: 200 });
+      }
+      return new Response("unexpected request", { status: 500 });
+    });
+
+    const byCustomId = await runOpenAiEmbeddingBatches({
+      openAi: {
+        baseUrl: "https://openai-compatible.example/v1",
+        headers: { Authorization: "Bearer test" },
+        model: "text-embedding-3-small",
+        fetchImpl,
+      },
+      agentId: "main",
+      requests,
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 1000,
+      timeoutMs: 60_000,
+      debug,
+    });
+
+    expect(uploadedGroups).toEqual([
+      ["0", "1", "2", "3"],
+      ["0", "1"],
+      ["2", "3"],
+    ]);
+    expect(debug).toHaveBeenCalledWith(
+      "memory embeddings: openai batch upload too large; splitting group",
+      expect.objectContaining({
+        requests: 4,
+        parts: [2, 2],
+      }),
+    );
+    expect([...byCustomId.entries()]).toEqual([
+      ["0", [1]],
+      ["1", [2]],
+      ["2", [3]],
+      ["3", [4]],
     ]);
   });
 });

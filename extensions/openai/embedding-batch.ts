@@ -134,6 +134,25 @@ async function fetchOpenAiBatchResource<T>(params: {
   });
 }
 
+function formatOpenAiBatchError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isOpenAiBatchUploadTooLargeError(error: unknown): boolean {
+  const message = formatOpenAiBatchError(error);
+  if (!/openai batch file upload failed/i.test(message)) {
+    return false;
+  }
+  return (
+    /\b413\b/.test(message) ||
+    /payload too large/i.test(message) ||
+    /request body too large/i.test(message) ||
+    /file too large/i.test(message) ||
+    /maximum allowed/i.test(message) ||
+    /max(?:imum)? (?:body|payload|file) (?:size )?(?:exceeded|limit)/i.test(message)
+  );
+}
+
 export function parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
   if (!text.trim()) {
     return [];
@@ -294,6 +313,15 @@ export async function runOpenAiEmbeddingBatches(
       maxJsonlBytes: params.maxJsonlBytes ?? OPENAI_BATCH_MAX_JSONL_BYTES,
       debugLabel: "memory embeddings: openai batch submit",
     }),
+    shouldSplitGroupOnError: isOpenAiBatchUploadTooLargeError,
+    onSplitGroup: ({ error, group, parts, depth }) => {
+      params.debug?.("memory embeddings: openai batch upload too large; splitting group", {
+        requests: group.length,
+        parts: parts.map((part) => part.length),
+        depth,
+        error: formatOpenAiBatchError(error),
+      });
+    },
     runGroup: async ({ group, groupIndex, groups, byCustomId, pollIntervalMs, timeoutMs }) => {
       const batchInfo = await submitOpenAiBatch({
         openAi: params.openAi,
