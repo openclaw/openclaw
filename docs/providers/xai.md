@@ -568,8 +568,10 @@ Legacy aliases still normalize to the canonical bundled ids:
     - `grok-4.20-multi-agent-experimental-beta-0304` is not supported on the
       normal xAI provider path because it requires a different upstream API
       surface than the standard OpenClaw xAI transport.
-    - xAI Realtime voice uses Talk Gateway relay. Browser-owned
-      provider-WebSocket sessions for xAI are not exposed yet.
+    - xAI Realtime voice supports Talk Gateway relay and browser-owned
+      provider-WebSocket sessions. Custom or proxy `baseUrl` values are
+      Gateway relay only; browser-owned provider-WebSocket sessions require
+      xAI's native `https://api.x.ai/v1` endpoint.
     - xAI image `quality`, image `mask`, and extra native-only aspect ratios are
       not exposed until the shared `image_generate` tool has corresponding
       cross-provider controls.
