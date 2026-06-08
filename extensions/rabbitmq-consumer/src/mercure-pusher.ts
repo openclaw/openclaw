@@ -66,6 +66,19 @@ export class MercurePusher {
     });
   }
 
+  /**
+   * Push a sanitized activity status line (e.g. "正在查询分析数据（第 2 步）…").
+   * Typed `progress` (not `text`) so the frontend renders it as a transient
+   * "working" indicator instead of appending it to the reply bubble.
+   */
+  async pushProgress(topic: string, content: string, historyId?: number): Promise<boolean> {
+    return this.sendToMercure(topic, {
+      type: "progress",
+      content,
+      ...(historyId === undefined ? {} : { historyId }),
+    });
+  }
+
   /** Push a done signal (frontend stops animation), tagged with the chat turn. */
   async pushDone(topic: string, historyId?: number): Promise<boolean> {
     return this.sendToMercure(topic, {
@@ -133,6 +146,13 @@ export class StreamingMercurePusher {
   private buffer = "";
   private timer: ReturnType<typeof setTimeout> | null = null;
   private fullText = "";
+  /**
+   * Chains flushes so pushes always reach the hub in order. Without it, a
+   * timer-scheduled flush still in flight races the `done` POST from
+   * `finish()`; when `done` wins, the frontend finalizes the bubble and drops
+   * the late tail chunk (reply truncated mid-sentence).
+   */
+  private pending: Promise<void> = Promise.resolve();
 
   constructor(pusher: MercurePusher, topic: string, historyId?: number, flushIntervalMs = 80) {
     this.pusher = pusher;
@@ -156,14 +176,17 @@ export class StreamingMercurePusher {
     return this.fullText;
   }
 
-  /** Flush any buffered text immediately. */
+  /** Flush any buffered text immediately (ordered after in-flight pushes). */
   async flush(): Promise<void> {
     this.cancelTimer();
     const chunk = this.buffer;
     this.buffer = "";
-    if (chunk) {
-      await this.pusher.pushText(this.topic, chunk, this.historyId);
-    }
+    this.pending = this.pending.then(async () => {
+      if (chunk) {
+        await this.pusher.pushText(this.topic, chunk, this.historyId);
+      }
+    });
+    await this.pending;
   }
 
   /** Signal that the stream is done: flush remaining buffer + push done event. */
@@ -172,10 +195,11 @@ export class StreamingMercurePusher {
     await this.pusher.pushDone(this.topic, this.historyId);
   }
 
-  /** Push an error and finish. */
+  /** Push an error after draining in-flight text pushes. */
   async pushError(error: string): Promise<void> {
     this.cancelTimer();
     this.buffer = "";
+    await this.pending;
     await this.pusher.pushError(this.topic, error, this.historyId);
   }
 

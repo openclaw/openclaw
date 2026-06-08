@@ -5,6 +5,7 @@ import type { HistoryManager } from "./history-manager.js";
 import { MercurePusher, StreamingMercurePusher } from "./mercure-pusher.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import { detectReportRequest, type ReportPeriod } from "./report-trigger.js";
+import { ToolActivityNarrator } from "./tool-activity.js";
 import type { TopicResolver } from "./topic-resolver.js";
 import type { ChatMessage, MercureConfig } from "./types.js";
 
@@ -283,12 +284,29 @@ export async function processChatMessage(
       chatMsg.historyId,
     );
 
-    // Only forward "assistant" deltas from THIS session. The agent runtime
-    // attaches sessionKey to every event of a run; without that filter, any
+    // Sanitized tool-activity narration: while the agent runs tools (DB
+    // queries etc.) it produces no assistant deltas, so without these pushes
+    // the frontend sees nothing for the whole tool phase. Only the tool NAME
+    // is mapped to a generic status line — args (SQL, paths) never leak.
+    const narrator = new ToolActivityNarrator({
+      push: (message) => {
+        void mercure.pushProgress(mercureTopic, message, chatMsg.historyId);
+      },
+    });
+
+    // Only forward events from THIS session. The agent runtime attaches
+    // sessionKey to every event of a run; without that filter, any
     // concurrent run in the same gateway process (report subagent, heartbeat,
     // another user's chat) would bleed into this user's Mercure stream.
     const unsubscribe = runtime.events.onAgentEvent((evt) => {
-      if (evt.stream !== "assistant" || evt.sessionKey !== sessionKey) {
+      if (evt.sessionKey !== sessionKey) {
+        return;
+      }
+      if (evt.stream === "tool") {
+        narrator.handleAgentEvent(evt);
+        return;
+      }
+      if (evt.stream !== "assistant") {
         return;
       }
       const delta = extractAssistantDelta(evt.data);

@@ -204,6 +204,66 @@ describe("processChatMessage", () => {
     }
   });
 
+  it("pushes sanitized progress events for tool starts, never leaking args", async () => {
+    // While the agent runs tools (DB queries) it emits no assistant deltas;
+    // the frontend used to see nothing for the whole tool phase. Tool starts
+    // must surface as `progress` events carrying only a generic label.
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: (listener) => {
+        listener?.({
+          runId: "r1",
+          seq: 1,
+          stream: "tool",
+          ts: 1,
+          sessionKey: SESSION_KEY,
+          data: {
+            phase: "start",
+            name: "exec",
+            toolCallId: "t1",
+            args: { command: "mysql -uroot -pSECRET -e 'SELECT 1'" },
+          },
+        });
+        // Tool event from a foreign session — must be dropped.
+        listener?.({
+          runId: "r2",
+          seq: 1,
+          stream: "tool",
+          ts: 2,
+          sessionKey: "agent:rabbitmq-99:rabbitmq:99:other",
+          data: { phase: "start", name: "exec", toolCallId: "t2" },
+        });
+        listener?.({
+          runId: "r1",
+          seq: 2,
+          stream: "assistant",
+          ts: 3,
+          sessionKey: SESSION_KEY,
+          data: { delta: "answer" },
+        });
+      },
+    });
+    const { historyManager } = createHistoryManagerMock();
+
+    await processChatMessage(createChatMessage(), historyManager, mercureConfig, runtime, logger);
+
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    const payloads = fetchMock.mock.calls.map((call) => {
+      const init = call[1] as { body?: string };
+      const params = new URLSearchParams(init.body ?? "");
+      return JSON.parse(params.get("data") ?? "{}") as Record<string, unknown>;
+    });
+
+    const progressEvents = payloads.filter((p) => p.type === "progress");
+    expect(progressEvents).toHaveLength(1);
+    expect(progressEvents[0].historyId).toBe(1);
+    expect(progressEvents[0].content).toBe("正在查询分析数据（第 1 步）…");
+    for (const evt of payloads) {
+      expect(JSON.stringify(evt)).not.toContain("SECRET");
+      expect(JSON.stringify(evt)).not.toContain("SELECT");
+    }
+  });
+
   it("prefers the latest assistant session message as the canonical response", async () => {
     const runtime = createRuntimeMock({
       workspaceDir,
@@ -336,9 +396,7 @@ describe("processChatMessage", () => {
         useSlaveTopic: true,
         masterId: 270,
         topicName: '专项[A] "测试"',
-        topics: [
-          { topicId: 585, useSlaveTopic: true, masterId: 270, topicName: '专项[A] "测试"' },
-        ],
+        topics: [{ topicId: 585, useSlaveTopic: true, masterId: 270, topicName: '专项[A] "测试"' }],
       }),
     } as unknown as TopicResolver;
 
