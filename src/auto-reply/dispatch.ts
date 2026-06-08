@@ -554,13 +554,17 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
       ? async (payload, info) => {
+          // Check both before and after hooks because hooks can await while newer replies finish.
           if (await shouldCancelForegroundReplyDelivery(foregroundReplyFence)) {
             return null;
           }
           const deliverPayload = configuredBeforeDeliver
             ? await configuredBeforeDeliver(payload, info)
             : payload;
-          if (!deliverPayload || (await shouldCancelForegroundReplyDelivery(foregroundReplyFence))) {
+          if (
+            !deliverPayload ||
+            (await shouldCancelForegroundReplyDelivery(foregroundReplyFence))
+          ) {
             return null;
           }
           return deliverPayload;

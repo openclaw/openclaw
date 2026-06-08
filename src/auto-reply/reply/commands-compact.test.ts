@@ -1,7 +1,6 @@
 // Tests compact command behavior for session compaction and reply status.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
 import {
   resolveAgentDirMock,
   resolveSessionAgentIdMock,
@@ -134,41 +133,6 @@ describe("handleCompactCommand", () => {
     expect(vi.mocked(compactEmbeddedAgentSession)).not.toHaveBeenCalled();
   });
 
-  it("replies to unauthorized native /compact instead of staying silent", async () => {
-    const params = buildCompactParams("/compact", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-
-    const result = await handleCompactCommand(
-      {
-        ...params,
-        ctx: {
-          ...params.ctx,
-          CommandSource: "native",
-          CommandTurn: {
-            kind: "native",
-            source: "native",
-            authorized: false,
-            body: "/compact",
-          },
-        },
-        command: {
-          ...params.command,
-          isAuthorizedSender: false,
-          senderId: "unauthorized",
-        },
-      } as HandleCommandsParams,
-      true,
-    );
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "You are not authorized to use this command." },
-    });
-    expect(vi.mocked(compactEmbeddedAgentSession)).not.toHaveBeenCalled();
-  });
-
   it("routes manual compaction with explicit trigger and context metadata", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
@@ -253,9 +217,7 @@ describe("handleCompactCommand", () => {
     expect(result?.reply?.text).toBe(
       "⚙️ Compaction skipped: context is already under the compaction target • Context 12.1k",
     );
-    expect(
-      getReplyPayloadMetadata(result?.reply as object)?.deliverDespiteSourceReplySuppression,
-    ).toBe(true);
+    expect(result?.reply?.isStatusNotice).toBe(true);
     expect(vi.mocked(incrementCompactionCount)).not.toHaveBeenCalled();
   });
 
@@ -283,9 +245,7 @@ describe("handleCompactCommand", () => {
     expect(result?.reply?.text).toBe(
       "⚙️ Compaction skipped: session was already compacted recently • Context 12.1k",
     );
-    expect(
-      getReplyPayloadMetadata(result?.reply as object)?.deliverDespiteSourceReplySuppression,
-    ).toBe(true);
+    expect(result?.reply?.isStatusNotice).toBe(true);
   });
 
   it("uses the canonical session agent when resolving the compaction session file", async () => {

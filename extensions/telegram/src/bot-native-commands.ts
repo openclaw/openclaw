@@ -1288,92 +1288,54 @@ export const registerTelegramNativeCommands = ({
           accountId: route.accountId,
         });
 
-        const { getReplyFromConfig } = await import("openclaw/plugin-sdk/reply-runtime");
-
-        // Resolve the command reply directly — status notices (/compact, /status,
-        // etc.) are simple text and bypass the full dispatch pipeline whose
-        // operation/fence/hook layers can silently drop the payload.
-        const directReply = await getReplyFromConfig(ctxPayload, { skillFilter }, executionCfg);
-        const directReplies = directReply
-          ? Array.isArray(directReply)
-            ? directReply
-            : [directReply]
-          : [];
-        const isDirectStatusNotice =
-          directReplies.length > 0 &&
-          directReplies.every(
-            (r) =>
-              r.isStatusNotice === true ||
-              resolveSendableOutboundReplyParts(r).trimmedText?.startsWith("⚙️"),
-          );
-
-        if (isDirectStatusNotice) {
-          const replyToId = String(msg.message_id);
-          const repliesForDelivery = directReplies.map((r) =>
-            r.replyToId ? r : Object.assign({}, r, { replyToId }),
-          );
-          const result = await deliverReplies({
-            replies: repliesForDelivery,
-            ...deliveryBaseOptions,
-            silent: false,
-          });
-          if (result.delivered) {
-            deliveryState.delivered = true;
-          }
-        } else {
-          // Non-status-notice commands need streaming/tools — full dispatch pipeline.
-          // Return the already-resolved reply so getReplyFromConfig is not called twice.
-          await telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
-            ctx: ctxPayload,
-            cfg: executionCfg,
-            replyResolver: async () => directReply,
-            dispatcherOptions: {
-              ...replyPipeline,
-              beforeDeliver: async (payload) => payload,
-              deliver: async (payload, _info) => {
-                if (
-                  shouldSuppressLocalTelegramExecApprovalPrompt({
-                    cfg: executionCfg,
-                    accountId: route.accountId,
-                    payload,
-                  })
-                ) {
-                  deliveryState.delivered = true;
-                  return;
-                }
-                const result = await deliverReplies({
-                  replies: [
-                    payload.replyToId
-                      ? payload
-                      : {
-                          ...payload,
-                          replyToId: String(msg.message_id),
-                        },
-                  ],
-                  ...deliveryBaseOptions,
-                  silent:
-                    runtimeTelegramCfg.silentErrorReplies === true && payload.isError === true,
-                });
-                if (result.delivered) {
-                  deliveryState.delivered = true;
-                }
-              },
-              onSkip: (_payload, info) => {
-                if (info.reason !== "silent") {
-                  deliveryState.skippedNonSilent += 1;
-                }
-              },
-              onError: (err, info) => {
-                runtime.error?.(danger(`telegram slash ${info.kind} reply failed: ${String(err)}`));
-              },
+        await telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
+          ctx: ctxPayload,
+          cfg: executionCfg,
+          dispatcherOptions: {
+            ...replyPipeline,
+            beforeDeliver: async (payload) => payload,
+            deliver: async (payload, _info) => {
+              if (
+                shouldSuppressLocalTelegramExecApprovalPrompt({
+                  cfg: executionCfg,
+                  accountId: route.accountId,
+                  payload,
+                })
+              ) {
+                deliveryState.delivered = true;
+                return;
+              }
+              const result = await deliverReplies({
+                replies: [
+                  payload.replyToId
+                    ? payload
+                    : {
+                        ...payload,
+                        replyToId: String(msg.message_id),
+                      },
+                ],
+                ...deliveryBaseOptions,
+                silent: runtimeTelegramCfg.silentErrorReplies === true && payload.isError === true,
+              });
+              if (result.delivered) {
+                deliveryState.delivered = true;
+              }
             },
-            replyOptions: {
-              skillFilter,
-              disableBlockStreaming,
-              onModelSelected,
+            onSkip: (_payload, info) => {
+              if (info.reason !== "silent") {
+                deliveryState.skippedNonSilent += 1;
+              }
             },
-          });
-        }
+            onError: (err, info) => {
+              runtime.error?.(danger(`telegram slash ${info.kind} reply failed: ${String(err)}`));
+            },
+          },
+          replyOptions: {
+            skillFilter,
+            disableBlockStreaming,
+            onModelSelected,
+          },
+        });
         if (!deliveryState.delivered && deliveryState.skippedNonSilent > 0) {
           await deliverReplies({
             replies: [{ text: EMPTY_RESPONSE_FALLBACK }],

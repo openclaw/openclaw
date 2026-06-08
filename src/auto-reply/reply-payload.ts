@@ -215,10 +215,6 @@ export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(p
   });
 }
 
-// Command handlers (/compact, /status, /stop, etc.) emit user-initiated system
-// feedback, not assistant source content. Mark replies so dispatch-from-config
-// does not drop them when sourceReplyDeliveryMode === "message_tool_only".
-// Native slash fast path must apply the same marking as handleInlineActions.
 export function markCommandReplyForDelivery(
   reply: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload | ReplyPayload[] | undefined {

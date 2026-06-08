@@ -14,9 +14,8 @@ import {
   resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-routing.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
-import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -200,18 +199,20 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   if (!compactRequested) {
     return null;
   }
-  const unauthorized = rejectUnauthorizedCommand(params, "/compact");
-  if (unauthorized) {
-    return unauthorized;
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /compact from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
   }
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   if (!targetSessionEntry?.sessionId) {
     return {
       shouldContinue: false,
-      reply: markReplyPayloadForSourceSuppressionDelivery({
+      reply: {
         text: "⚙️ Compaction unavailable (missing session id).",
         isStatusNotice: true,
-      }),
+      },
     };
   }
   const runtime = await loadCompactRuntime();
@@ -327,9 +328,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   runtime.enqueueSystemEvent(line, { sessionKey: params.sessionKey });
   return {
     shouldContinue: false,
-    reply: markReplyPayloadForSourceSuppressionDelivery({
+    reply: {
       text: `⚙️ ${line}`,
       isStatusNotice: true,
-    }),
+    },
   };
 };
