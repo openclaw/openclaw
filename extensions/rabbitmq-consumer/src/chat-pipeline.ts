@@ -4,9 +4,10 @@ import type { FeedCounter } from "./feed-counter.js";
 import type { HistoryManager } from "./history-manager.js";
 import { MercurePusher, StreamingMercurePusher } from "./mercure-pusher.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
-import { computeDateScope, detectReportRequest, type ReportPeriod } from "./report-trigger.js";
 import type { ReportTemplateLookup } from "./report-template-lookup.js";
+import { computeDateScope, detectReportRequest, type ReportPeriod } from "./report-trigger.js";
 import { ToolActivityNarrator } from "./tool-activity.js";
+import { pickTopicByName } from "./topic-match.js";
 import type { TopicResolver } from "./topic-resolver.js";
 import type { ChatMessage, MercureConfig } from "./types.js";
 
@@ -30,26 +31,52 @@ function extractAssistantDelta(data: Record<string, unknown>): string {
  * Resolve the user's report topic (entity_auth: uid -> masterId/slaveId).
  * Shared by the explicit-template and keyword report paths so both agree on
  * which feed_topic the report covers. Returns zeros when no resolver/mapping.
+ *
+ * When the requirement names a project ("...南方基金..."), the best title match
+ * WITHIN the user's authorized topics wins over the default primary topic — so
+ * a multi-project user gets the report they asked for, not just their most
+ * recently granted one. Matching is bounded to the authorized set, never the
+ * whole feed_topic table, so it can't be used to reach an unowned project.
  */
 async function resolveReportTopic(
   userId: string,
   topicResolver: TopicResolver | undefined,
   logger: PluginLogger,
+  requirement?: string,
 ): Promise<{ topicId: number; useSlaveTopic: boolean; masterId: number }> {
   if (!topicResolver) {
     return { topicId: 0, useSlaveTopic: false, masterId: 0 };
   }
   const resolution = await topicResolver.getTopicIdsByUser(userId);
-  const topicId = resolution.topicId ?? 0;
-  logger.info(
-    `[CHAT_PIPELINE] Resolved topicId=${topicId}, useSlaveTopic=${resolution.useSlaveTopic}, ` +
-      `masterId=${resolution.masterId} for userId=${userId}`,
-  );
-  return {
-    topicId,
+
+  // Default: the user's primary (most recently granted) topic.
+  let chosen = {
+    topicId: resolution.topicId ?? 0,
     useSlaveTopic: resolution.useSlaveTopic,
     masterId: resolution.masterId,
   };
+
+  // Prefer a requirement-named project when the user owns several.
+  if (requirement && resolution.topics.length > 1) {
+    const match = pickTopicByName(requirement, resolution.topics);
+    if (match && match.topicId !== chosen.topicId) {
+      logger.info(
+        `[CHAT_PIPELINE] Requirement matched topic ${JSON.stringify(match.topicName)} ` +
+          `(#${match.topicId}) over primary #${chosen.topicId} for userId=${userId}`,
+      );
+      chosen = {
+        topicId: match.topicId,
+        useSlaveTopic: match.useSlaveTopic,
+        masterId: match.masterId,
+      };
+    }
+  }
+
+  logger.info(
+    `[CHAT_PIPELINE] Resolved topicId=${chosen.topicId}, useSlaveTopic=${chosen.useSlaveTopic}, ` +
+      `masterId=${chosen.masterId} for userId=${userId}`,
+  );
+  return chosen;
 }
 
 /**
@@ -238,7 +265,7 @@ export async function processChatMessage(
         logger.info(
           `[CHAT_PIPELINE] Explicit template #${tpl.id} ("${tpl.name}") -> ${tpl.period} report`,
         );
-        const topic = await resolveReportTopic(userId, topicResolver, logger);
+        const topic = await resolveReportTopic(userId, topicResolver, logger, userMessage);
         return await createReportTaskAndRespond({
           period: tpl.period,
           // The user's typed text becomes the requirement; it may just be the
@@ -270,7 +297,12 @@ export async function processChatMessage(
     if (triggerResult.isReportRequest && downloadManager) {
       logger.info(`[CHAT_PIPELINE] Report request detected: ${triggerResult.period}`);
 
-      const topic = await resolveReportTopic(userId, topicResolver, logger);
+      const topic = await resolveReportTopic(
+        userId,
+        topicResolver,
+        logger,
+        triggerResult.requirement,
+      );
 
       return await createReportTaskAndRespond({
         period: triggerResult.period!,
