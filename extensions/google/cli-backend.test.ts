@@ -5,6 +5,7 @@ import { buildGoogleAntigravityCliBackend, buildGoogleGeminiCliBackend } from ".
 
 /** Sentences agy emits as pre-tool narration that should be filtered out. */
 const ANTIGRAVITY_NARRATION_POSITIVES = [
+  // "I will <verb> the <obj>." form
   "I will list the contents of the project workspace.",
   "I will read the memory files at ~/.openclaw.",
   "I will search the web for No Game No Life and Disboard.",
@@ -12,14 +13,23 @@ const ANTIGRAVITY_NARRATION_POSITIVES = [
   "I will view the remaining lines of the log.",
   "I will edit the file extensions/google/cli-backend.ts.",
   "I will search the repository for mentions of agy.",
+  // "I am <verb-ing> <obj>." form (background/long-running narration)
+  "I am running the openclaw status command in the background to inspect the overall state of the gateway, channels, and recent sessions.",
+  "I am running a deep probe status check (openclaw status --deep) in the background to inspect all active services, database states, and connection parameters.",
+  "I am fetching the latest 20 lines of Gateway logs to check for any hidden errors or warnings in the background execution.",
 ];
 
-/** Legitimate assistant sentences that start with "I will" and MUST stay. */
+/** Legitimate assistant sentences that start with "I will"/"I am" and MUST stay. */
 const ANTIGRAVITY_NARRATION_NEGATIVES = [
+  // I-will legitimates
   "I will see how to start a goal or update the plan.",
   "I will maintain a conversational tone by using natural language.",
   "I will add the following files to the list.",
   "I will return tomorrow with results.",
+  // I-am legitimates — short copular phrases must stay (min-20-char bound)
+  "I am running late today.",
+  "I am happy with the result.",
+  "I am a developer working on this project full time.",
 ];
 
 describe("google cli backends", () => {

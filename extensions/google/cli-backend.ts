@@ -29,6 +29,17 @@ const ANTIGRAVITY_CLI_DEFAULT_MODEL_REF = "google-antigravity-cli/gemini-3.5-fla
 const ANTIGRAVITY_PRE_TOOL_NARRATION =
   /^I will (list|read|view|check|search|edit|open|run|create|delete|write) [a-z][^\n]{2,120}\.\s*$/gim;
 
+/**
+ * agy also emits a long-running / background variant ("I am running the … in the
+ * background to inspect …", "I am fetching the latest …") before slow tool calls.
+ * Same intent as the "I will" narration: status-chatter that adds no value once
+ * the tool card is visible. Stricter min-length (20 chars after the verb) plus
+ * an -ing verb whitelist guards against false positives like "I am running late
+ * today." or "I am a developer …".
+ */
+const ANTIGRAVITY_PRE_TOOL_NARRATION_AM =
+  /^I am (listing|reading|viewing|checking|searching|editing|opening|running|creating|deleting|writing|fetching) [a-z][^\n]{20,200}\.\s*$/gim;
+
 export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
   return {
     id: "google-gemini-cli",
@@ -90,7 +101,10 @@ export function buildGoogleAntigravityCliBackend(): CliBackendPlugin {
     },
     nativeToolMode: "always-on",
     textTransforms: {
-      output: [{ from: ANTIGRAVITY_PRE_TOOL_NARRATION, to: "" }],
+      output: [
+        { from: ANTIGRAVITY_PRE_TOOL_NARRATION, to: "" },
+        { from: ANTIGRAVITY_PRE_TOOL_NARRATION_AM, to: "" },
+      ],
     },
     config: {
       command: "agy",
