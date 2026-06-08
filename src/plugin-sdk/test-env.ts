@@ -1,5 +1,5 @@
 // Focused public test helpers for environment, network, and time fixtures.
-import { resolveFfmpegBin } from "./media-runtime.js";
+import { resolveFfmpegBin } from "../media/ffmpeg-exec.js";
 
 export {
   createAuthCaptureJsonFetch,
