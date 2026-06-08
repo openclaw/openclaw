@@ -175,6 +175,7 @@ export type AppViewState = {
   sidebarContent: SidebarContent | null;
   sidebarError: string | null;
   splitRatio: number;
+  workspaceFileRailVisible: boolean;
   scrollToBottom: (opts?: { smooth?: boolean }) => void;
   devicesLoading: boolean;
   devicesError: string | null;

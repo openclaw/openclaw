@@ -1,11 +1,15 @@
 /* Split View Layout */
 .chat-workbench {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+.chat-workbench--with-rail {
+  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
 }
 
 .chat-split-container {

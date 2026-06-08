@@ -3545,6 +3545,11 @@ export function renderApp(state: AppViewState) {
                     onRefresh: refreshChatWorkspaceFiles,
                     onOpenFile: openChatWorkspaceFile,
                   },
+                  workspaceFileRailVisible: state.workspaceFileRailVisible,
+                  onToggleWorkspaceFileRail: () => {
+                    state.workspaceFileRailVisible = !state.workspaceFileRailVisible;
+                    requestHostUpdate();
+                  },
                   autoExpandToolCalls: false,
                   onRefresh: () => {
                     state.chatSideResult = null;

@@ -900,6 +900,7 @@ describe("chat composer workbench", () => {
         onRefresh,
         onOpenFile,
       },
+      workspaceFileRailVisible: true,
     });
 
     expect(

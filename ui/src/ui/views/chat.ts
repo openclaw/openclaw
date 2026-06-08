@@ -207,6 +207,8 @@ export type ChatProps = {
     onRefresh: () => void;
     onOpenFile: (name: string) => void;
   };
+  workspaceFileRailVisible?: boolean;
+  onToggleWorkspaceFileRail?: () => void;
 };
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
@@ -2058,7 +2060,9 @@ export function renderChat(props: ChatProps) {
         : nothing}
       ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
 
-      <div class="chat-workbench">
+      <div
+        class="chat-workbench${props.workspaceFileRailVisible ? " chat-workbench--with-rail" : ""}"
+      >
         <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
           <div
             class="chat-main"
@@ -2096,7 +2100,7 @@ export function renderChat(props: ChatProps) {
               `
             : nothing}
         </div>
-        ${renderWorkspaceFileRail(props.workspaceFiles)}
+        ${props.workspaceFileRailVisible ? renderWorkspaceFileRail(props.workspaceFiles) : nothing}
       </div>
 
       ${renderChatQueue({
@@ -2203,6 +2207,28 @@ export function renderChat(props: ChatProps) {
               <span class="agent-chat__control-label">${t("chat.composer.attachFile")}</span>
             </button>
 
+            ${props.workspaceFiles && props.onToggleWorkspaceFileRail
+              ? html`
+                  <button
+                    type="button"
+                    class="agent-chat__input-btn ${props.workspaceFileRailVisible
+                      ? "agent-chat__input-btn--active"
+                      : ""}"
+                    @click=${props.onToggleWorkspaceFileRail}
+                    title=${props.workspaceFileRailVisible
+                      ? "Hide workspace files"
+                      : "Show workspace files"}
+                    aria-label=${props.workspaceFileRailVisible
+                      ? "Hide workspace files"
+                      : "Show workspace files"}
+                  >
+                    ${icons.fileText}
+                    <span class="agent-chat__control-label"
+                      >${props.workspaceFileRailVisible ? "Hide Files" : "Files"}</span
+                    >
+                  </button>
+                `
+              : nothing}
             ${props.onToggleRealtimeTalk
               ? html`
                   <button

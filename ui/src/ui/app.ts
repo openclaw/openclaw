@@ -340,6 +340,7 @@ export class OpenClawApp extends LitElement {
   @state() sidebarContent: SidebarContent | null = null;
   @state() sidebarError: string | null = null;
   @state() splitRatio = this.settings.splitRatio;
+  @state() workspaceFileRailVisible = false;
 
   @state() nodesLoading = false;
   @state() nodes: Array<Record<string, unknown>> = [];
@@ -1487,6 +1488,10 @@ export class OpenClawApp extends LitElement {
       this.sidebarError = null;
       this.sidebarCloseTimer = null;
     }, 200);
+  }
+
+  handleToggleWorkspaceFileRail() {
+    this.workspaceFileRailVisible = !this.workspaceFileRailVisible;
   }
 
   handleSplitRatioChange(ratio: number) {
