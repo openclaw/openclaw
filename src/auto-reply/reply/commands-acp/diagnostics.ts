@@ -5,6 +5,7 @@ import { getAcpRuntimeBackend, requireAcpRuntimeBackend } from "../../../acp/run
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import { loadSessionStore } from "../../../config/sessions.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { formatRelativeTimestamp } from "../../../infra/format-time/format-relative.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -158,7 +159,15 @@ export function handleAcpInstallAction(
   return stopWithText(lines.join("\n"));
 }
 
-function formatAcpSessionLine(params: {
+function formatSpawnedAtUtc(ms: number | undefined): string {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) {
+    return "";
+  }
+  // Compact UTC, e.g. "2026-06-05 21:08Z"
+  return `${new Date(ms).toISOString().slice(0, 16).replace("T", " ")}Z`;
+}
+
+export function formatAcpSessionLine(params: {
   key: string;
   entry: SessionEntry;
   currentSessionKey?: string;
@@ -171,7 +180,18 @@ function formatAcpSessionLine(params: {
   const marker = params.currentSessionKey === params.key ? "*" : " ";
   const label = normalizeOptionalString(params.entry.label) || acp.agent;
   const threadText = params.threadId ? `, thread:${params.threadId}` : "";
-  return `${marker} ${label} (${acp.mode}, ${acp.state}, backend:${acp.backend}${threadText}) -> ${params.key}`;
+
+  const spawnedAt = formatSpawnedAtUtc(params.entry.sessionStartedAt);
+  const spawnedText = spawnedAt ? ` · spawned ${spawnedAt}` : "";
+
+  const lastActiveMs = params.entry.lastInteractionAt;
+  const lastActive =
+    typeof lastActiveMs === "number" && lastActiveMs > 0
+      ? formatRelativeTimestamp(lastActiveMs, { fallback: "" })
+      : "";
+  const lastActiveText = lastActive ? ` · last ${lastActive}` : "";
+
+  return `${marker} ${label} (${acp.mode}, ${acp.state}, backend:${acp.backend}${threadText})${spawnedText}${lastActiveText} -> ${params.key}`;
 }
 
 export function handleAcpSessionsAction(
