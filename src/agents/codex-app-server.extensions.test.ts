@@ -324,6 +324,79 @@ export default { id: "tool-result-middleware", register(api) {
     expect(result.content).toEqual([{ type: "text", text: "exec installed lazily compacted" }]);
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
   });
+
+  it("loads missing installed middleware when bundled middleware is already active", async () => {
+    const bundledDir = createBundledTempDir();
+    const installedDir = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    writeTempPlugin({
+      dir: bundledDir,
+      id: "bundled-tool-result-middleware",
+      filename: "index.mjs",
+      manifest: {
+        contracts: {
+          agentToolResultMiddleware: ["codex"],
+        },
+      },
+      body: `export default { id: "bundled-tool-result-middleware", register(api) {
+  api.registerAgentToolResultMiddleware(async (event) => ({
+    result: { ...event.result, content: [{ type: "text", text: event.result.content[0].text + " | bundled" }] }
+  }), { runtimes: ["codex"] });
+} };`,
+    });
+    const installedPluginFile = writeTempPlugin({
+      dir: installedDir,
+      id: "installed-tool-result-middleware",
+      manifest: {
+        activation: {
+          onStartup: false,
+        },
+        contracts: {
+          agentToolResultMiddleware: ["codex"],
+        },
+      },
+      body: `export default { id: "installed-tool-result-middleware", register(api) {
+  api.registerAgentToolResultMiddleware(async (event) => ({
+    result: { ...event.result, content: [{ type: "text", text: event.result.content[0].text + " | installed" }] }
+  }), { runtimes: ["codex"] });
+} };`,
+    });
+
+    loadOpenClawPlugins({
+      onlyPluginIds: ["bundled-tool-result-middleware"],
+      config: {
+        plugins: {
+          entries: {
+            "bundled-tool-result-middleware": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+    setRuntimeConfigSnapshot({
+      plugins: {
+        load: { paths: [installedPluginFile] },
+        allow: ["installed-tool-result-middleware"],
+      },
+    });
+
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(1);
+
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" });
+    const result = await runner.applyToolResultMiddleware({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: { command: "git status" },
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "raw | bundled | installed" }]);
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(1);
+  });
 });
 
 describe("Codex app-server extension factories", () => {

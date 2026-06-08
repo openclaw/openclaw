@@ -12,6 +12,7 @@ import {
 } from "./agent-tool-result-middleware.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
+import { getActivePluginRegistry } from "./runtime.js";
 
 const log = createSubsystemLogger("plugins/agent-tool-result-middleware");
 
@@ -36,6 +37,18 @@ function listMiddlewareOwnerPluginIds(params: {
   return pluginIds;
 }
 
+function listActiveMiddlewareOwnerPluginIds(
+  runtime: AgentToolResultMiddlewareRuntime,
+): Set<string> {
+  const pluginIds = new Set<string>();
+  for (const entry of getActivePluginRegistry()?.agentToolResultMiddlewares ?? []) {
+    if (entry.runtimes.includes(runtime)) {
+      pluginIds.add(entry.pluginId);
+    }
+  }
+  return pluginIds;
+}
+
 export async function loadAgentToolResultMiddlewaresForRuntime(params: {
   runtime: AgentToolResultMiddlewareRuntime;
   config?: OpenClawConfig;
@@ -44,9 +57,6 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
   manifestRegistry?: PluginManifestRegistry;
 }): Promise<AgentToolResultMiddleware[]> {
   const activeHandlers = listAgentToolResultMiddlewares(params.runtime);
-  if (activeHandlers.length > 0) {
-    return activeHandlers;
-  }
 
   try {
     const config = params.config ?? (await resolveRuntimeConfig());
@@ -63,27 +73,37 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
       runtime: params.runtime,
     });
     if (pluginIds.length === 0) {
-      return [];
+      return activeHandlers;
     }
+    const activePluginIds = listActiveMiddlewareOwnerPluginIds(params.runtime);
+    const missingPluginIds = pluginIds.filter((pluginId) => !activePluginIds.has(pluginId));
+    if (missingPluginIds.length === 0) {
+      return activeHandlers;
+    }
+    const missingPluginIdSet = new Set(missingPluginIds);
 
     const runtimeRegistry =
       getLoadedRuntimePluginRegistry({
         workspaceDir: params.workspaceDir,
         env,
-        requiredPluginIds: pluginIds,
+        requiredPluginIds: missingPluginIds,
       }) ??
       loadOpenClawPlugins({
         config,
         workspaceDir: params.workspaceDir,
         env,
-        onlyPluginIds: pluginIds,
+        onlyPluginIds: missingPluginIds,
         manifestRegistry,
         activate: false,
       });
 
-    return runtimeRegistry.agentToolResultMiddlewares
-      .filter((entry) => entry.runtimes.includes(params.runtime))
+    const missingHandlers = runtimeRegistry.agentToolResultMiddlewares
+      .filter(
+        (entry) =>
+          missingPluginIdSet.has(entry.pluginId) && entry.runtimes.includes(params.runtime),
+      )
       .map((entry) => entry.handler);
+    return [...activeHandlers, ...missingHandlers];
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     log.warn(`[${params.runtime}] failed to load tool result middleware plugins: ${detail}`);
