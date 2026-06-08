@@ -784,17 +784,20 @@ export function createFollowupRunner(params: {
                       emitChannelProgress: shouldEmitToolResultProgress(),
                     });
                   },
-                  onCommentaryText: async ({ text, itemId }) => {
-                    await forwardFollowupProgressEvent({
-                      evt: {
-                        stream: "item",
-                        data: { kind: "preamble", progressText: text, itemId },
-                      },
-                      opts,
-                      detailMode: toolProgressDetail,
-                      emitChannelProgress: shouldEmitToolResultProgress(),
-                    });
-                  },
+                  onCommentaryText:
+                    opts?.commentaryProgressEnabled === true && opts.onItemEvent
+                      ? async ({ text, itemId }) => {
+                          await forwardFollowupProgressEvent({
+                            evt: {
+                              stream: "item",
+                              data: { kind: "preamble", progressText: text, itemId },
+                            },
+                            opts,
+                            detailMode: toolProgressDetail,
+                            emitChannelProgress: shouldEmitToolResultProgress(),
+                          });
+                        }
+                      : undefined,
                   transformResult:
                     queued.currentInboundEventKind === "room_event"
                       ? (resultLocal) =>
@@ -830,6 +833,7 @@ export function createFollowupRunner(params: {
                     ...resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
                       config: runtimeConfig,
                     }),
+                    classifyCommentaryText: opts?.commentaryProgressEnabled !== undefined,
                     thinkLevel: run.thinkLevel,
                     timeoutMs: run.timeoutMs,
                     runId,

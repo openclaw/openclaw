@@ -1397,29 +1397,37 @@ describe("createFollowupRunner runtime config", () => {
       },
     };
     const onItemEvent = vi.fn(async () => {});
-    runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "item",
-        data: {
-          kind: "preamble",
-          itemId: "commentary-1",
-          progressText: "Let me check the files.",
-        },
-      });
-      return {
-        payloads: [{ text: "final" }],
-        meta: {
-          agentMeta: {
-            provider: "claude-cli",
-            model: "claude-opus-4-7",
+    runCliAgentMock.mockImplementationOnce(
+      async (params: {
+        runId: string;
+        classifyCommentaryText?: boolean;
+        emitCommentaryText?: boolean;
+      }) => {
+        expect(params.classifyCommentaryText).toBe(true);
+        expect(params.emitCommentaryText).toBe(true);
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "item",
+          data: {
+            kind: "preamble",
+            itemId: "commentary-1",
+            progressText: "Let me check the files.",
           },
-        },
-      };
-    });
+        });
+        return {
+          payloads: [{ text: "final" }],
+          meta: {
+            agentMeta: {
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+            },
+          },
+        };
+      },
+    );
 
     const runner = createFollowupRunner({
-      opts: { onItemEvent },
+      opts: { onItemEvent, commentaryProgressEnabled: true },
       typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "anthropic/claude-opus-4-7",

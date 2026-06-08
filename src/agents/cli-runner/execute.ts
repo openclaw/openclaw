@@ -556,7 +556,8 @@ export async function executePreparedCliRun(
             },
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
-            onCommentaryText: emitCliCommentaryText,
+            classifyCommentaryText: context.params.classifyCommentaryText,
+            onCommentaryText: context.params.emitCommentaryText ? emitCliCommentaryText : undefined,
             cleanup: async () => {
               try {
                 await fallbackClaudeSkillsPlugin?.cleanup();
@@ -601,7 +602,10 @@ export async function executePreparedCliRun(
               },
               onToolUseStart: emitCliToolUseStart,
               onToolResult: emitCliToolResult,
-              onCommentaryText: emitCliCommentaryText,
+              classifyCommentaryText: context.params.classifyCommentaryText,
+              onCommentaryText: context.params.emitCommentaryText
+                ? emitCliCommentaryText
+                : undefined,
             })
           : null;
         const supervisor = executeDeps.getProcessSupervisor();

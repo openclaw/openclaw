@@ -2199,22 +2199,30 @@ describe("runAgentTurnWithFallback", () => {
       model: "claude-opus-4-6",
       attempts: [],
     }));
-    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-        "../../infra/agent-events.js",
-      );
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "assistant",
-        data: { text: "Hello", delta: "Hello" },
-      });
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "assistant",
-        data: { text: "Hello world", delta: " world" },
-      });
-      return { payloads: [{ text: "Hello world" }], meta: {} };
-    });
+    state.runCliAgentMock.mockImplementationOnce(
+      async (params: {
+        runId: string;
+        classifyCommentaryText?: boolean;
+        emitCommentaryText?: boolean;
+      }) => {
+        expect(params.classifyCommentaryText).toBe(false);
+        expect(params.emitCommentaryText).toBe(false);
+        const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+          "../../infra/agent-events.js",
+        );
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "assistant",
+          data: { text: "Hello", delta: "Hello" },
+        });
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "assistant",
+          data: { text: "Hello world", delta: " world" },
+        });
+        return { payloads: [{ text: "Hello world" }], meta: {} };
+      },
+    );
 
     const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
       async (_payload) => undefined,
@@ -2259,22 +2267,30 @@ describe("runAgentTurnWithFallback", () => {
       model: "claude-opus-4-6",
       attempts: [],
     }));
-    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-        "../../infra/agent-events.js",
-      );
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "assistant",
-        data: { text: "Hello", delta: "Hello" },
-      });
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "assistant",
-        data: { text: "Hello world", delta: " world" },
-      });
-      return { payloads: [{ text: "Hello world" }], meta: {} };
-    });
+    state.runCliAgentMock.mockImplementationOnce(
+      async (params: {
+        runId: string;
+        classifyCommentaryText?: boolean;
+        emitCommentaryText?: boolean;
+      }) => {
+        expect(params.classifyCommentaryText).toBe(false);
+        expect(params.emitCommentaryText).toBe(false);
+        const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+          "../../infra/agent-events.js",
+        );
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "assistant",
+          data: { text: "Hello", delta: "Hello" },
+        });
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "assistant",
+          data: { text: "Hello world", delta: " world" },
+        });
+        return { payloads: [{ text: "Hello world" }], meta: {} };
+      },
+    );
 
     let firstPreviewStarted: (() => void) | undefined;
     let releaseFirstPreview: (() => void) | undefined;
@@ -2342,32 +2358,40 @@ describe("runAgentTurnWithFallback", () => {
       model: "claude-opus-4-6",
       attempts: [],
     }));
-    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-        "../../infra/agent-events.js",
-      );
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "Bash",
-          toolCallId: "toolu_01ABCD",
-          args: { command: "ls -la" },
-        },
-      });
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "tool",
-        data: {
-          phase: "result",
-          name: "Bash",
-          toolCallId: "toolu_01ABCD",
-          isError: false,
-        },
-      });
-      return { payloads: [{ text: "done" }], meta: {} };
-    });
+    state.runCliAgentMock.mockImplementationOnce(
+      async (params: {
+        runId: string;
+        classifyCommentaryText?: boolean;
+        emitCommentaryText?: boolean;
+      }) => {
+        expect(params.classifyCommentaryText).toBe(false);
+        expect(params.emitCommentaryText).toBe(false);
+        const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+          "../../infra/agent-events.js",
+        );
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "Bash",
+            toolCallId: "toolu_01ABCD",
+            args: { command: "ls -la" },
+          },
+        });
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "tool",
+          data: {
+            phase: "result",
+            name: "Bash",
+            toolCallId: "toolu_01ABCD",
+            isError: false,
+          },
+        });
+        return { payloads: [{ text: "done" }], meta: {} };
+      },
+    );
 
     const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined);
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
@@ -2413,22 +2437,30 @@ describe("runAgentTurnWithFallback", () => {
       model: "claude-opus-4-6",
       attempts: [],
     }));
-    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-        "../../infra/agent-events.js",
-      );
-      // Inter-tool commentary surfaces as a stream:"item", kind:"preamble" agent event.
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "item",
-        data: {
-          kind: "preamble",
-          itemId: "commentary-1",
-          progressText: "Let me check the files.",
-        },
-      });
-      return { payloads: [{ text: "done" }], meta: {} };
-    });
+    state.runCliAgentMock.mockImplementationOnce(
+      async (params: {
+        runId: string;
+        classifyCommentaryText?: boolean;
+        emitCommentaryText?: boolean;
+      }) => {
+        expect(params.classifyCommentaryText).toBe(true);
+        expect(params.emitCommentaryText).toBe(true);
+        const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+          "../../infra/agent-events.js",
+        );
+        // Inter-tool commentary surfaces as a stream:"item", kind:"preamble" agent event.
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "item",
+          data: {
+            kind: "preamble",
+            itemId: "commentary-1",
+            progressText: "Let me check the files.",
+          },
+        });
+        return { payloads: [{ text: "done" }], meta: {} };
+      },
+    );
 
     const onItemEvent = vi.fn<NonNullable<GetReplyOptions["onItemEvent"]>>(async () => undefined);
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
@@ -2440,7 +2472,7 @@ describe("runAgentTurnWithFallback", () => {
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
-      opts: { onItemEvent },
+      opts: { onItemEvent, commentaryProgressEnabled: true },
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
       blockStreamingEnabled: false,

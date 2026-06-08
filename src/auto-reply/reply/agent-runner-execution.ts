@@ -2137,13 +2137,16 @@ export async function runAgentTurnWithFallback(params: {
                       }),
                     ]);
                   },
-                  onCommentaryText: async ({ text, itemId }) => {
-                    await params.opts?.onItemEvent?.({
-                      kind: "preamble",
-                      progressText: text,
-                      itemId,
-                    });
-                  },
+                  onCommentaryText:
+                    params.opts?.commentaryProgressEnabled === true && params.opts.onItemEvent
+                      ? async ({ text, itemId }) => {
+                          await params.opts?.onItemEvent?.({
+                            kind: "preamble",
+                            progressText: text,
+                            itemId,
+                          });
+                        }
+                      : undefined,
                   onErrorBeforeLifecycle: async () => {
                     if (!rollbackFallbackCandidateSelection) {
                       return;
@@ -2187,6 +2190,7 @@ export async function runAgentTurnWithFallback(params: {
                     inputProvenance: params.followupRun.run.inputProvenance,
                     provider: cliExecutionProvider,
                     model,
+                    classifyCommentaryText: params.opts?.commentaryProgressEnabled !== undefined,
                     thinkLevel: params.followupRun.run.thinkLevel,
                     timeoutMs: params.followupRun.run.timeoutMs,
                     runId,

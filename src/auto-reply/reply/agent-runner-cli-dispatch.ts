@@ -12,8 +12,12 @@ import { updateSessionStore, type SessionEntry } from "../../config/sessions.js"
 import type { AgentEventPayload } from "../../infra/agent-events.js";
 import { emitAgentEvent, onAgentEvent } from "../../infra/agent-events.js";
 
-function shouldBridgeCliAssistantTextToReasoning(provider: string): boolean {
+function isClaudeCliProvider(provider: string): boolean {
   return normalizeLowercaseStringOrEmpty(provider) === "claude-cli";
+}
+
+function shouldBridgeCliAssistantTextToReasoning(provider: string): boolean {
+  return isClaudeCliProvider(provider);
 }
 
 function createAgentEventBridge<T>(params: {
@@ -63,6 +67,11 @@ type AgentEventBridge = {
   drain: () => Promise<void>;
 };
 
+type CommentaryTextPayload = {
+  text: string;
+  itemId?: string;
+};
+
 async function stopAgentEventBridges(bridges: readonly AgentEventBridge[]): Promise<void> {
   for (const bridge of bridges) {
     bridge.unsubscribe();
@@ -94,6 +103,17 @@ function createAssistantTextBridge(params: {
       return text;
     },
   });
+}
+
+function readCommentaryTextPayload(evt: AgentEventPayload): CommentaryTextPayload | undefined {
+  if (evt.stream !== "item" || evt.data.kind !== "preamble") {
+    return undefined;
+  }
+  const text = typeof evt.data.progressText === "string" ? evt.data.progressText.trim() : "";
+  if (!text) {
+    return undefined;
+  }
+  return { text, itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined };
 }
 
 export type CliToolEventPayload = {
@@ -190,22 +210,13 @@ function createToolEventBridge(params: {
 function createCommentaryEventBridge(params: {
   runId: string;
   suppressed?: boolean;
-  deliver?: (payload: { text: string; itemId?: string }) => Promise<void>;
+  deliver?: (payload: CommentaryTextPayload) => Promise<void>;
 }) {
   return createAgentEventBridge({
     runId: params.runId,
     suppressed: params.suppressed,
     deliver: params.deliver,
-    read: (evt) => {
-      if (evt.stream !== "item" || evt.data.kind !== "preamble") {
-        return undefined;
-      }
-      const text = typeof evt.data.progressText === "string" ? evt.data.progressText.trim() : "";
-      if (!text) {
-        return undefined;
-      }
-      return { text, itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined };
-    },
+    read: readCommentaryTextPayload,
   });
 }
 
@@ -261,10 +272,17 @@ export async function runCliAgentWithLifecycle(params: {
     suppressed: params.suppressAssistantBridge,
     deliver: params.onCommentaryText,
   });
-  const bridges = [assistantBridge, reasoningBridge, toolBridge, commentaryBridge];
+  const bridges = [assistantBridge, reasoningBridge, toolBridge, commentaryBridge].filter(
+    (bridge): bridge is AgentEventBridge => bridge !== undefined,
+  );
   let lifecycleTerminalEmitted = false;
   try {
-    const rawResult = await runCliAgent(params.runParams);
+    const rawResult = await runCliAgent({
+      ...params.runParams,
+      classifyCommentaryText:
+        params.runParams.classifyCommentaryText ?? Boolean(params.onCommentaryText),
+      emitCommentaryText: Boolean(params.onCommentaryText),
+    });
     const result = params.transformResult?.(rawResult) ?? rawResult;
     await stopAgentEventBridges(bridges);
 
