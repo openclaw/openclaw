@@ -419,6 +419,7 @@ export async function runCommandWithTimeout(
     let killIssuedByAbort = false;
     let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     let closeFallbackTimer: NodeJS.Timeout | null = null;
+    let processTreeForceKillTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
     const shouldTrackOutputTimeout =
       typeof noOutputTimeoutMs === "number" &&
@@ -442,6 +443,14 @@ export async function runCommandWithTimeout(
       closeFallbackTimer = null;
     };
 
+    const clearProcessTreeForceKillTimer = () => {
+      if (!processTreeForceKillTimer) {
+        return;
+      }
+      clearTimeout(processTreeForceKillTimer);
+      processTreeForceKillTimer = null;
+    };
+
     const killChild = (byTimeout = true) => {
       if (settled || typeof child?.kill !== "function") {
         return;
@@ -462,16 +471,23 @@ export async function runCommandWithTimeout(
               stdio: "ignore",
               windowsHide: true,
             });
-            setTimeout(() => {
-              try {
-                spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-                  stdio: "ignore",
-                  windowsHide: true,
-                });
-              } catch {
-                child.kill("SIGKILL");
-              }
-            }, COMMAND_PROCESS_TREE_KILL_GRACE_MS).unref();
+            if (!processTreeForceKillTimer) {
+              processTreeForceKillTimer = setTimeout(() => {
+                processTreeForceKillTimer = null;
+                if (settled) {
+                  return;
+                }
+                try {
+                  spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+                    stdio: "ignore",
+                    windowsHide: true,
+                  });
+                } catch {
+                  child.kill("SIGKILL");
+                }
+              }, COMMAND_PROCESS_TREE_KILL_GRACE_MS);
+              processTreeForceKillTimer.unref();
+            }
             return;
           } catch {
             // Fall through to Node's direct child kill as a last resort.
@@ -543,6 +559,7 @@ export async function runCommandWithTimeout(
       clearTimeout(timer);
       clearNoOutputTimer();
       clearCloseFallbackTimer();
+      clearProcessTreeForceKillTimer();
       removeAbortListener?.();
       removeAbortListener = null;
       reject(err);
@@ -568,6 +585,7 @@ export async function runCommandWithTimeout(
       clearTimeout(timer);
       clearNoOutputTimer();
       clearCloseFallbackTimer();
+      clearProcessTreeForceKillTimer();
       removeAbortListener?.();
       removeAbortListener = null;
       const resolvedSignal = childExitState?.signal ?? signalValue ?? child.signalCode ?? null;
