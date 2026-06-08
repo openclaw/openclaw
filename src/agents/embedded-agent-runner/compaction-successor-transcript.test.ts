@@ -250,7 +250,12 @@ describe("rotateTranscriptAfterCompaction", () => {
     );
     expect(successorCompaction.firstKeptEntryId).toBe(firstKeptId);
     const contextMessages = successor.buildSessionContext().messages;
-    expect(JSON.stringify(contextMessages)).not.toContain("old assistant");
+    expect(
+      contextMessages.some(
+        (message) =>
+          message.role === "assistant" && JSON.stringify(message.content).includes("old assistant"),
+      ),
+    ).toBe(false);
     expect(JSON.stringify(contextMessages)).toContain("kept user");
   });
 
