@@ -119,7 +119,7 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
     expect(env.OPENCLAW_GATEWAY_SERVICE_PID).toBeUndefined();
   });
 
-  it("defaults to the git/dev channel and omits --timeout when not provided", async () => {
+  it("omits --channel (no config mutation) and --timeout when not provided", async () => {
     const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({ code: 0 }));
     await runPostCoreFinalizeAfterGatewayUpdate({
       result: gitOkResult(),
@@ -127,11 +127,9 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
       spawnFinalize,
     });
     const call = spawnFinalize.mock.calls[0][0];
-    // git/source updates default to the dev channel (matches runGatewayUpdate),
-    // not the package (stable) channel.
-    const channelIdx = call.argv.indexOf("--channel");
-    expect(channelIdx).toBeGreaterThan(-1);
-    expect(call.argv[channelIdx + 1]).toBe("dev");
+    // No `--channel` unless the caller has a configured channel: `update finalize`
+    // persists any `--channel`, so a defaulted one would mutate openclaw.json.
+    expect(call.argv).not.toContain("--channel");
     expect(call.argv).not.toContain("--timeout");
     // No per-step timeout requested → outer backstop is the floor.
     expect(call.timeoutMs).toBe(30 * 60_000);
