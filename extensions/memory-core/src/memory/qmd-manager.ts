@@ -549,7 +549,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     // fall back to best-effort idempotent `qmd collection add`.
     const existing = await this.listCollectionsBestEffort();
 
-    await this.migrateLegacyUnscopedCollections(existing);
+    await this.migrateLegacyScopedCollections(existing);
 
     for (const collection of this.qmd.collections) {
       const listed = existing.get(collection.name);
@@ -790,14 +790,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  private async migrateLegacyUnscopedCollections(
+  private async migrateLegacyScopedCollections(
     existing: Map<string, ListedCollection>,
   ): Promise<void> {
     for (const collection of this.qmd.collections) {
-      if (existing.has(collection.name)) {
-        continue;
-      }
-      const legacyName = this.deriveLegacyCollectionName(collection.name);
+      const legacyName = this.deriveLegacyScopedName(collection.name);
       if (!legacyName) {
         continue;
       }
@@ -823,13 +820,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  private deriveLegacyCollectionName(scopedName: string): string | null {
-    const agentSuffix = `-${this.sanitizeCollectionNameSegment(this.agentId)}`;
-    if (!scopedName.endsWith(agentSuffix)) {
+  private deriveLegacyScopedName(unscopedName: string): string | null {
+    const agentSegment = this.sanitizeCollectionNameSegment(this.agentId);
+    if (!agentSegment) {
       return null;
     }
-    const legacyName = scopedName.slice(0, -agentSuffix.length).trim();
-    return legacyName || null;
+    return `${unscopedName}-${agentSegment}`;
   }
 
   private canMigrateLegacyCollection(
@@ -2487,7 +2483,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private pickSessionCollectionName(): string {
     const existing = new Set(this.qmd.collections.map((collection) => collection.name));
-    const base = `sessions-${this.sanitizeCollectionNameSegment(this.agentId)}`;
+    const base = "sessions";
     if (!existing.has(base)) {
       return base;
     }

@@ -97,7 +97,7 @@ binary advertises support for multiple collection filters, OpenClaw searches all
 same-source collections with one command:
 
 ```bash
-qmd search "router notes" --json -n 10 -c memory-root-main -c memory-dir-main
+qmd search "router notes" --json -n 10 -c memory-root -c memory-dir
 ```
 
 This avoids starting one QMD subprocess for every durable-memory collection.
