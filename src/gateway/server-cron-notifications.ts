@@ -9,7 +9,6 @@ import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveCronDeliveryPlan,
-  resolveFailureDestination,
   resolveFailureDestinationResolution,
   sendCronAnnouncePayloadStrict,
   sendFailureNotificationAnnounce,
