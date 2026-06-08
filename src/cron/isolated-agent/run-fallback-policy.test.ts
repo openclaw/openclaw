@@ -314,4 +314,115 @@ describe("resolveCronFallbacksOverride", () => {
     expect(cliDocs).toContain("Local-provider preflight checks walk configured fallbacks");
     expect(automationDocs).toContain("Local-provider preflight checks walk configured fallbacks");
   });
+
+  // Tests for #91362: global fallback inheritance for isolated cron sessions
+  it("inherits global fallbacks when agent model is a string", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"],
+          },
+        },
+        list: [
+          {
+            id: "main",
+            model: "deepseek/deepseek-v4-pro", // string model, no explicit fallbacks
+          },
+        ],
+      },
+    };
+    expect(
+      resolveCronFallbacksOverride({
+        cfg,
+        agentId: "main",
+        job: makeJob({ kind: "agentTurn", message: "summarize" }),
+      }),
+    ).toEqual(["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"]);
+  });
+
+  it("inherits global fallbacks when agent model has primary but no fallbacks field", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["deepseek/deepseek-v4-flash"],
+          },
+        },
+        list: [
+          {
+            id: "main",
+            model: { primary: "deepseek/deepseek-v4-pro" }, // no fallbacks field
+          },
+        ],
+      },
+    };
+    expect(
+      resolveCronFallbacksOverride({
+        cfg,
+        agentId: "main",
+        job: makeJob({ kind: "agentTurn", message: "summarize" }),
+      }),
+    ).toEqual(["deepseek/deepseek-v4-flash"]);
+  });
+
+  it("respects explicit agent fallbacks array (does not inherit globals)", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"],
+          },
+        },
+        list: [
+          {
+            id: "main",
+            model: {
+              primary: "deepseek/deepseek-v4-pro",
+              fallbacks: ["openai/gpt-5.4"], // explicit fallbacks
+            },
+          },
+        ],
+      },
+    };
+    expect(
+      resolveCronFallbacksOverride({
+        cfg,
+        agentId: "main",
+        job: makeJob({ kind: "agentTurn", message: "summarize" }),
+      }),
+    ).toEqual(["openai/gpt-5.4"]); // uses agent's own fallbacks, not globals
+  });
+
+  it("respects explicit empty fallbacks array (disables inheritance)", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["deepseek/deepseek-v4-flash"],
+          },
+        },
+        list: [
+          {
+            id: "main",
+            model: {
+              primary: "deepseek/deepseek-v4-pro",
+              fallbacks: [], // explicitly disabled
+            },
+          },
+        ],
+      },
+    };
+    expect(
+      resolveCronFallbacksOverride({
+        cfg,
+        agentId: "main",
+        job: makeJob({ kind: "agentTurn", message: "summarize" }),
+      }),
+    ).toStrictEqual([]); // respects explicit disable
+  });
 });
