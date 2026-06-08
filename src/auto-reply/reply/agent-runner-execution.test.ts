@@ -5161,7 +5161,7 @@ describe("runAgentTurnWithFallback", () => {
       const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
       const result = await runAgentTurnWithFallback(
         createMinimalRunAgentTurnParams({
-          sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]!),
+          sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]),
         }),
       );
 
