@@ -20,7 +20,11 @@ import {
   type OperatorScope,
 } from "../../gateway/method-scopes.js";
 import { getOperatorApprovalRuntimeToken } from "../../gateway/operator-approval-runtime-token.js";
-import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../../infra/device-identity.js";
+import {
+  loadDeviceIdentityIfPresent,
+  loadOrCreateDeviceIdentity,
+  type DeviceIdentity,
+} from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPositiveIntegerParam, readStringParam } from "./common.js";
 
@@ -222,6 +226,7 @@ function resolveApprovalRuntimeTokenForGatewayTool(params: {
 function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
   method: string;
   opts: GatewayCallOptions;
+  target: GatewayOverrideTarget;
 }): DeviceIdentity | undefined {
   if (!APPROVAL_RUNTIME_METHODS.has(params.method)) {
     return undefined;
@@ -229,16 +234,23 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
   if (trimToUndefined(params.opts.gatewayUrl) !== undefined) {
     return undefined;
   }
-  if (trimToUndefined(process.env.OPENCLAW_GATEWAY_URL) === undefined) {
+  if (params.target !== "remote") {
     return undefined;
   }
   try {
-    return loadOrCreateDeviceIdentity();
+    const identity = loadOrCreateDeviceIdentity();
+    // Remote approval requests are later matched by requester device id.
+    // Reject loadOrCreate's unpersisted fallback so another process can see the same id.
+    const persistedIdentity = loadDeviceIdentityIfPresent();
+    if (persistedIdentity?.deviceId !== identity.deviceId) {
+      throw new Error("device identity is not persisted");
+    }
+    return identity;
   } catch (error) {
     throw new Error(
       [
-        "env-selected approval gateway calls require a stable device identity.",
-        "Fix the OpenClaw state directory permissions or unset OPENCLAW_GATEWAY_URL for local approval-runtime calls.",
+        "remote approval gateway calls require a stable device identity.",
+        "Fix the OpenClaw state directory permissions or use the local approval-runtime gateway.",
       ].join(" "),
       { cause: error },
     );
@@ -263,7 +275,11 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     opts,
     target: gateway.target,
   });
-  const deviceIdentity = resolveApprovalRequesterDeviceIdentityForGatewayTool({ method, opts });
+  const deviceIdentity = resolveApprovalRequesterDeviceIdentityForGatewayTool({
+    method,
+    opts,
+    target: gateway.target,
+  });
   return await callGateway<T>({
     url: gateway.url,
     token: gateway.token,

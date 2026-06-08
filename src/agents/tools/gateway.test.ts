@@ -16,6 +16,14 @@ const mocks = vi.hoisted(() => ({
     publicKeyPem: "public-key",
     privateKeyPem: "private-key",
   },
+  persistedDeviceIdentity: undefined as
+    | {
+        deviceId: string;
+        publicKeyPem: string;
+        privateKeyPem: string;
+      }
+    | null
+    | undefined,
   deviceIdentityError: undefined as Error | undefined,
 }));
 vi.mock("../../config/config.js", () => ({
@@ -26,6 +34,10 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => mocks.callGateway(...args),
 }));
 vi.mock("../../infra/device-identity.js", () => ({
+  loadDeviceIdentityIfPresent: () =>
+    mocks.persistedDeviceIdentity === undefined
+      ? mocks.deviceIdentity
+      : mocks.persistedDeviceIdentity,
   loadOrCreateDeviceIdentity: () => {
     if (mocks.deviceIdentityError) {
       throw mocks.deviceIdentityError;
@@ -52,6 +64,7 @@ describe("gateway tool defaults", () => {
   beforeEach(() => {
     mocks.callGateway.mockClear();
     mocks.deviceIdentityError = undefined;
+    mocks.persistedDeviceIdentity = undefined;
     mocks.configState.value = {};
     setActivePluginRegistry(createEmptyPluginRegistry());
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -348,6 +361,7 @@ describe("gateway tool defaults", () => {
     expect(call.url).toBeUndefined();
     expect(call.token).toBeUndefined();
     expect(call).not.toHaveProperty("approvalRuntimeToken");
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
   });
 
   it("does not send the local approval runtime token to env-selected gateways", async () => {
@@ -392,7 +406,48 @@ describe("gateway tool defaults", () => {
 
     await expect(
       callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" }),
-    ).rejects.toThrow("env-selected approval gateway calls require a stable device identity");
+    ).rejects.toThrow("remote approval gateway calls require a stable device identity");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("fails remote approval calls when requester device identity is not persisted", async () => {
+    mocks.configState.value = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "ws://127.0.0.1:18789",
+          token: "remote-token",
+        },
+      },
+    };
+    mocks.persistedDeviceIdentity = null;
+    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
+
+    await expect(
+      callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" }),
+    ).rejects.toThrow("remote approval gateway calls require a stable device identity");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("fails remote approval calls when requester device identity readback differs", async () => {
+    mocks.configState.value = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          token: "remote-token",
+        },
+      },
+    };
+    mocks.persistedDeviceIdentity = {
+      ...mocks.deviceIdentity,
+      deviceId: "other-device",
+    };
+    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
+
+    await expect(
+      callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" }),
+    ).rejects.toThrow("remote approval gateway calls require a stable device identity");
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
