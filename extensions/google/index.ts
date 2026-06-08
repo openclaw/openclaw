@@ -344,6 +344,8 @@ export default definePluginEntry({
     registerGoogleGeminiCliProvider(api);
     registerGoogleProvider(api);
     api.registerMemoryEmbeddingProvider(geminiMemoryEmbeddingProviderAdapter);
+    // Register alias so users can configure memorySearch.provider: "google"
+    api.registerMemoryEmbeddingProvider({ ...geminiMemoryEmbeddingProviderAdapter, id: "google" });
     api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider());
     api.registerMediaUnderstandingProvider(createLazyGoogleMediaUnderstandingProvider());
     api.registerMusicGenerationProvider(createLazyGoogleMusicGenerationProvider());
