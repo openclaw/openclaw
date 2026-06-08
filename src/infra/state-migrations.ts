@@ -411,12 +411,19 @@ function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   return Boolean(legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec);
 }
 
-function legacyInstallRecordCoveredByCurrent(
+export function legacyInstallRecordCoveredByCurrent(
   currentRecord: InstalledPluginIndex["installRecords"][string],
   legacyRecord: InstalledPluginIndex["installRecords"][string],
 ): boolean {
   if (currentRecord.source !== legacyRecord.source) {
     return false;
+  }
+  // If the current record was installed at or after the legacy record,
+  // it supersedes the legacy record (e.g. after a plugin upgrade).
+  const currentInstalledAt = readInstallRecordStringField(currentRecord, "installedAt");
+  const legacyInstalledAt = readInstallRecordStringField(legacyRecord, "installedAt");
+  if (currentInstalledAt && legacyInstalledAt && currentInstalledAt >= legacyInstalledAt) {
+    return true;
   }
   for (const key of Object.keys(legacyRecord).toSorted()) {
     const currentValue = readInstallRecordField(currentRecord, key);

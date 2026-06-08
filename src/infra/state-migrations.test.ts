@@ -590,3 +590,71 @@ describe("state migrations", () => {
     await expectMissingPath(path.join(stateDir, "sessions", "sessions.json"));
   });
 });
+
+describe("legacyInstallRecordCoveredByCurrent", () => {
+  let legacyInstallRecordCoveredByCurrent: (
+    current: Record<string, unknown>,
+    legacy: Record<string, unknown>,
+  ) => boolean;
+
+  beforeAll(async () => {
+    const mod = await import("./state-migrations.js");
+    legacyInstallRecordCoveredByCurrent = mod.legacyInstallRecordCoveredByCurrent;
+  });
+
+  it("covers a legacy record when current has the same installedAt", () => {
+    const ts = "2026-06-01T12:00:00.000Z";
+    const current = {
+      source: "npm",
+      spec: "@openclaw/codex@2.0.0",
+      installedAt: ts,
+      resolvedAt: ts,
+    };
+    const legacy = { source: "npm", spec: "@openclaw/codex@1.0.0", installedAt: ts };
+    expect(legacyInstallRecordCoveredByCurrent(current, legacy)).toBe(true);
+  });
+
+  it("covers a legacy record when current installedAt is newer (upgrade scenario)", () => {
+    const current = {
+      source: "npm",
+      spec: "@openclaw/codex@2.0.0",
+      installedAt: "2026-06-06T00:00:00.000Z",
+      resolvedAt: "2026-06-06T00:00:00.000Z",
+    };
+    const legacy = {
+      source: "npm",
+      spec: "@openclaw/codex@1.0.0",
+      installedAt: "2026-06-01T00:00:00.000Z",
+    };
+    expect(legacyInstallRecordCoveredByCurrent(current, legacy)).toBe(true);
+  });
+
+  it("does not cover when current installedAt is older than legacy", () => {
+    const current = {
+      source: "npm",
+      spec: "@openclaw/codex@1.0.0",
+      installedAt: "2026-06-01T00:00:00.000Z",
+      resolvedAt: "2026-06-01T00:00:00.000Z",
+    };
+    const legacy = {
+      source: "npm",
+      spec: "@openclaw/codex@2.0.0",
+      installedAt: "2026-06-06T00:00:00.000Z",
+    };
+    const result = legacyInstallRecordCoveredByCurrent(current, legacy);
+    expect(result).toBe(false);
+  });
+
+  it("does not cover when sources differ", () => {
+    const ts = "2026-06-06T00:00:00.000Z";
+    const current = { source: "npm", spec: "@openclaw/codex@2.0.0", installedAt: ts };
+    const legacy = { source: "git", spec: "@openclaw/codex@1.0.0", installedAt: ts };
+    expect(legacyInstallRecordCoveredByCurrent(current, legacy)).toBe(false);
+  });
+
+  it("covers when all fields match exactly", () => {
+    const ts = "2026-06-06T00:00:00.000Z";
+    const record = { source: "npm", spec: "@openclaw/codex@2.0.0", installedAt: ts };
+    expect(legacyInstallRecordCoveredByCurrent(record, record)).toBe(true);
+  });
+});
