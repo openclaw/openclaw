@@ -46,9 +46,16 @@ const mocks = vi.hoisted(() => ({
         params.requestedChannel === "last" || params.requestedChannel == null
           ? lastChannel
           : params.requestedChannel;
-      const mode = params.explicitTo ? "explicit" : "implicit";
+      // Simulate the guard clause from targets-session.ts (reserved meta-strings)
+      const RESERVED_META = new Set(["current", "self", "this", "me"]);
+      const sanitizedExplicit =
+        params.explicitTo && RESERVED_META.has(params.explicitTo.toLowerCase())
+          ? undefined
+          : params.explicitTo;
+
+      const mode = sanitizedExplicit ? "explicit" : "implicit";
       const resolvedTo =
-        params.explicitTo ?? (channel && channel === lastChannel ? lastTo : undefined);
+        sanitizedExplicit ?? (channel && channel === lastChannel ? lastTo : undefined);
 
       return {
         channel,
@@ -190,6 +197,34 @@ describe("agent delivery helpers", () => {
     for (const [key, value] of Object.entries(expected)) {
       expect((plan as Record<string, unknown>)[key]).toEqual(value);
     }
+  });
+
+  it("rejects reserved meta-strings, falling back to session lastTo", () => {
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: {
+        sessionId: "s-reserved-1",
+        updatedAt: 1,
+        deliveryContext: { channel: "directchat", to: "+1555" },
+      },
+      requestedChannel: "last",
+      explicitTo: "current",
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+    expect(plan.resolvedTo).toBe("+1555");
+    expect(plan.deliveryTargetMode).toBe("explicit");
+  });
+
+  it("rejects reserved meta-strings to undefined when no session fallback", () => {
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: undefined,
+      requestedChannel: "last",
+      explicitTo: "self",
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+    expect(plan.resolvedTo).toBeUndefined();
+    expect(plan.deliveryTargetMode).toBe("explicit");
   });
 
   it("resolves fallback targets when no explicit destination is provided", () => {

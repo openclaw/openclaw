@@ -114,7 +114,7 @@ export function resolveAgentDeliveryPlan(params: {
     normalizeAccountId(params.accountId) ??
     (deliveryTargetMode === "implicit" ? baseDelivery.accountId : undefined);
 
-  let resolvedTo = explicitTo;
+  let resolvedTo = baseDelivery.to;
   if (
     !resolvedTo &&
     isDeliverableMessageChannel(resolvedChannel) &&
