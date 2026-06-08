@@ -246,6 +246,8 @@ type CronAgentTurnPayloadFields = {
   externalContentSource?: HookExternalContentSource;
   /** If true, run with lightweight bootstrap context. */
   lightContext?: boolean;
+  /** If true, any failed tool call makes the cron run fail even if final text exists. */
+  failOnToolFailure?: boolean;
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
 };

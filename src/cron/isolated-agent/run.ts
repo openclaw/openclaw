@@ -435,6 +435,35 @@ function resolvePositiveContextTokens(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function resolveToolFailureCountFromAgentResult(result: unknown): number {
+  if (!isRecord(result) || !isRecord(result.meta) || !isRecord(result.meta.toolSummary)) {
+    return 0;
+  }
+  const failures = result.meta.toolSummary.failures;
+  return typeof failures === "number" && Number.isFinite(failures) && failures > 0
+    ? Math.floor(failures)
+    : 0;
+}
+
+function resolveToolFailureContractError(params: {
+  agentPayload: Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
+  finalRunResult: unknown;
+}): string | undefined {
+  if (params.agentPayload?.failOnToolFailure !== true) {
+    return undefined;
+  }
+  const failures = resolveToolFailureCountFromAgentResult(params.finalRunResult);
+  if (failures <= 0) {
+    return undefined;
+  }
+  const noun = failures === 1 ? "tool call" : "tool calls";
+  return `cron isolated run failed: ${failures} ${noun} failed`;
+}
+
 async function loadCliRunnerRuntime() {
   return await import("../../agents/cli-runner.runtime.js");
 }
@@ -1065,6 +1094,19 @@ async function finalizeCronRun(params: {
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
+  const toolFailureContractError = resolveToolFailureContractError({
+    agentPayload: prepared.agentPayload,
+    finalRunResult,
+  });
+  const toolFailureContractDiagnostics = toolFailureContractError
+    ? createCronRunDiagnosticsFromError("tool", toolFailureContractError)
+    : undefined;
+  if (toolFailureContractError) {
+    hasFatalErrorPayload = true;
+    embeddedRunError = toolFailureContractError;
+    summary = toolFailureContractError;
+    outputText = toolFailureContractError;
+  }
   const resolveRunOutcome = (result?: {
     delivered?: boolean;
     deliveryAttempted?: boolean;
@@ -1080,15 +1122,16 @@ async function finalizeCronRun(params: {
       delivered: result?.delivered,
       deliveryAttempted: result?.deliveryAttempted,
       delivery: result?.delivery,
-      diagnostics: hasFatalErrorPayload
-        ? mergeCronRunDiagnostics(
-            agentDiagnostics,
-            createCronRunDiagnosticsFromError(
+      diagnostics: mergeCronRunDiagnostics(
+        agentDiagnostics,
+        toolFailureContractDiagnostics,
+        hasFatalErrorPayload
+          ? createCronRunDiagnosticsFromError(
               "agent-run",
               embeddedRunError ?? "cron isolated run returned an error payload",
-            ),
-          )
-        : agentDiagnostics,
+            )
+          : undefined,
+      ),
       ...telemetry,
     });
   const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {

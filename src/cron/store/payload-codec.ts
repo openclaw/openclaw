@@ -68,6 +68,7 @@ export function bindPayloadColumns(
   | "payload_allow_unsafe_external_content"
   | "payload_external_content_source_json"
   | "payload_fallbacks_json"
+  | "payload_fail_on_tool_failure"
   | "payload_kind"
   | "payload_light_context"
   | "payload_message"
@@ -87,6 +88,7 @@ export function bindPayloadColumns(
       payload_allow_unsafe_external_content: null,
       payload_external_content_source_json: null,
       payload_light_context: null,
+      payload_fail_on_tool_failure: null,
       payload_tools_allow_json: null,
     };
   }
@@ -102,6 +104,7 @@ export function bindPayloadColumns(
       payload_allow_unsafe_external_content: null,
       payload_external_content_source_json: null,
       payload_light_context: null,
+      payload_fail_on_tool_failure: null,
       payload_tools_allow_json: null,
     };
   }
@@ -115,6 +118,7 @@ export function bindPayloadColumns(
     payload_allow_unsafe_external_content: booleanToInteger(payload.allowUnsafeExternalContent),
     payload_external_content_source_json: serializeJson(payload.externalContentSource),
     payload_light_context: booleanToInteger(payload.lightContext),
+    payload_fail_on_tool_failure: booleanToInteger(payload.failOnToolFailure),
     payload_tools_allow_json: serializeJson(payload.toolsAllow),
   };
 }
@@ -141,6 +145,10 @@ export function payloadFromRow(row: CronJobRow): CronPayload | null {
     );
     const lightContext =
       row.payload_light_context != null ? integerToBoolean(row.payload_light_context) : undefined;
+    const failOnToolFailure =
+      row.payload_fail_on_tool_failure != null
+        ? integerToBoolean(row.payload_fail_on_tool_failure)
+        : undefined;
     const toolsAllow = row.payload_tools_allow_json
       ? parseJsonArray(row.payload_tools_allow_json)
       : undefined;
@@ -154,6 +162,7 @@ export function payloadFromRow(row: CronJobRow): CronPayload | null {
       ...(allowUnsafeExternalContent != null ? { allowUnsafeExternalContent } : {}),
       ...(externalContentSource ? { externalContentSource } : {}),
       ...(lightContext != null ? { lightContext } : {}),
+      ...(failOnToolFailure != null ? { failOnToolFailure } : {}),
       ...(toolsAllow ? { toolsAllow } : {}),
     };
   }

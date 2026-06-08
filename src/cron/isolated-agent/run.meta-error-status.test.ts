@@ -54,6 +54,57 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.outputText).toBe("cron isolated run failed: retry limit exceeded");
   });
 
+  it("marks successful final text as a cron error when failOnToolFailure sees failed tools", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [{ text: "Final success-looking text" }],
+        meta: {
+          toolSummary: { calls: 3, tools: ["exec"], failures: 1, totalToolTimeMs: 120 },
+          agentMeta: { usage: { input: 0, output: 0 } },
+        },
+      },
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        job: {
+          payload: {
+            kind: "agentTurn",
+            message: "run checks",
+            failOnToolFailure: true,
+          },
+        },
+      }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("cron isolated run failed: 1 tool call failed");
+    expect(result.diagnostics?.summary).toBe("cron isolated run failed: 1 tool call failed");
+  });
+
+  it("keeps successful final text ok when failOnToolFailure is not set", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [{ text: "Final success-looking text" }],
+        meta: {
+          toolSummary: { calls: 3, tools: ["exec"], failures: 1, totalToolTimeMs: 120 },
+          agentMeta: { usage: { input: 0, output: 0 } },
+        },
+      },
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    expect(result.status).toBe("ok");
+    expect(result.error).toBeUndefined();
+  });
+
   it("surfaces cron timeout result when the cron-nested lane watchdog fires", async () => {
     runWithModelFallbackMock.mockRejectedValueOnce(
       new CommandLaneTaskTimeoutError("cron-nested", 330_000),

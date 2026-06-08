@@ -431,6 +431,7 @@ function backfillCronJobsFromJobJson(db: DatabaseSync): void {
             payload_allow_unsafe_external_content = ?,
             payload_external_content_source_json = ?,
             payload_light_context = ?,
+            payload_fail_on_tool_failure = ?,
             payload_tools_allow_json = ?,
             delivery_mode = ?,
             delivery_channel = ?,
@@ -520,6 +521,11 @@ function backfillCronJobsFromJobJson(db: DatabaseSync): void {
       isAgentTurn ? jsonField(payload.externalContentSource) : null,
       isAgentTurn && typeof payload.lightContext === "boolean"
         ? payload.lightContext
+          ? 1
+          : 0
+        : null,
+      isAgentTurn && typeof payload.failOnToolFailure === "boolean"
+        ? payload.failOnToolFailure
           ? 1
           : 0
         : null,
@@ -683,6 +689,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_jobs", "payload_allow_unsafe_external_content INTEGER");
   ensureColumn(db, "cron_jobs", "payload_external_content_source_json TEXT");
   ensureColumn(db, "cron_jobs", "payload_light_context INTEGER");
+  ensureColumn(db, "cron_jobs", "payload_fail_on_tool_failure INTEGER");
   ensureColumn(db, "cron_jobs", "payload_tools_allow_json TEXT");
   ensureColumn(db, "cron_jobs", "delivery_mode TEXT");
   ensureColumn(db, "cron_jobs", "delivery_channel TEXT");
