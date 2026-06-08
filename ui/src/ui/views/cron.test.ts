@@ -141,12 +141,6 @@ describe("cron view", () => {
     const onLoadRuns = vi.fn();
     const job = createJob("job-1");
     const scrollIntoView = vi.fn();
-    const getElementSpy = vi.spyOn(document, "getElementById").mockImplementation((id: string) => {
-      if (id !== "cron-run-history") {
-        return null;
-      }
-      return { scrollIntoView } as unknown as HTMLElement;
-    });
     render(
       renderCron(
         createProps({
@@ -158,6 +152,15 @@ describe("cron view", () => {
       ),
       container,
     );
+
+    const runHistoryCard = Array.from(container.querySelectorAll(".card")).find(
+      (card) => card.id === "cron-run-history",
+    );
+    expect(runHistoryCard).toBeInstanceOf(HTMLElement);
+    if (!(runHistoryCard instanceof HTMLElement)) {
+      return;
+    }
+    runHistoryCard.scrollIntoView = scrollIntoView;
 
     const selected = container.querySelector(".list-item-selected");
     expect(selected).not.toBeNull();
@@ -171,7 +174,6 @@ describe("cron view", () => {
     expect(onLoadRuns).toHaveBeenCalledTimes(1);
     expect(onLoadRuns).toHaveBeenCalledWith("job-1");
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "start", behavior: "smooth" });
-    getElementSpy.mockRestore();
   });
 
   it("renders run chat links when session keys are present", () => {
