@@ -31,6 +31,7 @@ let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
 let providerRuntimeBatchCalls: string[][] = [];
 let providerRuntimeBatchGate: Promise<void> | null = null;
+let providerRuntimeBatchFailuresRemaining = 0;
 let providerRuntimeActiveBatchCalls = 0;
 let providerRuntimeMaxActiveBatchCalls = 0;
 let providerCloseCalls = 0;
@@ -162,6 +163,10 @@ vi.mock("./embeddings.js", () => {
                   try {
                     await providerRuntimeBatchGate;
                     providerRuntimeBatchCalls.push(batch.chunks.map((chunk) => chunk.text));
+                    if (providerRuntimeBatchFailuresRemaining > 0) {
+                      providerRuntimeBatchFailuresRemaining -= 1;
+                      throw new Error("provider runtime batch failed");
+                    }
                     return batch.chunks.map((chunk) => embedText(chunk.text));
                   } finally {
                     providerRuntimeActiveBatchCalls -= 1;
@@ -251,6 +256,7 @@ describe("memory index", () => {
     embedBatchInputCalls = 0;
     providerRuntimeBatchCalls = [];
     providerRuntimeBatchGate = null;
+    providerRuntimeBatchFailuresRemaining = 0;
     providerRuntimeActiveBatchCalls = 0;
     providerRuntimeMaxActiveBatchCalls = 0;
     providerCloseCalls = 0;
@@ -476,6 +482,40 @@ describe("memory index", () => {
         "# Log\nBeta memory line.",
         "# Log\nGamma memory line.",
       ]);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("maps source-wide batch fallback results to missing chunks after cache hits", async () => {
+    const cfg = createCfg({
+      provider: "batch-wide-test",
+      batchEnabled: true,
+      storePath: path.join(workspaceDir, "index-cross-file-batch-fallback-cache.sqlite"),
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test" });
+
+      await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+      providerRuntimeBatchCalls = [];
+      providerRuntimeBatchFailuresRemaining = 1;
+      embedBatchCalls = 0;
+
+      await manager.sync({ reason: "test", force: true });
+
+      expect(providerRuntimeBatchCalls).toEqual([["# Log\nBeta memory line."]]);
+      expect(embedBatchCalls).toBe(1);
+      const betaRow = (
+        manager as unknown as {
+          db: { prepare: (sql: string) => { get: (...args: unknown[]) => unknown } };
+        }
+      ).db
+        .prepare("SELECT embedding FROM chunks WHERE path LIKE ? AND source = ?")
+        .get("%2026-01-13.md", "memory") as { embedding: string } | undefined;
+
+      expect(betaRow).toBeDefined();
+      expect(JSON.parse(betaRow?.embedding ?? "[]")).toEqual([0, 1, 0, 0]);
     } finally {
       await manager.close?.();
     }

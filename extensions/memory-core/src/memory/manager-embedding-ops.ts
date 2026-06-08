@@ -334,7 +334,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           timeoutMs: this.batch.timeoutMs,
           debug: this.buildBatchDebug(source, chunks, debugContext),
         }),
-      fallback: async () => await this.embedChunksInBatches(chunks),
+      fallback: async () => await this.embedChunksInBatches(missingChunks),
     });
     if (!batchResult) {
       return this.embedChunksInBatches(chunks);
