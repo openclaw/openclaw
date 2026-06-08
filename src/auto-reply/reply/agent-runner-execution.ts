@@ -801,7 +801,7 @@ function buildExternalRunFailureReply(
   if (authProfileFailoverFailure) {
     return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
   }
-  const providerRequestError = classifyProviderRequestError(normalizedMessage);
+  const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
   if (providerRequestError) {
     return {
       text: providerRequestError.userMessage,
@@ -2136,6 +2136,13 @@ export async function runAgentTurnWithFallback(params: {
                         detailMode: params.toolProgressDetail,
                       }),
                     ]);
+                  },
+                  onCommentaryText: async ({ text, itemId }) => {
+                    await params.opts?.onItemEvent?.({
+                      kind: "preamble",
+                      progressText: text,
+                      itemId,
+                    });
                   },
                   onErrorBeforeLifecycle: async () => {
                     if (!rollbackFallbackCandidateSelection) {
