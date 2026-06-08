@@ -363,6 +363,7 @@ export function createRequestCompactionTool(opts: RequestCompactionToolOpts): An
 
 const volitionalCompactionCounts = createExpiringMapCache<string, number>({
   ttlMs: VOLITIONAL_COMPACTION_COUNT_TTL_MS,
+  clock: () => Date.now(),
 });
 
 /** Increment the volitional compaction counter for a session. */

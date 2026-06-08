@@ -62,6 +62,17 @@ const ALLOWLIST = [
       "Lost on process restart; the TaskFlow queue remains and the next dispatch/finalize cycle can arm a fresh hedge.",
   },
   {
+    file: "src/auto-reply/continuation/work-dispatch.ts",
+    symbol: "workTimers",
+    owner: "continuation work dispatcher",
+    purpose:
+      "Keeps one setTimeout handle per sessionKey for scheduled continue_work follow-through on the main lane.",
+    safeVolatileClassification:
+      "The map stores timeout handles for the current Node process; the underlying continue_work intent is persisted in TaskFlow.",
+    restartContract:
+      "Lost on process restart; the TaskFlow queue remains and the next continuation scheduling pass can arm a fresh work timer.",
+  },
+  {
     file: "src/auto-reply/reply/reply-run-registry.ts",
     symbol: "activeRunsByKey",
     owner: "reply run registry singleton",
