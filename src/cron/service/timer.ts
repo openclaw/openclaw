@@ -13,6 +13,7 @@ import {
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import { registerActiveCronTaskRun } from "../../tasks/cron-task-cancel.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
@@ -124,14 +125,16 @@ export async function executeJobCoreWithTimeout(
   opts?: { runId?: string },
 ): Promise<Awaited<ReturnType<typeof executeJobCore>>> {
   const runAbortController = new AbortController();
-  markCronJobActive(job.id, {
-    runId: opts?.runId,
-    // Main-session cron jobs enqueue work into a downstream child session.
-    // The cron wrapper does not own that queued run, so exposing its abort
-    // signal would let task cancellation mark the ledger row cancelled while
-    // the child session can continue running.
-    ...(job.sessionTarget !== "main" ? { abortController: runAbortController } : {}),
-  });
+  // Main-session cron jobs enqueue work into a downstream child session. The
+  // cron wrapper does not own that queued run, so it must not expose a task
+  // cancellation handle that could make the wrapper row lie about child state.
+  const releaseCronTaskRun =
+    job.sessionTarget !== "main"
+      ? registerActiveCronTaskRun({
+          runId: opts?.runId,
+          controller: runAbortController,
+        })
+      : undefined;
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   try {
     if (typeof jobTimeoutMs !== "number") {
@@ -193,7 +196,7 @@ export async function executeJobCoreWithTimeout(
       watchdog.dispose();
     }
   } finally {
-    clearCronJobActive(job.id, opts?.runId);
+    releaseCronTaskRun?.();
   }
 }
 

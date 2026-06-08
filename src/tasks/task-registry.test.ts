@@ -2,11 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
-import {
-  cancelCronJobRun,
-  markCronJobActive,
-  resetCronActiveJobsForTests,
-} from "../cron/active-jobs.js";
+import { resetCronActiveJobsForTests } from "../cron/active-jobs.js";
 import {
   emitAgentEvent,
   registerAgentRunContext,
@@ -21,6 +17,7 @@ import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-even
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { registerActiveCronTaskRun, resetActiveCronTaskRunsForTests } from "./cron-task-cancel.js";
 import {
   createTaskFlowForTask as createTaskFlowForTaskOrNull,
   createManagedTaskFlow as createManagedTaskFlowOrNull,
@@ -466,7 +463,6 @@ describe("task-registry", () => {
         cancelSession: hoisted.cancelSessionMock,
       }),
       killSubagentRunAdmin: async (params) => hoisted.killSubagentRunAdminMock(params),
-      cancelCronJobRun,
     });
   });
 
@@ -476,6 +472,7 @@ describe("task-registry", () => {
     resetHeartbeatWakeStateForTests();
     resetAgentRunContextForTest();
     resetCronActiveJobsForTests();
+    resetActiveCronTaskRunsForTests();
     resetTaskRegistryControlRuntimeForTests();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryMaintenanceRuntimeForTests();
@@ -3549,9 +3546,9 @@ describe("task-registry", () => {
       if (!task) {
         throw new Error("expected cron task");
       }
-      markCronJobActive("nightly-gmail-sync", {
+      registerActiveCronTaskRun({
         runId: "cron:nightly-gmail-sync:123",
-        abortController,
+        controller: abortController,
       });
 
       const result = await cancelTaskById({

@@ -12,13 +12,15 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { HEARTBEAT_SKIP_LANES_BUSY, type HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import {
+  cancelActiveCronTaskRun,
+  resetActiveCronTaskRunsForTests,
+} from "../../tasks/cron-task-cancel.js";
+import {
   cancelTaskById,
   listTaskRecords,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryForTests,
-  setTaskRegistryControlRuntimeForTests,
 } from "../../tasks/task-registry.js";
-import { cancelCronJobRun } from "../active-jobs.js";
 import * as schedule from "../schedule.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type {
@@ -889,13 +891,12 @@ describe("cron service timer regressions", () => {
       const timerPromise = onTimer(state);
       const observedAbortSignal = await runnerStarted.promise;
       const runId = `cron:cancel-before-timeout:${scheduledAt}`;
-      const cancelled = cancelCronJobRun({
-        jobId: "cancel-before-timeout",
+      const cancelled = cancelActiveCronTaskRun({
         runId,
         reason: "Cancelled by operator.",
       });
 
-      expect(cancelled).toEqual({ found: true, cancelled: true });
+      expect(cancelled).toBe(true);
       expect(observedAbortSignal?.aborted).toBe(true);
 
       await vi.advanceTimersByTimeAsync(Math.ceil(FAST_TIMEOUT_SECONDS * 1_000) + 10);
@@ -1131,13 +1132,6 @@ describe("cron service timer regressions", () => {
     vi.useFakeTimers();
     try {
       resetTaskRegistryForTests();
-      setTaskRegistryControlRuntimeForTests({
-        getAcpSessionManager: () => ({
-          cancelSession: vi.fn(),
-        }),
-        killSubagentRunAdmin: vi.fn(),
-        cancelCronJobRun,
-      });
 
       const store = timerRegressionFixtures.makeStorePath();
       const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
@@ -1227,6 +1221,7 @@ describe("cron service timer regressions", () => {
         }),
       );
     } finally {
+      resetActiveCronTaskRunsForTests();
       resetTaskRegistryControlRuntimeForTests();
       resetTaskRegistryForTests();
       vi.useRealTimers();

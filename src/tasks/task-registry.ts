@@ -18,6 +18,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { isChildlessCodexNativeSubagentTask } from "./codex-native-subagent-task.js";
+import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -2081,17 +2082,16 @@ export async function cancelTaskById(params: {
   try {
     if (task.runtime !== "cli") {
       if (task.runtime === "cron") {
-        const { cancelCronJobRun } = await loadTaskRegistryControlRuntime();
-        const result = cancelCronJobRun({
-          jobId: task.sourceId,
-          runId: task.runId,
-          reason: params.reason?.trim() || "Cancelled by operator.",
-        });
-        if (!result.found || !result.cancelled) {
+        if (
+          !cancelActiveCronTaskRun({
+            runId: task.runId,
+            reason: params.reason?.trim() || "Cancelled by operator.",
+          })
+        ) {
           return {
             found: true,
             cancelled: false,
-            reason: result.reason,
+            reason: "Cron task has no active cancellation handle.",
             task: cloneTaskRecord(task),
           };
         }

@@ -117,11 +117,6 @@ async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>
         cancelSession: hoisted.cancelSessionMock,
       }),
       killSubagentRunAdmin: async (params) => hoisted.killSubagentRunAdminMock(params),
-      cancelCronJobRun: () => ({
-        found: false,
-        cancelled: false,
-        reason: "Cron task is not active in this gateway process.",
-      }),
     });
     try {
       await run(stateDir);
