@@ -28,7 +28,7 @@ function canRecoverLiteralTagMention(prefix: string, textAfterTag: string): bool
   if (!/\S/.test(prefix) || /^\s+tag\s+should\s+be\s+hidden\b/i.test(textAfterTag)) {
     return false;
   }
-  return /^\s+(?:tag|tags|element|block)\b/i.test(textAfterTag);
+  return /^\s+tag\b/i.test(textAfterTag);
 }
 
 /** Detects whether a stray reasoning close tag separates two visible text regions. */

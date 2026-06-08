@@ -325,6 +325,42 @@ describe("stripReasoningTagsFromText", () => {
         opts: { mode: "strict" as const },
       },
       {
+        name: "keeps visible prefix but hides unclosed reasoning tags prose",
+        input: "Visible prefix <reasoning> tags should be hidden",
+        expected: "Visible prefix",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "keeps visible prefix but hides unclosed reasoning element prose",
+        input: "Visible prefix <reasoning> element should be hidden",
+        expected: "Visible prefix",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "keeps visible prefix but hides unclosed reasoning block prose",
+        input: "Visible prefix <reasoning> block should be hidden",
+        expected: "Visible prefix",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "keeps visible prefix but hides unclosed namespaced reasoning tags prose",
+        input: "Visible prefix <antml:reasoning> tags should be hidden",
+        expected: "Visible prefix",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "keeps visible prefix but hides unclosed namespaced reasoning element prose",
+        input: "Visible prefix <antml:reasoning> element should be hidden",
+        expected: "Visible prefix",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "keeps visible prefix but hides unclosed namespaced reasoning block prose",
+        input: "Visible prefix <antml:reasoning> block should be hidden",
+        expected: "Visible prefix",
+        opts: { mode: "strict" as const },
+      },
+      {
         name: "does not recover fully closed reasoning-only blocks in strict mode",
         input: "<think>hidden reasoning only</think>",
         expected: "",
