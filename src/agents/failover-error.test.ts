@@ -1319,7 +1319,7 @@ describe("buildFailoverRemediationHint", () => {
 
 describe("isSignalTimeoutReason", () => {
   it("returns false for plain AbortController.abort() DOMException (client disconnect)", () => {
-    // watchClientDisconnect calls abort() with no args → DOMException("This operation was aborted", "AbortError")
+    // watchClientDisconnect calls abort() with no args, producing AbortError.
     // This must not be classified as a run timeout (#90764).
     const err = new DOMException("This operation was aborted", "AbortError");
     expect(isSignalTimeoutReason(err)).toBe(false);
