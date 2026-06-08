@@ -217,7 +217,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   const runtime = await loadCompactRuntime();
   const sessionId = targetSessionEntry.sessionId;
-  if (runtime.isEmbeddedAgentRunActive(sessionId)) {
+  if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
     runtime.abortEmbeddedAgentRun(sessionId);
     await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
   }

@@ -46,7 +46,11 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
@@ -4043,17 +4047,25 @@ export const chatHandlers: GatewayRequestHandlers = {
                   });
                 }
               } else {
-                const sourceReplyPayloads = deliveredReplies
+                const hasReturnedAgentErrorPayloads = returnedAgentErrorPayloads.length > 0;
+                const agentRunReplyPayloads = deliveredReplies
                   .filter((entryEntry) => entryEntry.kind === "final")
                   .map((entryResult) => entryResult.payload)
-                  .filter(isSourceReplyTranscriptMirrorPayload);
-                if (sourceReplyPayloads.length > 0) {
+                  .filter(
+                    (payload) =>
+                      isSourceReplyTranscriptMirrorPayload(payload) ||
+                      (!hasReturnedAgentErrorPayloads && isReplyPayloadStatusNotice(payload)),
+                  );
+                if (agentRunReplyPayloads.length > 0) {
+                  const hasSourceReplyTranscriptMirror = agentRunReplyPayloads.some(
+                    isSourceReplyTranscriptMirrorPayload,
+                  );
                   const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
                     cfg,
                     sessionKey,
                     agentId,
                     accountId,
-                    payloads: sourceReplyPayloads,
+                    payloads: agentRunReplyPayloads,
                   });
                   const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
                     sessionKey,
@@ -4100,11 +4112,11 @@ export const chatHandlers: GatewayRequestHandlers = {
                       },
                     });
                   const combinedAssistantContent =
-                    sourceReplyPayloads.length === 1
+                    agentRunReplyPayloads.length === 1
                       ? await buildReplyAssistantContent(finalPayloads)
                       : undefined;
                   const combinedMediaMessage =
-                    sourceReplyPayloads.length === 1
+                    agentRunReplyPayloads.length === 1
                       ? await buildReplyMediaMessage(finalPayloads)
                       : undefined;
                   type SourceReplyContentState = {
@@ -4115,17 +4127,17 @@ export const chatHandlers: GatewayRequestHandlers = {
                   };
                   const sourceReplyContentStates: SourceReplyContentState[] = [];
                   const sourceReplyBroadcastContent: AssistantDisplayContentBlock[] = [];
-                  for (const [replyIndex] of sourceReplyPayloads.entries()) {
+                  for (const [replyIndex] of agentRunReplyPayloads.entries()) {
                     const finalPayload = finalPayloads[replyIndex];
                     if (!finalPayload) {
                       continue;
                     }
                     const replyAssistantContent =
-                      sourceReplyPayloads.length === 1
+                      agentRunReplyPayloads.length === 1
                         ? combinedAssistantContent
                         : await buildReplyAssistantContent([finalPayload]);
                     const replyMediaMessage =
-                      sourceReplyPayloads.length === 1
+                      agentRunReplyPayloads.length === 1
                         ? combinedMediaMessage
                         : await buildReplyMediaMessage([finalPayload]);
                     const replyBroadcastContent = hasAssistantDisplayMediaContent(
@@ -4163,7 +4175,10 @@ export const chatHandlers: GatewayRequestHandlers = {
                       >["sourceReplyTranscriptMirror"];
                       state: SourceReplyContentState;
                     }> = [];
-                    for (const [replyIndex, sourceReplyPayload] of sourceReplyPayloads.entries()) {
+                    for (const [
+                      replyIndex,
+                      sourceReplyPayload,
+                    ] of agentRunReplyPayloads.entries()) {
                       const state = sourceReplyContentStates[replyIndex];
                       if (!state || !hasAssistantDisplayMediaContent(state.persistedContent)) {
                         continue;
@@ -4210,7 +4225,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                       for (const [
                         replyIndex,
                         sourceReplyPayload,
-                      ] of sourceReplyPayloads.entries()) {
+                      ] of agentRunReplyPayloads.entries()) {
                         if (!sourceReplyContentStates[replyIndex]) {
                           continue;
                         }
@@ -4352,7 +4367,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                       agentId,
                       message,
                     });
-                    broadcastedSourceReplyFinal = true;
+                    broadcastedSourceReplyFinal = hasSourceReplyTranscriptMirror;
                   }
                 }
               }
