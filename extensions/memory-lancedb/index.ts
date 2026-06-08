@@ -199,6 +199,7 @@ const TABLE_NAME = "memories";
 const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 15_000;
 const DEFAULT_TOOL_RECALL_TIMEOUT_MS = 15_000;
 const DEFAULT_TOOL_RECALL_COOLDOWN_MS = 60_000;
+const DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA = 10;
 
 // Auto-recall over-fetches from the vector store, then filters envelope sludge
 // (contaminated memories that slipped past capture gating), then caps the
@@ -1545,7 +1546,7 @@ export default definePluginEntry({
                 } catch (error) {
                   throw new MemoryRecallEmbeddingError(error);
                 }
-                return await db.search(vector, limit, 0.1);
+                return await db.search(vector, limit + DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA, 0.1);
               },
             });
           } catch (error) {
