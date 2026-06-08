@@ -78,9 +78,19 @@ function buildSseEventSourceFetch(
         Object.assign(sdkHeaders, init.headers);
       }
     }
+    // Header names are case-insensitive (RFC 7230), but a plain object spread
+    // keeps both the SDK's lowercase `authorization` and an operator-configured
+    // `Authorization`. undici emits both as separate header lines, which servers
+    // join into one invalid `Bearer a, Bearer b` value (Home Assistant's MCP
+    // endpoint rejects it as 401). Lowercase every key before merging so operator
+    // headers override the SDK's and survive as a single entry.
+    const mergedHeaders: Record<string, string> = {};
+    for (const [key, value] of [...Object.entries(sdkHeaders), ...Object.entries(headers)]) {
+      mergedHeaders[key.toLowerCase()] = value;
+    }
     return baseFetch(url, {
       ...(init as RequestInit),
-      headers: { ...sdkHeaders, ...headers },
+      headers: mergedHeaders,
     }) as ReturnType<SseEventSourceFetch>;
   };
 }
