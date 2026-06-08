@@ -81,7 +81,7 @@ async function writeMatrixSessionMeta(
     nativeDirectUserId?: string;
   },
 ): Promise<void> {
-  const store = loadSessionStore(storePath, { clone: false }) as Record<string, SessionEntry>;
+  const store = loadSessionStore(storePath, { clone: false });
   const existing = store[sessionKey] ?? {
     sessionId: `sess-${Object.keys(store).length + 1}`,
     updatedAt: Date.now(),
