@@ -14,6 +14,10 @@ import {
 } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  injectTimestamp,
+  timestampOptsFromConfig,
+} from "../../gateway/server-methods/agent-timestamp.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { readErrorName } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";

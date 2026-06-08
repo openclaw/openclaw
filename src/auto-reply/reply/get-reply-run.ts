@@ -1,6 +1,7 @@
 /** Prepares and runs auto-reply agent turns, including prompt context and session policy. */
 import crypto from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   clearAutoFallbackPrimaryProbeSelection,
