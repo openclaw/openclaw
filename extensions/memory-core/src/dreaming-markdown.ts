@@ -12,17 +12,19 @@ import {
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
-const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
+const DAILY_PHASE_HEADINGS: Record<MemoryDreamingPhaseName, string> = {
   light: "## Light Sleep",
   rem: "## REM Sleep",
+  deep: "## Deep Sleep",
 };
 
-const DAILY_PHASE_LABELS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
+const DAILY_PHASE_LABELS: Record<MemoryDreamingPhaseName, string> = {
   light: "light",
   rem: "rem",
+  deep: "deep",
 };
 
-function resolvePhaseMarkers(phase: Exclude<MemoryDreamingPhaseName, "deep">): {
+function resolvePhaseMarkers(phase: MemoryDreamingPhaseName): {
   start: string;
   end: string;
 } {
@@ -58,7 +60,7 @@ function shouldWriteSeparate(storage: MemoryDreamingStorageConfig): boolean {
 
 export async function writeDailyDreamingPhaseBlock(params: {
   workspaceDir: string;
-  phase: Exclude<MemoryDreamingPhaseName, "deep">;
+  phase: MemoryDreamingPhaseName;
   bodyLines: string[];
   nowMs?: number;
   timezone?: string;
