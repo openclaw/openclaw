@@ -1,8 +1,6 @@
 ---
 name: claw-score
 description: Audit an OpenClaw maturity-scorecard surface into an evidence-backed category score report. Use when given a surface from an OpenClaw maturity-scorecard.md and asked to score coverage, quality, readiness, or generate a detailed surface report plus per-category subreports.
-dependencies:
-- mem
 ---
 
 # claw-score
