@@ -256,6 +256,8 @@ type ListedCollection = {
   pattern?: string;
 };
 
+const SESSION_COLLECTION_BASE = "sessions";
+
 type ManagedCollection = {
   name: string;
   path: string;
@@ -794,7 +796,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     existing: Map<string, ListedCollection>,
   ): Promise<void> {
     for (const collection of this.qmd.collections) {
-      const legacyName = this.deriveLegacyScopedName(collection.name);
+      // The session collection's name is disambiguated (e.g. "sessions-2") when a user
+      // collection already claims "sessions", but the shipped legacy collection was always
+      // scoped from the base "sessions" — derive its legacy name from that base so the
+      // orphan ("sessions-<agentId>") is still found and removed.
+      const legacyBaseName =
+        collection.kind === "sessions" ? SESSION_COLLECTION_BASE : collection.name;
+      const legacyName = this.deriveLegacyScopedName(legacyBaseName);
       if (!legacyName) {
         continue;
       }
@@ -2496,7 +2504,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private pickSessionCollectionName(): string {
     const existing = new Set(this.qmd.collections.map((collection) => collection.name));
-    const base = "sessions";
+    const base = SESSION_COLLECTION_BASE;
     if (!existing.has(base)) {
       return base;
     }

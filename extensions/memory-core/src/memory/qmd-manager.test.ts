@@ -1691,6 +1691,80 @@ describe("QmdMemoryManager", () => {
     expect(legacyCollections.has("sessions")).toBe(true);
   });
 
+  it("migrates the shipped sessions-<agentId> collection even when the session name is disambiguated", async () => {
+    // A user collection can claim "sessions", so the engine session collection is
+    // disambiguated to "sessions-2". The shipped legacy collection was scoped from the base
+    // "sessions" — it must still be found and removed, not orphaned at the old name.
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, name: "sessions", pattern: "**/*.md" }],
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const sessionPath = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const legacyScopedName = `sessions-${agentId}`;
+    const legacyCollections = new Map<string, { path: string; pattern: string }>([
+      [legacyScopedName, { path: sessionPath, pattern: "**/*.md" }],
+    ]);
+    const removeCalls: string[] = [];
+    const addCalls: Array<{ name: string; path: string }> = [];
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify(
+            [...legacyCollections.entries()].map(([name, info]) => ({
+              name,
+              path: info.path,
+              mask: info.pattern,
+            })),
+          ),
+        );
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "remove") {
+        const child = createMockChild({ autoClose: false });
+        const name = args[2] ?? "";
+        removeCalls.push(name);
+        legacyCollections.delete(name);
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const child = createMockChild({ autoClose: false });
+        const nameIdx = args.indexOf("--name");
+        const name = nameIdx >= 0 ? (args[nameIdx + 1] ?? "") : "";
+        const pathArg = args[2] ?? "";
+        addCalls.push({ name, path: pathArg });
+        legacyCollections.set(name, { path: pathArg, pattern: "**/*.md" });
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    // The user collection took "sessions", so the engine session collection is "sessions-2".
+    const addedDisambiguated = addCalls.find((c) => c.name === "sessions-2");
+    expect(addedDisambiguated?.path).toBe(sessionPath);
+    // The shipped legacy "sessions-<agentId>" must still be removed (derived from the base
+    // "sessions", not from the disambiguated "sessions-2") — otherwise it orphans.
+    expect(removeCalls).toContain(legacyScopedName);
+    expect(legacyCollections.has(legacyScopedName)).toBe(false);
+  });
+
   it("always sets kind on collections produced by the bootstrap path (contract: sessions kind)", async () => {
     // canMigrateLegacyCollection gates removal on collection.kind. This
     // covers the sessions collection, which is added by the manager
