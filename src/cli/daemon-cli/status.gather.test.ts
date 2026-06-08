@@ -835,6 +835,39 @@ describe("gatherDaemonStatus", () => {
     expect(probeInput.password).toBeUndefined();
   });
 
+  it("ignores local exec SecretRefs for remote probes when exec refs are disabled", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+        },
+        auth: {
+          mode: "token",
+          token: { source: "exec", provider: "vault", id: "gateway/token" },
+        },
+      },
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: "/bin/false" },
+        },
+      },
+    };
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+      allowExecSecretRefs: false,
+    });
+
+    expect(status.rpc?.authWarning).toBeUndefined();
+    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).toHaveBeenCalledTimes(1);
+    const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
+    expect(probeInput.token).toBeUndefined();
+    expect(probeInput.password).toBeUndefined();
+  });
+
   it("does not resolve daemon password SecretRef when token auth is configured", async () => {
     daemonLoadedConfig = {
       gateway: {

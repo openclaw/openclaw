@@ -742,7 +742,9 @@ async function hasActiveGatewayExecCredential(
       !gatewaySecretInputPathCanWin({
         config: cfg,
         env: process.env,
+        modeOverride: mode,
         path,
+        remoteTokenFallback: "remote-only",
       })
     ) {
       return false;

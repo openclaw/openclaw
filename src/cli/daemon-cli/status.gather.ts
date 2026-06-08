@@ -524,7 +524,9 @@ function hasActiveGatewayExecProbeCredential(params: {
         config: cfg,
         env: params.env,
         explicitAuth: params.explicitAuth,
+        modeOverride: params.mode,
         path,
+        remoteTokenFallback: "remote-only",
       })
     ) {
       return false;

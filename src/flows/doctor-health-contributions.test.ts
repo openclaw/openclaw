@@ -250,6 +250,54 @@ describe("doctor health contributions", () => {
     expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
   });
 
+  it("does not skip remote gateway health probes for local-only exec SecretRefs", async () => {
+    mocks.checkGatewayHealth.mockResolvedValue({
+      authenticated: false,
+      healthOk: true,
+    });
+    const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
+    const cfg = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+        },
+        auth: {
+          mode: "token",
+          token: { source: "exec", provider: "vault", id: "gateway/token" },
+        },
+      },
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: "/bin/false" },
+        },
+      },
+    };
+    const ctx = {
+      cfg,
+      configResult: { cfg },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      cfgForPersistence: cfg,
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.checkGatewayHealth).toHaveBeenCalledWith({
+      runtime: ctx.runtime,
+      cfg,
+      timeoutMs: 10_000,
+    });
+    expect(mocks.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Gateway health probes skipped"),
+      "Gateway",
+    );
+  });
+
   it("keeps release configured plugin installs repair-only", async () => {
     const contribution = requireDoctorContribution("doctor:release-configured-plugin-installs");
     const ctx = {

@@ -192,14 +192,6 @@ async function waitForGatewayCall(expectedCalls = 1) {
   expect(callGateway).toHaveBeenCalledTimes(expectedCalls);
 }
 
-function createDeferredVoid() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((value) => {
-    resolve = value;
-  });
-  return { promise, resolve };
-}
-
 function mockMessages(mock: unknown): string[] {
   const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
   return calls.map(([message]) => String(message));
