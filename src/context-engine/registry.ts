@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../config/types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
-  clearPersistedContextEngineQuarantine,
   clearPersistedContextEngineQuarantineForProcess,
   listPersistedContextEngineQuarantines,
   recordPersistedContextEngineQuarantine,
@@ -497,11 +496,11 @@ export function clearContextEngineRuntimeQuarantine(engineId?: string): void {
   const quarantinedEngines = getContextEngineRegistryState().quarantinedEngines;
   if (engineId === undefined) {
     quarantinedEngines.clear();
-    clearPersistedContextEngineQuarantine();
+    clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
     return;
   }
   quarantinedEngines.delete(engineId);
-  clearPersistedContextEngineQuarantine(engineId);
+  clearPersistedContextEngineQuarantineForProcess(engineId, process.pid);
 }
 
 /**

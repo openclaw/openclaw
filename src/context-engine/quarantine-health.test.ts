@@ -99,4 +99,63 @@ describe("context engine quarantine health", () => {
       });
     });
   });
+
+  it("clears all current process records while preserving live sibling quarantines", async () => {
+    await withStateDirEnv("openclaw-context-engine-quarantine-", async ({ stateDir }) => {
+      await withLiveSiblingProcess(async (siblingProcessId) => {
+        const filePath = path.join(stateDir, "context-engine", "runtime-quarantines.json");
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(
+          filePath,
+          `${JSON.stringify(
+            {
+              schemaVersion: 1,
+              records: [
+                {
+                  engineId: "local-a",
+                  operation: "bootstrap",
+                  reason: "current process failure a",
+                  failedAtMs: 123,
+                  processId: process.pid,
+                  recordedAtMs: 456,
+                },
+                {
+                  engineId: "local-b",
+                  operation: "assemble",
+                  reason: "current process failure b",
+                  failedAtMs: 234,
+                  processId: process.pid,
+                  recordedAtMs: 567,
+                },
+                {
+                  engineId: "lossless-claw",
+                  owner: "plugin:lossless-claw",
+                  operation: "bootstrap",
+                  reason: "sibling process failure",
+                  failedAtMs: 789,
+                  processId: siblingProcessId,
+                  recordedAtMs: 1_000,
+                },
+              ],
+            },
+            null,
+            2,
+          )}\n`,
+          "utf8",
+        );
+
+        clearContextEngineRuntimeQuarantine();
+
+        expect(listContextEngineQuarantines()).toEqual([
+          {
+            engineId: "lossless-claw",
+            owner: "plugin:lossless-claw",
+            operation: "bootstrap",
+            reason: "sibling process failure",
+            failedAt: new Date(789),
+          },
+        ]);
+      });
+    });
+  });
 });

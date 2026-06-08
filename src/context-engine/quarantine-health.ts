@@ -160,32 +160,26 @@ export function listPersistedContextEngineQuarantines(): ContextEngineRuntimeQua
   }));
 }
 
-export function clearPersistedContextEngineQuarantine(engineId?: string): void {
-  if (engineId === undefined) {
-    try {
-      fs.rmSync(quarantineHealthPath(), { force: true });
-    } catch {
-      // Best-effort cleanup; callers still clear in-memory state.
-    }
-    return;
+function removePersistedContextEngineQuarantineFile(): void {
+  try {
+    fs.rmSync(quarantineHealthPath(), { force: true });
+  } catch {
+    // Best-effort cleanup; callers still clear in-memory state.
   }
-  const records = readPersistedRecords().filter((record) => record.engineId !== engineId);
-  if (records.length === 0) {
-    clearPersistedContextEngineQuarantine();
-    return;
-  }
-  writePersistedRecords(records);
 }
 
 export function clearPersistedContextEngineQuarantineForProcess(
-  engineId: string,
+  engineId: string | undefined,
   processId: number,
 ): void {
-  const records = readPersistedRecords().filter(
-    (record) => record.engineId !== engineId || record.processId !== processId,
-  );
+  const records = readPersistedRecords().filter((record) => {
+    if (record.processId !== processId) {
+      return true;
+    }
+    return engineId !== undefined && record.engineId !== engineId;
+  });
   if (records.length === 0) {
-    clearPersistedContextEngineQuarantine();
+    removePersistedContextEngineQuarantineFile();
     return;
   }
   writePersistedRecords(records);
