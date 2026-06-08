@@ -21,19 +21,23 @@ export function createSlackWriteClient(token: string, options: WebClientOptions 
   return new WebClient(token, resolveSlackWriteClientOptions(options));
 }
 
-export function createSlackTokenCacheKey(token: string): string {
-  return `sha256:${createHash("sha256").update(token).digest("base64url")}`;
+export function createSlackTokenCacheKey(token: string, options: WebClientOptions = {}): string {
+  const cacheInput = JSON.stringify({
+    token,
+    slackApiUrl: options.slackApiUrl ?? "",
+  });
+  return `sha256:${createHash("sha256").update(cacheInput).digest("base64url")}`;
 }
 
-export function getSlackWriteClient(token: string): WebClient {
-  const tokenKey = createSlackTokenCacheKey(token);
+export function getSlackWriteClient(token: string, options: WebClientOptions = {}): WebClient {
+  const tokenKey = createSlackTokenCacheKey(token, options);
   const cached = slackWriteClientCache.get(tokenKey);
   if (cached) {
     slackWriteClientCache.delete(tokenKey);
     slackWriteClientCache.set(tokenKey, cached);
     return cached;
   }
-  const client = createSlackWriteClient(token);
+  const client = createSlackWriteClient(token, options);
   if (slackWriteClientCache.size >= SLACK_WRITE_CLIENT_CACHE_MAX) {
     const oldestTokenKey = slackWriteClientCache.keys().next().value;
     if (oldestTokenKey) {

@@ -55,6 +55,14 @@ function resolveReadToken(params: DirectoryConfigParams): string | undefined {
   return account.userToken ?? account.botToken?.trim();
 }
 
+function createDirectorySlackWebClient(params: DirectoryConfigParams, token: string) {
+  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  return createSlackWebClient(
+    token,
+    account.config.slackApiUrl ? { slackApiUrl: account.config.slackApiUrl } : {},
+  );
+}
+
 function normalizeQuery(value?: string | null): string {
   return normalizeLowercaseStringOrEmpty(value);
 }
@@ -105,7 +113,7 @@ export async function getSlackDirectorySelfLive(
   if (!token) {
     return null;
   }
-  const client = createSlackWebClient(token);
+  const client = createDirectorySlackWebClient(params, token);
   const auth = (await client.auth.test()) as SlackAuthTestResponse;
   const userId = normalizeOptionalString(auth.user_id);
   if (!userId) {
@@ -129,7 +137,7 @@ export async function listSlackDirectoryPeersLive(
   if (!token) {
     return [];
   }
-  const client = createSlackWebClient(token);
+  const client = createDirectorySlackWebClient(params, token);
   const query = normalizeQuery(params.query);
   const members: SlackUser[] = [];
   let cursor: string | undefined;
@@ -176,7 +184,7 @@ export async function listSlackDirectoryGroupsLive(
   if (!token) {
     return [];
   }
-  const client = createSlackWebClient(token);
+  const client = createDirectorySlackWebClient(params, token);
   const query = normalizeQuery(params.query);
   const channels: SlackChannel[] = [];
   let cursor: string | undefined;

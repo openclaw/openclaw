@@ -131,6 +131,22 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
     return opts.client;
   }
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
+  // Per-account `slackApiUrl` requires a resolved config; honor it when one is
+  // threaded through. The SLACK_API_URL_OVERRIDE env override is applied inside
+  // the client layer regardless, so when no per-account override is configured we
+  // keep the original token-only call path untouched.
+  const cfg = opts.cfg;
+  let slackApiUrl: string | undefined;
+  if (cfg) {
+    const account = resolveSlackAccount({ cfg, accountId: opts.accountId });
+    slackApiUrl = account.config.slackApiUrl;
+  }
+  if (slackApiUrl) {
+    const clientOptions = { slackApiUrl };
+    return mode === "write"
+      ? getSlackWriteClient(token, clientOptions)
+      : createSlackWebClient(token, clientOptions);
+  }
   return mode === "write" ? getSlackWriteClient(token) : createSlackWebClient(token);
 }
 

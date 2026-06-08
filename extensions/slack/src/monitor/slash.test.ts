@@ -257,7 +257,7 @@ const { registerSlackMonitorSlashCommands } = (await import("./slash.js")) as {
   registerSlackMonitorSlashCommands: RegisterFn;
 };
 
-const { dispatchMock } = getSlackSlashMocks();
+const { deliverSlackSlashRepliesMock, dispatchMock } = getSlackSlashMocks();
 
 beforeEach(() => {
   resetSlackSlashMocks();
@@ -305,8 +305,9 @@ function createArgMenusHarness() {
   const optionsReceiverContexts: unknown[] = [];
 
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
+  const postMessage = vi.fn().mockResolvedValue({ ok: true });
   const app = {
-    client: { chat: { postEphemeral } },
+    client: { chat: { postEphemeral, postMessage } },
     command: (name: string, handler: (args: unknown) => Promise<void>) => {
       commands.set(name, handler);
     },
@@ -358,6 +359,7 @@ function createArgMenusHarness() {
     options,
     optionsReceiverContexts,
     postEphemeral,
+    postMessage,
     ctx,
     account,
     app,
@@ -975,8 +977,9 @@ function createPolicyHarness(overrides?: {
 }) {
   const commands = new Map<unknown, (args: unknown) => Promise<void>>();
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
+  const postMessage = vi.fn().mockResolvedValue({ ok: true });
   const app = {
-    client: { chat: { postEphemeral } },
+    client: { chat: { postEphemeral, postMessage } },
     command: (name: unknown, handler: (args: unknown) => Promise<void>) => {
       commands.set(name, handler);
     },
@@ -1018,12 +1021,13 @@ function createPolicyHarness(overrides?: {
 
   const account = { accountId: "acct", config: { commands: { native: false } } } as unknown;
 
-  return { commands, ctx, account, postEphemeral, channelId, channelName };
+  return { commands, ctx, account, postEphemeral, postMessage, channelId, channelName };
 }
 
 async function runSlashHandler(params: {
   commands: Map<unknown, (args: unknown) => Promise<void>>;
   body?: unknown;
+  includeRespond?: boolean;
   command: Partial<{
     user_id: string;
     user_name: string;
@@ -1041,8 +1045,7 @@ async function runSlashHandler(params: {
 
   const respond = vi.fn().mockResolvedValue(undefined);
   const ack = vi.fn().mockResolvedValue(undefined);
-
-  await handler({
+  const payload: Record<string, unknown> = {
     body: params.body,
     command: {
       user_id: "U1",
@@ -1052,8 +1055,12 @@ async function runSlashHandler(params: {
       ...params.command,
     },
     ack,
-    respond,
-  });
+  };
+  if (params.includeRespond !== false) {
+    payload.respond = respond;
+  }
+
+  await handler(payload);
 
   return { respond, ack };
 }
@@ -1061,6 +1068,7 @@ async function runSlashHandler(params: {
 async function registerAndRunPolicySlash(params: {
   harness: ReturnType<typeof createPolicyHarness>;
   body?: unknown;
+  includeRespond?: boolean;
   command?: Partial<{
     user_id: string;
     user_name: string;
@@ -1074,6 +1082,7 @@ async function registerAndRunPolicySlash(params: {
   return await runSlashHandler({
     commands: params.harness.commands,
     body: params.body,
+    includeRespond: params.includeRespond,
     command: {
       channel_id: params.command?.channel_id ?? params.harness.channelId,
       channel_name: params.command?.channel_name ?? params.harness.channelName,
@@ -1114,6 +1123,95 @@ describe("slack slash commands channel policy", () => {
     expect(ack).toHaveBeenCalledTimes(1);
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("uses Bolt respond for real Slack slash replies", async () => {
+    const harness = createPolicyHarness({ groupPolicy: "open" });
+    await registerAndRunPolicySlash({ harness });
+
+    expect(deliverSlackSlashRepliesMock).not.toHaveBeenCalled();
+
+    dispatchMock.mockImplementationOnce(async (args: unknown) => {
+      const dispatcherOptions = (
+        args as {
+          dispatcherOptions?: { deliver?: (payload: unknown) => Promise<void> };
+        }
+      ).dispatcherOptions;
+      await dispatcherOptions?.deliver?.({ text: "real response" });
+      return { counts: { final: 1, tool: 0, block: 0 } };
+    });
+    const { respond } = await registerAndRunPolicySlash({ harness });
+
+    const payload = firstCallPayload(deliverSlackSlashRepliesMock, "slash replies") as {
+      respond?: unknown;
+    };
+    expect(payload.respond).toBe(respond);
+    expect(harness.postEphemeral).not.toHaveBeenCalled();
+    expect(harness.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to postEphemeral when synthetic slash respond is unavailable", async () => {
+    const harness = createPolicyHarness({ groupPolicy: "open" });
+    deliverSlackSlashRepliesMock.mockImplementationOnce(async (args: unknown) => {
+      const respond = (args as { respond?: (payload: unknown) => Promise<void> }).respond;
+      await respond?.({ text: "synthetic response", response_type: "ephemeral" });
+    });
+    dispatchMock.mockImplementationOnce(async (args: unknown) => {
+      const dispatcherOptions = (
+        args as {
+          dispatcherOptions?: { deliver?: (payload: unknown) => Promise<void> };
+        }
+      ).dispatcherOptions;
+      await dispatcherOptions?.deliver?.({ text: "synthetic response" });
+      return { counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const { respond } = await registerAndRunPolicySlash({
+      harness,
+      includeRespond: false,
+      command: { channel_id: "C_SYNTH", user_id: "U_SYNTH" },
+    });
+
+    expect(respond).not.toHaveBeenCalled();
+    expect(harness.postEphemeral).toHaveBeenCalledWith({
+      token: "bot-token",
+      channel: "C_SYNTH",
+      user: "U_SYNTH",
+      text: "synthetic response",
+      blocks: undefined,
+    });
+    expect(harness.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to postMessage for synthetic in-channel slash replies", async () => {
+    const harness = createPolicyHarness({ groupPolicy: "open" });
+    deliverSlackSlashRepliesMock.mockImplementationOnce(async (args: unknown) => {
+      const respond = (args as { respond?: (payload: unknown) => Promise<void> }).respond;
+      await respond?.({ text: "public synthetic response", response_type: "in_channel" });
+    });
+    dispatchMock.mockImplementationOnce(async (args: unknown) => {
+      const dispatcherOptions = (
+        args as {
+          dispatcherOptions?: { deliver?: (payload: unknown) => Promise<void> };
+        }
+      ).dispatcherOptions;
+      await dispatcherOptions?.deliver?.({ text: "public synthetic response" });
+      return { counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    await registerAndRunPolicySlash({
+      harness,
+      includeRespond: false,
+      command: { channel_id: "C_SYNTH", user_id: "U_SYNTH" },
+    });
+
+    expect(harness.postMessage).toHaveBeenCalledWith({
+      token: "bot-token",
+      channel: "C_SYNTH",
+      text: "public synthetic response",
+      blocks: undefined,
+    });
+    expect(harness.postEphemeral).not.toHaveBeenCalled();
   });
 
   it("allows unlisted channels when groupPolicy is open", async () => {

@@ -4,7 +4,8 @@ import { vi } from "vitest";
 type AsyncMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
 
 const mocks = vi.hoisted(() => ({
-  dispatchMock: vi.fn(),
+  deliverSlackSlashRepliesMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+  dispatchMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   readAllowFromStoreMock: vi.fn(),
   upsertPairingRequestMock: vi.fn(),
   resolveAgentRouteMock: vi.fn(),
@@ -16,7 +17,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./slash-dispatch.runtime.js", () => {
   return {
-    deliverSlackSlashReplies: vi.fn(async () => {}),
+    deliverSlackSlashReplies: (...args: unknown[]) => mocks.deliverSlackSlashRepliesMock(...args),
     dispatchReplyWithDispatcher: (...args: unknown[]) => mocks.dispatchMock(...args),
     finalizeInboundContext: (...args: unknown[]) => mocks.finalizeInboundContextMock(...args),
     resolveAgentRoute: (...args: unknown[]) => mocks.resolveAgentRouteMock(...args),
@@ -29,7 +30,8 @@ vi.mock("./slash-dispatch.runtime.js", () => {
 });
 
 type SlashHarnessMocks = {
-  dispatchMock: ReturnType<typeof vi.fn>;
+  deliverSlackSlashRepliesMock: AsyncMock;
+  dispatchMock: AsyncMock;
   readAllowFromStoreMock: ReturnType<typeof vi.fn>;
   upsertPairingRequestMock: ReturnType<typeof vi.fn>;
   resolveAgentRouteMock: ReturnType<typeof vi.fn>;
@@ -44,6 +46,7 @@ export function getSlackSlashMocks(): SlashHarnessMocks {
 }
 
 export function resetSlackSlashMocks() {
+  mocks.deliverSlackSlashRepliesMock.mockReset().mockResolvedValue(undefined);
   mocks.dispatchMock.mockReset().mockResolvedValue({ counts: { final: 1, tool: 0, block: 0 } });
   mocks.readAllowFromStoreMock.mockReset().mockResolvedValue([]);
   mocks.upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });

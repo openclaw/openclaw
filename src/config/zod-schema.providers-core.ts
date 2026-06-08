@@ -948,13 +948,59 @@ export const SlackSocketModeSchema = z
   })
   .strict();
 
+export const SlackTrustedUpstreamSchema = z
+  .object({
+    requireHeader: z
+      .object({
+        name: z.string().trim().min(1).optional().default("X-OpenClaw-Trusted-Upstream-Verified"),
+        value: z.string().optional().default("true"),
+      })
+      .strict()
+      .optional()
+      .default({
+        name: "X-OpenClaw-Trusted-Upstream-Verified",
+        value: "true",
+      }),
+    maxEventAge: z.number().int().min(0).optional().default(300),
+    // Optional bot identity for the trusted-upstream `authorize` callback.
+    // When both are set, OpenClaw skips Bolt's lazy `auth.test` call so the
+    // gateway can run with a placeholder `botToken` (zero-creds shape).
+    botUserId: z
+      .string()
+      .trim()
+      .regex(
+        /^[UW][A-Z0-9]{2,}$/u,
+        "channels.slack.trustedUpstream.botUserId must be a Slack user id like U0123ABC",
+      )
+      .optional(),
+    botId: z
+      .string()
+      .trim()
+      .regex(
+        /^B[A-Z0-9]{2,}$/u,
+        "channels.slack.trustedUpstream.botId must be a Slack bot id like B0123ABC",
+      )
+      .optional(),
+  })
+  .strict()
+  .optional()
+  .default({
+    requireHeader: {
+      name: "X-OpenClaw-Trusted-Upstream-Verified",
+      value: "true",
+    },
+    maxEventAge: 300,
+  });
+
 export const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
-    mode: z.enum(["socket", "http"]).optional(),
+    mode: z.enum(["socket", "http", "trusted-upstream"]).optional(),
     socketMode: SlackSocketModeSchema.optional(),
+    trustedUpstream: SlackTrustedUpstreamSchema,
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
+    slackApiUrl: z.string().url().optional(),
     capabilities: SlackCapabilitiesSchema.optional(),
     execApprovals: z
       .object({
@@ -1036,9 +1082,11 @@ export const SlackAccountSchema = z
   });
 
 export const SlackConfigSchema = SlackAccountSchema.safeExtend({
-  mode: z.enum(["socket", "http"]).optional().default("socket"),
+  mode: z.enum(["socket", "http", "trusted-upstream"]).optional().default("socket"),
+  trustedUpstream: SlackTrustedUpstreamSchema,
   signingSecret: SecretInputSchema.optional().register(sensitive),
   webhookPath: z.string().optional().default("/slack/events"),
+  slackApiUrl: z.string().url().optional(),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   mentionPatterns: MentionPatternsPolicySchema.optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),

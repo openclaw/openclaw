@@ -19,11 +19,13 @@ type SlackAccountLike = {
   enabled?: unknown;
   mode?: unknown;
   signingSecret?: unknown;
+  botToken?: unknown;
 };
 
 type SlackConfigLike = {
   mode?: unknown;
   signingSecret?: unknown;
+  botToken?: unknown;
   accounts?: Record<string, SlackAccountLike | undefined>;
 };
 
@@ -78,7 +80,10 @@ export function validateSlackSigningSecretRequirements(
   value: SlackConfigLike,
   ctx: z.RefinementCtx,
 ): void {
-  const baseMode = value.mode === "http" || value.mode === "socket" ? value.mode : "socket";
+  const baseMode =
+    value.mode === "http" || value.mode === "socket" || value.mode === "trusted-upstream"
+      ? value.mode
+      : "socket";
   if (baseMode === "http" && !hasConfiguredSecretInput(value.signingSecret)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -86,19 +91,37 @@ export function validateSlackSigningSecretRequirements(
       path: ["signingSecret"],
     });
   }
+  if (baseMode === "trusted-upstream" && !hasConfiguredSecretInput(value.botToken)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'channels.slack.mode="trusted-upstream" requires channels.slack.botToken',
+      path: ["botToken"],
+    });
+  }
   forEachEnabledAccount(value.accounts, (accountId, account) => {
     const accountMode =
-      account.mode === "http" || account.mode === "socket" ? account.mode : baseMode;
-    if (accountMode !== "http") {
+      account.mode === "http" || account.mode === "socket" || account.mode === "trusted-upstream"
+        ? account.mode
+        : baseMode;
+    if (accountMode === "http") {
+      const accountSecret = account.signingSecret ?? value.signingSecret;
+      if (!hasConfiguredSecretInput(accountSecret)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            'channels.slack.accounts.*.mode="http" requires channels.slack.signingSecret or channels.slack.accounts.*.signingSecret',
+          path: ["accounts", accountId, "signingSecret"],
+        });
+      }
       return;
     }
-    const accountSecret = account.signingSecret ?? value.signingSecret;
-    if (!hasConfiguredSecretInput(accountSecret)) {
+    const accountBotToken = account.botToken ?? value.botToken;
+    if (accountMode === "trusted-upstream" && !hasConfiguredSecretInput(accountBotToken)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          'channels.slack.accounts.*.mode="http" requires channels.slack.signingSecret or channels.slack.accounts.*.signingSecret',
-        path: ["accounts", accountId, "signingSecret"],
+          'channels.slack.accounts.*.mode="trusted-upstream" requires channels.slack.botToken or channels.slack.accounts.*.botToken',
+        path: ["accounts", accountId, "botToken"],
       });
     }
   });

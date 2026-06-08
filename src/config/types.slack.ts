@@ -139,17 +139,53 @@ export type SlackSocketModeConfig = {
   pingPongLoggingEnabled?: boolean;
 };
 
+export type SlackTrustedUpstreamRequireHeaderConfig = {
+  /** Header name required on trusted-upstream requests. Default: X-OpenClaw-Trusted-Upstream-Verified. */
+  name?: string;
+  /** Exact header value required on trusted-upstream requests. Default: true. */
+  value?: string;
+};
+
+export type SlackTrustedUpstreamConfig = {
+  /** Required assertion header for trusted-upstream requests. */
+  requireHeader?: SlackTrustedUpstreamRequireHeaderConfig;
+  /** Reject events older than this many seconds by payload.event_time. 0 disables. Default: 300. */
+  maxEventAge?: number;
+  /**
+   * Slack bot user id (e.g. "U0123ABC") for the configured account.
+   *
+   * When set, OpenClaw passes an `authorize` callback to Bolt that returns this
+   * value directly, so Bolt does not lazy-call `auth.test` against Slack. This
+   * is required when the gateway runs trusted-upstream with a placeholder bot
+   * token (the canonical zero-credentials shape, where the real token lives in
+   * an upstream proxy such as a trusted reverse proxy or sidecar); otherwise Bolt's lazy
+   * `auth.test` call hits Slack with the placeholder token and fails with
+   * `invalid_auth`.
+   */
+  botUserId?: string;
+  /**
+   * Slack bot id (e.g. "B0123ABC") paired with `botUserId`. See `botUserId`
+   * above for the rationale. Required alongside `botUserId` when running
+   * trusted-upstream without a real bot token.
+   */
+  botId?: string;
+};
+
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
-  /** Slack connection mode (socket|http). Default: socket. */
-  mode?: "socket" | "http";
+  /** Slack connection mode (socket|http|trusted-upstream). Default: socket. */
+  mode?: "socket" | "http" | "trusted-upstream";
   /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
   socketMode?: SlackSocketModeConfig;
+  /** Trusted reverse-proxy settings. Trusted-upstream mode only. */
+  trustedUpstream?: SlackTrustedUpstreamConfig;
   /** Slack signing secret (required for HTTP mode). */
   signingSecret?: string;
   /** Slack Events API webhook path (default: /slack/events). */
   webhookPath?: string;
+  /** Override Slack Web API base URL. Must include /api path for @slack/web-api compatibility. */
+  slackApiUrl?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: SlackCapabilitiesConfig;
   /** Slack-native exec approval delivery + approver authorization. */

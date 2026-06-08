@@ -106,14 +106,61 @@ describe("slack web client config", () => {
     expect(options.retryConfig).toBe(customRetry);
   });
 
+  it("injects SLACK_API_URL_OVERRIDE into web client options when no per-account url is set", () => {
+    process.env.SLACK_API_URL_OVERRIDE = "http://slack-proxy.internal:8080/slack/api/";
+    try {
+      const options = resolveSlackWebClientOptions();
+      expect(options.slackApiUrl).toBe("http://slack-proxy.internal:8080/slack/api/");
+    } finally {
+      delete process.env.SLACK_API_URL_OVERRIDE;
+    }
+  });
+
+  it("lets per-account slackApiUrl beat SLACK_API_URL_OVERRIDE", () => {
+    process.env.SLACK_API_URL_OVERRIDE = "http://env-override.example/slack/api/";
+    try {
+      const options = resolveSlackWebClientOptions({
+        slackApiUrl: "http://per-account.example/slack/api/",
+      });
+      expect(options.slackApiUrl).toBe("http://per-account.example/slack/api/");
+    } finally {
+      delete process.env.SLACK_API_URL_OVERRIDE;
+    }
+  });
+
+  it("ignores blank SLACK_API_URL_OVERRIDE values", () => {
+    process.env.SLACK_API_URL_OVERRIDE = "   ";
+    try {
+      const options = resolveSlackWebClientOptions();
+      expect(options.slackApiUrl).toBeUndefined();
+    } finally {
+      delete process.env.SLACK_API_URL_OVERRIDE;
+    }
+  });
+
+  it("also injects SLACK_API_URL_OVERRIDE into write client options", () => {
+    process.env.SLACK_API_URL_OVERRIDE = "http://slack-proxy.internal:8080/slack/api/";
+    try {
+      const options = resolveSlackWriteClientOptions();
+      expect(options.slackApiUrl).toBe("http://slack-proxy.internal:8080/slack/api/");
+    } finally {
+      delete process.env.SLACK_API_URL_OVERRIDE;
+    }
+  });
+
   it("passes merged options into WebClient", () => {
     const customAgent = {} as never;
 
-    createSlackWebClient("xoxb-test", { timeout: 1234, agent: customAgent });
+    createSlackWebClient("xoxb-test", {
+      timeout: 1234,
+      agent: customAgent,
+      slackApiUrl: "http://slack-proxy.internal:8080/slack/api/",
+    });
 
     expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
       agent: customAgent,
       retryConfig: SLACK_DEFAULT_RETRY_OPTIONS,
+      slackApiUrl: "http://slack-proxy.internal:8080/slack/api/",
       timeout: 1234,
     });
   });
@@ -188,6 +235,25 @@ describe("slack web client config", () => {
 
     expect(second).not.toBe(first);
     expect(WebClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps cached write clients separated by slackApiUrl", () => {
+    const first = getSlackWriteClient("xoxb-test", {
+      slackApiUrl: "http://slack-proxy.internal:8080/slack/api/",
+    });
+    const second = getSlackWriteClient("xoxb-test", {
+      slackApiUrl: "https://slack.com/api/",
+    });
+
+    expect(second).not.toBe(first);
+    expect(WebClient).toHaveBeenCalledTimes(2);
+    expect(WebClient).toHaveBeenNthCalledWith(
+      1,
+      "xoxb-test",
+      expect.objectContaining({
+        slackApiUrl: "http://slack-proxy.internal:8080/slack/api/",
+      }),
+    );
   });
 
   it("builds stable non-secret token cache keys", () => {
