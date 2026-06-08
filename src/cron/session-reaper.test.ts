@@ -141,16 +141,16 @@ describe("sweepCronRunSessions", () => {
     });
   });
 
-  it("prunes expired isolated cron sessions (no :run: suffix)", async () => {
+  it("preserves stable isolated cron base sessions while pruning expired run descendants", async () => {
     const now = Date.now();
     const store: Record<string, { sessionId: string; updatedAt: number }> = {
       "agent:main:cron:job-isolated-expired": {
         sessionId: "isolated-expired",
-        updatedAt: now - 25 * 3_600_000, // 25h ago — expired
+        updatedAt: now - 25 * 3_600_000, // old but stable base row — preserve
       },
       "agent:main:cron:job-isolated-recent": {
         sessionId: "isolated-recent",
-        updatedAt: now - 1 * 3_600_000, // 1h ago — not expired
+        updatedAt: now - 1 * 3_600_000, // recent stable base row — preserve
       },
       "agent:main:cron:job-main-target": {
         sessionId: "main-target-base",
@@ -158,10 +158,10 @@ describe("sweepCronRunSessions", () => {
       },
       "agent:main:cron:job-main-target:run:run-123": {
         sessionId: "main-target-run",
-        updatedAt: now - 25 * 3_600_000, // expired run
+        updatedAt: now - 25 * 3_600_000, // expired run descendant — prune
       },
     };
-    fs.writeFileSync(storePath, JSON.stringify(store));
+    writeSessionStoreForTest(storePath, store);
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -171,10 +171,10 @@ describe("sweepCronRunSessions", () => {
     });
 
     expect(result.swept).toBe(true);
-    expect(result.pruned).toBe(2);
+    expect(result.pruned).toBe(1);
 
-    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
-    expect(updated["agent:main:cron:job-isolated-expired"]).toBeUndefined();
+    const updated = readSessionStoreForTest(storePath);
+    expect(updated["agent:main:cron:job-isolated-expired"]).toBeDefined();
     expect(updated["agent:main:cron:job-isolated-recent"]).toBeDefined();
     expect(updated["agent:main:cron:job-main-target"]).toBeDefined();
     expect(updated["agent:main:cron:job-main-target:run:run-123"]).toBeUndefined();
