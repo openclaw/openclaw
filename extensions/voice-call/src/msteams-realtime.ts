@@ -19,6 +19,7 @@
  * speakable result; a short "working on it" filler covers longer agent runs.
  */
 
+import { readFile } from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
@@ -136,6 +137,59 @@ const MSTEAMS_LOOK_TOOL: RealtimeVoiceTool = {
     required: ["question"],
   },
 };
+
+const MSTEAMS_SHOW_TOOL_NAME = "show_to_caller";
+const MSTEAMS_SHOW_TOOL: RealtimeVoiceTool = {
+  type: "function",
+  name: MSTEAMS_SHOW_TOOL_NAME,
+  description:
+    "Show the caller an image on the video call — take a screenshot of your screen, or display an " +
+    'image you generated or found. Use this when the caller asks to SEE something ("show me your ' +
+    'screen", "show me that picture", "can I see it?"). The image appears on your video tile for a few ' +
+    "seconds; describe what you are showing in your spoken reply.",
+  parameters: {
+    type: "object",
+    properties: {
+      request: {
+        type: "string",
+        description:
+          "What to show the caller, e.g. 'a screenshot of your screen' or 'the chart you generated'.",
+      },
+    },
+    required: ["request"],
+  },
+};
+
+/** System prompt for the show_to_caller consult: produce ONE image; the bridge displays it on the tile. */
+const MSTEAMS_REALTIME_SHOW_SYSTEM_PROMPT =
+  "The caller is on a live video call and asked to SEE something. Produce exactly ONE image to show " +
+  "them — take a screenshot of your screen, or generate/fetch the requested image — using your tools. " +
+  "The image is shown on your video tile automatically, so do NOT send it as a chat message. Return a " +
+  "brief spoken sentence describing what you're showing.";
+
+/** Max bytes for an agent-produced image we'll display (safety bound). */
+const MSTEAMS_MAX_DISPLAY_IMAGE_BYTES = 4_000_000;
+
+/** MIME for a local image file by extension, or null for non-images / remote URLs. */
+function mimeForImagePath(filePath: string): string | null {
+  if (/^[a-z]+:\/\//i.test(filePath)) {
+    return null; // remote URL — not a trusted local file; skip
+  }
+  const ext = filePath.toLowerCase().split(".").pop() ?? "";
+  switch (ext) {
+    case "png":
+      return "image/png";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "gif":
+      return "image/gif";
+    case "webp":
+      return "image/webp";
+    default:
+      return null;
+  }
+}
 
 /** Returned when look_at_screen is over the per-call vision budget (cost cap). */
 const MSTEAMS_LOOK_BUDGETED = {
@@ -349,10 +403,13 @@ export function createMsteamsRealtimeCall(params: {
   const visionEnabled = Boolean(
     deps.agentRuntime && deps.voiceConfig && deps.cfg && deps.getLatestFrame,
   );
+  // show_to_caller needs only a consult-capable agent (it produces its own image), not a frame source.
+  const showEnabled = Boolean(deps.agentRuntime && deps.voiceConfig && deps.cfg);
   const bridgeTools = [
     ...(deps.tools ?? []),
     ...(asyncTasksEnabled ? [MSTEAMS_AGENT_TASK_TOOL] : []),
     ...(visionEnabled ? [MSTEAMS_LOOK_TOOL] : []),
+    ...(showEnabled ? [MSTEAMS_SHOW_TOOL] : []),
   ];
 
   /**
@@ -473,6 +530,10 @@ export function createMsteamsRealtimeCall(params: {
       }
       if (event.name === MSTEAMS_LOOK_TOOL_NAME) {
         void handleLook(event, rtSession);
+        return;
+      }
+      if (event.name === MSTEAMS_SHOW_TOOL_NAME) {
+        void handleShow(event, rtSession);
         return;
       }
       void handleToolCall(event, rtSession);
@@ -684,6 +745,88 @@ export function createMsteamsRealtimeCall(params: {
         `MsteamsRealtime: look failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
       );
       rtSession.submitToolResult(event.callId, { text: "Sorry, I had trouble seeing that." });
+    }
+  }
+
+  /** Read agent-produced trusted-local image files and show them on the outbound tile (Phase 8). */
+  async function forwardDisplayImages(mediaPaths: string[]): Promise<number> {
+    let shown = 0;
+    for (const filePath of mediaPaths) {
+      const mime = mimeForImagePath(filePath);
+      if (!mime) {
+        continue; // not a local image file
+      }
+      try {
+        const bytes = await readFile(filePath);
+        if (bytes.length === 0 || bytes.length > MSTEAMS_MAX_DISPLAY_IMAGE_BYTES) {
+          continue;
+        }
+        session.send({ type: "display.image", dataBase64: bytes.toString("base64"), mime });
+        shown += 1;
+      } catch (err) {
+        logger?.debug?.(
+          `MsteamsRealtime: could not show image ${filePath} for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return shown;
+  }
+
+  /**
+   * show_to_caller (CVI Phase 8): run the agent to PRODUCE an image (screenshot / generated image) and
+   * display it on the bot's video tile. Reuses the consult path; the produced trusted-local media is
+   * read and sent as `display.image`. The agent is told not to also message it to chat.
+   */
+  async function handleShow(
+    event: RealtimeVoiceToolCallEvent,
+    rtSession: RealtimeVoiceBridgeSession,
+  ): Promise<void> {
+    if (recordingGateBlocks()) {
+      logger?.debug?.(`MsteamsRealtime: show refused for ${callId} — recording not active`);
+      rtSession.submitToolResult(event.callId, MSTEAMS_RECORDING_BLOCKED);
+      return;
+    }
+    const { agentRuntime, voiceConfig, cfg } = deps;
+    if (!agentRuntime || !voiceConfig || !cfg) {
+      rtSession.submitToolResult(event.callId, { text: "I can't show images on this call." });
+      return;
+    }
+    const agentId = voiceConfig.agentId ?? "main";
+    const sessionKey = `agent:${agentId}:subagent:msteams:${callId}`;
+    try {
+      if (rtSession.bridge?.supportsToolResultContinuation) {
+        rtSession.submitToolResult(
+          event.callId,
+          buildRealtimeVoiceAgentConsultWorkingResponse("caller"),
+          { willContinue: true },
+        );
+      }
+      const result = await runMsteamsConsult({
+        agentRuntime,
+        voiceConfig,
+        cfg,
+        agentId,
+        sessionKey,
+        runIdPrefix: `voice-realtime-show:${callId}`,
+        args: event.args,
+        surface:
+          "a live Microsoft Teams video call — show the caller an image on the bot's video tile",
+        extraSystemPrompt: MSTEAMS_REALTIME_SHOW_SYSTEM_PROMPT,
+        toolPolicy: "owner", // needs the screenshot / image-generation tools
+        timeoutMs: voiceConfig.responseTimeoutMs,
+      });
+      const shown = await forwardDisplayImages(result.mediaPaths ?? []);
+      rtSession.submitToolResult(event.callId, {
+        text:
+          shown > 0
+            ? result.text || "I'm showing it on your screen now."
+            : result.text || "Sorry, I couldn't produce an image to show.",
+      });
+    } catch (err) {
+      logger?.warn(
+        `MsteamsRealtime: show failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
+      );
+      rtSession.submitToolResult(event.callId, { text: "Sorry, I had trouble showing that." });
     }
   }
 
