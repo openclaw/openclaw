@@ -1720,6 +1720,77 @@ describe("runCliAgent reliability", () => {
     expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
   });
 
+  it("does not fail over when a Claude CLI turn has tool calls but no assistant text", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "llm_output"),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout:
+          [
+            JSON.stringify({
+              type: "assistant",
+              message: {
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool_use",
+                    id: "toolu_message",
+                    name: "message",
+                    input: { text: "Already delivered in Telegram" },
+                  },
+                ],
+              },
+            }),
+            JSON.stringify({
+              type: "result",
+              result: "",
+              session_id: "claude-session-1",
+            }),
+          ].join("\n") + "\n",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const context = buildPreparedContext({
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      runId: "run-tool-only-empty-result",
+    });
+    const backend = {
+      ...context.preparedBackend.backend,
+      output: "jsonl" as const,
+      jsonlDialect: "claude-stream-json" as const,
+      sessionIdFields: ["session_id"],
+    };
+    const result = await runPreparedCliAgent({
+      ...context,
+      backendResolved: {
+        ...context.backendResolved,
+        config: backend,
+      },
+      preparedBackend: {
+        ...context.preparedBackend,
+        backend,
+      },
+    });
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.meta.executionTrace?.fallbackUsed).toBe(false);
+    expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
+  });
+
   it("returns silent payload for empty CLI output when silence is allowed", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "llm_output"),

@@ -24,7 +24,14 @@ export type CliOutput = {
   sessionId?: string;
   usage?: CliUsage;
   finalPromptText?: string;
+  toolUseCount?: number;
 };
+
+function withCliToolUseCount<T extends CliOutput>(output: T, count: number | undefined): T {
+  return typeof count === "number" && count > 0
+    ? ({ ...output, toolUseCount: count } as T)
+    : output;
+}
 
 /** Incremental assistant text emitted while parsing a streaming CLI response. */
 export type CliStreamingDelta = {
@@ -367,6 +374,7 @@ function parseClaudeCliJsonlResult(params: {
   parsed: Record<string, unknown>;
   sessionId?: string;
   usage?: CliUsage;
+  toolUseCount?: number;
 }): CliOutput | null {
   if (!usesClaudeStreamJsonDialect(params)) {
     return null;
@@ -378,11 +386,17 @@ function parseClaudeCliJsonlResult(params: {
   ) {
     const resultText = unwrapNestedCliResultText(params.parsed.result).trim();
     if (resultText) {
-      return { text: resultText, sessionId: params.sessionId, usage: params.usage };
+      return withCliToolUseCount(
+        { text: resultText, sessionId: params.sessionId, usage: params.usage },
+        params.toolUseCount,
+      );
     }
     // Claude may finish with an empty result after tool-only work. Keep the
     // resolved session handle and usage instead of dropping them.
-    return { text: "", sessionId: params.sessionId, usage: params.usage };
+    return withCliToolUseCount(
+      { text: "", sessionId: params.sessionId, usage: params.usage },
+      params.toolUseCount,
+    );
   }
   return null;
 }
@@ -657,12 +671,24 @@ export function createCliJsonlStreamingParser(params: {
       usage = nextUsage ?? usage;
     }
 
+    if (params.onToolUseStart || params.onToolResult) {
+      dispatchClaudeCliStreamingToolEvent({
+        backend: params.backend,
+        providerId: params.providerId,
+        parsed,
+        tracker: toolTracker,
+        onToolUseStart: params.onToolUseStart,
+        onToolResult: params.onToolResult,
+      });
+    }
+
     const result = parseClaudeCliJsonlResult({
       backend: params.backend,
       providerId: params.providerId,
       parsed,
       sessionId,
       usage,
+      toolUseCount: toolTracker.startedIds.size,
     });
     if (result) {
       output = result;
@@ -675,17 +701,6 @@ export function createCliJsonlStreamingParser(params: {
       if (!type || type.includes("message")) {
         texts.push(item.text);
       }
-    }
-
-    if (params.onToolUseStart || params.onToolResult) {
-      dispatchClaudeCliStreamingToolEvent({
-        backend: params.backend,
-        providerId: params.providerId,
-        parsed,
-        tracker: toolTracker,
-        onToolUseStart: params.onToolUseStart,
-        onToolResult: params.onToolResult,
-      });
     }
 
     const delta = parseClaudeCliStreamingDelta({
@@ -747,7 +762,9 @@ export function createCliJsonlStreamingParser(params: {
         return output;
       }
       const text = texts.join("\n").trim();
-      return text ? { text, sessionId, usage } : null;
+      return text
+        ? withCliToolUseCount({ text, sessionId, usage }, toolTracker.startedIds.size)
+        : null;
     },
   };
 }
@@ -766,6 +783,7 @@ export function parseCliJsonl(
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   const texts: string[] = [];
+  const toolTracker = createToolUseTracker();
   for (const line of lines) {
     for (const parsed of parseJsonRecordCandidates(line)) {
       sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
@@ -778,12 +796,20 @@ export function parseCliJsonl(
         usage = nextUsage ?? usage;
       }
 
+      dispatchClaudeCliStreamingToolEvent({
+        backend,
+        providerId,
+        parsed,
+        tracker: toolTracker,
+      });
+
       const claudeResult = parseClaudeCliJsonlResult({
         backend,
         providerId,
         parsed,
         sessionId,
         usage,
+        toolUseCount: toolTracker.startedIds.size,
       });
       if (claudeResult) {
         return claudeResult;
@@ -802,7 +828,7 @@ export function parseCliJsonl(
   if (!text) {
     return null;
   }
-  return { text, sessionId, usage };
+  return withCliToolUseCount({ text, sessionId, usage }, toolTracker.startedIds.size);
 }
 
 /** Parses CLI output according to the backend output mode with text fallback. */

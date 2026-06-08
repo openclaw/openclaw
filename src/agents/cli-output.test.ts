@@ -619,6 +619,60 @@ describe("createCliJsonlStreamingParser", () => {
     ]);
   });
 
+  it("preserves tool-use count for Claude tool-only empty result turns", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      onToolUseStart: () => {},
+      onToolResult: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_message",
+                name: "message",
+                input: { text: "Already delivered" },
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          result: "",
+          session_id: "claude-session-1",
+          usage: { input_tokens: 12, output_tokens: 1 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "",
+      sessionId: "claude-session-1",
+      usage: {
+        input: 12,
+        output: 1,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+      toolUseCount: 1,
+    });
+  });
+
   it("reassembles streamed tool args from input_json_delta chunks", () => {
     const starts: CliToolUseStartDelta[] = [];
     const parser = createCliJsonlStreamingParser({
