@@ -75,10 +75,23 @@ describe("Slack live QA runtime helpers", () => {
   it("selects native approval scenarios by id without changing standard scenario coverage", () => {
     expect(
       testing
-        .findScenario(["slack-approval-exec-native", "slack-approval-plugin-native"])
+        .findScenario([
+          "slack-approval-exec-native",
+          "slack-approval-plugin-native",
+          "slack-codex-approval-exec-native",
+          "slack-codex-approval-plugin-native",
+        ])
         .map((scenario) => scenario.id),
-    ).toEqual(["slack-approval-exec-native", "slack-approval-plugin-native"]);
+    ).toEqual([
+      "slack-approval-exec-native",
+      "slack-approval-plugin-native",
+      "slack-codex-approval-exec-native",
+      "slack-codex-approval-plugin-native",
+    ]);
     expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-approval-exec-native");
+    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain(
+      "slack-codex-approval-exec-native",
+    );
   });
 
   it("enables Slack native exec and plugin approval delivery for approval scenarios", () => {
@@ -110,6 +123,58 @@ describe("Slack live QA runtime helpers", () => {
       target: "channel",
     });
     expect(account?.channels?.C123456789?.users).toEqual(["U999999999"]);
+  });
+
+  it("enables Codex guardian runtime and native plugin approval delivery for Codex approval scenarios", () => {
+    const cfg = testing.buildSlackQaConfig(
+      {
+        agents: {
+          defaults: {},
+          list: [
+            {
+              id: "qa",
+              model: { primary: "openai/gpt-5.5" },
+            },
+          ],
+        },
+      },
+      {
+        channelId: "C123456789",
+        driverBotUserId: "U999999999",
+        overrides: {
+          approvals: {
+            exec: true,
+            plugin: true,
+            target: "channel",
+          },
+          codexApproval: true,
+        },
+        primaryModel: "openai/gpt-5.5",
+        sutAccountId: "sut",
+        sutAppToken: "xapp-sut",
+        sutBotToken: "xoxb-sut",
+      },
+    );
+
+    expect(cfg.plugins?.allow).toEqual(["slack", "codex"]);
+    expect(cfg.plugins?.entries?.codex).toEqual({
+      enabled: true,
+      config: {
+        appServer: {
+          mode: "guardian",
+        },
+      },
+    });
+    expect(cfg.tools?.exec?.mode).toBe("ask");
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+      id: "codex",
+    });
+    expect(cfg.approvals?.plugin).toEqual({ enabled: true, mode: "session" });
+    expect(cfg.channels?.slack?.accounts?.sut?.execApprovals).toEqual({
+      enabled: true,
+      approvers: ["U999999999"],
+      target: "channel",
+    });
   });
 
   it("overrides both owner and channel allowlists for block scenarios", () => {
@@ -148,6 +213,79 @@ describe("Slack live QA runtime helpers", () => {
         },
       ]),
     ).toEqual(["/approve plugin:abc allow-once"]);
+  });
+
+  it("extracts plugin approval ids from native Slack approval action values", () => {
+    expect(
+      testing.extractSlackNativeApprovalId({
+        actionValues: ["/approve plugin:abc123 allow-once", "/approve plugin:abc123 deny"],
+        decision: "allow-once",
+      }),
+    ).toBe("plugin:abc123");
+  });
+
+  it("builds Codex approval instructions for command and file-change routes", () => {
+    expect(
+      testing.buildCodexApprovalInstruction({
+        appServerMethod: "item/commandExecution/requestApproval",
+        token: "SLACK_QA_CODEX_EXEC_APPROVAL_ABC123",
+      }),
+    ).toContain("Use the shell tool exactly once");
+    expect(
+      testing.buildCodexApprovalInstruction({
+        appServerMethod: "item/fileChange/requestApproval",
+        token: "SLACK_QA_CODEX_FILE_APPROVAL_ABC123",
+      }),
+    ).toContain("outside the workspace");
+  });
+
+  it("matches pending Codex plugin approvals by id, route, and Slack turn source", () => {
+    expect(
+      testing.findPendingCodexPluginApprovalRecord({
+        approvalId: "plugin:abc123",
+        appServerMethod: "item/fileChange/requestApproval",
+        channelId: "C123456789",
+        records: [
+          {
+            id: "plugin:abc123",
+            request: {
+              pluginId: "openclaw-codex-app-server",
+              title: "Codex app-server file approval",
+              toolName: "codex_file_approval",
+              sessionKey: "agent:qa:slack-codex-approval-plugin-native-token",
+              turnSourceChannel: "slack",
+              turnSourceTo: "channel:C123456789",
+              turnSourceAccountId: "sut",
+            },
+          },
+        ],
+        sessionKey: "agent:qa:slack-codex-approval-plugin-native-token",
+        sutAccountId: "sut",
+      }),
+    ).toBeDefined();
+    expect(
+      testing.findPendingCodexPluginApprovalRecord({
+        approvalId: "plugin:abc123",
+        appServerMethod: "item/commandExecution/requestApproval",
+        channelId: "C123456789",
+        records: [
+          {
+            id: "plugin:abc123",
+            request: {
+              pluginId: "openclaw-codex-app-server",
+              title: "Codex app-server file approval",
+              toolName: "codex_file_approval",
+              sessionKey: "agent:qa:slack-codex-approval-plugin-native-token",
+              turnSourceChannel: "slack",
+              turnSourceTo: "channel:C123456789",
+              turnSourceAccountId: "sut",
+            },
+          },
+        ],
+        sessionKey: "agent:qa:slack-codex-approval-plugin-native-token",
+        sutAccountId: "sut",
+      }),
+    ).toBeUndefined();
   });
 
   it("builds approval checkpoint message evidence from Slack blocks", () => {
@@ -340,8 +478,11 @@ describe("Slack live QA runtime helpers", () => {
     ).toEqual({
       approvalId: "<redacted>",
       approvalKind: "plugin",
+      appServerMethod: undefined,
       channelId: undefined,
+      codexModelKey: undefined,
       decision: "allow-once",
+      finalCodexTurnStatus: undefined,
       pendingActionValues: undefined,
       pendingCheckpointPath: undefined,
       pendingMessageTs: undefined,
@@ -351,6 +492,52 @@ describe("Slack live QA runtime helpers", () => {
       resolvedCheckpointPath: undefined,
       resolvedMessageTs: undefined,
       resolvedScreenshotPath: undefined,
+      resolvedText: undefined,
+      threadTs: undefined,
+    });
+  });
+
+  it("keeps Codex approval route metadata while redacting Slack metadata", () => {
+    expect(
+      testing.toSlackQaScenarioArtifactResults({
+        includeContent: false,
+        redactMetadata: true,
+        scenarios: [
+          {
+            approval: {
+              approvalId: "plugin:abc",
+              approvalKind: "plugin",
+              appServerMethod: "item/fileChange/requestApproval",
+              channelId: "C123456789",
+              codexModelKey: "openai/gpt-5.5",
+              decision: "allow-once",
+              finalCodexTurnStatus: "ok",
+              pendingActionValues: ["/approve plugin:abc allow-once"],
+              pendingMessageTs: "1.000000",
+              pendingText: "Plugin approval required",
+              resolvedActionValues: [],
+              resolvedMessageTs: "1.000000",
+              resolvedText: "Plugin approval: Allowed once",
+              threadTs: "1.000000",
+            },
+            details: "codex plugin approval resolved",
+            id: "slack-codex-approval-plugin-native",
+            status: "pass",
+            title: "Slack native Codex file approval prompt resolves",
+          },
+        ],
+      })[0]?.approval,
+    ).toMatchObject({
+      approvalId: "<redacted>",
+      appServerMethod: "item/fileChange/requestApproval",
+      channelId: undefined,
+      codexModelKey: "openai/gpt-5.5",
+      finalCodexTurnStatus: "ok",
+      pendingActionValues: undefined,
+      pendingMessageTs: undefined,
+      pendingText: undefined,
+      resolvedActionValues: undefined,
+      resolvedMessageTs: undefined,
       resolvedText: undefined,
       threadTs: undefined,
     });
