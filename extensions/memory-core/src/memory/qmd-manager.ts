@@ -657,7 +657,36 @@ export class QmdMemoryManager implements MemorySearchManager {
     } catch {
       // ignore; older qmd versions might not support list --json.
     }
+
+    // `qmd collection list --json` does not include the filesystem path, but
+    // `shouldRebindCollection` needs it to detect a changed collection root.
+    // Enrich each listed managed collection with its path from `qmd collection show`.
+    if (existing.size > 0) {
+      await this.enrichCollectionPaths(existing);
+    }
     return existing;
+  }
+
+  private async enrichCollectionPaths(
+    listed: Map<string, ListedCollection>,
+  ): Promise<void> {
+    // Only enrich entries whose path is still missing after listing.
+    for (const [name, details] of listed) {
+      if (details.path !== undefined) {
+        continue;
+      }
+      try {
+        const result = await this.runQmd(["collection", "show", name], {
+          timeoutMs: this.qmd.update.commandTimeoutMs,
+        });
+        const pathLine = /^\s*Path\s*:\s*(.+?)\s*$/im.exec(result.stdout);
+        if (pathLine?.[1]) {
+          details.path = pathLine[1].trim();
+        }
+      } catch {
+        // If `collection show` fails, keep the existing (possibly empty) metadata.
+      }
+    }
   }
 
   private findCollectionByPathPattern(
