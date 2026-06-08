@@ -119,6 +119,23 @@ export function getFeishuSendRateLimitCode(error: unknown): number | undefined {
   return typeof code === "number" && FEISHU_SEND_RATE_LIMIT_CODES.has(code) ? code : undefined;
 }
 
+/**
+ * Returns a retryable rate-limit code when a fulfilled (non-throwing) Feishu
+ * SDK response embeds it in the response body. The Feishu node SDK can resolve
+ * with `{ code: 11232, msg: "..." }` instead of throwing — see typing.ts
+ * (getBackoffCodeFromResponse) and issue #28157 for the same behavior on
+ * messageReaction.create. Without this classification, requestFeishuApi would
+ * `return` the rate-limited body and downstream `assertFeishuMessageApiSuccess`
+ * would fail once with no retry.
+ */
+export function getFeishuSendRateLimitCodeFromResponse(response: unknown): number | undefined {
+  if (!isRecord(response)) {
+    return undefined;
+  }
+  const code = (response as { code?: unknown }).code;
+  return typeof code === "number" && FEISHU_SEND_RATE_LIMIT_CODES.has(code) ? code : undefined;
+}
+
 export async function requestFeishuApi<T>(
   request: () => Promise<T>,
   errorPrefix: string,
@@ -130,6 +147,7 @@ export async function requestFeishuApi<T>(
   } = {},
 ): Promise<T> {
   const retryDelayMs = options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS;
+  let lastFulfilledRateLimit: { response: unknown; code: number } | undefined;
   for (let attempt = 0; attempt <= FEISHU_SEND_MAX_RETRIES; attempt++) {
     if (attempt > 0) {
       // Linear backoff: delay grows with each attempt to give the rate-limit window time to reset.
@@ -138,7 +156,15 @@ export async function requestFeishuApi<T>(
       });
     }
     try {
-      return await request();
+      const result = await request();
+      // Feishu SDK may fulfill with a rate-limit body (e.g. { code: 11232, ... })
+      // instead of throwing. Classify before returning so retry covers both shapes.
+      const fulfilledRateLimit = getFeishuSendRateLimitCodeFromResponse(result);
+      if (fulfilledRateLimit !== undefined && attempt < FEISHU_SEND_MAX_RETRIES) {
+        lastFulfilledRateLimit = { response: result, code: fulfilledRateLimit };
+        continue;
+      }
+      return result;
     } catch (error) {
       const isRetryable =
         attempt < FEISHU_SEND_MAX_RETRIES && getFeishuSendRateLimitCode(error) !== undefined;
@@ -147,6 +173,16 @@ export async function requestFeishuApi<T>(
       }
       // Rate-limit on a non-final attempt — loop continues to next retry.
     }
+  }
+  // Exhausted retries while the SDK kept fulfilling rate-limit bodies. Surface
+  // the last response as an error so callers see the same wrapped shape they
+  // would have seen if the SDK had thrown.
+  if (lastFulfilledRateLimit) {
+    const synthetic = Object.assign(
+      new Error(`Request fulfilled with rate-limit code ${lastFulfilledRateLimit.code}`),
+      { response: { status: 200, data: lastFulfilledRateLimit.response } },
+    );
+    throw createFeishuApiError(synthetic, errorPrefix, options);
   }
   // Unreachable: every iteration either returns or throws. Required for TypeScript exhaustiveness.
   throw createFeishuApiError(new Error("unreachable"), errorPrefix, options);

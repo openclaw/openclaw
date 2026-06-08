@@ -6,7 +6,11 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { getFeishuSendRateLimitCode, requestFeishuApi } from "./comment-shared.js";
+import {
+  getFeishuSendRateLimitCode,
+  getFeishuSendRateLimitCodeFromResponse,
+  requestFeishuApi,
+} from "./comment-shared.js";
 
 /** Build an AxiosError-shaped object for a given Feishu body error code (HTTP 400). */
 function axiosError(code: number) {
@@ -216,6 +220,104 @@ describe("requestFeishuApi — retry on expanded rate-limit signals", () => {
 
     const result = await requestFeishuApi(request, "prefix", NO_DELAY);
     expect(result).toBe("ok-mixed");
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+});
+
+// Feishu SDK can fulfill (no throw) with a rate-limit code in the body, e.g.
+// `{ code: 11232, msg: "..." }`. Same shape the typing path already handles
+// via getBackoffCodeFromResponse — see issue #28157.
+describe("getFeishuSendRateLimitCodeFromResponse — fulfilled body classification", () => {
+  it("returns 230020 for a fulfilled per-chat rate-limit body", () => {
+    expect(getFeishuSendRateLimitCodeFromResponse({ code: 230020, msg: "rate limit" })).toBe(
+      230020,
+    );
+  });
+
+  it("returns 11232 for a fulfilled tenant-level rate-limit body", () => {
+    expect(getFeishuSendRateLimitCodeFromResponse({ code: 11232, msg: "rate limit" })).toBe(11232);
+  });
+
+  it("returns undefined for a successful body (code=0)", () => {
+    expect(getFeishuSendRateLimitCodeFromResponse({ code: 0, data: {} })).toBeUndefined();
+  });
+
+  it("returns undefined for a non-rate-limit error body", () => {
+    expect(getFeishuSendRateLimitCodeFromResponse({ code: 230001 })).toBeUndefined();
+  });
+
+  it("returns undefined for null / non-object", () => {
+    expect(getFeishuSendRateLimitCodeFromResponse(null)).toBeUndefined();
+    expect(getFeishuSendRateLimitCodeFromResponse(undefined)).toBeUndefined();
+    expect(getFeishuSendRateLimitCodeFromResponse("oops")).toBeUndefined();
+  });
+});
+
+describe("requestFeishuApi — retry on fulfilled rate-limit body (no throw)", () => {
+  // Mirrors the typing-path fix from #28157: SDK resolves with the rate-limit
+  // code instead of throwing, and the helper must classify before returning.
+  it("retries when SDK fulfills with code 11232 then succeeds", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 11232, msg: "rate limit", data: null })
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_ok" } });
+
+    const result = await requestFeishuApi(request, "prefix", NO_DELAY);
+    expect(result).toEqual({ code: 0, data: { message_id: "om_ok" } });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries when SDK fulfills with code 230020 then succeeds", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 230020, msg: "rate limit" })
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_ok2" } });
+
+    const result = await requestFeishuApi(request, "prefix", NO_DELAY);
+    expect((result as { data: { message_id: string } }).data.message_id).toBe("om_ok2");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("exhausts retries when SDK keeps fulfilling 11232 and throws wrapped error", async () => {
+    const request = vi.fn().mockResolvedValue({ code: 11232, msg: "rate limit" });
+
+    const err = await requestFeishuApi(request, "Feishu send failed", NO_DELAY).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/Feishu send failed/);
+    expect((err as Error).message).toMatch(/11232/);
+    // 1 initial attempt + 2 retries
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not retry when SDK fulfills with a successful response (code=0)", async () => {
+    const request = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_first" } });
+
+    const result = await requestFeishuApi(request, "prefix", NO_DELAY);
+    expect((result as { data: { message_id: string } }).data.message_id).toBe("om_first");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry when SDK fulfills with a non-rate-limit error code", async () => {
+    // Non-retryable error codes pass through to assertFeishuMessageApiSuccess upstream.
+    const fulfilled = { code: 230001, msg: "permission error" };
+    const request = vi.fn().mockResolvedValue(fulfilled);
+
+    const result = await requestFeishuApi(request, "prefix", NO_DELAY);
+    expect(result).toBe(fulfilled);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers across thrown then fulfilled rate-limits (catch → try → ok)", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(axiosError(230020))
+      .mockResolvedValueOnce({ code: 11232, msg: "rate limit" })
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_recovered" } });
+
+    const result = await requestFeishuApi(request, "prefix", NO_DELAY);
+    expect((result as { data: { message_id: string } }).data.message_id).toBe("om_recovered");
     expect(request).toHaveBeenCalledTimes(3);
   });
 });
