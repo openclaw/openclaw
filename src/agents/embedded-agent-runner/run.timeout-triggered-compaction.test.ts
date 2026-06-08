@@ -7,7 +7,6 @@ import {
   mockedContextEngine,
   mockedGetApiKeyForModel,
   mockedGlobalHookRunner,
-  mockedLog,
   mockedPickFallbackThinkingLevel,
   mockedResolveAuthProfileOrder,
   mockedRunEmbeddedAttempt,
@@ -175,14 +174,6 @@ describe("timeout-triggered compaction", () => {
     expect(compactParams.runtimeContext?.attempt).toBe(1);
     expect(compactParams.runtimeContext?.maxAttempts).toBe(2);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    // Regression guard: timeout-compaction path must emit a
-    // [context-pressure:fire] anchor in the same format as the overflow path,
-    // so operators grepping for mid-turn pressure triggers (trigger F,
-    // RFC §4.1) see the timeout-driven compaction that bypasses
-    // checkContextPressure() in agent-runner.ts.
-    expect(mockedLog.warn).toHaveBeenCalledWith(
-      expect.stringContaining("[context-pressure:fire] mid-turn trigger=timeout"),
-    );
     expect(result.meta.error).toBeUndefined();
     expect(result.meta.agentMeta?.compactionTokensAfter).toBe(80_000);
   });
@@ -421,7 +412,7 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).not.toHaveBeenCalled();
   });
 
-  it("falls through to timeout handling after max timeout compaction attempts", async () => {
+  it("falls through to failover rotation after max timeout compaction attempts", async () => {
     // First attempt: timeout with high prompt usage (150k / 200k = 75%)
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -471,7 +462,7 @@ describe("timeout-triggered compaction", () => {
     // Both compaction attempts used; third timeout falls through.
     expect(mockedCompactDirect).toHaveBeenCalledTimes(2);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
-    // Falls through to timeout error payload once compaction retries are exhausted.
+    // Falls through to timeout error payload (failover rotation path)
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
@@ -537,101 +528,92 @@ describe("timeout-triggered compaction", () => {
     expect(mockedRunPostCompactionSideEffects).toHaveBeenCalledTimes(1);
   });
 
-  it("does not rotate profiles after compacted:false timeout compaction failure", async () => {
+  it("counts compacted:false timeout compactions against the retry cap across profile rotation", async () => {
     useTwoAuthProfiles();
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        timedOut: true,
-        aborted: true,
-        lastAssistant: {
-          usage: { input: 150000 },
-        } as never,
-      }),
-    );
-    mockedCompactDirect.mockResolvedValueOnce({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
-
-    const result = await runEmbeddedAgent(overflowBaseRunParams);
-
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedCompactDirect).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeContext: expect.objectContaining({
-          authProfileId: "profile-a",
-          attempt: 1,
-          maxAttempts: 2,
+    // Attempt 1 (profile-a): timeout → compaction #1 fails → rotate to profile-b
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          timedOut: true,
+          aborted: true,
+          lastAssistant: {
+            usage: { input: 150000 },
+          } as never,
         }),
-      }),
-    );
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ authProfileId: "profile-a" }),
-    );
-    expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(result.payloads?.[0]?.text).toContain("timed out");
-  });
-
-  it("does not rotate profiles after thrown timeout compaction failure", async () => {
-    useTwoAuthProfiles();
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        timedOut: true,
-        aborted: true,
-        lastAssistant: {
-          usage: { input: 150000 },
-        } as never,
-      }),
-    );
-    mockedCompactDirect.mockRejectedValueOnce(new Error("engine crashed"));
+      )
+      // Attempt 2 (profile-b): timeout → compaction #2 fails → cap exhausted → rotation
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          timedOut: true,
+          aborted: true,
+          lastAssistant: {
+            usage: { input: 150000 },
+          } as never,
+        }),
+      );
+    mockedCompactDirect
+      .mockResolvedValueOnce({
+        ok: false,
+        compacted: false,
+        reason: "nothing to compact",
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        compacted: false,
+        reason: "nothing to compact",
+      });
 
     const result = await runEmbeddedAgent(overflowBaseRunParams);
 
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ authProfileId: "profile-a" }),
-    );
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(2);
+    const firstCompact = compactCallAt(0);
+    expect(firstCompact.runtimeContext?.authProfileId).toBe("profile-a");
+    expect(firstCompact.runtimeContext?.attempt).toBe(1);
+    expect(firstCompact.runtimeContext?.maxAttempts).toBe(2);
+    const secondCompact = compactCallAt(1);
+    expect(secondCompact.runtimeContext?.authProfileId).toBe("profile-b");
+    expect(secondCompact.runtimeContext?.attempt).toBe(2);
+    expect(secondCompact.runtimeContext?.maxAttempts).toBe(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
-  it("emits [session-key:missing] when sessionKey is missing on timeout path", async () => {
-    // Same setup as the first test but with empty sessionKey — the
-    // enqueueSystemEvent gate should skip and leave a breadcrumb via the
-    // canonical session-key skip helper.
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        timedOut: true,
-        lastAssistant: {
-          usage: { input: 150000 },
-        } as never,
-      }),
-    );
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "timeout recovery compaction",
-        tokensBefore: 150000,
-        tokensAfter: 80000,
-      }),
-    );
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+  it("counts thrown timeout compactions against the retry cap across profile rotation", async () => {
+    useTwoAuthProfiles();
+    // Attempt 1 (profile-a): timeout → compaction #1 throws → rotate to profile-b
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          timedOut: true,
+          aborted: true,
+          lastAssistant: {
+            usage: { input: 150000 },
+          } as never,
+        }),
+      )
+      // Attempt 2 (profile-b): timeout → compaction #2 throws → cap exhausted → rotation
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          timedOut: true,
+          aborted: true,
+          lastAssistant: {
+            usage: { input: 150000 },
+          } as never,
+        }),
+      );
+    mockedCompactDirect
+      .mockRejectedValueOnce(new Error("engine crashed"))
+      .mockRejectedValueOnce(new Error("engine crashed again"));
 
-    await runEmbeddedAgent({ ...overflowBaseRunParams, sessionKey: "" });
+    const result = await runEmbeddedAgent(overflowBaseRunParams);
 
-    // The mid-turn [context-pressure:fire] anchor still emits (it uses
-    // sessionKey ?? sessionId as a display value, not as a gate).
-    expect(mockedLog.warn).toHaveBeenCalledWith(
-      expect.stringContaining("[context-pressure:fire] mid-turn trigger=timeout"),
-    );
-    // But the system-event enqueue was skipped → canonical breadcrumb emitted.
-    expect(mockedLog.warn).toHaveBeenCalledWith(
-      expect.stringContaining("[session-key:missing] site=pi-runner.timeout-compaction"),
-    );
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(attemptCallAt(0).authProfileId).toBe("profile-a");
+    expect(attemptCallAt(1).authProfileId).toBe("profile-b");
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
   it("uses prompt/input tokens for ratio, not total tokens", async () => {

@@ -6,7 +6,7 @@
 import {
   asDateTimestampMs,
   finiteSecondsToTimerSafeMilliseconds,
-} from "@openclaw/normalization-core/number-coercion";
+} from "../shared/number-coercion.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 /** Convert subagent timeout seconds to a timer-safe delay. */

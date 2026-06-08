@@ -546,7 +546,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  // Keep the configured provider for context-window policy, while auth/model loading below can
+  // Keep the configured provider for harness policy, while auth/model loading below can
   // route OpenAI compaction through Codex OAuth when that runtime owns the session credentials.
   const provider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
   const runtimeProvider = resolvedCompactionTarget.runtimeProvider ?? provider;
