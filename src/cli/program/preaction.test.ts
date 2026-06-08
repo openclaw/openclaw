@@ -171,6 +171,15 @@ describe("registerPreActionHooks", () => {
       .command("send")
       .option("--json")
       .action(() => {});
+    const hooks = programLocal.command("hooks");
+    hooks
+      .command("relay")
+      .requiredOption("--provider <provider>")
+      .requiredOption("--relay-id <id>")
+      .requiredOption("--event <event>")
+      .option("--generation <generation>")
+      .option("--timeout <ms>")
+      .action(() => {});
     const config = programLocal.command("config");
     config.option("--section <section>");
     setCommandJsonMode(config.command("set"), "parse-only")
@@ -514,6 +523,33 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+  });
+
+  it("reserves hooks relay stdout for provider protocol output", async () => {
+    await runPreAction({
+      parseArgv: ["hooks", "relay"],
+      processArgv: [
+        "node",
+        "openclaw",
+        "hooks",
+        "relay",
+        "--provider",
+        "codex",
+        "--relay-id",
+        "relay-1",
+        "--generation",
+        "generation-1",
+        "--event",
+        "pre_tool_use",
+        "--timeout",
+        "5000",
+      ],
+    });
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("does not preload plugins for agents list JSON output", async () => {

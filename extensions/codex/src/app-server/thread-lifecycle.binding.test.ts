@@ -716,12 +716,12 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const config = {
+    const finalConfigPatch = {
       "features.hooks": true,
       "hooks.PreToolUse": [],
     };
     const expectedConfig = {
-      ...config,
+      ...finalConfigPatch,
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.apply_patch_streaming_events": true,
@@ -733,7 +733,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer,
-      config,
+      finalConfigPatch,
     });
     await startOrResumeThread({
       client: { request } as never,
@@ -741,13 +741,104 @@ describe("Codex app-server thread lifecycle bindings", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer,
-      config,
+      finalConfigPatch,
     });
 
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
     expect(requestCalls[0]?.[1].config).toEqual(expectedConfig);
     expect(requestCalls[1]?.[1].config).toEqual(expectedConfig);
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.nativeHookRelayConfigFingerprint).toBeTruthy();
+  });
+
+  it("starts a fresh Codex thread when native hook relay config was not applied to the binding", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+      nativeHookRelayGeneration: "generation-existing",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-fresh");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const finalConfigPatch = {
+      "features.hooks": true,
+      "hooks.PreToolUse": [
+        {
+          hooks: [{ type: "command", command: "openclaw-native-hook-relay", timeout: 5 }],
+        },
+      ],
+    };
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      finalConfigPatch,
+    });
+
+    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    expect(binding.lifecycle.action).toBe("started");
+    expect(binding.threadId).toBe("thread-fresh");
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(requestCalls[0]?.[1].config).toMatchObject(finalConfigPatch);
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.nativeHookRelayConfigFingerprint).toBeTruthy();
+  });
+
+  it("starts a fresh Codex thread when native hook relay config changes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult(`thread-${request.mock.calls.length}`);
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      finalConfigPatch: {
+        "features.hooks": true,
+        "hooks.PreToolUse": [],
+      },
+    });
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      finalConfigPatch: {
+        "features.hooks": true,
+        "hooks.PreToolUse": [
+          {
+            hooks: [{ type: "command", command: "openclaw-native-hook-relay", timeout: 9 }],
+          },
+        ],
+      },
+    });
+
+    expect(binding.lifecycle.action).toBe("started");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/start"]);
   });
 
   it("merges native hook relay config with plugin app config when starting a thread", async () => {

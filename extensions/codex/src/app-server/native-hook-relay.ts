@@ -111,11 +111,11 @@ export function createCodexNativeHookRelay(params: {
       }
     | undefined;
   generation?: string;
-  generationMismatchGraceMs?: number;
   events: readonly NativeHookRelayEvent[];
   agentId: string | undefined;
   sessionId: string;
   sessionKey: string | undefined;
+  preToolUsePolicyActive?: boolean;
   config: EmbeddedRunAttemptParams["config"];
   runId: string;
   channelId?: string;
@@ -135,12 +135,10 @@ export function createCodexNativeHookRelay(params: {
       sessionKey: params.sessionKey,
     }),
     ...(params.generation ? { generation: params.generation } : {}),
-    ...(params.generationMismatchGraceMs
-      ? { generationMismatchGraceMs: params.generationMismatchGraceMs }
-      : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.preToolUsePolicyActive === true ? { preToolUsePolicyActive: true } : {}),
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
@@ -242,6 +240,18 @@ export function buildCodexNativeHookRelayConfig(params: {
   const config: JsonObject = {
     "features.hooks": true,
   };
+  if (
+    selectedEvents.has("pre_tool_use") &&
+    params.relay.shouldRelayEvent("pre_tool_use") &&
+    params.relay.preToolUsePolicyActive === true
+  ) {
+    // PreToolUse hooks run through Codex's tool router. Force shell-like native
+    // execution onto the hookable exec_command path only when OpenClaw policy
+    // requires PreToolUse enforcement; observational hooks should not broaden
+    // the default Codex execution surface.
+    config["features.unified_exec"] = true;
+    config.experimental_use_unified_exec_tool = true;
+  }
   const hookState: JsonObject = {};
   for (const event of CODEX_NATIVE_HOOK_RELAY_EVENTS) {
     const codexEvent = CODEX_HOOK_EVENT_BY_NATIVE_EVENT[event];

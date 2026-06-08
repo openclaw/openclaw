@@ -3,6 +3,7 @@ import {
   buildAgentHookContextChannelFields,
   embeddedAgentLog,
   formatErrorMessage,
+  getBeforeToolCallPolicyDiagnosticState,
   resolveAgentDir,
   resolveAttemptSpawnWorkspaceDir,
   resolveModelAuthMode,
@@ -273,6 +274,10 @@ export async function runCodexAppServerSideQuestion(
     });
 
     const serviceTier = binding.serviceTier ?? appServer.serviceTier;
+    const beforeToolCallPolicy = getBeforeToolCallPolicyDiagnosticState();
+    const preToolUsePolicyActive =
+      beforeToolCallPolicy.hasBeforeToolCallHook ||
+      beforeToolCallPolicy.trustedToolPolicies.length > 0;
     const nativeHookRelayEvents = resolveCodexSideNativeHookRelayEvents({
       configuredEvents: options.nativeHookRelay?.events,
       approvalPolicy,
@@ -284,6 +289,7 @@ export async function runCodexAppServerSideQuestion(
           agentId: sessionAgentId,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
+          preToolUsePolicyActive,
           config: params.cfg,
           runId: sideRunParams.runId,
           channelId: buildAgentHookContextChannelFields({
@@ -435,6 +441,7 @@ function registerCodexSideNativeHookRelay(params: {
   agentId: string | undefined;
   sessionId: string;
   sessionKey: string | undefined;
+  preToolUsePolicyActive?: boolean;
   config: EmbeddedRunAttemptParams["config"];
   runId: string;
   channelId?: string;
@@ -450,6 +457,7 @@ function registerCodexSideNativeHookRelay(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.preToolUsePolicyActive === true ? { preToolUsePolicyActive: true } : {}),
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),

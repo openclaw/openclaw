@@ -104,6 +104,7 @@ export type NativeHookRelayRegistration = {
   runId: string;
   channelId?: string;
   allowedEvents: readonly NativeHookRelayEvent[];
+  preToolUsePolicyActive?: boolean;
   expiresAtMs: number;
   signal?: AbortSignal;
 };
@@ -128,6 +129,7 @@ export type RegisterNativeHookRelayParams = {
   runId: string;
   channelId?: string;
   allowedEvents?: readonly NativeHookRelayEvent[];
+  preToolUsePolicyActive?: boolean;
   ttlMs?: number;
   command?: NativeHookRelayCommandOptions;
   signal?: AbortSignal;
@@ -428,6 +430,7 @@ export function registerNativeHookRelay(
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents,
+    ...(params.preToolUsePolicyActive === true ? { preToolUsePolicyActive: true } : {}),
     expiresAtMs,
     ...(params.signal ? { signal: params.signal } : {}),
   };
@@ -573,6 +576,9 @@ function nativeHookRelayEventHasLocalWork(
   event: NativeHookRelayEvent,
 ): boolean {
   if (event === "pre_tool_use") {
+    if (registration.preToolUsePolicyActive === true) {
+      return true;
+    }
     // Avoid spawning a native hook relay for every Codex tool call when there
     // is no before_tool_call hook, trusted-tool policy, or loop detector work.
     return hasBeforeToolCallPolicy() || nativePreToolUseMayRunLoopDetection(registration);

@@ -15,6 +15,7 @@ describe("command-startup-policy", () => {
     expect(shouldBypassConfigGuardForCommandPath(["config"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "validate"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "schema"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["hooks", "relay"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "set"])).toBe(false);
     expect(shouldBypassConfigGuardForCommandPath(["status"])).toBe(false);
   });
@@ -169,6 +170,7 @@ describe("command-startup-policy", () => {
   it("matches banner suppression policy", () => {
     expect(shouldHideCliBannerForCommandPath(["update", "status"])).toBe(true);
     expect(shouldHideCliBannerForCommandPath(["completion"])).toBe(true);
+    expect(shouldHideCliBannerForCommandPath(["hooks", "relay"])).toBe(true);
     expect(
       shouldHideCliBannerForCommandPath(["status"], {
         ...process.env,
@@ -211,6 +213,7 @@ describe("command-startup-policy", () => {
     expect(shouldEnsureCliPathForCommandPath(["config", "get"])).toBe(false);
     expect(shouldEnsureCliPathForCommandPath(["models", "status"])).toBe(false);
     expect(shouldEnsureCliPathForCommandPath(["tools", "effective"])).toBe(false);
+    expect(shouldEnsureCliPathForCommandPath(["hooks", "relay"])).toBe(false);
     expect(shouldEnsureCliPathForCommandPath(["message", "send"])).toBe(true);
     expect(shouldEnsureCliPathForCommandPath([])).toBe(true);
   });
@@ -243,6 +246,20 @@ describe("command-startup-policy", () => {
       skipConfigGuard: false,
       loadPlugins: false,
       pluginRegistry: { scope: "channels" },
+    });
+
+    expect(
+      resolveCliStartupPolicy({
+        commandPath: ["hooks", "relay"],
+        jsonOutputMode: false,
+        env: {},
+      }),
+    ).toEqual({
+      suppressDoctorStdout: true,
+      hideBanner: true,
+      skipConfigGuard: false,
+      loadPlugins: false,
+      pluginRegistry: { scope: "all" },
     });
   });
 });
