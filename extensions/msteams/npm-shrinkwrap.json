@@ -180,15 +180,6 @@
         "node": ">=20"
       }
     },
-    "node_modules/@azure/msal-node/node_modules/@azure/msal-common": {
-      "version": "15.17.0",
-      "resolved": "https://registry.npmjs.org/@azure/msal-common/-/msal-common-15.17.0.tgz",
-      "integrity": "sha512-VQ5/gTLFADkwue+FohVuCqlzFPUq4xSrX8jeZe+iwZuY6moliNC8xt86qPVNYdtbQfELDf2Nu6LI+demFPHGgw==",
-      "license": "MIT",
-      "engines": {
-        "node": ">=0.8.0"
-      }
-    },
     "node_modules/@microsoft/teams.api": {
       "version": "2.0.12",
       "resolved": "https://registry.npmjs.org/@microsoft/teams.api/-/teams.api-2.0.12.tgz",

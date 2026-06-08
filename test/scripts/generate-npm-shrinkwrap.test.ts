@@ -232,6 +232,177 @@ describe("generate-npm-shrinkwrap", () => {
     });
   });
 
+  it("preserves current forked shrinkwrap placement across npm major-line layouts", () => {
+    const generated = {
+      packages: {
+        "": {},
+        "node_modules/cliui": {
+          version: "6.0.0",
+          dependencies: {
+            "wrap-ansi": "^6.2.0",
+          },
+        },
+        "node_modules/qrcode": {
+          version: "1.5.4",
+          dependencies: {
+            yargs: "^15.3.1",
+          },
+        },
+        "node_modules/qrcode/node_modules/yargs": {
+          version: "15.4.1",
+          dependencies: {
+            cliui: "^6.0.0",
+            "wrap-ansi": "^6.2.0",
+            y18n: "^4.0.0",
+            "yargs-parser": "^18.1.2",
+          },
+        },
+        "node_modules/wrap-ansi": {
+          version: "6.2.0",
+        },
+        "node_modules/y18n": {
+          version: "4.0.3",
+        },
+        "node_modules/yargs": {
+          version: "17.7.2",
+          dependencies: {
+            cliui: "^8.0.1",
+            y18n: "^5.0.5",
+            "yargs-parser": "^21.1.1",
+          },
+        },
+        "node_modules/yargs-parser": {
+          version: "18.1.3",
+        },
+      },
+    };
+    const current = {
+      packages: {
+        "": {},
+        "node_modules/cliui": {
+          version: "8.0.1",
+          dependencies: {
+            "wrap-ansi": "^7.0.0",
+          },
+        },
+        "node_modules/qrcode": generated.packages["node_modules/qrcode"],
+        "node_modules/qrcode/node_modules/cliui": {
+          version: "6.0.0",
+        },
+        "node_modules/qrcode/node_modules/wrap-ansi": {
+          version: "6.2.0",
+        },
+        "node_modules/qrcode/node_modules/y18n": {
+          version: "4.0.3",
+        },
+        "node_modules/qrcode/node_modules/yargs":
+          generated.packages["node_modules/qrcode/node_modules/yargs"],
+        "node_modules/qrcode/node_modules/yargs-parser": {
+          version: "18.1.3",
+        },
+        "node_modules/wrap-ansi": {
+          version: "7.0.0",
+        },
+        "node_modules/y18n": {
+          version: "5.0.8",
+        },
+        "node_modules/yargs": generated.packages["node_modules/yargs"],
+        "node_modules/yargs-parser": {
+          version: "21.1.1",
+        },
+      },
+    };
+    const pnpmPackages = new Set([
+      "cliui@6.0.0",
+      "cliui@8.0.1",
+      "qrcode@1.5.4",
+      "wrap-ansi@6.2.0",
+      "wrap-ansi@7.0.0",
+      "y18n@4.0.3",
+      "y18n@5.0.8",
+      "yargs@15.4.1",
+      "yargs@17.7.2",
+      "yargs-parser@18.1.3",
+      "yargs-parser@21.1.1",
+    ]);
+
+    expect(restoreCurrentPnpmLockedPackages(generated, current, pnpmPackages)).toEqual(current);
+  });
+
+  it("removes generated forked entries that do not satisfy any dependency edge", () => {
+    const generated = {
+      packages: {
+        "": {},
+        "node_modules/@azure/msal-common": {
+          version: "16.6.2",
+        },
+        "node_modules/@azure/msal-node": {
+          version: "5.2.2",
+          dependencies: {
+            "@azure/msal-common": "16.6.2",
+          },
+        },
+        "node_modules/@azure/msal-node/node_modules/@azure/msal-common": {
+          version: "15.17.0",
+        },
+      },
+    };
+    const current = {
+      packages: {
+        "": {},
+        "node_modules/@azure/msal-common": generated.packages["node_modules/@azure/msal-common"],
+        "node_modules/@azure/msal-node": generated.packages["node_modules/@azure/msal-node"],
+      },
+    };
+
+    expect(
+      restoreCurrentPnpmLockedPackages(
+        generated,
+        current,
+        new Set(["@azure/msal-common@15.17.0", "@azure/msal-common@16.6.2"]),
+      ),
+    ).toEqual(current);
+  });
+
+  it("preserves current forked entries behind compound version ranges", () => {
+    const generated = {
+      packages: {
+        "": {},
+        "node_modules/@types/ws": {
+          version: "8.18.1",
+          dependencies: {
+            "@types/node": "*",
+          },
+        },
+        "node_modules/@types/ws/node_modules/@types/node": {
+          version: "25.9.1",
+          dependencies: {
+            "undici-types": ">=7.24.0 <7.24.7",
+          },
+        },
+        "node_modules/undici-types": {
+          version: "6.21.0",
+        },
+      },
+    };
+    const current = {
+      packages: {
+        ...generated.packages,
+        "node_modules/@types/ws/node_modules/undici-types": {
+          version: "7.24.6",
+        },
+      },
+    };
+
+    expect(
+      restoreCurrentPnpmLockedPackages(
+        generated,
+        current,
+        new Set(["undici-types@6.21.0", "undici-types@7.16.0", "undici-types@7.24.6"]),
+      ),
+    ).toEqual(current);
+  });
+
   it("does not restore versions that no longer satisfy the dependency edge", () => {
     const generated = {
       packages: {

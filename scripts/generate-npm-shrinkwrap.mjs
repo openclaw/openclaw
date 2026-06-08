@@ -117,6 +117,20 @@ function collectPnpmLockPackageVersions(lockfile) {
   return versionsByName;
 }
 
+function collectPnpmLockedVersionsByName(pnpmLockPackages) {
+  const versionsByName = new Map();
+  for (const packageKey of pnpmLockPackages) {
+    const parsed = parsePnpmPackageKey(packageKey);
+    if (!parsed) {
+      continue;
+    }
+    const versions = versionsByName.get(parsed.name) ?? new Set();
+    versions.add(parsed.version);
+    versionsByName.set(parsed.name, versions);
+  }
+  return versionsByName;
+}
+
 function stableVersionParts(version) {
   const match = version.match(STABLE_VERSION_PATTERN);
   return match
@@ -945,13 +959,19 @@ function versionSatisfiesSimpleSpec(version, spec) {
   if (normalized === "" || normalized === "*") {
     return true;
   }
-  const match = normalized.match(/^(?<operator>\^|~|>=)?(?<version>\d+\.\d+\.\d+)$/u);
+  if (/\s/u.test(normalized)) {
+    return normalized
+      .split(/\s+/u)
+      .filter(Boolean)
+      .every((part) => versionSatisfiesSimpleSpec(version, part));
+  }
+  const match = normalized.match(/^(?<operator>\^|~|>=|>|<=|<)?(?<version>\d+\.\d+\.\d+)$/u);
   if (!match?.groups) {
     return normalized === version;
   }
   const minimumVersion = match.groups.version;
   const comparison = compareStableVersions(version, minimumVersion);
-  if (comparison === null || comparison < 0) {
+  if (comparison === null) {
     return false;
   }
   const candidate = stableVersionParts(version);
@@ -961,15 +981,26 @@ function versionSatisfiesSimpleSpec(version, spec) {
   }
   switch (match.groups.operator) {
     case "^":
+      if (comparison < 0) {
+        return false;
+      }
       return minimum.major > 0
         ? candidate.major === minimum.major
         : minimum.minor > 0
           ? candidate.major === 0 && candidate.minor === minimum.minor
           : candidate.major === 0 && candidate.minor === 0 && candidate.patch === minimum.patch;
     case "~":
-      return candidate.major === minimum.major && candidate.minor === minimum.minor;
+      return (
+        comparison >= 0 && candidate.major === minimum.major && candidate.minor === minimum.minor
+      );
     case ">=":
-      return true;
+      return comparison >= 0;
+    case ">":
+      return comparison > 0;
+    case "<=":
+      return comparison <= 0;
+    case "<":
+      return comparison < 0;
     default:
       return comparison === 0;
   }
@@ -985,6 +1016,27 @@ function dependencySpecForLockPath(packages, lockPath, dependencyName) {
     parent?.peerDependencies?.[dependencyName] ??
     null
   );
+}
+
+function shrinkwrapEntrySatisfiesDependencyEdge(packages, lockPath, packageName, version) {
+  for (const [parentLockPath, metadata] of Object.entries(packages)) {
+    if (parentLockPath === lockPath || !metadata || typeof metadata !== "object") {
+      continue;
+    }
+    const dependencySpec =
+      metadata.dependencies?.[packageName] ??
+      metadata.optionalDependencies?.[packageName] ??
+      metadata.peerDependencies?.[packageName] ??
+      null;
+    if (!dependencySpec || !versionSatisfiesSimpleSpec(version, dependencySpec)) {
+      continue;
+    }
+    const resolved = resolveShrinkwrapDependency(packages, parentLockPath, packageName);
+    if (resolved?.path === lockPath && resolved.version === version) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function restoreCurrentPnpmLockedPackages(
@@ -1005,6 +1057,16 @@ function restoreCurrentPnpmLockedPackages(
   ) {
     return generated;
   }
+
+  const versionsByName = collectPnpmLockedVersionsByName(pnpmLockPackages);
+  const forkedPackageNames = new Set(
+    [...versionsByName.entries()]
+      .filter(
+        ([, versions]) =>
+          versions.size > 1 && pnpmLockOverrideVersionForVersions(versions) === null,
+      )
+      .map(([name]) => name),
+  );
 
   for (const [lockPath, metadata] of Object.entries(generatedPackages)) {
     if (lockPath === "" || !metadata || typeof metadata !== "object" || !metadata.version) {
@@ -1037,6 +1099,81 @@ function restoreCurrentPnpmLockedPackages(
     // when it still matches the canonical pnpm lock.
     generatedPackages[lockPath] = currentMetadata;
   }
+
+  for (const [lockPath, currentMetadata] of Object.entries(currentPackages)) {
+    if (
+      lockPath === "" ||
+      !currentMetadata ||
+      typeof currentMetadata !== "object" ||
+      !currentMetadata.version
+    ) {
+      continue;
+    }
+    const packageName = currentMetadata.name ?? packageNameForLockPath(lockPath);
+    if (
+      !packageName ||
+      !forkedPackageNames.has(packageName) ||
+      !pnpmLockPackages.has(`${packageName}@${currentMetadata.version}`) ||
+      !shrinkwrapEntrySatisfiesDependencyEdge(
+        currentPackages,
+        lockPath,
+        packageName,
+        currentMetadata.version,
+      )
+    ) {
+      continue;
+    }
+
+    const generatedMetadata = generatedPackages[lockPath];
+    const generatedPackageName = generatedMetadata?.name ?? packageNameForLockPath(lockPath);
+    if (
+      generatedMetadata &&
+      typeof generatedMetadata === "object" &&
+      generatedMetadata.version === currentMetadata.version &&
+      generatedPackageName === packageName
+    ) {
+      continue;
+    }
+    if (
+      generatedMetadata &&
+      (!generatedMetadata.version ||
+        generatedPackageName !== packageName ||
+        !pnpmLockPackages.has(`${packageName}@${generatedMetadata.version}`))
+    ) {
+      continue;
+    }
+
+    // npm 10 and npm 11 can place valid forked transitive dependency lines
+    // differently. Preserve the current pnpm-locked placement when it satisfies
+    // a real shrinkwrap dependency edge.
+    generatedPackages[lockPath] = currentMetadata;
+  }
+
+  for (const [lockPath, metadata] of Object.entries(generatedPackages)) {
+    if (lockPath === "" || !metadata || typeof metadata !== "object" || !metadata.version) {
+      continue;
+    }
+    const packageName = metadata.name ?? packageNameForLockPath(lockPath);
+    if (
+      !packageName ||
+      !forkedPackageNames.has(packageName) ||
+      currentPackages[lockPath] ||
+      !pnpmLockPackages.has(`${packageName}@${metadata.version}`) ||
+      shrinkwrapEntrySatisfiesDependencyEdge(
+        generatedPackages,
+        lockPath,
+        packageName,
+        metadata.version,
+      )
+    ) {
+      continue;
+    }
+    delete generatedPackages[lockPath];
+  }
+
+  generated.packages = Object.fromEntries(
+    Object.entries(generatedPackages).toSorted(([left], [right]) => left.localeCompare(right)),
+  );
 
   return generated;
 }
