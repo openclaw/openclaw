@@ -28,7 +28,7 @@ import {
   stagedPostCompactionDelegateCount,
 } from "./continuation-delegate-store.js";
 
-const SESSION_KEY = "channel:martin-q2-ordering-test";
+const SESSION_KEY = "channel:delegate-ordering-test";
 
 beforeEach(() => {
   // Clean slate — drain anything a prior test left staged for this key.

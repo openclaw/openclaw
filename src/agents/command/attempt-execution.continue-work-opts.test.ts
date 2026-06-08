@@ -10,7 +10,7 @@
  * `options?.continueWorkOpts` as undefined on turn-1, the `continue_work` tool
  * never registers in the subagent's spawn-init tool-list, and subagent sessions
  * cannot self-elect another turn even though PR #892 cured the same gap on the
- * followup-runner (turn-2+) path. Silas `1511789172` empirical:
+ * followup-runner (turn-2+) path. Empirical observation:
  * `CONTINUE_WORK STILL NOT AVAILABLE` post-PR-#892-merge.
  *
  * Cure-mechanism-distinction: same observable `turn 2/200` event can be
@@ -19,7 +19,7 @@
  * present on turn-1) so the cure path can be verified independently of the
  * delivery mechanism.
  *
- * Trap-test-first per figs `1511789649` + Cael `1511790615`/`1511790113`.
+ * Trap-test-first methodology (RED on the pre-cure shape, GREEN after).
  */
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -196,7 +196,7 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
     expect(callArgs?.continueWorkOpts).toBeUndefined();
   });
 
-  // Extended coverage per Cael 1511790113 (4): exercise the closure end-to-end
+  // Extended coverage: exercise the closure end-to-end
   // so that a future regression which forwards a *stub* closure (instead of
   // the runner-supplied accumulator) is still caught. Pinning the presence of
   // requestContinuation alone is necessary but not sufficient — the closure
@@ -312,14 +312,14 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
   });
 });
 
-// Cross-layer drift-catch (Cael 1511790113 (4)):
+// Cross-layer drift-catch:
 //   - Layer 1 (turn-2+ followup-runner): pinned by
 //     src/auto-reply/reply/followup-runner.test.ts
 //     "createFollowupRunner continueWorkOpts threading (#746)".
 //   - Layer 2 (turn-1 spawn-init runAgentAttempt): pinned by this file.
 // Together these prevent a regression that fixes one Layer in isolation from
 // silently reopening the gap on the other Layer (the same
-// false-empirical-proof class Cael 1511789404 flagged).
+// false-empirical-proof class).
 describe("#746 cross-layer drift-catch sentinel", () => {
   it("documents both Layer 1 + Layer 2 cure sites for #746 (sentinel only)", () => {
     // This sentinel exists so a future maintainer searching for "#746" in
