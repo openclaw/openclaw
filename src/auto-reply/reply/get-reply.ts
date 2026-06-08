@@ -771,7 +771,6 @@ export async function getReplyFromConfig(
     elevatedAllowed,
     elevatedFailures,
     defaultActivation,
-    resolvedThinkLevel,
     resolvedFastMode,
     resolvedFastModeAutoOnSeconds,
     resolvedVerboseLevel,
