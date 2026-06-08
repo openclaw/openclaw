@@ -9,7 +9,6 @@ import {
   validateChatMetadataParams,
   validateChatSendParams,
   validateChatEvent,
-  validateChatSendParams,
   validateCommandsListParams,
   validateConnectParams,
   validateModelsListParams,

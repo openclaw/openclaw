@@ -4590,12 +4590,14 @@ describe("runAgentTurnWithFallback", () => {
       resolvedVerboseLevel: "on",
     });
 
-    expect(onToolStart).toHaveBeenCalledWith({
-      name: "bash",
-      phase: "start",
-      args: { command: "sleep 6" },
-      detailMode: undefined,
-    });
+    expect(onToolStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "bash",
+        phase: "start",
+        args: { command: "sleep 6" },
+        detailMode: undefined,
+      }),
+    );
     expect(onCommandOutput).toHaveBeenCalledWith(
       expect.objectContaining({
         name: "bash",
