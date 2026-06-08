@@ -760,7 +760,7 @@ describe("cron service timer regressions", () => {
       });
       await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
 
-      let now = scheduledAt;
+      const now = scheduledAt;
       let abortObserved = false;
       let timerSettled = false;
       const runnerStarted = createDeferred<void>();
@@ -806,7 +806,10 @@ describe("cron service timer regressions", () => {
       expect(cancelResult.cancelled).toBe(true);
       expect(abortObserved).toBe(true);
 
-      for (let attempt = 0; attempt < 5 && !timerSettled; attempt += 1) {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        if (timerSettled) {
+          break;
+        }
         await vi.advanceTimersByTimeAsync(0);
         await Promise.resolve();
       }
@@ -985,7 +988,10 @@ describe("cron service timer regressions", () => {
       expect(cancelled).toBe(true);
       expect(observedAbortSignal?.aborted).toBe(true);
 
-      for (let attempt = 0; attempt < 5 && !timerSettled; attempt += 1) {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        if (timerSettled) {
+          break;
+        }
         await vi.advanceTimersByTimeAsync(0);
         await Promise.resolve();
       }
