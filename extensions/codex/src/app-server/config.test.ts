@@ -1521,6 +1521,41 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     ).toBe("full");
   });
 
+  it("lets agent full exec policy override a global allowlist for Codex app-server", () => {
+    const config = {
+      tools: {
+        exec: {
+          security: "allowlist",
+          ask: "off",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "tony-direct",
+            tools: {
+              exec: {
+                security: "full",
+                ask: "off",
+              },
+            },
+          },
+        ],
+      },
+    };
+    const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
+      config,
+      agentId: "tony-direct",
+    });
+
+    expect(execPolicy.mode).toBe("full");
+    expectRuntimePolicy(resolveRuntimeForTest({ execPolicy }), {
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      approvalsReviewer: "user",
+    });
+  });
+
   it.each(["always"] as const)(
     "keeps legacy full exec security with ask=%s on prompting Codex policy",
     (ask) => {

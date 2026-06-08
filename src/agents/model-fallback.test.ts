@@ -1086,6 +1086,33 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("does not treat Codex app-server local exec policy errors as model fallback failures", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["minimax/MiniMax-M2.7"],
+          },
+        },
+      },
+    });
+    const policyError = new Error(
+      "Codex app-server local execution is not available when tools.exec.mode=allowlist",
+    );
+    const run = vi.fn().mockRejectedValue(policyError);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        run,
+      }),
+    ).rejects.toBe(policyError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("aborts the fallback chain on embedded session takeover instead of trying every model (#83510)", async () => {
     const cfg = makeCfg({
       agents: {
