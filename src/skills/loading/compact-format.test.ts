@@ -362,4 +362,36 @@ describe("per-skill version for change detection", () => {
     // Compact format omits description
     expect(prompt).not.toContain("Get weather data");
   });
+
+  it("prefers explicit version field over mtimeMs", () => {
+    const skill = createCanonicalFixtureSkill({
+      name: "weather",
+      description: "Get weather data",
+      filePath: "/skills/weather/SKILL.md",
+      baseDir: "/skills/weather",
+      source: "workspace",
+      mtimeMs: 1749300250123,
+      version: "v2.1.0", // explicit version takes precedence
+    });
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries: [makeEntry(skill)],
+    });
+    expect(prompt).toContain("<version>v2.1.0</version>");
+    expect(prompt).not.toContain("1749300250");
+  });
+
+  it("supports numeric version from frontmatter", () => {
+    const skill = createCanonicalFixtureSkill({
+      name: "weather",
+      description: "Get weather data",
+      filePath: "/skills/weather/SKILL.md",
+      baseDir: "/skills/weather",
+      source: "workspace",
+      version: 42, // numeric version (semver-style)
+    });
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries: [makeEntry(skill)],
+    });
+    expect(prompt).toContain("<version>42</version>");
+  });
 });

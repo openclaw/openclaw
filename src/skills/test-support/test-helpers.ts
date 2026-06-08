@@ -34,6 +34,7 @@ export function createCanonicalFixtureSkill(params: {
   source: string;
   disableModelInvocation?: boolean;
   mtimeMs?: number;
+  version?: number | string;
 }): Skill {
   return {
     name: params.name,
@@ -49,6 +50,7 @@ export function createCanonicalFixtureSkill(params: {
     }),
     disableModelInvocation: params.disableModelInvocation ?? false,
     mtimeMs: params.mtimeMs,
+    version: params.version,
   };
 }
 

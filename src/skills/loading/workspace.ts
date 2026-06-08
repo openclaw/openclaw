@@ -1299,8 +1299,10 @@ function formatSkillsWithVersion(skills: Skill[], compact: boolean): string {
       lines.push(`    <description>${escapeXml(skill.description)}</description>`);
     }
     lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
-    if (skill.mtimeMs !== undefined) {
-      lines.push(`    <version>${Math.floor(skill.mtimeMs)}</version>`);
+    if (skill.version !== undefined) {
+      // Use version field (frontmatter version or mtimeMs-derived)
+      const versionValue = typeof skill.version === "number" ? skill.version : escapeXml(skill.version);
+      lines.push(`    <version>${versionValue}</version>`);
     }
     lines.push("  </skill>");
   }

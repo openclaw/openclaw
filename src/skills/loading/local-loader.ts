@@ -67,13 +67,21 @@ function loadSingleSkillDirectory(params: {
   const filePath = path.resolve(skillFilePath);
   const baseDir = path.resolve(params.skillDir);
 
-  // Get mtimeMs for per-skill change detection
+  // Get mtimeMs for automatic per-skill change detection
   let mtimeMs: number | undefined;
   try {
     mtimeMs = fs.statSync(filePath).mtimeMs;
   } catch {
     // Ignore stat errors; mtimeMs will be undefined
   }
+
+  // Determine version for prompt output:
+  // 1. Prefer explicit frontmatter version if provided (manual opt-in)
+  // 2. Otherwise use mtimeMs (automatic)
+  const explicitVersion = frontmatter.version?.trim();
+  const version: number | string | undefined = explicitVersion
+    ? (explicitVersion.match(/^\d+$/) ? parseInt(explicitVersion, 10) : explicitVersion)
+    : mtimeMs;
 
   return {
     skill: {
@@ -90,6 +98,7 @@ function loadSingleSkillDirectory(params: {
       }),
       disableModelInvocation: invocation.disableModelInvocation,
       mtimeMs,
+      version,
     },
     frontmatter,
   };
