@@ -5,6 +5,7 @@ import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   clearPersistedContextEngineQuarantine,
+  clearPersistedContextEngineQuarantineForProcess,
   listPersistedContextEngineQuarantines,
   recordPersistedContextEngineQuarantine,
 } from "./quarantine-health.js";
@@ -529,7 +530,8 @@ export function registerContextEngineForOwner(
     return { ok: false, existingOwner: existing.owner };
   }
   registry.set(id, { factory, owner: normalizedOwner });
-  clearContextEngineRuntimeQuarantine(id);
+  getContextEngineRegistryState().quarantinedEngines.delete(id);
+  clearPersistedContextEngineQuarantineForProcess(id, process.pid);
   return { ok: true };
 }
 

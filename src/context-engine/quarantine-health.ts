@@ -176,3 +176,17 @@ export function clearPersistedContextEngineQuarantine(engineId?: string): void {
   }
   writePersistedRecords(records);
 }
+
+export function clearPersistedContextEngineQuarantineForProcess(
+  engineId: string,
+  processId: number,
+): void {
+  const records = readPersistedRecords().filter(
+    (record) => record.engineId !== engineId || record.processId !== processId,
+  );
+  if (records.length === 0) {
+    clearPersistedContextEngineQuarantine();
+    return;
+  }
+  writePersistedRecords(records);
+}
