@@ -369,6 +369,38 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("clears agentTurn model and fallback overrides when patch requests null", () => {
+    const job = createIsolatedAgentTurnJob("job-model-clear", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      model: "openrouter/deepseek/deepseek-r1",
+      fallbacks: ["openrouter/gpt-4.1-mini"],
+      thinking: "high",
+      toolsAllow: ["exec"],
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        model: null,
+        fallbacks: null,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.message).toBe("do it");
+      expect(job.payload.model).toBeUndefined();
+      expect(job.payload.fallbacks).toBeUndefined();
+      expect(job.payload.thinking).toBe("high");
+      expect(job.payload.toolsAllow).toEqual(["exec"]);
+    }
+  });
+
   it("applies payload.lightContext when replacing payload kind via patch", () => {
     const job = createIsolatedAgentTurnJob("job-light-context-switch", {
       mode: "announce",

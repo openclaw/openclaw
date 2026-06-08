@@ -71,6 +71,10 @@ function isStringArrayOrNull(value: unknown): boolean {
   );
 }
 
+function isStringOrNull(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
 function moveDefinedField(params: {
   source: Record<string, unknown>;
   target: Record<string, unknown>;
@@ -223,7 +227,7 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
   if (!isCronPayloadKind(payload.kind)) {
     const hasAgentTurnSignal =
       isNonEmptyString(payload.message) ||
-      isNonEmptyString(payload.model) ||
+      (payload.model !== undefined && isStringOrNull(payload.model)) ||
       isNonEmptyString(payload.thinking) ||
       typeof payload.timeoutSeconds === "number" ||
       typeof payload.lightContext === "boolean" ||

@@ -141,7 +141,7 @@ function coerceSchedule(schedule: UnknownRecord) {
   return next;
 }
 
-function coercePayload(payload: UnknownRecord) {
+function coercePayload(payload: UnknownRecord, options?: { allowPatchClears?: boolean }) {
   const next: UnknownRecord = { ...payload };
   const kindRaw = normalizeLowercaseStringOrEmpty(next.kind);
   if (kindRaw === "agentturn") {
@@ -173,6 +173,11 @@ function coercePayload(payload: UnknownRecord) {
     const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
     if (model !== undefined) {
       next.model = model;
+    } else if (
+      options?.allowPatchClears &&
+      (next.model === null || (typeof next.model === "string" && next.model.trim() === ""))
+    ) {
+      next.model = null;
     } else {
       delete next.model;
     }
@@ -194,7 +199,9 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("fallbacks" in next) {
-    const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
+    const fallbacks = normalizeTrimmedStringArray(next.fallbacks, {
+      allowNull: options?.allowPatchClears,
+    });
     if (fallbacks !== undefined) {
       next.fallbacks = fallbacks;
     } else {
@@ -540,7 +547,7 @@ export function normalizeCronJobInput(
   }
 
   if (isRecord(base.payload)) {
-    next.payload = coercePayload(base.payload);
+    next.payload = coercePayload(base.payload, { allowPatchClears: !options.applyDefaults });
   }
 
   if (isRecord(base.delivery)) {

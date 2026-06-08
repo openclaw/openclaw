@@ -493,6 +493,18 @@ describe("cron tool", () => {
     ]);
     expect(patch?.properties?.sessionKey?.type).toBeUndefined();
     expect(patch?.properties?.sessionKey?.description).toContain("null to clear");
+    expect(payload?.properties?.model?.anyOf?.map((entry) => entry.type)).toEqual([
+      "string",
+      "null",
+    ]);
+    expect(payload?.properties?.model?.type).toBeUndefined();
+    expect(payload?.properties?.model?.description).toContain("null to clear");
+    expect(payload?.properties?.fallbacks?.anyOf?.map((entry) => entry.type)).toEqual([
+      "array",
+      "null",
+    ]);
+    expect(payload?.properties?.fallbacks?.type).toBeUndefined();
+    expect(payload?.properties?.fallbacks?.description).toContain("null to clear");
     expect(payload?.properties?.toolsAllow?.anyOf?.map((entry) => entry.type)).toEqual([
       "array",
       "null",
@@ -1564,6 +1576,37 @@ describe("cron tool", () => {
     });
   });
 
+  it("recovers flattened nullable payload clear params for update action", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-flat-clear-model", {
+      action: "update",
+      id: "job-5",
+      model: null,
+      fallbacks: null,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          id?: string;
+          patch?: {
+            payload?: {
+              kind?: string;
+              model?: string | null;
+              fallbacks?: string[] | null;
+            };
+          };
+        }
+      | undefined;
+    expect(params?.id).toBe("job-5");
+    expect(params?.patch?.payload).toEqual({
+      kind: "agentTurn",
+      model: null,
+      fallbacks: null,
+    });
+  });
+
   it("recovers concatenated cron update keys from local tool-call parsers", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 
@@ -1767,6 +1810,41 @@ describe("cron tool", () => {
     expect(params?.patch?.payload).toEqual({
       kind: "agentTurn",
       toolsAllow: null,
+    });
+  });
+
+  it("preserves null model and fallback payload patches on update", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool();
+    await tool.execute("call-update-clear-model", {
+      action: "update",
+      id: "job-8",
+      patch: {
+        payload: {
+          model: null,
+          fallbacks: null,
+        },
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | {
+          id?: string;
+          patch?: {
+            payload?: {
+              kind?: string;
+              model?: string | null;
+              fallbacks?: string[] | null;
+            };
+          };
+        }
+      | undefined;
+    expect(params?.id).toBe("job-8");
+    expect(params?.patch?.payload).toEqual({
+      kind: "agentTurn",
+      model: null,
+      fallbacks: null,
     });
   });
 });

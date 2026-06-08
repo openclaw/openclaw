@@ -171,6 +171,8 @@ If stdout is non-empty, that text is the delivered result. If stdout is empty an
 
 Cron jobs can also carry payload-level `fallbacks`. When present, that list replaces the configured fallback chain for the job. Use `fallbacks: []` in the job payload/API when you want a strict cron run that tries only the selected model. If a job has `--model` but neither payload nor configured fallbacks, OpenClaw passes an explicit empty fallback override so the agent primary is not appended as a hidden extra retry target.
 
+When editing a job through the Gateway API or cron tool, set `payload.model: null` to clear a stored model override and `payload.fallbacks: null` to clear stored fallback overrides. Omitted payload fields preserve existing job values.
+
 Local-provider preflight checks walk configured fallbacks before marking a cron run `skipped`; `fallbacks: []` keeps that preflight path strict.
 
 Model-selection precedence for isolated jobs is:

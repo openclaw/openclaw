@@ -97,18 +97,22 @@ function failureDestinationModeSchema(params: { nullableClears: boolean }) {
   return Type.Optional(Type.Union(variants));
 }
 
-function cronPayloadObjectSchema(params: { toolsAllow: TSchema }) {
+function cronPayloadObjectSchema(params: {
+  model: TSchema;
+  fallbacks: TSchema;
+  toolsAllow: TSchema;
+}) {
   return Type.Object(
     {
       kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload kind" }),
       text: Type.Optional(Type.String({ description: "systemEvent text" })),
       message: Type.Optional(Type.String({ description: "agentTurn prompt" })),
-      model: Type.Optional(Type.String({ description: "Model override" })),
+      model: params.model,
       thinking: Type.Optional(Type.String({ description: "Thinking override" })),
       timeoutSeconds: optionalFiniteNumberSchema({ minimum: 0 }),
       lightContext: Type.Optional(Type.Boolean()),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
-      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
+      fallbacks: params.fallbacks,
       toolsAllow: params.toolsAllow,
     },
     { additionalProperties: true },
@@ -147,6 +151,8 @@ function createCronScheduleSchema(): TSchema {
 function createCronPayloadSchema(): TSchema {
   return Type.Optional(
     cronPayloadObjectSchema({
+      model: Type.Optional(Type.String({ description: "Model override" })),
+      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
       toolsAllow: Type.Optional(Type.Array(Type.String(), { description: "Allowed tools" })),
     }),
   );
@@ -273,6 +279,8 @@ function createCronPatchObjectSchema(): TSchema {
         wakeMode: optionalStringEnum(CRON_WAKE_MODES),
         payload: Type.Optional(
           cronPayloadObjectSchema({
+            model: nullableStringSchema("Model override, or null to clear"),
+            fallbacks: nullableStringArraySchema("Fallback models, or null to clear"),
             toolsAllow: nullableStringArraySchema("Allowed tool ids, or null to clear"),
           }),
         ),

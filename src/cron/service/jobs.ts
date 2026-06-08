@@ -923,9 +923,13 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   }
   if (typeof patch.model === "string") {
     next.model = patch.model;
+  } else if (patch.model === null) {
+    delete next.model;
   }
   if (Array.isArray(patch.fallbacks)) {
     next.fallbacks = patch.fallbacks;
+  } else if (patch.fallbacks === null) {
+    delete next.fallbacks;
   }
   if (Array.isArray(patch.toolsAllow)) {
     next.toolsAllow = patch.toolsAllow;
@@ -975,17 +979,24 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     throw new Error('cron.update payload.kind="agentTurn" requires message');
   }
 
-  return {
+  const next: Extract<CronPayload, { kind: "agentTurn" }> = {
     kind: "agentTurn",
     message: patch.message,
-    model: patch.model,
-    fallbacks: patch.fallbacks,
-    toolsAllow: Array.isArray(patch.toolsAllow) ? patch.toolsAllow : undefined,
     thinking: patch.thinking,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
   };
+  if (typeof patch.model === "string") {
+    next.model = patch.model;
+  }
+  if (Array.isArray(patch.fallbacks)) {
+    next.fallbacks = patch.fallbacks;
+  }
+  if (Array.isArray(patch.toolsAllow)) {
+    next.toolsAllow = patch.toolsAllow;
+  }
+  return next;
 }
 
 function mergeCronDelivery(

@@ -651,7 +651,12 @@ describe("gateway server cron", () => {
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "hello", model: "opus" },
+        payload: {
+          kind: "agentTurn",
+          message: "hello",
+          model: "opus",
+          fallbacks: ["openrouter/gpt-4.1-mini"],
+        },
       });
       expect(mergeRes.ok).toBe(true);
       const mergeJobIdValue = (mergeRes.payload as { id?: unknown } | null)?.id;
@@ -687,13 +692,14 @@ describe("gateway server cron", () => {
       expect(mergeUpdateRes.ok).toBe(true);
       const merged = mergeUpdateRes.payload as
         | {
-            payload?: { kind?: unknown; message?: unknown; model?: unknown };
+            payload?: { kind?: unknown; message?: unknown; model?: unknown; fallbacks?: unknown };
             delivery?: { mode?: unknown; channel?: unknown; to?: unknown };
           }
         | undefined;
       expect(merged?.payload?.kind).toBe("agentTurn");
       expect(merged?.payload?.message).toBe("hello");
       expect(merged?.payload?.model).toBe("opus");
+      expect(merged?.payload?.fallbacks).toEqual(["openrouter/gpt-4.1-mini"]);
       expect(merged?.delivery?.mode).toBe("announce");
       expect(merged?.delivery?.channel).toBe("telegram");
       expect(merged?.delivery?.to).toBe("19098680");
@@ -714,12 +720,44 @@ describe("gateway server cron", () => {
               kind?: unknown;
               message?: unknown;
               model?: unknown;
+              fallbacks?: unknown;
             };
           }
         | undefined;
       expect(modelOnlyPatched?.payload?.kind).toBe("agentTurn");
       expect(modelOnlyPatched?.payload?.message).toBe("hello");
       expect(modelOnlyPatched?.payload?.model).toBe("anthropic/claude-sonnet-4-6");
+      expect(modelOnlyPatched?.payload?.fallbacks).toEqual(["openrouter/gpt-4.1-mini"]);
+
+      const clearModelRes = await directCronReq(cronState, "cron.update", {
+        id: mergeJobId,
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            model: null,
+            fallbacks: null,
+          },
+        },
+      });
+      expect(clearModelRes.ok).toBe(true);
+      const clearedModel = clearModelRes.payload as
+        | {
+            payload?: {
+              kind?: unknown;
+              message?: unknown;
+              model?: unknown;
+              fallbacks?: unknown;
+            };
+            delivery?: { mode?: unknown; channel?: unknown; to?: unknown };
+          }
+        | undefined;
+      expect(clearedModel?.payload?.kind).toBe("agentTurn");
+      expect(clearedModel?.payload?.message).toBe("hello");
+      expect(clearedModel?.payload?.model).toBeUndefined();
+      expect(clearedModel?.payload?.fallbacks).toBeUndefined();
+      expect(clearedModel?.delivery?.mode).toBe("announce");
+      expect(clearedModel?.delivery?.channel).toBe("telegram");
+      expect(clearedModel?.delivery?.to).toBe("19098680");
 
       const deliveryPatchRes = await directCronReq(cronState, "cron.update", {
         id: mergeJobId,

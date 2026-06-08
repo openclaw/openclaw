@@ -736,6 +736,30 @@ describe("normalizeCronJobPatch", () => {
     expect(payload.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
+  it("preserves null and blank model patches so updates can clear the override", () => {
+    const clearedByNull = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        model: null,
+      },
+    }) as unknown as Record<string, unknown>;
+    const nullPayload = clearedByNull.payload as Record<string, unknown>;
+    expect(nullPayload.kind).toBe("agentTurn");
+    expect(nullPayload.model).toBeNull();
+    expect(validateCronUpdateParams({ id: "job-1", patch: clearedByNull })).toBe(true);
+
+    const clearedByBlank = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        model: "   ",
+      },
+    }) as unknown as Record<string, unknown>;
+    const blankPayload = clearedByBlank.payload as Record<string, unknown>;
+    expect(blankPayload.kind).toBe("agentTurn");
+    expect(blankPayload.model).toBeNull();
+    expect(validateCronUpdateParams({ id: "job-1", patch: clearedByBlank })).toBe(true);
+  });
+
   it("preserves empty fallback lists so patches can disable fallbacks", () => {
     const normalized = normalizeCronJobPatch({
       payload: {
@@ -747,6 +771,20 @@ describe("normalizeCronJobPatch", () => {
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.kind).toBe("agentTurn");
     expect(payload.fallbacks).toStrictEqual([]);
+  });
+
+  it("preserves null fallback lists so patches can clear the fallback override", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        fallbacks: null,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.fallbacks).toBeNull();
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 
   it("preserves empty toolsAllow lists so patches can disable all tools", () => {

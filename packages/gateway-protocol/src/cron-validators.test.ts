@@ -171,6 +171,22 @@ describe("cron protocol validators", () => {
     ).toBe(true);
   });
 
+  it("accepts nullable agentTurn payload override clears on update params", () => {
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            model: null,
+            fallbacks: null,
+            toolsAllow: null,
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects blank cron delivery target strings", () => {
     expect(
       validateCronAddParams({

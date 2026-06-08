@@ -623,11 +623,18 @@
                   "type": "boolean"
                 },
                 "fallbacks": {
-                  "description": "Fallback models",
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
+                  "anyOf": [
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Fallback models, or null to clear"
                 },
                 "kind": {
                   "description": "Payload kind",
@@ -642,8 +649,15 @@
                   "type": "string"
                 },
                 "model": {
-                  "description": "Model override",
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Model override, or null to clear"
                 },
                 "text": {
                   "description": "systemEvent text",
