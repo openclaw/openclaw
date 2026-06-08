@@ -232,7 +232,7 @@ import {
   resetContinuationWorkDispatchForTests,
   scheduleContinuationWork,
 } from "./work-dispatch.js";
-import { enqueuePendingWork } from "./work-store.js";
+import { enqueuePendingWork, hasLiveOrRecentlyDispatchedContinuationWork } from "./work-store.js";
 
 const config = {
   enabled: true,
@@ -289,6 +289,8 @@ describe("durable continuation_work dispatch", () => {
       reason: "nested hop",
     });
 
+    expect(hasLiveOrRecentlyDispatchedContinuationWork(childSessionKey)).toBe(true);
+
     const callGateway = vi.fn();
     await deleteSubagentSessionForCleanup({
       callGateway: callGateway as never,
@@ -299,7 +301,7 @@ describe("durable continuation_work dispatch", () => {
 
     await dispatchPendingContinuationWork({ sessionKey: childSessionKey });
     await vi.advanceTimersByTimeAsync(1_000);
-    await flushTimers();
+    await Promise.resolve();
 
     expect(turnGrants).toEqual([
       expect.objectContaining({
@@ -312,8 +314,10 @@ describe("durable continuation_work dispatch", () => {
       }),
     ]);
 
-    await vi.advanceTimersByTimeAsync(65_000);
-    await flushTimers();
+    expect(hasLiveOrRecentlyDispatchedContinuationWork(childSessionKey)).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    await Promise.resolve();
 
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",

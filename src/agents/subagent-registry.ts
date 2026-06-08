@@ -1006,7 +1006,7 @@ async function sweepSubagentRuns() {
       if (entry.archiveAtMs > now) {
         continue;
       }
-      if (hasLiveOrRecentlyDispatchedContinuationWork(entry.childSessionKey, now)) {
+      if (hasLiveOrRecentlyDispatchedContinuationWork(entry.childSessionKey)) {
         continue;
       }
       clearPendingLifecycleError(runId);

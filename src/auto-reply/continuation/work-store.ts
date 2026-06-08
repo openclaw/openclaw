@@ -24,8 +24,6 @@ const log = createSubsystemLogger("continuation/work-store");
 
 export const CONTINUATION_WORK_CONTROLLER_ID = "core/continuation-work";
 
-const RECENTLY_DISPATCHED_RETAIN_MS = 60_000;
-
 const PendingWorkStateSchema = z.object({
   kind: z.literal("continuation_work"),
   sessionKey: z.string().min(1),
@@ -338,23 +336,9 @@ export function pendingWorkCount(sessionKey: string): number {
   return listTaskFlowsForOwnerKey(sessionKey).filter(isRecoverableWorkFlow).length;
 }
 
-export function hasLiveOrRecentlyDispatchedContinuationWork(
-  sessionKey: string,
-  now = Date.now(),
-): boolean {
-  return listTaskFlowsForOwnerKey(sessionKey).some((flow) => {
-    if (!isContinuationWorkFlow(flow)) {
-      return false;
-    }
-    if (flow.status === "queued" || flow.status === "running") {
-      return true;
-    }
-    if (flow.status !== "succeeded" || flow.endedAt === undefined) {
-      return false;
-    }
-    const state = decodeWorkState(flow);
-    return (
-      state?.turnGrantedAt !== undefined && now - flow.endedAt <= RECENTLY_DISPATCHED_RETAIN_MS
-    );
-  });
+export function hasLiveOrRecentlyDispatchedContinuationWork(sessionKey: string): boolean {
+  return listTaskFlowsForOwnerKey(sessionKey).some(
+    (flow) =>
+      isContinuationWorkFlow(flow) && (flow.status === "queued" || flow.status === "running"),
+  );
 }
