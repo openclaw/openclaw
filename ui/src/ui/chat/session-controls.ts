@@ -624,7 +624,7 @@ function cancelChatSessionRename(state: AppViewState) {
 }
 
 function hasPendingChatSessionRename(state: AppViewState, key: string) {
-  return state.chatSessionPickerRenamePendingKeys[key] === true;
+  return key in state.chatSessionPickerRenamePendingKeys;
 }
 
 function setPendingChatSessionRename(state: AppViewState, key: string) {
@@ -673,9 +673,12 @@ async function commitChatSessionRename(state: AppViewState, key: string) {
     return;
   }
   if (state.chatSessionPickerOpen) {
+    invalidateChatSessionPickerSearchRequests(state);
     await loadChatSessionPickerPage(state);
   } else {
+    invalidateChatSessionPickerSearchRequests(state);
     state.chatSessionPickerResult = null;
+    state.chatSessionPickerLoading = false;
   }
 }
 
