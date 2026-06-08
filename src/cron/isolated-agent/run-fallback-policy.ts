@@ -1,12 +1,35 @@
 /** Resolves model fallback chains for isolated cron runs and preflight. */
 import { resolveModelCandidateChain } from "../../agents/model-fallback.js";
 import type { ModelCandidate } from "../../agents/model-fallback.types.js";
+import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
   resolveEffectiveModelFallbacks,
   resolveSubagentModelFallbacksOverride,
 } from "./run-execution.runtime.js";
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
+
+/**
+ * Checks if agent model config lacks explicit fallbacks (string or object without fallbacks field).
+ * In these cases, isolated cron sessions should inherit global defaults.
+ */
+function agentModelLacksExplicitFallbacks(cfg: OpenClawConfig, agentId: string): boolean {
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  const model = agentConfig?.model;
+  if (!model) {
+    return false;
+  }
+  // String model (e.g. "deepseek/v4-pro") has no fallbacks field
+  if (typeof model === "string") {
+    return true;
+  }
+  // Object model without fallbacks field should inherit defaults
+  if (typeof model === "object" && !Object.hasOwn(model, "fallbacks")) {
+    return true;
+  }
+  return false;
+}
 
 /** Resolves cron model fallbacks, giving explicit payload fallbacks precedence over subagent/default policy. */
 export function resolveCronFallbacksOverride(params: {
@@ -33,12 +56,23 @@ export function resolveCronFallbacksOverride(params: {
       return subagentFallbacksOverride;
     }
   }
-  return resolveEffectiveModelFallbacks({
+  const effectiveFallbacks = resolveEffectiveModelFallbacks({
     cfg: params.cfg,
     agentId: params.agentId,
     hasSessionModelOverride: hasCronPayloadModelOverride,
     modelOverrideSource: hasCronPayloadModelOverride ? "auto" : undefined,
   });
+  // For isolated cron sessions, inherit global fallbacks when agent model lacks explicit fallbacks.
+  // This fixes #91362 - agents.defaults.model.fallbacks not inherited by isolated cron sessions.
+  if (
+    effectiveFallbacks !== undefined &&
+    effectiveFallbacks.length === 0 &&
+    !hasCronPayloadModelOverride &&
+    agentModelLacksExplicitFallbacks(params.cfg, params.agentId)
+  ) {
+    return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+  }
+  return effectiveFallbacks;
 }
 
 /** Builds the ordered model candidates used by cron preflight checks. */
