@@ -451,6 +451,14 @@ export async function runCommandWithTimeout(
       } else {
         killIssuedByAbort = true;
       }
+      if (
+        killProcessTree &&
+        typeof child.pid === "number" &&
+        child.pid > 0
+      ) {
+        terminateProcessTree(child.pid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
+        return;
+      }
       if (process.platform === "win32" && typeof child.pid === "number" && child.pid > 0) {
         try {
           spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
@@ -461,14 +469,6 @@ export async function runCommandWithTimeout(
         } catch {
           // Fall through to Node's direct child kill as a last resort.
         }
-      }
-      if (
-        killProcessTree &&
-        typeof child.pid === "number" &&
-        child.pid > 0
-      ) {
-        terminateProcessTree(child.pid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
-        return;
       }
       child.kill("SIGKILL");
     };
