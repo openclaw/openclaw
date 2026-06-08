@@ -821,6 +821,27 @@ describe("memory index", () => {
     }
   });
 
+  it("keeps metadata after a same-identity safe reindex", async () => {
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
+    const dbPath = path.join(workspaceDir, "index-safe-reindex-same-identity.sqlite");
+    const cfg = createCfg({
+      storePath: dbPath,
+      provider: "none",
+      model: "",
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test", force: true });
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+      await manager.sync({ reason: "test", force: true });
+
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it("rebuilds missing metadata with existing chunks on gateway sync", async () => {
     const dbPath = path.join(workspaceDir, "index-missing-meta-cutover.sqlite");
     const cfg = createCfg({

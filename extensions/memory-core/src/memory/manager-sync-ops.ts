@@ -2304,6 +2304,7 @@ export abstract class MemoryManagerSyncOps {
       } else {
         this.db = originalDb;
       }
+      this.lastMetaSerialized = null;
       this.fts.available = originalState.ftsAvailable;
       this.fts.loadError = originalState.ftsError;
       this.vector.available = originalDbClosed ? null : originalState.vectorAvailable;
@@ -2413,6 +2414,7 @@ export abstract class MemoryManagerSyncOps {
       });
 
       this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
+      this.lastMetaSerialized = null;
       this.resetVectorState();
       this.ensureSchema();
       this.vector.dims = nextMeta?.vectorDims;
