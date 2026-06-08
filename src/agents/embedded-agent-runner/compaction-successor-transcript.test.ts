@@ -222,6 +222,38 @@ describe("rotateTranscriptAfterCompaction", () => {
     ).toBe(false);
   });
 
+  it("does not preserve a summarized assistant when custom entries separate the kept user", async () => {
+    const dir = await createTmpDir();
+    const manager = SessionManager.create(dir, dir);
+    manager.appendMessage({ role: "user", content: "old user", timestamp: 1 });
+    const oldAssistantId = manager.appendMessage(makeAssistant("old assistant", 2));
+    manager.appendCustomEntry("branch_summary", { summary: "intervening summary" });
+    const firstKeptId = manager.appendMessage({ role: "user", content: "kept user", timestamp: 3 });
+    manager.appendCompaction("Summary of old user and old assistant.", firstKeptId, 5000);
+    const sessionFile = requireString(manager.getSessionFile(), "compacted session file");
+
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile,
+      now: () => new Date("2026-04-27T12:03:00.000Z"),
+    });
+
+    expect(result.rotated).toBe(true);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
+    expect(successor.getEntries().find((entry) => entry.id === oldAssistantId)).toBeUndefined();
+    const successorCompaction = requireEntryByType(
+      successor.getEntries(),
+      "compaction",
+      "successor compaction",
+    );
+    expect(successorCompaction.firstKeptEntryId).toBe(firstKeptId);
+    const contextMessages = successor.buildSessionContext().messages;
+    expect(JSON.stringify(contextMessages)).not.toContain("old assistant");
+    expect(JSON.stringify(contextMessages)).toContain("kept user");
+  });
+
   it("creates a compacted successor transcript and leaves the archive untouched", async () => {
     const dir = await createTmpDir();
     const { manager, sessionFile, firstKeptId, oldUserId } = createCompactedSession(dir);
