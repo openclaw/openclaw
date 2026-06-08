@@ -658,35 +658,41 @@ describe("renderWorkboard", () => {
     const state = getWorkboardState(host);
     state.loaded = true;
     const container = document.createElement("div");
+    document.body.append(container);
 
-    render(
-      renderWorkboard({
-        host,
-        client: null,
-        connected: true,
-        pluginEnabled: true,
-        agentsList: null,
-        sessions: [],
-        onOpenSession: () => undefined,
-      }),
-      container,
-    );
+    try {
+      render(
+        renderWorkboard({
+          host,
+          client: null,
+          connected: true,
+          pluginEnabled: true,
+          agentsList: null,
+          sessions: [],
+          onOpenSession: () => undefined,
+        }),
+        container,
+      );
 
-    const select = container.querySelector<HTMLDetailsElement>(
-      ".workboard-toolbar__filters .workboard-select",
-    );
-    const board = container.querySelector<HTMLElement>(".workboard-board");
-    expect(select).toBeTruthy();
-    expect(board).toBeTruthy();
+      const select = container.querySelector<HTMLDetailsElement>(
+        ".workboard-toolbar__filters .workboard-select",
+      );
+      const board = container.querySelector<HTMLElement>(".workboard-board");
+      expect(select).toBeTruthy();
+      expect(board).toBeTruthy();
 
-    select!.open = true;
-    board!.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
-    expect(select?.open).toBe(false);
+      select!.open = true;
+      select!.dispatchEvent(new Event("toggle"));
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      expect(select?.open).toBe(false);
 
-    select!.open = true;
-    const escape = dispatchKey(select!, "Escape");
-    expect(escape.defaultPrevented).toBe(true);
-    expect(select?.open).toBe(false);
+      select!.open = true;
+      const escape = dispatchKey(select!, "Escape");
+      expect(escape.defaultPrevented).toBe(true);
+      expect(select?.open).toBe(false);
+    } finally {
+      container.remove();
+    }
   });
 
   it("skips render-triggered lifecycle sync after a poll refresh", async () => {

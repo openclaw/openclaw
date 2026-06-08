@@ -729,11 +729,41 @@ function normalizeActiveAgentFilter(
   return options.some((option) => option.id === filter) ? filter : "all";
 }
 
+let workboardSelectDocumentCloserInstalled = false;
+
+function hasOpenWorkboardSelectMenus(root: ParentNode = document): boolean {
+  return Boolean(root.querySelector(".workboard-select[open]"));
+}
+
+function handleWorkboardSelectDocumentPointer(event: PointerEvent) {
+  const target = event.target;
+  if (target instanceof Element && target.closest(".workboard-select")) {
+    return;
+  }
+  closeWorkboardSelectMenus(document);
+}
+
+function syncWorkboardSelectDocumentCloser() {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const shouldInstall = hasOpenWorkboardSelectMenus(document);
+  if (shouldInstall && !workboardSelectDocumentCloserInstalled) {
+    document.addEventListener("pointerdown", handleWorkboardSelectDocumentPointer, true);
+    workboardSelectDocumentCloserInstalled = true;
+    return;
+  }
+  if (!shouldInstall && workboardSelectDocumentCloserInstalled) {
+    document.removeEventListener("pointerdown", handleWorkboardSelectDocumentPointer, true);
+    workboardSelectDocumentCloserInstalled = false;
+  }
+}
+
 function closeOtherWorkboardSelectMenus(details: HTMLDetailsElement) {
   if (!details.open) {
     return;
   }
-  const root = details.closest(".workboard") ?? document;
+  const root = details.closest(".workboard") ?? (details.getRootNode() as ParentNode);
   closeWorkboardSelectMenus(root, details);
 }
 
@@ -744,6 +774,7 @@ function closeWorkboardSelectMenus(root: ParentNode, except?: HTMLDetailsElement
     }
     select.open = false;
   }
+  syncWorkboardSelectDocumentCloser();
 }
 
 function closeWorkboardSelectMenusOnOutsidePointer(event: Event) {
@@ -806,6 +837,7 @@ function renderWorkboardSelect<Value extends string>(params: {
         const details = event.currentTarget as HTMLDetailsElement;
         closeOtherWorkboardSelectMenus(details);
         positionWorkboardSelectMenu(details);
+        syncWorkboardSelectDocumentCloser();
       }}
       @keydown=${(event: KeyboardEvent) => {
         if (event.key !== "Escape") {
