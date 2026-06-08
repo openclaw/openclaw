@@ -2062,6 +2062,59 @@ describe("session cost usage", () => {
     });
   });
 
+  it("serves fresh active cached totals while same-stem archives refresh", async () => {
+    const root = await makeSessionCostRoot("session-cache-active-while-archive-stale");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const activePath = path.join(sessionsDir, "sess-cache-partial.jsonl");
+    const archivePath = path.join(
+      sessionsDir,
+      "sess-cache-partial.jsonl.reset.2026-02-12T11-00-00.000Z",
+    );
+    await fs.writeFile(
+      activePath,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          usage: { input: 10, output: 20, totalTokens: 30, cost: { total: 0.03 } },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [activePath] });
+      await fs.writeFile(
+        archivePath,
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-12T10:00:00.000Z",
+          message: {
+            role: "assistant",
+            usage: { input: 6, output: 4, totalTokens: 10, cost: { total: 0.01 } },
+          },
+        }),
+        "utf-8",
+      );
+
+      const cached = await loadSessionCostSummaryFromCache({
+        sessionId: "sess-cache-partial",
+        sessionFile: activePath,
+        requestRefresh: false,
+      });
+
+      expect(cached.cacheStatus.status).toBe("partial");
+      expect(cached.cacheStatus.cachedFiles).toBe(1);
+      expect(cached.cacheStatus.pendingFiles).toBe(1);
+      expect(cached.summary?.sessionFile).toBe(activePath);
+      expect(cached.summary?.totalTokens).toBe(30);
+      expect(cached.summary?.totalCost).toBeCloseTo(0.03, 8);
+    });
+  });
+
   it("uses the candidate session directory for archived fallback lookups", async () => {
     const root = await makeSessionCostRoot("session-custom-archive");
     const customSessionsDir = path.join(root, "custom-store", "sessions");
