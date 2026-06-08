@@ -3,7 +3,8 @@
  * private OpenClaw state directory with one hashed file per MCP server URL.
  */
 import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
+import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 import {
   auth,
@@ -26,6 +27,7 @@ type McpOAuthStore = {
   codeVerifier?: string;
   discoveryState?: OAuthDiscoveryState;
   lastAuthorizationUrl?: string;
+  redirectUrl?: string;
   state?: string;
 };
 
@@ -59,24 +61,42 @@ function oauthStorePath(serverName: string, serverUrl: string): string {
 
 async function readStore(filePath: string): Promise<McpOAuthStore> {
   try {
-    return JSON.parse(await fs.readFile(filePath, "utf-8")) as McpOAuthStore;
+    return JSON.parse(await fsPromises.readFile(filePath, "utf-8")) as McpOAuthStore;
+  } catch {
+    return {};
+  }
+}
+
+function readStoreSync(filePath: string): McpOAuthStore {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf-8")) as McpOAuthStore;
   } catch {
     return {};
   }
 }
 
 async function writeStore(filePath: string, store: McpOAuthStore): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  await fs.writeFile(filePath, JSON.stringify(store, null, 2), { encoding: "utf-8", mode: 0o600 });
-  await fs.chmod(filePath, 0o600).catch(() => {});
+  await fsPromises.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await fsPromises.writeFile(filePath, JSON.stringify(store, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  await fsPromises.chmod(filePath, 0o600).catch(() => {});
 }
 
-function resolveOAuthRedirectUrl(config: McpOAuthConfig): string {
-  return normalizeOptionalString(config.redirectUrl) ?? LEGACY_DEFAULT_REDIRECT_URL;
+function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = {}): string {
+  return (
+    normalizeOptionalString(config.redirectUrl) ??
+    normalizeOptionalString(store.redirectUrl) ??
+    LEGACY_DEFAULT_REDIRECT_URL
+  );
 }
 
-function buildOAuthClientMetadata(config: McpOAuthConfig): OAuthClientMetadata {
-  const redirectUrl = resolveOAuthRedirectUrl(config);
+function buildOAuthClientMetadata(
+  config: McpOAuthConfig,
+  store: McpOAuthStore = {},
+): OAuthClientMetadata {
+  const redirectUrl = resolveOAuthRedirectUrl(config, store);
   return {
     client_name: "OpenClaw MCP",
     redirect_uris: [redirectUrl],
@@ -99,7 +119,6 @@ export function createMcpOAuthClientProvider(params: {
 }): OAuthClientProvider {
   const config = params.config ?? {};
   const filePath = oauthStorePath(params.serverName, params.serverUrl);
-  const redirectUrl = resolveOAuthRedirectUrl(config);
   const allowAuthorizationRedirect =
     params.allowAuthorizationRedirect ?? Boolean(params.onAuthorizationUrl);
   const assertAuthorizationRedirectAllowed = () => {
@@ -111,11 +130,11 @@ export function createMcpOAuthClientProvider(params: {
   };
   return {
     get redirectUrl() {
-      return redirectUrl;
+      return resolveOAuthRedirectUrl(config, readStoreSync(filePath));
     },
     clientMetadataUrl: normalizeOptionalString(config.clientMetadataUrl),
     get clientMetadata() {
-      return buildOAuthClientMetadata(config);
+      return buildOAuthClientMetadata(config, readStoreSync(filePath));
     },
     async state() {
       assertAuthorizationRedirectAllowed();
@@ -188,7 +207,7 @@ export async function clearMcpOAuthCredentials(params: {
   serverName: string;
   serverUrl: string;
 }): Promise<void> {
-  await fs.rm(oauthStorePath(params.serverName, params.serverUrl), { force: true });
+  await fsPromises.rm(oauthStorePath(params.serverName, params.serverUrl), { force: true });
 }
 
 /** Reads stored OAuth credential presence without exposing credential values. */
@@ -238,13 +257,23 @@ export async function runMcpOAuthLogin(params: {
   fetchFn?: FetchLike;
   onAuthorizationUrl?: (url: URL) => void | Promise<void>;
 }): Promise<"authorized" | "redirect"> {
+  const filePath = oauthStorePath(params.serverName, params.serverUrl);
+  const store = await readStore(filePath);
+  const loginParams = {
+    ...params,
+    config: {
+      ...params.config,
+      redirectUrl: normalizeOptionalString(params.config?.redirectUrl) ?? store.redirectUrl,
+    },
+  };
   try {
-    return await runMcpOAuthLoginAttempt(params);
+    return await runMcpOAuthLoginAttempt(loginParams);
   } catch (error) {
     if (
       !normalizeOptionalString(params.config?.redirectUrl) &&
       isMcpOAuthRedirectRegistrationError(error)
     ) {
+      await writeStore(filePath, { ...store, redirectUrl: LOCALHOST_REDIRECT_URL });
       return await runMcpOAuthLoginAttempt({
         ...params,
         config: {
