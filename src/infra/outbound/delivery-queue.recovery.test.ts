@@ -638,8 +638,7 @@ describe("delivery-queue recovery", () => {
 
     const remaining = await loadPendingDeliveries(tmpDir());
     expect(remaining).toHaveLength(3);
-    const entriesWithUnexpectedRetryCount = remaining.filter((entry) => entry.retryCount !== 0);
-    expect(entriesWithUnexpectedRetryCount).toStrictEqual([]);
+    expect(remaining.map((entry) => entry.retryCount)).toStrictEqual([0, 0, 0]);
     expectMockMessageContaining(log.warn, "deferred to next startup");
   });
 
