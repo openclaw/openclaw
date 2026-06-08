@@ -16,10 +16,7 @@ import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js
 import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./manager-local-worker-errors.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { closeMemoryIndexManagersForAgent, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
-import {
-  DEFAULT_LOCAL_MODEL,
-  registerBuiltInMemoryEmbeddingProviders,
-} from "./provider-adapters.js";
+import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
 // timeout when it shares a packed CI extension shard.
@@ -173,20 +170,13 @@ describe("memory embedding provider registration", () => {
     clearRegistry();
   });
 
-  it("registers the builtin local embedding provider", () => {
+  it("does not register a built-in local embedding provider", () => {
     clearRegistry();
     registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
 
     const adapter = listRegisteredAdapters().find((entry) => entry.id === "local");
 
-    if (!adapter) {
-      throw new Error("expected local embedding provider adapter to be registered");
-    }
-    expect(adapter.id).toBe("local");
-    expect(adapter.defaultModel).toBe(DEFAULT_LOCAL_MODEL);
-    expect(adapter.transport).toBe("local");
-    expect(adapter.authProviderId).toBeUndefined();
-    expect(adapter.autoSelectPriority).toBe(10);
+    expect(adapter).toBeUndefined();
   });
 });
 
@@ -1727,7 +1717,7 @@ describe("memory index", () => {
     const manager = await getFreshManager(cfg);
     try {
       await expect(manager.search("Alpha")).rejects.toThrow(
-        /Memory search unavailable: embedding provider "openai" is configured but unavailable\.[\s\S]*agentId=main purpose=default[\s\S]*registeredMemoryEmbeddingProviders=local/,
+        /Memory search unavailable: embedding provider "openai" is configured but unavailable\.[\s\S]*agentId=main purpose=default[\s\S]*registeredMemoryEmbeddingProviders=none/,
       );
       await expect(manager.sync({ reason: "test" })).rejects.toThrow(
         /Memory sync unavailable: embedding provider "openai" is configured but unavailable\./,

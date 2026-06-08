@@ -1241,6 +1241,7 @@
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
+                  "plugins/llama-cpp",
                   "plugins/memory-lancedb",
                   "plugins/oc-path",
                   "plugins/zalouser"
