@@ -34,12 +34,25 @@ type SessionsCompactResult = {
     tokensAfter?: number;
     sessionId?: string;
     sessionFile?: string;
+    // Codex app-server `thread/compact/start` reports ok:true / compacted:false
+    // with this pending marker; the compaction was *started* and completion is
+    // delivered asynchronously, so it must not be rendered as "no work needed".
+    details?: {
+      backend?: string;
+      threadId?: string;
+      signal?: string;
+      pending?: boolean;
+    };
   };
 };
 
 function describeCompaction(result: SessionsCompactResult, fallbackKey: string): string {
   const sessionKey = result.key ?? fallbackKey;
   if (!result.compacted) {
+    const details = result.result?.details;
+    if (details?.pending === true || details?.signal === "thread/compact/start") {
+      return `Compaction started for session ${sessionKey} (pending; completion is reported asynchronously by the backend).`;
+    }
     const reason = result.reason ? ` (${result.reason})` : "";
     return `No compaction needed for session ${sessionKey}${reason}.`;
   }

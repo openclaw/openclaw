@@ -42,6 +42,29 @@ describe("sessionsCompactCommand", () => {
     expect(logged).toContain("34941");
   });
 
+  it("reports an asynchronously started Codex compaction as pending, not a no-op", async () => {
+    // Codex app-server `thread/compact/start` returns ok:true / compacted:false
+    // with a pending marker; completion is delivered later, so this is a started
+    // compaction, NOT "no compaction needed".
+    callGatewayCli.mockResolvedValue({
+      ok: true,
+      key: "agent:main:main",
+      compacted: false,
+      result: {
+        tokensBefore: 1200,
+        details: { backend: "codex-app-server", signal: "thread/compact/start", pending: true },
+      },
+    });
+    const runtime = createRuntime();
+
+    await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
+
+    expect(runtime.exit).not.toHaveBeenCalled();
+    const logged = joinedArgs(runtime.log);
+    expect(logged).toContain("pending");
+    expect(logged).not.toContain("No compaction needed");
+  });
+
   it("exits non-zero when the gateway reports ok:false (no silent no-op)", async () => {
     callGatewayCli.mockResolvedValue({
       ok: false,

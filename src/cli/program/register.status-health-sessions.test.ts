@@ -323,6 +323,22 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it("rejects an inherited parent --store for compact instead of mutating a different store (regression #91378)", async () => {
+    await runCli(["sessions", "--store", "/tmp/other-sessions.json", "compact", "agent:work:main"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--store"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsCompactCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects other unsupported inherited parent list options for compact", async () => {
+    await runCli(["sessions", "--all-agents", "--limit", "25", "compact", "agent:work:main"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--all-agents"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsCompactCommand).not.toHaveBeenCalled();
+  });
+
   it("forwards sessions list-side options", async () => {
     await runCli([
       "sessions",
