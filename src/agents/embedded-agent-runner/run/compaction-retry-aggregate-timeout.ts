@@ -13,6 +13,7 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
   aggregateTimeoutMs: number;
   onTimeout?: () => void;
   isCompactionStillInFlight?: () => boolean;
+  onHeartbeat?: () => void;
 }): Promise<{ timedOut: boolean }> {
   const timeoutMs = resolveTimerTimeoutMs(params.aggregateTimeoutMs, 1);
 
@@ -46,6 +47,7 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
       // Keep extending the timeout window while compaction is actively running.
       // We only trigger the fallback timeout once compaction appears idle.
       if (params.isCompactionStillInFlight?.()) {
+        params.onHeartbeat?.();
         continue;
       }
 

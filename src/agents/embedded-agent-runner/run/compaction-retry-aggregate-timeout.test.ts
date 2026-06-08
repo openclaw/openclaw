@@ -1,6 +1,16 @@
 // Coverage for aggregate timeout handling while waiting on compaction retry.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import {
+  emitTrustedDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../../../infra/diagnostic-events.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
+} from "../../../logging/diagnostic-run-activity.js";
+import { classifySessionAttention } from "../../../logging/diagnostic-session-attention.js";
+import { resetDiagnosticStateForTest } from "../../../logging/diagnostic.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 
 type AggregateTimeoutParams = Parameters<typeof waitForCompactionRetryWithAggregateTimeout>[0];
@@ -30,6 +40,10 @@ function expectClearedTimeoutState(onTimeout: TimeoutCallbackMock, timedOut: boo
   expect(vi.getTimerCount()).toBe(0);
 }
 
+async function delay(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
 function buildAggregateTimeoutParams(
   overrides: Partial<AggregateTimeoutParams> &
     Pick<AggregateTimeoutParams, "waitForCompactionRetry">,
@@ -43,6 +57,7 @@ function buildAggregateTimeoutParams(
     abortable: overrides.abortable ?? (async (promise) => await promise),
     aggregateTimeoutMs: overrides.aggregateTimeoutMs ?? 60_000,
     isCompactionStillInFlight: overrides.isCompactionStillInFlight,
+    onHeartbeat: overrides.onHeartbeat,
     onTimeout,
   };
 }
@@ -68,6 +83,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
     // starts once compaction is no longer in flight.
     await withFakeTimers(async () => {
       let compactionInFlight = true;
+      const onHeartbeat = vi.fn();
       const waitForCompactionRetry = vi.fn(
         async () =>
           await new Promise<void>((resolve) => {
@@ -80,16 +96,78 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       const params = buildAggregateTimeoutParams({
         waitForCompactionRetry,
         isCompactionStillInFlight: () => compactionInFlight,
+        onHeartbeat,
       });
 
       const resultPromise = waitForCompactionRetryWithAggregateTimeout(params);
 
-      await vi.advanceTimersByTimeAsync(170_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(onHeartbeat).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(onHeartbeat).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(50_000);
       const result = await resultPromise;
 
       expect(result.timedOut).toBe(false);
       expectClearedTimeoutState(params.onTimeout, false);
     });
+  });
+
+  it("refreshes diagnostic activity while active compaction retry waits", async () => {
+    let now = 1_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const sessionId = "session-heartbeat";
+    const sessionKey = "agent:main:main";
+
+    resetDiagnosticStateForTest();
+    try {
+      markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+      now += 10 * 60_000;
+
+      let compactionInFlight = true;
+      const resultPromise = waitForCompactionRetryWithAggregateTimeout({
+        waitForCompactionRetry: async () => {
+          await delay(35);
+          compactionInFlight = false;
+        },
+        abortable: async (promise) => await promise,
+        aggregateTimeoutMs: 10,
+        isCompactionStillInFlight: () => compactionInFlight,
+        onHeartbeat: () => {
+          emitTrustedDiagnosticEvent({
+            type: "run.progress",
+            runId: "run-heartbeat",
+            sessionId,
+            sessionKey,
+            reason: "compaction_retry:active",
+          });
+        },
+      });
+
+      await delay(15);
+      await waitForDiagnosticEventsDrained();
+      const activity = getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }, now);
+
+      expect(activity.activeWorkKind).toBe("embedded_run");
+      expect(activity.lastProgressReason).toBe("compaction_retry:active");
+      expect(activity.lastProgressAgeMs).toBe(0);
+      expect(
+        classifySessionAttention({
+          state: "processing",
+          queueDepth: 1,
+          activity,
+          staleMs: 120_000,
+        }),
+      ).toMatchObject({
+        eventType: "session.long_running",
+        reason: "queued_behind_active_work",
+        recoveryEligible: false,
+      });
+      await expect(resultPromise).resolves.toEqual({ timedOut: false });
+    } finally {
+      nowSpy.mockRestore();
+      resetDiagnosticStateForTest();
+    }
   });
 
   it("times out after an idle timeout window", async () => {
