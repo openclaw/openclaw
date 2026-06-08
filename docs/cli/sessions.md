@@ -168,10 +168,6 @@ traffic. Use `--store <path>` for explicit offline repair of a store file.
 }
 ```
 
-Related:
-
-- Session config: [Configuration reference](/gateway/config-agents#session)
-
 ## Compact a session
 
 Reclaim context budget for a wedged or oversized session. `openclaw sessions compact <key>` is the first-class wrapper around the `sessions.compact` gateway RPC and requires a running gateway.
@@ -228,5 +224,6 @@ Example truncate response (`--max-lines 200`):
 
 ## Related
 
+- Session config: [Configuration reference](/gateway/config-agents#session)
 - [CLI reference](/cli)
 - [Session management](/concepts/session)
