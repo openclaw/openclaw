@@ -156,7 +156,7 @@ import {
   waitForTerminalGatewayDedupe,
 } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import { emitSessionsChanged } from "./sessions.js";
+import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,

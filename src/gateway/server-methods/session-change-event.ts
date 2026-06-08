@@ -28,7 +28,7 @@ export function emitSessionsChanged(
     payload.reason === "reset" || payload.reason === "delete" || payload.reason === "new";
 
   if (isTeardown) {
-    let msgSubs = new Set<string>();
+    let msgSubs: ReadonlySet<string> = new Set<string>();
     if (payload.sessionKey) {
       const subscriptionKey = resolveSessionMessageSubscriptionKey({
         canonicalKey: payload.sessionKey,
