@@ -737,3 +737,62 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(result.content.filter((b) => b.type === "toolCall")).toStrictEqual([]);
   });
 });
+
+describe("openai-completions empty-stop guard", () => {
+  it("routes finish_reason stop with no raw provider output into the error path", async () => {
+    mockChunksRef.chunks = [
+      { id: "chatcmpl-test", choices: [{ index: 0, delta: {} }] },
+      makeFinishChunk("stop"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("returned stop with empty content");
+    expect(result.errorMessage).toContain("Provider openai (model gpt-5.5)");
+    expect(result.content).toStrictEqual([]);
+  });
+
+  it("keeps a normal stop with visible text deliverable", async () => {
+    mockChunksRef.chunks = [makeTextChunk("done"), makeFinishChunk("stop")];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toStrictEqual([{ type: "text", text: "done" }]);
+  });
+
+  it("keeps a refusal-only stop deliverable", async () => {
+    mockChunksRef.chunks = [
+      {
+        id: "chatcmpl-test",
+        choices: [{ index: 0, delta: { refusal: "I cannot help with that." } }],
+      },
+      makeFinishChunk("stop"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toStrictEqual([{ type: "text", text: "I cannot help with that." }]);
+  });
+
+  it("does not treat suppressed raw reasoning as provider-empty output", async () => {
+    mockChunksRef.chunks = [
+      {
+        id: "chatcmpl-test",
+        choices: [{ index: 0, delta: { reasoning_content: "private reasoning" } }],
+      },
+      makeFinishChunk("stop"),
+    ];
+
+    const stream = streamOpenAICompletions(reasoningModel, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toStrictEqual([]);
+  });
+});

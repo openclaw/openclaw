@@ -1141,6 +1141,96 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("routes OpenAI-compatible loopback empty stop replies into the error path", async () => {
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        const created = Math.floor(Date.now() / 1000);
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-empty-stop",
+            object: "chat.completion.chunk",
+            created,
+            model: "step-router-v1",
+            choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
+          })}\n\n`,
+        );
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-empty-stop",
+            object: "chat.completion.chunk",
+            created,
+            model: "step-router-v1",
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          })}\n\n`,
+        );
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        id: "step-router-v1",
+        name: "Step Router",
+        api: "openai-completions",
+        provider: "stepfun",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4096,
+        maxTokens: 256,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let doneReason: string | undefined;
+      let errorPayload: Record<string, unknown> | undefined;
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        reason?: string;
+        error?: Record<string, unknown>;
+      }>) {
+        if (event.type === "done") {
+          doneReason = event.reason;
+        }
+        if (event.type === "error") {
+          errorPayload = event.error;
+        }
+      }
+
+      expect(doneReason).toBeUndefined();
+      expect(errorPayload).toMatchObject({ stopReason: "error", content: [] });
+      expect(String(errorPayload?.errorMessage)).toContain(
+        "Provider stepfun (model step-router-v1) returned stop with empty content",
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("refuses ModelStudio chat streams with no user or assistant payload turns", async () => {
     const model = {
       id: "qwen-coder-plus",
@@ -2113,6 +2203,133 @@ describe("openai transport stream", () => {
 
     expect(output.content).toStrictEqual([{ type: "text", text: "ok" }]);
     expect(output.stopReason).toBe("stop");
+  });
+
+  it("rejects stop-only OpenAI-compatible streams with no raw provider output", async () => {
+    const model = {
+      id: "step-router-v1",
+      name: "Step Router",
+      api: "openai-completions",
+      provider: "stepfun",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    await expect(
+      testing.processOpenAICompletionsStream(
+        streamChunks([
+          {
+            id: "chatcmpl-empty-stop",
+            object: "chat.completion.chunk" as const,
+            created: 1775425651,
+            model: model.id,
+            choices: [{ index: 0, delta: { role: "assistant" as const }, finish_reason: null }],
+          },
+          {
+            id: "chatcmpl-empty-stop",
+            object: "chat.completion.chunk" as const,
+            created: 1775425651,
+            model: model.id,
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" as const }],
+          },
+        ]),
+        output,
+        model,
+        stream,
+      ),
+    ).rejects.toThrow("Provider stepfun (model step-router-v1) returned stop with empty content");
+  });
+
+  it("keeps refusal-only OpenAI-compatible streams deliverable", async () => {
+    const model = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-refusal",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant" as const, refusal: "I cannot help with that." },
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-refusal",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" as const }],
+        },
+      ]),
+      output,
+      model,
+      stream,
+    );
+
+    expect(output.stopReason).toBe("stop");
+    expect(output.content).toStrictEqual([{ type: "text", text: "I cannot help with that." }]);
+  });
+
+  it("does not reject raw reasoning that is suppressed by transport options", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-reasoning-only",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant" as const, reasoning_content: "private reasoning" },
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-reasoning-only",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" as const }],
+        },
+      ]),
+      output,
+      model,
+      stream,
+      { emitReasoning: false },
+    );
+
+    expect(output.stopReason).toBe("stop");
+    expect(output.content).toStrictEqual([]);
   });
 
   it("filters DeepSeek DSML content without disturbing native tool calls", async () => {
@@ -10136,9 +10353,7 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
   });
 
   it("preserves reasoning_content replay for Gemma 4 openai-completions models", () => {
-    const assistant = getAssistantMessage(
-      buildReplayParams(gemma4Model, "reasoning_content"),
-    );
+    const assistant = getAssistantMessage(buildReplayParams(gemma4Model, "reasoning_content"));
 
     expect(assistant.reasoning_content).toBe("Need to answer politely.");
     expect(assistant).not.toHaveProperty("reasoning_details");

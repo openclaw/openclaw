@@ -81,6 +81,33 @@ function isImageContentBlock(block: { type: string }): block is ImageContent {
   return block.type === "image";
 }
 
+function hasRawOpenAICompletionsDeltaOutput(delta: ChatCompletionChunk.Choice.Delta) {
+  const fields = delta as Record<string, unknown>;
+  if (typeof delta.content === "string" && delta.content.length > 0) {
+    return true;
+  }
+  if (typeof delta.refusal === "string" && delta.refusal.length > 0) {
+    return true;
+  }
+  if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) {
+    return true;
+  }
+  for (const field of ["reasoning_content", "reasoning", "reasoning_text"]) {
+    const value = fields[field];
+    if (typeof value === "string" && value.length > 0) {
+      return true;
+    }
+  }
+  return Array.isArray(fields.reasoning_details) && fields.reasoning_details.length > 0;
+}
+
+function buildEmptyStopErrorMessage(model: Model<"openai-completions">) {
+  return (
+    `Provider ${model.provider} (model ${model.id}) returned stop with empty content: ` +
+    "no text, thinking, or tool calls"
+  );
+}
+
 export interface OpenAICompletionsOptions extends StreamOptions {
   toolChoice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -189,6 +216,7 @@ export const streamOpenAICompletions: StreamFunction<
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
       const blocks = output.content as StreamingBlock[];
       const getContentIndex = (block: StreamingBlock) => blocks.indexOf(block);
+      let sawRawProviderOutput = false;
       const finishBlock = (block: StreamingBlock) => {
         const contentIndex = getContentIndex(block);
         if (contentIndex === -1) {
@@ -365,6 +393,9 @@ export const streamOpenAICompletions: StreamFunction<
         }
 
         if (choice.delta) {
+          if (hasRawOpenAICompletionsDeltaOutput(choice.delta)) {
+            sawRawProviderOutput = true;
+          }
           // Some endpoints return reasoning in reasoning_content (llama.cpp),
           // or reasoning (other openai compatible endpoints)
           // Use the first non-empty reasoning field to avoid duplication
@@ -389,6 +420,9 @@ export const streamOpenAICompletions: StreamFunction<
             choice.delta.content.length > 0
           ) {
             appendPartitionedContent(choice.delta.content, Boolean(foundReasoningField));
+          }
+          if (typeof choice.delta.refusal === "string" && choice.delta.refusal.length > 0) {
+            appendPartitionedContent(choice.delta.refusal, false);
           }
 
           if (shouldEmitReasoning && foundReasoningField) {
@@ -477,6 +511,16 @@ export const streamOpenAICompletions: StreamFunction<
       }
       if (hasToolCalls && output.stopReason !== "toolUse") {
         output.content = output.content.filter((block) => block.type !== "toolCall");
+      }
+      const hasThinking = output.content.some((block) => block.type === "thinking");
+      if (
+        output.stopReason === "stop" &&
+        !sawRawProviderOutput &&
+        !hasToolCalls &&
+        !hasVisibleText &&
+        !hasThinking
+      ) {
+        throw new Error(buildEmptyStopErrorMessage(model));
       }
 
       stream.push({ type: "done", reason: output.stopReason, message: output });

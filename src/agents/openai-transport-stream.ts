@@ -2641,6 +2641,39 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
   };
 }
 
+function hasRawOpenAICompletionsDeltaOutput(
+  delta: ChatCompletionChunk["choices"][number]["delta"],
+) {
+  const fields = delta as Record<string, unknown>;
+  const content = fields.content;
+  if (typeof content === "string" && content.length > 0) {
+    return true;
+  }
+  if (Array.isArray(content) && content.length > 0) {
+    return true;
+  }
+  if (typeof fields.refusal === "string" && fields.refusal.length > 0) {
+    return true;
+  }
+  if (Array.isArray(fields.tool_calls) && fields.tool_calls.length > 0) {
+    return true;
+  }
+  for (const field of ["reasoning_content", "reasoning", "reasoning_text"]) {
+    const value = fields[field];
+    if (typeof value === "string" && value.length > 0) {
+      return true;
+    }
+  }
+  return Array.isArray(fields.reasoning_details) && fields.reasoning_details.length > 0;
+}
+
+function buildEmptyOpenAICompletionsStopMessage(model: Model) {
+  return (
+    `Provider ${model.provider} (model ${model.id}) returned stop with empty content: ` +
+    "no text, thinking, or tool calls"
+  );
+}
+
 async function processOpenAICompletionsStream(
   responseStream: AsyncIterable<ChatCompletionChunk>,
   output: MutableAssistantOutput,
@@ -2680,6 +2713,7 @@ async function processOpenAICompletionsStream(
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
   const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
   let sawStopFinishReason = false;
+  let sawRawProviderOutput = false;
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   let chunkPushedEvent = false;
@@ -2944,6 +2978,9 @@ async function processOpenAICompletionsStream(
       await cooperativeScheduler.afterEvent();
       continue;
     }
+    if (hasRawOpenAICompletionsDeltaOutput(choiceDelta)) {
+      sawRawProviderOutput = true;
+    }
     const reasoningDeltas = getCompletionsReasoningDeltas(
       choiceDelta as Record<string, unknown>,
       compat.visibleReasoningDetailTypes,
@@ -2969,6 +3006,9 @@ async function processOpenAICompletionsStream(
           appendRoutedContentDelta(contentDelta);
         }
       }
+    }
+    if (typeof choiceDelta.refusal === "string" && choiceDelta.refusal.length > 0) {
+      appendFilteredVisibleTextDelta(choiceDelta.refusal);
     }
     for (const reasoningDelta of reasoningDeltas) {
       if (reasoningDelta.kind === "thinking" && !emitReasoning) {
@@ -3071,6 +3111,16 @@ async function processOpenAICompletionsStream(
   }
   if (hasToolCalls && output.stopReason !== "toolUse") {
     output.content = output.content.filter((block) => block.type !== "toolCall");
+  }
+  const hasThinking = output.content.some((block) => block.type === "thinking");
+  if (
+    output.stopReason === "stop" &&
+    !sawRawProviderOutput &&
+    !hasToolCalls &&
+    !hasVisibleText &&
+    !hasThinking
+  ) {
+    throw new Error(buildEmptyOpenAICompletionsStopMessage(model));
   }
 }
 
