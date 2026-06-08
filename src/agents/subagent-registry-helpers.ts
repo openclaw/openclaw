@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import fsSync from "node:fs";
 import path from "node:path";
 import { getRuntimeConfig } from "../config/config.js";
 import {
@@ -183,9 +183,9 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
     return;
   }
 
-  const resolveReal = async (targetPath: string): Promise<string | null> => {
+  const resolveReal = (targetPath: string): string | null => {
     try {
-      return await fs.realpath(targetPath);
+      return fsSync.realpathSync(targetPath);
     } catch (err) {
       if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
         return null;
@@ -195,10 +195,8 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
   };
 
   try {
-    const [rootReal, dirReal] = await Promise.all([
-      resolveReal(entry.attachmentsRootDir),
-      resolveReal(entry.attachmentsDir),
-    ]);
+    const rootReal = resolveReal(entry.attachmentsRootDir);
+    const dirReal = resolveReal(entry.attachmentsDir);
     if (!dirReal) {
       return;
     }
@@ -209,7 +207,7 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
     if (!dirBase.startsWith(rootWithSep)) {
       return;
     }
-    await fs.rm(dirBase, { recursive: true, force: true });
+    fsSync.rmSync(dirBase, { recursive: true, force: true });
   } catch {
     // best effort
   }

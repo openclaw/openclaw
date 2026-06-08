@@ -502,43 +502,63 @@ export async function acquireSessionWriteLock(params: {
   const normalizedSessionFile = await resolveNormalizedSessionFile(sessionFile);
   const lockPath = `${normalizedSessionFile}.lock`;
   await fs.mkdir(sessionDir, { recursive: true });
-  try {
-    const lock = await SESSION_LOCKS.acquire(sessionFile, {
-      staleMs,
-      timeoutMs,
-      retry: { minTimeout: 50, maxTimeout: 1000, factor: 1 },
-      allowReentrant,
-      metadata: { maxHoldMs },
-      payload: () => {
-        const createdAt = new Date().toISOString();
-        const starttime = getProcessStartTime(process.pid);
-        const lockPayload: LockFilePayload = { pid: process.pid, createdAt };
-        if (starttime !== null) {
-          lockPayload.starttime = starttime;
-        }
-        return lockPayload as Record<string, unknown>;
-      },
-      shouldReclaim: async ({ payload, nowMs, heldByThisProcess }) => {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const lock = await SESSION_LOCKS.acquire(sessionFile, {
+        staleMs,
+        timeoutMs,
+        retry: { minTimeout: 50, maxTimeout: 1000, factor: 1 },
+        allowReentrant,
+        metadata: { maxHoldMs },
+        payload: () => {
+          const createdAt = new Date().toISOString();
+          const starttime = getProcessStartTime(process.pid);
+          const lockPayload: LockFilePayload = { pid: process.pid, createdAt };
+          if (starttime !== null) {
+            lockPayload.starttime = starttime;
+          }
+          return lockPayload as Record<string, unknown>;
+        },
+        shouldReclaim: async ({ payload, nowMs, heldByThisProcess }) => {
+          const inspected = inspectLockPayloadForSession({
+            payload: payload as LockFilePayload | null,
+            staleMs,
+            nowMs,
+            heldByThisProcess,
+            reclaimLockWithoutStarttime: true,
+          });
+          return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
+        },
+      });
+      return { release: lock.release };
+    } catch (err) {
+      const code = (err as { code?: unknown }).code;
+      if (code === "file_lock_stale" && attempt === 0) {
+        const staleLockPath = (err as { lockPath?: string }).lockPath ?? lockPath;
+        const payload = await readLockPayload(staleLockPath);
+        const nowMs = Date.now();
         const inspected = inspectLockPayloadForSession({
-          payload: payload as LockFilePayload | null,
+          payload,
           staleMs,
           nowMs,
-          heldByThisProcess,
+          heldByThisProcess: false,
           reclaimLockWithoutStarttime: true,
         });
-        return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
-      },
-    });
-    return { release: lock.release };
-  } catch (err) {
-    if ((err as { code?: unknown }).code !== "file_lock_timeout") {
-      throw err;
+        if (await shouldReclaimContendedLockFile(staleLockPath, inspected, staleMs, nowMs)) {
+          await fs.rm(staleLockPath, { force: true });
+          continue;
+        }
+      }
+      if (code !== "file_lock_timeout") {
+        throw err;
+      }
+      const timeoutLockPath = (err as { lockPath?: string }).lockPath ?? lockPath;
+      const payload = await readLockPayload(timeoutLockPath);
+      const owner = typeof payload?.pid === "number" ? `pid=${payload.pid}` : "unknown";
+      throw new SessionWriteLockTimeoutError({ timeoutMs, owner, lockPath: timeoutLockPath });
     }
-    const timeoutLockPath = (err as { lockPath?: string }).lockPath ?? lockPath;
-    const payload = await readLockPayload(timeoutLockPath);
-    const owner = typeof payload?.pid === "number" ? `pid=${payload.pid}` : "unknown";
-    throw new SessionWriteLockTimeoutError({ timeoutMs, owner, lockPath: timeoutLockPath });
   }
+  throw new SessionWriteLockTimeoutError({ timeoutMs, owner: "unknown", lockPath });
 }
 
 export const __testing = {

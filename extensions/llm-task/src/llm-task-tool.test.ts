@@ -2,11 +2,21 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("typebox", () => ({
   Type: {
+    Any: (schema?: unknown) => schema,
+    Array: (schema: unknown) => ({ type: "array", items: schema }),
+    Boolean: (schema?: unknown) => ({ type: "boolean", ...(schema as object | undefined) }),
+    Integer: (schema?: unknown) => ({ type: "integer", ...(schema as object | undefined) }),
+    Null: () => ({ type: "null" }),
+    Number: (schema?: unknown) => ({ type: "number", ...(schema as object | undefined) }),
     Object: (schema: unknown) => schema,
-    String: (schema?: unknown) => schema,
     Optional: (schema: unknown) => schema,
-    Unknown: (schema?: unknown) => schema,
-    Number: (schema?: unknown) => schema,
+    Record: (key: unknown, value: unknown) => ({ key, value }),
+    String: (schema?: unknown) => ({ type: "string", ...(schema as object | undefined) }),
+    Unknown: (schema?: unknown) => schema ?? {},
+    Literal: (value: unknown) => ({ const: value }),
+    Union: (schemas: unknown[]) => ({ anyOf: schemas }),
+    Enum: (values: Record<string, unknown>) => ({ enum: Object.values(values) }),
+    Unsafe: (schema: unknown) => schema,
   },
 }));
 

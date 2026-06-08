@@ -574,6 +574,18 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     }),
   }));
 
+  const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+  clearAgentHarnesses();
+  registerAgentHarness({
+    id: "codex",
+    label: "Codex test harness",
+    supports: (ctx) =>
+      ctx.provider.trim().toLowerCase() === "codex"
+        ? { supported: true, priority: 100 }
+        : { supported: false },
+    runAttempt: mockedRunEmbeddedAttempt,
+  });
+
   const { runEmbeddedPiAgent } = await import("./run.js");
   return { runEmbeddedPiAgent };
 }
