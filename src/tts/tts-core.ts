@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { completeSimple } from "../llm/stream.js";
 import type { TextContent } from "../llm/types.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 export {
   normalizeApplyTextNormalization,
@@ -136,12 +137,14 @@ export async function summarizeText(
           signal: controller.signal,
         },
       );
-      const summary = res.content
-        .filter(isTextContentBlock)
-        .map((block) => block.text.trim())
-        .filter(Boolean)
-        .join(" ")
-        .trim();
+      const summary = stripReasoningTagsFromText(
+        res.content
+          .filter(isTextContentBlock)
+          .map((block) => block.text.trim())
+          .filter(Boolean)
+          .join(" ")
+          .trim(),
+      );
 
       if (!summary) {
         throw new Error("No summary returned");

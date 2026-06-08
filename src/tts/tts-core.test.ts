@@ -107,4 +107,77 @@ describe("TTS core", () => {
       setTimeoutSpy.mockRestore();
     }
   });
+
+  it("strips reasoning tags from TTS summary text", async () => {
+    const model = {
+      id: "test-model",
+      name: "Test Model",
+      api: "test-api",
+      provider: "test-provider",
+      baseUrl: "https://example.test",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 4096,
+      maxTokens: 1024,
+    } satisfies Model;
+    const config = {
+      auto: "off",
+      mode: "final",
+      provider: "test-provider",
+      providerSource: "config",
+      personas: {},
+      summaryModel: "test-provider/test-model",
+      modelOverrides: modelOverridePolicy,
+      providerConfigs: {},
+      maxTextLength: 10_000,
+      timeoutMs: 10_000,
+    } satisfies ResolvedTtsConfig;
+    const auth = {
+      apiKey: "key",
+      source: "test",
+      mode: "api-key",
+    } satisfies ResolvedProviderAuth;
+    const authStorage = AuthStorage.inMemory();
+    const modelRegistry = ModelRegistry.inMemory(authStorage);
+    // Simulate a reasoning model that wraps its summary in <think> tags
+    const assistant = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "<think>Let me summarize this text for the user.</think> The weather is sunny today.",
+        },
+      ],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      stopReason: "stop",
+      usage,
+      timestamp: Date.now(),
+    } satisfies AssistantMessage;
+
+    const result = await summarizeText(
+      {
+        text: "What's the weather today? It looks like it's going to be sunny.",
+        targetLength: 120,
+        cfg: {},
+        config,
+        timeoutMs: 10_000,
+      },
+      {
+        completeSimple: vi.fn(async () => assistant),
+        getApiKeyForModel: vi.fn(async () => auth),
+        prepareModelForSimpleCompletion: vi.fn(() => model),
+        requireApiKey: vi.fn(() => "key"),
+        resolveModelAsync: vi.fn(async () => ({
+          model,
+          authStorage,
+          modelRegistry,
+        })),
+      },
+    );
+
+    expect(result.summary).toBe("The weather is sunny today.");
+  });
 });
