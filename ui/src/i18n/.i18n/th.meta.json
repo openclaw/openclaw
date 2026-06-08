@@ -67,11 +67,11 @@
     "workboard.viewRunning",
     "workboard.viewStale"
   ],
-  "generatedAt": "2026-06-04T01:43:37.198Z",
+  "generatedAt": "2026-06-08T18:52:57.281Z",
   "locale": "th",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "14587cdb5795c9edf5beec34713dcee083352e2f24ea7a3b554190ae7451fbb4",
+  "sourceHash": "d5bf172e64d9fa67af1413cce0483eb006fdd3a1e97a7657c67e67ef999ec00f",
   "totalKeys": 1368,
   "translatedKeys": 1302,
   "workflow": 1
