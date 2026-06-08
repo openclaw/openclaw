@@ -171,6 +171,32 @@ describe("cron protocol validators", () => {
     ).toBe(true);
   });
 
+  it("accepts null model and fallbacks clears on update params", () => {
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            model: null,
+          },
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            fallbacks: null,
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects blank cron delivery target strings", () => {
     expect(
       validateCronAddParams({
