@@ -714,36 +714,36 @@ export async function runPreflightCompactionIfNeeded(params: {
     params.followupRun.run,
     params.followupRun.run.provider,
   );
-  // Three-tier runtime resolution mirroring runReplyAgent's dispatch path
-  // (agent-runner-execution.ts:2056, followup-runner.ts:726):
-  //   1. agentRuntimeOverride === "pi" forces canonical-provider routing,
-  //      so the gate does NOT short-circuit (preflight runs).
-  //   2. resolveSessionRuntimeOverrideForProvider honors a persisted runtime
+  // Resolve the effective CLI runtime exactly as runReplyAgent's dispatch path
+  // does (agent-runner-execution.ts:2056, followup-runner.ts:726), so the gate
+  // skips embedded compaction only when dispatch would route to a CLI runtime:
+  //   1. resolveSessionRuntimeOverrideForProvider honors a persisted runtime
   //      override only when it is provider-compatible (a CLI backend bound to
   //      the active provider, or codex/openclaw). A stale/mismatched CLI
   //      override returns undefined so we fall through, not skip.
-  //   3. Fall through to the auth-profile-aware resolver, which inspects
+  //   2. Fall through to the auth-profile-aware resolver, which inspects
   //      models.providers.<provider>.agentRuntime and auth-order routing.
-  // Honoring a stale CLI override here would skip embedded compaction on a
-  // turn that dispatch actually runs embedded.
+  // A "pi"/openclaw override is not special-cased here because dispatch does not
+  // special-case it either: it falls through to the same config-driven
+  // resolution, which yields an embedded run for canonical configs and a CLI run
+  // for CLI-routed configs. Honoring a stale CLI override here would skip
+  // embedded compaction on a turn that dispatch actually runs embedded.
   const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
     provider: params.followupRun.run.provider,
     entry,
   });
   const cliExecutionProvider =
-    normalizeLowercaseStringOrEmpty(entry.agentRuntimeOverride) === "pi"
-      ? params.followupRun.run.provider
-      : ((sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, params.cfg)
-          ? sessionRuntimeOverride
-          : undefined) ??
-        resolveCliRuntimeExecutionProvider({
-          provider: params.followupRun.run.provider,
-          cfg: params.cfg,
-          agentId: params.followupRun.run.agentId,
-          modelId: params.followupRun.run.model ?? params.defaultModel,
-          authProfileId,
-        }) ??
-        params.followupRun.run.provider);
+    (sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, params.cfg)
+      ? sessionRuntimeOverride
+      : undefined) ??
+    resolveCliRuntimeExecutionProvider({
+      provider: params.followupRun.run.provider,
+      cfg: params.cfg,
+      agentId: params.followupRun.run.agentId,
+      modelId: params.followupRun.run.model ?? params.defaultModel,
+      authProfileId,
+    }) ??
+    params.followupRun.run.provider;
   const isCli = isCliProvider(cliExecutionProvider, params.cfg);
   if (params.isHeartbeat || isCli) {
     return entry ?? params.sessionEntry;
@@ -1038,36 +1038,36 @@ export async function runMemoryFlushIfNeeded(params: {
     params.followupRun.run,
     params.followupRun.run.provider,
   );
-  // Three-tier runtime resolution mirroring runReplyAgent's dispatch path
-  // (agent-runner-execution.ts:2056, followup-runner.ts:726):
-  //   1. agentRuntimeOverride === "pi" forces canonical-provider routing,
-  //      so the gate does NOT short-circuit (memory flush runs).
-  //   2. resolveSessionRuntimeOverrideForProvider honors a persisted runtime
+  // Resolve the effective CLI runtime exactly as runReplyAgent's dispatch path
+  // does (agent-runner-execution.ts:2056, followup-runner.ts:726), so the gate
+  // skips embedded flush only when dispatch would route to a CLI runtime:
+  //   1. resolveSessionRuntimeOverrideForProvider honors a persisted runtime
   //      override only when it is provider-compatible (a CLI backend bound to
   //      the active provider, or codex/openclaw). A stale/mismatched CLI
   //      override returns undefined so we fall through, not skip.
-  //   3. Fall through to the auth-profile-aware resolver, which inspects
+  //   2. Fall through to the auth-profile-aware resolver, which inspects
   //      models.providers.<provider>.agentRuntime and auth-order routing.
-  // Honoring a stale CLI override here would skip embedded flush on a turn
-  // that dispatch actually runs embedded.
+  // A "pi"/openclaw override is not special-cased here because dispatch does not
+  // special-case it either: it falls through to the same config-driven
+  // resolution, which yields an embedded run for canonical configs and a CLI run
+  // for CLI-routed configs. Honoring a stale CLI override here would skip
+  // embedded flush on a turn that dispatch actually runs embedded.
   const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
     provider: params.followupRun.run.provider,
     entry,
   });
   const cliExecutionProvider =
-    normalizeLowercaseStringOrEmpty(entry?.agentRuntimeOverride) === "pi"
-      ? params.followupRun.run.provider
-      : ((sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, params.cfg)
-          ? sessionRuntimeOverride
-          : undefined) ??
-        resolveCliRuntimeExecutionProvider({
-          provider: params.followupRun.run.provider,
-          cfg: params.cfg,
-          agentId: params.followupRun.run.agentId,
-          modelId: params.followupRun.run.model ?? params.defaultModel,
-          authProfileId: flushAuthProfileId,
-        }) ??
-        params.followupRun.run.provider);
+    (sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, params.cfg)
+      ? sessionRuntimeOverride
+      : undefined) ??
+    resolveCliRuntimeExecutionProvider({
+      provider: params.followupRun.run.provider,
+      cfg: params.cfg,
+      agentId: params.followupRun.run.agentId,
+      modelId: params.followupRun.run.model ?? params.defaultModel,
+      authProfileId: flushAuthProfileId,
+    }) ??
+    params.followupRun.run.provider;
   const isCli = isCliProvider(cliExecutionProvider, params.cfg);
   const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({

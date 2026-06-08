@@ -2539,7 +2539,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
   });
 
-  it("runs memory flush when agentRuntimeOverride is 'pi' even though auth.order prefers a CLI profile", async () => {
+  it("skips memory flush when agentRuntimeOverride is 'pi' and auth.order routes the provider to a CLI profile (matches dispatch)", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -2581,8 +2581,49 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    // agentRuntimeOverride: "pi" forces canonical-provider routing, so the
-    // CLI gate should NOT fire even when auth.order prefers a CLI profile.
+    // The gate mirrors dispatch's config-driven CLI routing: a "pi" override is
+    // not special-cased, so when auth.order routes anthropic to a CLI profile
+    // (claude-cli), dispatch runs CLI and the gate skips embedded flush too.
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("runs memory flush when agentRuntimeOverride is 'pi' but no model/auth policy routes the provider to a CLI runtime", async () => {
+    // Inverse of the CLI-routed case: a "pi" override on a provider with no CLI
+    // route (claude-cli is bound to anthropic, not openai; no auth.order CLI
+    // profile) dispatches embedded, so the gate must run embedded flush too.
+    // Proves the gate and dispatch agree in both directions.
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+      agentRuntimeOverride: "pi",
+    };
+
+    await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: { "claude-cli": { command: "claude" } },
+            compaction: { memoryFlush: {} },
+          },
+        },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+      }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "openai/gpt-5.5",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
   });
 });
