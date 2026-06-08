@@ -52,6 +52,13 @@ export type ReadSessionEntryOptions = {
 
 const log = createSubsystemLogger("sessions/store");
 
+function sameSessionStoreFreshnessSnapshot(
+  left: ReturnType<typeof getSessionStoreFreshnessSnapshot> | undefined,
+  right: ReturnType<typeof getSessionStoreFreshnessSnapshot> | undefined,
+): boolean {
+  return left?.mtimeMs === right?.mtimeMs && left?.sizeBytes === right?.sizeBytes;
+}
+
 function normalizeOptionalFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
@@ -388,7 +395,26 @@ export function loadSessionStore(
     }
   }
 
-  const store = loadSqliteSessionStore(storePath);
+  let store = loadSqliteSessionStore(storePath);
+  let cacheFileStat = currentFileStat;
+  let canCacheLoadedStore = canWriteSessionStoreCache;
+  if (canWriteSessionStoreCache) {
+    const postReadFileStat = getSessionStoreFreshnessSnapshot(storePath);
+    if (sameSessionStoreFreshnessSnapshot(currentFileStat, postReadFileStat)) {
+      cacheFileStat = postReadFileStat;
+    } else {
+      // Opening SQLite can create/touch sidecar files; another process can also
+      // write between the SELECT and freshness stat. Reload once against the
+      // changed snapshot, and skip caching if the DB keeps moving.
+      store = loadSqliteSessionStore(storePath);
+      const retryFileStat = getSessionStoreFreshnessSnapshot(storePath);
+      if (sameSessionStoreFreshnessSnapshot(postReadFileStat, retryFileStat)) {
+        cacheFileStat = retryFileStat;
+      } else {
+        canCacheLoadedStore = false;
+      }
+    }
+  }
 
   const hydratedPromptRefs = shouldHydrateSkillPromptRefs
     ? hydrateSessionStoreSkillPromptRefs({ storePath, store })
@@ -432,12 +458,12 @@ export function loadSessionStore(
   if (hydratedPromptRefs || migrated || normalized) {
     // Callers that mutate and save will persist the repaired SQLite shape.
   }
-  if (canWriteSessionStoreCache) {
+  if (canCacheLoadedStore) {
     writeSessionStoreCache({
       storePath,
       store,
-      mtimeMs: currentFileStat?.mtimeMs,
-      sizeBytes: currentFileStat?.sizeBytes,
+      mtimeMs: cacheFileStat?.mtimeMs,
+      sizeBytes: cacheFileStat?.sizeBytes,
       takeOwnership: true,
     });
   }
