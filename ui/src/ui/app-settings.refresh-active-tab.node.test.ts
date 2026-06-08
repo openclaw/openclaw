@@ -170,6 +170,7 @@ function createHost() {
     sessionsChangedReloadTimer: null as number | ReturnType<typeof globalThis.setTimeout> | null,
     sessionKey: "main",
     selectedAgentId: null as string | null,
+    hello: null as { auth?: { role?: string; scopes?: string[] } } | null,
     settings: {},
     basePath: "",
   };
@@ -358,6 +359,23 @@ describe("refreshActiveTab", () => {
       client: host.client,
       force: true,
       requestUpdate: host.requestUpdate,
+      refreshDiagnostics: true,
+    });
+  });
+
+  it("keeps read-only Workboard tab preload on the read refresh path", async () => {
+    const host = createHost();
+    host.tab = "workboard";
+    host.hello = { auth: { role: "operator", scopes: ["operator.read"] } };
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadWorkboardMock).toHaveBeenCalledWith({
+      host,
+      client: host.client,
+      force: true,
+      requestUpdate: host.requestUpdate,
+      refreshDiagnostics: false,
     });
   });
 

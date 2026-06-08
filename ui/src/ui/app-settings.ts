@@ -450,6 +450,7 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
             client: app.client,
             force: true,
             requestUpdate: host.requestUpdate,
+            refreshDiagnostics: hasOperatorWriteAccess(app.hello?.auth ?? null),
           }),
         ]);
         break;
