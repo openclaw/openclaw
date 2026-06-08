@@ -765,7 +765,7 @@ export function createSessionMcpRuntime(params: {
         }
         released = true;
         activeLeases = Math.max(0, activeLeases - 1);
-        // release ≠ use: refreshing lastUsedAt here defeats the idle-sweep TTL.
+        // Release is not use: refreshing lastUsedAt here defeats the idle-sweep TTL.
       };
     },
     getCatalog,

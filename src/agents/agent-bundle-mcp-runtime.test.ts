@@ -7,12 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBundleMcpJsonSchemaValidator } from "./agent-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
 import {
-  testing,
   createSessionMcpRuntime,
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
+  testing,
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
@@ -1672,12 +1672,12 @@ process.on("SIGINT", shutdown);`,
     });
     const releaseLease = runtime.acquireLease?.();
 
-    // TTL elapses while the lease is still held — sweep skips active runtimes
+    // TTL elapses while the lease is still held, so sweep skips active runtimes.
     now += 60;
     await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
 
-    // Release the lease — must not reset lastUsedAt, so the runtime is
-    // evictable on the very next sweep without waiting another full TTL
+    // Release must not reset lastUsedAt; the runtime is evictable on the very
+    // next sweep without waiting another full TTL.
     releaseLease?.();
     await expect(manager.sweepIdleRuntimes()).resolves.toBe(1);
 
@@ -1722,6 +1722,9 @@ process.on("SIGINT", shutdown);`,
       cfg: { mcp: { servers: {} } },
     });
     const lastUsedBefore = runtime.lastUsedAt;
+    if (!runtime.acquireLease) {
+      throw new Error("Expected production session MCP runtime to expose acquireLease");
+    }
     const release = runtime.acquireLease();
     release();
     expect(runtime.lastUsedAt).toBe(lastUsedBefore);
