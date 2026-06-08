@@ -876,7 +876,7 @@ export const OpenClawSchema = z
                 code: z.ZodIssueCode.custom,
                 message:
                   `cron.modelPreflight total retry window must be <= ${CRON_MODEL_PREFLIGHT_MAX_TOTAL_WINDOW_MS}ms ` +
-                  `so local-provider preflight stays below the cron agent setup watchdog; got ${totalWindowMs}ms.`,
+                  `per endpoint so it fits within the cron agent setup budget; got ${totalWindowMs}ms.`,
               });
             }
           })

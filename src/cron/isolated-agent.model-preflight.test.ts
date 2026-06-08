@@ -168,6 +168,89 @@ describe("runCronIsolatedAgentTurn model provider preflight", () => {
     expect(String(logWarnMock.mock.calls[0]?.[0] ?? "")).not.toContain("Skipping this cron run");
   });
 
+  it("shares one preflight deadline across multiple local fallback candidates", async () => {
+    mockRunCronFallbackPassthrough();
+    preflightCronModelProviderMock
+      .mockResolvedValueOnce({
+        status: "unavailable",
+        reason: "first local provider unavailable",
+        provider: "ollama",
+        model: "qwen3:32b",
+        baseUrl: "http://127.0.0.1:11434",
+        retryAfterMs: 300000,
+      })
+      .mockResolvedValueOnce({
+        status: "unavailable",
+        reason: "second local provider unavailable",
+        provider: "vllm",
+        model: "local-fallback",
+        baseUrl: "http://127.0.0.1:8000/v1",
+        retryAfterMs: 300000,
+      })
+      .mockResolvedValueOnce({ status: "available" });
+
+    const result = await runCronIsolatedAgentTurn({
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "ollama/qwen3:32b",
+              fallbacks: ["vllm/local-fallback", "openrouter/cloud-fallback"],
+            },
+          },
+        },
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+            },
+            vllm: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8000/v1",
+              models: [],
+            },
+            openrouter: {
+              api: "openai-completions",
+              baseUrl: "https://openrouter.ai/api/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      deps: {} as never,
+      job: {
+        id: "shared-preflight-budget",
+        name: "Shared Preflight Budget",
+        enabled: true,
+        createdAtMs: 0,
+        updatedAtMs: 0,
+        schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        state: {},
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "summarize" },
+        delivery: { mode: "none" },
+      },
+      message: "summarize",
+      sessionKey: "cron:shared-preflight-budget",
+      lane: "cron",
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.provider).toBe("openrouter");
+    const preflightCalls = preflightCronModelProviderMock.mock.calls.map((call) => call[0]);
+    expect(preflightCalls).toMatchObject([
+      { provider: "ollama", model: "qwen3:32b" },
+      { provider: "vllm", model: "local-fallback" },
+      { provider: "openrouter", model: "openrouter/cloud-fallback" },
+    ]);
+    const deadlines = preflightCalls.map((call) => call.deadlineMs);
+    expect(deadlines.every((deadline) => typeof deadline === "number")).toBe(true);
+    expect(new Set(deadlines).size).toBe(1);
+  });
+
   it("keeps explicit empty payload fallbacks strict when local primary preflight fails", async () => {
     preflightCronModelProviderMock.mockResolvedValueOnce({
       status: "unavailable",

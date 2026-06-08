@@ -1110,7 +1110,9 @@ describe("cron webhook schema", () => {
     if (res.success) {
       throw new Error("expected cron.modelPreflight retry window validation to fail");
     }
-    expect(res.error.issues[0]?.message).toContain("total retry window must be <= 55000ms");
+    expect(res.error.issues[0]?.message).toContain(
+      "total retry window must be <= 55000ms per endpoint",
+    );
   });
 });
 
