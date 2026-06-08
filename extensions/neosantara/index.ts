@@ -1,8 +1,9 @@
+import { buildPairedProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog-shared";
 // Neosantara plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { OPENAI_RESPONSES_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream";
 import { applyNeosantaraConfig, NEOSANTARA_DEFAULT_MODEL_REF } from "./onboard.js";
-import { buildNeosantaraProvider } from "./provider-catalog.js";
+import { buildNeosantaraProvider, buildNeosantaraResponsesProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "neosantara";
 
@@ -13,7 +14,7 @@ export default defineSingleProviderPluginEntry({
   provider: {
     label: "Neosantara",
     docsPath: "/providers/neosantara",
-    hookAliases: ["neosantara-responses"],
+    aliases: ["neosantara-responses"],
     auth: [
       {
         methodId: "api-key",
@@ -32,7 +33,17 @@ export default defineSingleProviderPluginEntry({
       },
     ],
     catalog: {
-      buildProvider: buildNeosantaraProvider,
+      order: "paired",
+      run: async (ctx) => {
+        return buildPairedProviderApiKeyCatalog({
+          ctx,
+          providerId: "neosantara",
+          buildProviders: async () => ({
+            neosantara: buildNeosantaraProvider(),
+            "neosantara-responses": buildNeosantaraResponsesProvider(),
+          }),
+        });
+      },
     },
     normalizeTransport: ({ provider, api, baseUrl }) => {
       const isNeosantara = provider === PROVIDER_ID || provider === "neosantara-responses";

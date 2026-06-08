@@ -9,3 +9,15 @@ export function buildNeosantaraProvider(): ModelProviderConfig {
     catalog: manifest.modelCatalog.providers.neosantara,
   });
 }
+
+export function buildNeosantaraResponsesProvider(): ModelProviderConfig {
+  const provider = buildNeosantaraProvider();
+  return {
+    ...provider,
+    api: "openai-responses",
+    models: provider.models.map((model) => ({
+      ...model,
+      api: "openai-responses",
+    })),
+  };
+}

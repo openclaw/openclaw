@@ -4,7 +4,7 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["neosantara"],
+  "providers": ["neosantara", "neosantara-responses"],
   "providerAuthAliases": {
     "neosantara-responses": "neosantara"
   },
@@ -85,7 +85,8 @@
       }
     },
     "discovery": {
-      "neosantara": "static"
+      "neosantara": "static",
+      "neosantara-responses": "static"
     }
   },
   "configSchema": {

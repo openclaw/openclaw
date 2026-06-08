@@ -13,10 +13,52 @@ describe("neosantara provider registration", () => {
     expect(provider.label).toBe("Neosantara");
     expect(provider.docsPath).toBe("/providers/neosantara");
     expect(provider.envVars).toEqual(["NEOSANTARA_API_KEY"]);
-    expect(provider.hookAliases).toEqual(["neosantara-responses"]);
+    expect(provider.aliases).toEqual(["neosantara-responses"]);
     expect(provider.auth).toHaveLength(1);
     expect(provider.auth[0].id).toBe("api-key");
     expect(provider.auth[0].kind).toBe("api_key");
+  });
+
+  it("returns explicit provider configs for both neosantara and neosantara-responses in catalog", async () => {
+    const captured = capturePluginRegistration(plugin);
+    const [provider] = captured.providers;
+    if (!provider) {
+      throw new Error("Expected Neosantara provider");
+    }
+
+    const mockCtx = {
+      config: {},
+      env: {},
+      resolveProviderApiKey: (providerId: string) => {
+        if (providerId === "neosantara") {
+          return { apiKey: "test-key" };
+        }
+        return { apiKey: undefined };
+      },
+      resolveProviderAuth: (providerId: string) => {
+        if (providerId === "neosantara") {
+          return { apiKey: "test-key", mode: "api_key", source: "env" };
+        }
+        return { apiKey: undefined, mode: "none", source: "none" };
+      },
+    };
+
+    const result = await provider.catalog?.run(mockCtx as any);
+    expect(result).toBeDefined();
+    expect(result).toHaveProperty("providers");
+
+    const providers = (result as any).providers;
+    expect(providers).toHaveProperty("neosantara");
+    expect(providers).toHaveProperty("neosantara-responses");
+
+    // Check neosantara config
+    expect(providers.neosantara.apiKey).toBe("test-key");
+    expect(providers.neosantara.api).toBe("openai-completions");
+
+    // Check neosantara-responses config
+    expect(providers["neosantara-responses"].apiKey).toBe("test-key");
+    expect(providers["neosantara-responses"].api).toBe("openai-responses");
+    expect(providers["neosantara-responses"].models[0].api).toBe("openai-responses");
   });
 
   it("normalizes transport for neosantara", () => {

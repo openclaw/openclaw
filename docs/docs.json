@@ -1428,6 +1428,7 @@
                   "providers/minimax",
                   "providers/mistral",
                   "providers/moonshot",
+                  "providers/neosantara",
                   "providers/novita",
                   "providers/nvidia",
                   "providers/ollama",
