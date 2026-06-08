@@ -9,7 +9,10 @@ import {
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
+
+const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
 
 function formatAge(ageMs: number | null): string {
   if (ageMs === null) {
@@ -38,6 +41,47 @@ function formatLockLine(lock: SessionLockInspection): string {
     : "stale=no";
   const removedStatus = lock.removed ? " [removed]" : "";
   return `- ${shortenHomePath(lock.lockPath)} ${pidStatus} ${ageStatus} ${staleStatus}${removedStatus}`;
+}
+
+export async function detectStaleSessionLocks(params?: {
+  config?: SessionWriteLockAcquireTimeoutConfig;
+  env?: NodeJS.ProcessEnv;
+  staleMs?: number;
+  readOwnerProcessArgs?: SessionLockOwnerProcessArgsReader;
+}): Promise<readonly SessionLockInspection[]> {
+  const staleMs = params?.staleMs ?? resolveSessionWriteLockStaleMs(params?.config, params?.env);
+  const env = params?.env ?? process.env;
+  const sessionDirs = await resolveAgentSessionDirs(resolveStateDir(env));
+  const staleLocks: SessionLockInspection[] = [];
+  for (const sessionsDir of sessionDirs) {
+    const result = await cleanStaleLockFiles({
+      sessionsDir,
+      staleMs,
+      removeStale: false,
+      readOwnerProcessArgs: params?.readOwnerProcessArgs,
+    });
+    staleLocks.push(...result.locks.filter((lock) => lock.stale));
+  }
+  return staleLocks.toSorted((a, b) => a.lockPath.localeCompare(b.lockPath));
+}
+
+export function sessionLockToHealthFinding(lock: SessionLockInspection): HealthFinding {
+  return {
+    checkId: SESSION_LOCKS_CHECK_ID,
+    severity: "warning",
+    message: `Stale session lock file: ${shortenHomePath(lock.lockPath)} (${lock.staleReasons.join(", ") || "unknown"})`,
+    path: lock.lockPath,
+    fixHint: 'Run "openclaw doctor --fix" to remove stale lock files automatically.',
+  };
+}
+
+export function sessionLockToRepairEffect(lock: SessionLockInspection): HealthRepairEffect {
+  return {
+    kind: "state",
+    action: "would-remove-stale-session-lock",
+    target: lock.lockPath,
+    dryRunSafe: false,
+  };
 }
 
 /** Reports session write locks and removes stale locks when doctor repair is enabled. */
