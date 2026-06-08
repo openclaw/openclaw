@@ -271,6 +271,61 @@ describe("host-hook fixture plugin contract", () => {
     expect(result?.blockReason).toBe("bundled policy");
   });
 
+  it("lets bundled trusted policies replace declared external policies with the same id", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "external-policy",
+        name: "External Policy",
+        origin: "workspace",
+        contracts: { trustedToolPolicies: ["shared-deny"] },
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "shared-deny",
+          description: "Declared external policy",
+          evaluate: () => ({ allow: true }),
+        });
+      },
+    });
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "bundled-policy",
+        name: "Bundled Policy",
+        origin: "bundled",
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "shared-deny",
+          description: "Bundled policy",
+          evaluate: () => ({ block: true, blockReason: "bundled policy" }),
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    expect(registry.registry.trustedToolPolicies).toHaveLength(1);
+    expect(registry.registry.trustedToolPolicies?.[0]?.pluginId).toBe("bundled-policy");
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "external-policy",
+        message:
+          "trusted tool policy shared-deny from external-policy was replaced by bundled policy bundled-policy",
+      },
+    ]);
+
+    const result = await runTrustedToolPolicies(
+      { toolName: "exec", params: {} },
+      { toolName: "exec" },
+    );
+
+    expect(result?.blockReason).toBe("bundled policy");
+  });
+
   it("allows the official npm Codex plugin to keep /codex command ownership", () => {
     const { config, registry } = createPluginRegistryFixture();
     const codexRoot = path.join("/tmp", ".openclaw", "npm", "node_modules", "@openclaw", "codex");
