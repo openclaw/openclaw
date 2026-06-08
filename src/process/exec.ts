@@ -456,6 +456,27 @@ export async function runCommandWithTimeout(
         typeof child.pid === "number" &&
         child.pid > 0
       ) {
+        if (process.platform === "win32") {
+          try {
+            spawn("taskkill", ["/PID", String(child.pid), "/T"], {
+              stdio: "ignore",
+              windowsHide: true,
+            });
+            setTimeout(() => {
+              try {
+                spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+                  stdio: "ignore",
+                  windowsHide: true,
+                });
+              } catch {
+                child.kill("SIGKILL");
+              }
+            }, COMMAND_PROCESS_TREE_KILL_GRACE_MS).unref();
+            return;
+          } catch {
+            // Fall through to Node's direct child kill as a last resort.
+          }
+        }
         terminateProcessTree(child.pid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
         return;
       }
