@@ -49,6 +49,7 @@ import type {
   WebhookParseOptions,
   WebhookVerificationResult,
 } from "../types.js";
+import { estimateVisemes } from "../viseme-estimate.js";
 import { VisionBudget } from "../vision-budget.js";
 import type { VoiceCallProvider } from "./base.js";
 
@@ -1173,6 +1174,19 @@ export class MsteamsProvider implements VoiceCallProvider {
     }
     if (pcm16k.length === 0) {
       throw new Error("MsteamsProvider.playTts: TTS produced no audio");
+    }
+
+    // CVI Phase 5 (spike): send an estimated viseme timeline just ahead of the audio so the avatar can
+    // shape its mouth per sound (blended over RMS openness). 16-bit mono @ 16 kHz → 2 bytes/sample.
+    // Best-effort/cosmetic — the worker falls back to RMS-only if this is absent or it's an older worker.
+    try {
+      const durationMs = (pcm16k.length / BYTES_PER_SAMPLE / MSTEAMS_SAMPLE_RATE_HZ) * 1000;
+      const marks = estimateVisemes(input.text, durationMs);
+      if (marks.length > 0) {
+        state.session.send({ type: "speech.marks", ts: 0, marks });
+      }
+    } catch {
+      // non-fatal: viseme marks are a cosmetic lip-shape hint
     }
 
     await this.streamPcmFrames(state, pcm16k, abort.signal);
