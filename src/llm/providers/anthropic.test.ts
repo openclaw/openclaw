@@ -156,6 +156,7 @@ describe("Anthropic provider", () => {
 
     const payload = capturedPayload as { messages: Array<{ role: string; content: unknown[] }> };
     const assistantMessage = payload.messages.find((message) => message.role === "assistant");
+    expect(JSON.stringify(assistantMessage?.content)).not.toContain("reasoning_content");
     expect(assistantMessage?.content).toEqual([
       {
         type: "thinking",
