@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
   CLAUDE_CLI_CLEAR_ENV,
+  injectClaudeSettings,
   normalizeClaudeBackendConfig,
   normalizeClaudePermissionArgs,
   normalizeClaudeSettingSourcesArgs,
@@ -152,7 +153,74 @@ describe("resolveClaudeCliExecutionArgs", () => {
   });
 });
 
+describe("injectClaudeSettings", () => {
+  it("appends a fresh --settings flag when none is present", () => {
+    expect(injectClaudeSettings(["-p", "--verbose"], { ultracode: true })).toEqual([
+      "-p",
+      "--verbose",
+      "--settings",
+      '{"ultracode":true}',
+    ]);
+  });
+
+  it("merges into an existing inline --settings object (patch wins)", () => {
+    expect(
+      injectClaudeSettings(["-p", "--settings", '{"foo":1}', "--verbose"], { ultracode: true }),
+    ).toEqual(["-p", "--settings", '{"foo":1,"ultracode":true}', "--verbose"]);
+  });
+
+  it("merges into the --settings=<json> equals form", () => {
+    expect(injectClaudeSettings(["-p", '--settings={"foo":1}'], { ultracode: true })).toEqual([
+      "-p",
+      '--settings={"foo":1,"ultracode":true}',
+    ]);
+  });
+
+  it("lets the patch override a conflicting key", () => {
+    expect(
+      injectClaudeSettings(["--settings", '{"ultracode":false}'], { ultracode: true }),
+    ).toEqual(["--settings", '{"ultracode":true}']);
+  });
+
+  it("drops a malformed inline settings blob and forwards the patch alone", () => {
+    expect(injectClaudeSettings(["--settings", "not-json"], { ultracode: true })).toEqual([
+      "--settings",
+      '{"ultracode":true}',
+    ]);
+  });
+});
+
 describe("normalizeClaudeBackendConfig", () => {
+  it("injects ultracode settings into args and resumeArgs when opted in", () => {
+    const normalized = normalizeClaudeBackendConfig({
+      command: "claude",
+      ultracode: true,
+      args: ["-p", "--output-format", "stream-json"],
+      resumeArgs: ["-p", "--output-format", "stream-json", "--resume", "{sessionId}"],
+    });
+
+    expect(normalized.args).toContain("--settings");
+    expect(normalized.args).toContain('{"ultracode":true}');
+    expect(normalized.resumeArgs).toContain("--settings");
+    expect(normalized.resumeArgs).toContain('{"ultracode":true}');
+  });
+
+  it("does not inject ultracode settings when the flag is absent or false", () => {
+    expect(
+      normalizeClaudeBackendConfig({
+        command: "claude",
+        args: ["-p", "--output-format", "stream-json"],
+      }).args,
+    ).not.toContain("--settings");
+    expect(
+      normalizeClaudeBackendConfig({
+        command: "claude",
+        ultracode: false,
+        args: ["-p", "--output-format", "stream-json"],
+      }).args,
+    ).not.toContain("--settings");
+  });
+
   it("normalizes both args and resumeArgs for custom overrides", () => {
     const normalized = normalizeClaudeBackendConfig({
       command: "claude",

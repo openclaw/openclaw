@@ -67,6 +67,7 @@ const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
 const CLAUDE_SETTING_SOURCES_ARG = "--setting-sources";
 const CLAUDE_EFFORT_ARG = "--effort";
+const CLAUDE_SETTINGS_ARG = "--settings";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
 const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
 
@@ -226,6 +227,61 @@ function stripClaudeEffortArgs(args: readonly string[]): string[] {
   return normalized;
 }
 
+/** Merge a settings object into an existing inline `--settings` JSON, patch wins. */
+function mergeClaudeSettingsJson(existing: string, patch: Record<string, unknown>): string {
+  let base: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(existing);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      base = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Unparseable inline settings: drop the malformed blob and forward the patch
+    // alone so ultracode still engages rather than passing invalid JSON through.
+  }
+  return JSON.stringify({ ...base, ...patch });
+}
+
+/**
+ * Idempotently inject a Claude CLI `--settings` JSON patch.
+ *
+ * Claude Code accepts `--settings` as a JSON string; a single inline object is
+ * shallow-merged (patch wins) so we never emit conflicting duplicate flags. When
+ * no inline settings exist (the common case) the patch is appended as a fresh arg.
+ */
+export function injectClaudeSettings(
+  args: readonly string[],
+  patch: Record<string, unknown>,
+): string[] {
+  const normalized: string[] = [];
+  let merged = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] ?? "";
+    if (arg === CLAUDE_SETTINGS_ARG) {
+      const maybeValue = args[i + 1];
+      if (typeof maybeValue === "string" && maybeValue.trim().length > 0) {
+        normalized.push(arg, mergeClaudeSettingsJson(maybeValue, patch));
+        merged = true;
+        i += 1;
+        continue;
+      }
+      normalized.push(arg);
+      continue;
+    }
+    if (arg.startsWith(`${CLAUDE_SETTINGS_ARG}=`)) {
+      const value = arg.slice(`${CLAUDE_SETTINGS_ARG}=`.length);
+      normalized.push(`${CLAUDE_SETTINGS_ARG}=${mergeClaudeSettingsJson(value, patch)}`);
+      merged = true;
+      continue;
+    }
+    normalized.push(arg);
+  }
+  if (!merged) {
+    normalized.push(CLAUDE_SETTINGS_ARG, JSON.stringify(patch));
+  }
+  return normalized;
+}
+
 /** Resolve final Claude CLI execution args for one backend invocation. */
 export function resolveClaudeCliExecutionArgs(
   context: CliBackendResolveExecutionArgsContext,
@@ -245,12 +301,24 @@ export function normalizeClaudeBackendConfig(
   const output = config.output ?? "jsonl";
   const input = config.input ?? "stdin";
   const permission = resolveClaudePermissionMode(context);
+  // ultracode (xhigh effort + standing dynamic-workflow orchestration) is opt-in
+  // per claude-cli backend config and reachable only via the `ultracode` session
+  // settings key, so inject `--settings '{"ultracode":true}'`. Keep `undefined`
+  // intact so an unset resumeArgs still falls back to args at spawn time.
+  const applyUltracode = (args?: string[]): string[] | undefined =>
+    config.ultracode === true && args !== undefined
+      ? injectClaudeSettings(args, { ultracode: true })
+      : args;
   return {
     ...config,
-    args: normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(config.args), permission),
-    resumeArgs: normalizeClaudePermissionArgs(
-      normalizeClaudeSettingSourcesArgs(config.resumeArgs),
-      permission,
+    args: applyUltracode(
+      normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(config.args), permission),
+    ),
+    resumeArgs: applyUltracode(
+      normalizeClaudePermissionArgs(
+        normalizeClaudeSettingSourcesArgs(config.resumeArgs),
+        permission,
+      ),
     ),
     output,
     liveSession:
