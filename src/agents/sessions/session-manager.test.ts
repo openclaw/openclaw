@@ -77,6 +77,74 @@ describe("SessionManager.open", () => {
     }
   });
 
+  it("does not duplicate header or user turn when resuming a header+user-only file", async () => {
+    // Case 2 from issue #89206: normal resume of a session whose last turn is
+    // a user message with no assistant reply yet. The first follow-up turn
+    // should append without duplicating the header or the existing user turn.
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+
+    // Simulate a previous session: header + one user message on disk, no assistant.
+    const header = {
+      type: "session",
+      version: 3,
+      id: "existing-session",
+      timestamp: "2026-06-01T00:00:00.000Z",
+      cwd: "/srv/openclaw/main",
+    };
+    const user1 = {
+      type: "message",
+      id: "user-1",
+      parentId: null,
+      timestamp: "2026-06-01T00:00:01.000Z",
+      message: { role: "user", content: "first question" },
+    };
+    const initialTranscript = [JSON.stringify(header), JSON.stringify(user1)].join("\n") + "\n";
+    await fs.writeFile(sessionFile, initialTranscript, "utf8");
+
+    // Open the existing session and resume — add a follow-up turn.
+    const sessionManager = SessionManager.open(sessionFile, dir, "/tmp/task-repo");
+    sessionManager.appendMessage({
+      role: "user",
+      content: "follow-up question",
+      timestamp: Date.now(),
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "follow-up answer" }],
+      api: "messages",
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+
+    const entries = (await fs.readFile(sessionFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; id?: string });
+
+    // Should have exactly: header + user1 + user2 + assistant = 4 entries
+    expect(entries).toHaveLength(4);
+    expect(entries.map((e) => e.type)).toEqual(["session", "message", "message", "message"]);
+    // Verify the original user message is preserved (not duplicated).
+    const userEntries = entries.filter(
+      (e) =>
+        e.type === "message" && (e as { message?: { role?: string } }).message?.role === "user",
+    );
+    expect(userEntries).toHaveLength(2);
+    // No duplicate session headers.
+    expect(entries.filter((e) => e.type === "session")).toHaveLength(1);
+  });
+
   it("does not duplicate the header after recovering a header-only corrupt file", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");

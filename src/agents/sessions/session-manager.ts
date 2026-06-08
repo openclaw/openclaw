@@ -902,8 +902,18 @@ export class SessionManager {
       (e) => e.type === "message" && e.message.role === "assistant",
     );
     if (!hasAssistant) {
-      // Mark as not flushed so when assistant arrives, all entries get written
-      this.flushed = false;
+      // Defer the first full write until an assistant entry arrives so the
+      // session header is always the first line on disk (newSession contract).
+      // When the file already exists (resume / corrupt-header recovery), the
+      // header is already on disk, so append the new entry immediately to keep
+      // the flushed invariant and avoid the duplicate-header rewrite in the
+      // next assistant-triggered persist.
+      if (existsSync(this.sessionFile)) {
+        appendJsonlEntrySync(this.sessionFile, entry);
+        this.flushed = true;
+      } else {
+        this.flushed = false;
+      }
       return;
     }
 
