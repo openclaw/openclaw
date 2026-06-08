@@ -92,9 +92,7 @@ export function normalizeQueryPlan(raw: unknown): QueryPlan {
       limit: clamp(Number(input.topN?.limit), 1, TOPN_LIMIT_MAX, DEFAULT_QUERY_PLAN.topN.limit),
     },
     needDetails:
-      typeof input.needDetails === "boolean"
-        ? input.needDetails
-        : DEFAULT_QUERY_PLAN.needDetails,
+      typeof input.needDetails === "boolean" ? input.needDetails : DEFAULT_QUERY_PLAN.needDetails,
     detailLimit: clamp(
       Number(input.detailLimit),
       10,

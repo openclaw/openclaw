@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_QUERY_PLAN,
-  extractQueryPlan,
-  normalizeQueryPlan,
-} from "./query-plan.js";
+import { DEFAULT_QUERY_PLAN, extractQueryPlan, normalizeQueryPlan } from "./query-plan.js";
 
 describe("normalizeQueryPlan", () => {
   it("accepts a valid plan as-is", () => {
@@ -52,7 +48,9 @@ describe("normalizeQueryPlan", () => {
 
 describe("extractQueryPlan", () => {
   it("parses a bare JSON reply", () => {
-    const plan = extractQueryPlan('{"aggregations":["emotion"],"topN":{"by":"comments","limit":3}}');
+    const plan = extractQueryPlan(
+      '{"aggregations":["emotion"],"topN":{"by":"comments","limit":3}}',
+    );
 
     expect(plan?.aggregations).toEqual(["emotion"]);
     expect(plan?.topN).toEqual({ by: "comments", limit: 3 });

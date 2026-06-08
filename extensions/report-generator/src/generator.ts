@@ -301,9 +301,7 @@ export class ReportGenerator {
       }
       throw new Error("no parseable query plan in assistant reply");
     } catch (error) {
-      logger.warn(
-        `[REPORT_GENERATOR] Query planning failed, using default plan: ${String(error)}`,
-      );
+      logger.warn(`[REPORT_GENERATOR] Query planning failed, using default plan: ${String(error)}`);
       return DEFAULT_QUERY_PLAN;
     }
   }
