@@ -58,6 +58,13 @@ const REALTIME_SAMPLE_RATE_HZ = 24_000;
 /** Cap the consult transcript context so it cannot grow without bound on long calls. */
 const MAX_TRANSCRIPT_ENTRIES = 40;
 
+/**
+ * CVI Phase 4 — how often to push the latest inbound frame into the realtime session as ambient
+ * visual context. Only fires when the frame changed and the vision budget allows, so a static screen
+ * costs nothing; on a changing screen the budget (`maxVisionPerMinute`) is the real cap.
+ */
+const REALTIME_VISION_PUSH_INTERVAL_MS = 6000;
+
 const MSTEAMS_REALTIME_CONSULT_SYSTEM_PROMPT = [
   "You are the configured OpenClaw agent receiving delegated requests from a live Microsoft Teams voice call.",
   "Act on behalf of the caller using the normal available tools when the caller asks you to do work.",
@@ -301,6 +308,10 @@ export function createMsteamsRealtimeCall(params: {
   let lastLookData: string | undefined;
   let lastLookText: string | undefined;
 
+  /** Phase 4 proactive vision: the last frame bytes pushed into the session (skip unchanged), + timer. */
+  let lastPushedFrameData: string | undefined;
+  let visionPushTimer: ReturnType<typeof setInterval> | undefined;
+
   function recordTranscript(role: "user" | "assistant", text: string): void {
     // Media Access API: never retain media-derived transcript text before Teams
     // recording status is active. Otherwise pre-recording turns would sit in the
@@ -463,8 +474,49 @@ export function createMsteamsRealtimeCall(params: {
     },
     onClose: () => {
       closed = true;
+      if (visionPushTimer) {
+        clearInterval(visionPushTimer);
+        visionPushTimer = undefined;
+      }
     },
   });
+
+  /**
+   * CVI Phase 4: push the latest inbound frame into the realtime session as ambient context so the
+   * model is continuously visually aware — not only when the caller invokes `look_at_screen`. Skips
+   * when nothing changed, before recording is active, or when over the vision budget. No forced
+   * response: the model uses the frame on its next natural turn.
+   */
+  function pushLatestFrameToModel(): void {
+    if (closed || recordingGateBlocks() || !deps.getLatestFrame) {
+      return;
+    }
+    const frame = deps.getLatestFrame();
+    if (!frame || frame.dataBase64 === lastPushedFrameData) {
+      return; // no frame yet, or unchanged since the last push
+    }
+    if (deps.visionBudget && !deps.visionBudget.tryConsume(callId, Date.now())) {
+      return; // over the per-call vision budget
+    }
+    lastPushedFrameData = frame.dataBase64;
+    try {
+      realtime.sendImage({
+        dataBase64: frame.dataBase64,
+        mime: frame.mime,
+        text: `Live view — ${describeMsteamsVideoFrameOwner(frame)}.`,
+      });
+    } catch (err) {
+      logger?.debug?.(
+        `MsteamsRealtime: vision push failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  if (deps.getLatestFrame) {
+    visionPushTimer = setInterval(pushLatestFrameToModel, REALTIME_VISION_PUSH_INTERVAL_MS);
+    // Don't keep the process alive for this cosmetic-awareness timer.
+    visionPushTimer.unref?.();
+  }
 
   /** Run the OpenClaw agent for an openclaw_agent_consult call and speak the result. */
   async function handleToolCall(
@@ -740,6 +792,10 @@ export function createMsteamsRealtimeCall(params: {
         return;
       }
       closed = true;
+      if (visionPushTimer) {
+        clearInterval(visionPushTimer);
+        visionPushTimer = undefined;
+      }
       try {
         realtime.close();
       } catch {
