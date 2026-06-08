@@ -1,12 +1,18 @@
 // Channel plugin catalog tests cover plugin catalog entries and metadata normalization.
-import { describe, expect, it, vi } from "vitest";
-import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginChannelCatalogEntry } from "../../plugins/channel-catalog-registry.js";
+
+const listChannelCatalogEntriesMock = vi.hoisted(() => vi.fn(() => []));
 
 vi.mock("../../plugins/channel-catalog-registry.js", () => ({
-  listChannelCatalogEntries: () => [],
+  listChannelCatalogEntries: listChannelCatalogEntriesMock,
 }));
 
 import { getChannelPluginCatalogEntry } from "./catalog.js";
+
+beforeEach(() => {
+  listChannelCatalogEntriesMock.mockReset().mockReturnValue([]);
+});
 
 describe("channel plugin catalog", () => {
   it("keeps third-party channel ids mapped with catalog install trust", () => {
@@ -29,51 +35,39 @@ describe("channel plugin catalog", () => {
   });
 
   it("excludes only the rejected origin/plugin pair when resolving fallback copies", () => {
-    const discovery: PluginDiscoveryResult = {
-      candidates: [
-        {
-          idHint: "telegram",
-          origin: "config",
-          rootDir: "/tmp/config-telegram",
-          source: "/tmp/config-telegram/index.js",
-          packageName: "telegram-shadow",
-          packageManifest: {
-            plugin: { id: "telegram" },
-            channel: {
-              id: "telegram",
-              label: "Telegram Shadow",
-              selectionLabel: "Telegram Shadow",
-              docsPath: "/channels/telegram",
-              blurb: "shadow",
-            },
-            install: { localPath: "/tmp/config-telegram" },
-          },
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: "telegram",
+        origin: "config",
+        rootDir: "/tmp/config-telegram",
+        packageName: "telegram-shadow",
+        channel: {
+          id: "telegram",
+          label: "Telegram Shadow",
+          selectionLabel: "Telegram Shadow",
+          docsPath: "/channels/telegram",
+          blurb: "shadow",
         },
-        {
-          idHint: "telegram",
-          origin: "bundled",
-          rootDir: "/tmp/bundled-telegram",
-          source: "/tmp/bundled-telegram/index.js",
-          packageName: "@openclaw/telegram",
-          packageManifest: {
-            plugin: { id: "telegram" },
-            channel: {
-              id: "telegram",
-              label: "Telegram",
-              selectionLabel: "Telegram",
-              docsPath: "/channels/telegram",
-              blurb: "bundled",
-            },
-            install: { npmSpec: "@openclaw/telegram@1.0.0" },
-          },
+        install: { localPath: "/tmp/config-telegram" },
+      },
+      {
+        pluginId: "telegram",
+        origin: "bundled",
+        rootDir: "/tmp/bundled-telegram",
+        packageName: "@openclaw/telegram",
+        channel: {
+          id: "telegram",
+          label: "Telegram",
+          selectionLabel: "Telegram",
+          docsPath: "/channels/telegram",
+          blurb: "bundled",
         },
-      ],
-      diagnostics: [],
-    };
+        install: { npmSpec: "@openclaw/telegram@1.0.0" },
+      },
+    ] satisfies PluginChannelCatalogEntry[]);
 
     expect(
       getChannelPluginCatalogEntry("telegram", {
-        discovery,
         excludePluginRefs: [{ pluginId: "telegram", origin: "config" }],
       })?.origin,
     ).toBe("bundled");
