@@ -391,7 +391,10 @@ export function createOpenClawTools(
     !embedded ||
     options?.sourceReplyDeliveryMode === "message_tool_only" ||
     messageExplicitlyAllowed;
-  const includeSubagentSpawnTool = !embedded || options?.allowGatewaySubagentBinding === true;
+  const includeSubagentSpawnTool =
+    !embedded ||
+    options?.allowGatewaySubagentBinding === true ||
+    (resolvedConfig?.agents?.defaults?.subagents?.allowAgents?.length ?? 0) > 0;
   const effectiveCallGateway = embedded
     ? createEmbeddedCallGateway()
     : openClawToolsDeps.callGateway;
