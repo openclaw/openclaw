@@ -561,12 +561,6 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       let usedRestFallback = false;
       let operation;
       try {
-        if (isVertex) {
-          // Bypass `@google/genai` SDK for Vertex due to a known bug in `gaxios` under Node ADC fetching:
-          // "TypeError: Cannot convert undefined or null to object at hasOwnProperty"
-          // This explicitly routes to the REST fallback path which uses robust OpenClaw primitives.
-          throw new Error("Force REST fallback for Vertex video generation");
-        }
         operation = await client.models.generateVideos({
           model,
           prompt: req.prompt,
