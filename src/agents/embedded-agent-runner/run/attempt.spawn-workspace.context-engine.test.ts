@@ -1041,6 +1041,60 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
   });
 
+  it("repairs an orphaned user message behind non-message session metadata before the provider", async () => {
+    const marker =
+      "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]";
+    const olderPrompt = "OLD_TURN_76888: answer the orphaned queued turn";
+    const latestPrompt = "LATEST_TURN_76888: answer only the active channel prompt";
+    const repairedPrompt = `${marker}\n${olderPrompt}\n\n${latestPrompt}`;
+    const orphanLeaf = {
+      id: "orphan-leaf",
+      parentId: "parent-leaf",
+      type: "message",
+      message: { role: "user", content: olderPrompt, timestamp: 1 },
+    };
+    hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
+      id: "model-snapshot-leaf",
+      parentId: "orphan-leaf",
+      type: "custom",
+      customType: "model-snapshot",
+      data: { provider: "deepseek", modelId: "deepseek-chat" },
+    });
+    hoisted.sessionManager.getEntry.mockImplementation((id: string) =>
+      id === "orphan-leaf" ? orphanLeaf : undefined,
+    );
+    const seen: { modelInputPrompt?: string } = {};
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: latestPrompt,
+      },
+      sessionPrompt: async (session, prompt) => {
+        seen.modelInputPrompt = prompt;
+        const activePrompt = prompt.startsWith(`${marker}\n${olderPrompt}\n\n`)
+          ? prompt.slice(`${marker}\n${olderPrompt}\n\n`.length)
+          : "missing-active-prompt";
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: `stub-provider-target=${activePrompt}`, timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(result.finalPromptText).toBe(repairedPrompt);
+    expect(seen.modelInputPrompt).toBe(repairedPrompt);
+    const finalAssistant = findRecord(
+      requireRecords(result.messagesSnapshot, "messages snapshot"),
+      (message) => message.role === "assistant",
+      "final assistant",
+    );
+    expect(finalAssistant.content).toBe(`stub-provider-target=${latestPrompt}`);
+    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+  });
+
   it("keeps hidden runtime context hidden when orphan repair merges a transcript prompt", async () => {
     hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
       id: "orphan-leaf",
