@@ -168,6 +168,12 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.deliveryTo = "cron.errors.webhookUrlInvalid";
     }
   }
+  if (form.deliveryMode === "announce" && form.deliveryChannel === "telegram") {
+    const target = form.deliveryTo.trim();
+    if (target && !/^-?\d+$/.test(target)) {
+      errors.deliveryTo = "cron.errors.telegramChatIdRequired";
+    }
+  }
   if (form.failureAlertMode === "custom") {
     const afterRaw = form.failureAlertAfter.trim();
     if (afterRaw) {
