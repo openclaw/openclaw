@@ -59,6 +59,21 @@ export type RealtimeVoiceToolResultOptions = {
   willContinue?: boolean;
 };
 
+export type RealtimeVoiceSpeakTextOptions = {
+  /**
+   * Stable key for providers that can dedupe externally scheduled speech.
+   */
+  idempotencyKey?: string;
+  /**
+   * Logical origin for observability, for example "agent-final" or "control".
+   */
+  source?: string;
+  /**
+   * "exact" means preserve wording; "natural" allows provider-side verbal polish.
+   */
+  mode?: "exact" | "natural";
+};
+
 export type RealtimeVoiceBridgeEvent = {
   direction: "client" | "server";
   type: string;
@@ -188,6 +203,7 @@ export type RealtimeVoiceBridge = {
   sendAudio(audio: Buffer): void;
   setMediaTimestamp(ts: number): void;
   sendUserMessage?(text: string): void;
+  speakText?(text: string, options?: RealtimeVoiceSpeakTextOptions): void;
   triggerGreeting?(instructions?: string): void;
   handleBargeIn?(options?: RealtimeVoiceBargeInOptions): void;
   submitToolResult(callId: string, result: unknown, options?: RealtimeVoiceToolResultOptions): void;

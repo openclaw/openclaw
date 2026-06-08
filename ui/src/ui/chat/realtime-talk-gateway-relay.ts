@@ -259,18 +259,6 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     const abortController = new AbortController();
     this.consultAbortControllers.set(callId, abortController);
     try {
-      if (event.forced) {
-        this.submitToolResult(
-          callId,
-          {
-            status: "working",
-            tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-            message:
-              "Tell the person briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.",
-          },
-          { willContinue: true },
-        );
-      }
       await submitRealtimeTalkConsult({
         ctx: this.ctx,
         callId,

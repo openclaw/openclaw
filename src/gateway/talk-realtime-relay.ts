@@ -14,7 +14,10 @@ import {
   shouldAutoControlRealtimeVoiceAgentText,
   type RealtimeVoiceAgentControlResult,
 } from "../talk/agent-run-control.js";
-import { readSpeakableRealtimeVoiceToolResult } from "../talk/consult-question.js";
+import {
+  matchRealtimeVoiceConsultQuestions,
+  readSpeakableRealtimeVoiceToolResult,
+} from "../talk/consult-question.js";
 import {
   createRealtimeVoiceForcedConsultCoordinator,
   type RealtimeVoiceForcedConsultCoordinator,
@@ -56,8 +59,11 @@ const MAX_RELAY_SESSIONS_PER_CONN = 2;
 const MAX_RELAY_SESSIONS_GLOBAL = 64;
 const RELAY_EVENT = "talk.event";
 const RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS = 12_000;
-const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
+const FORCED_CONSULT_TRANSCRIPT_DEBOUNCE_MS = 3_000;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1_800;
+const FINAL_SPEECH_OUTPUT_ALLOW_MS = 30_000;
+
+type TalkFinalSpeechStatus = "speaking" | "degraded";
 
 type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "ready" }
@@ -92,6 +98,16 @@ type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "toolProgress"; result: RealtimeVoiceAgentControlResult }
   | {
       relaySessionId: string;
+      type: "finalSpeech";
+      text: string;
+      status: TalkFinalSpeechStatus;
+      detail?: string;
+      source?: string;
+      callId?: string;
+      runId?: string;
+    }
+  | {
+      relaySessionId: string;
       type: "error";
       message: string;
       code?: "realtime_unavailable";
@@ -117,6 +133,11 @@ type RelaySession = {
   activeAgentToolCalls: Map<string, string>;
   completedAgentToolCalls: Set<string>;
   forcedConsults: RealtimeVoiceForcedConsultCoordinator;
+  suppressProviderSpeech: boolean;
+  finalSpeechOutputAllowedUntilMs: number;
+  finalSpeechOutputStarted: boolean;
+  finalSpeechOutputItemId?: string;
+  finalSpeechOutputResponseId?: string;
   transcript: RealtimeVoiceTranscriptEntry[];
 };
 
@@ -210,27 +231,81 @@ function isRelayAssistantEchoTranscript(session: RelaySession | undefined, text:
     lookbackMs: RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS,
   });
 }
-function buildForcedConsultCheckingPrompt(): string {
-  return [
-    "Briefly tell the person that you are checking with OpenClaw.",
-    "Do not answer the request yet. Wait for the OpenClaw result before giving the actual answer.",
-  ].join(" ");
-}
-
-function buildForcedConsultSpeechPrompt(text: string): string {
-  return [
-    "OpenClaw finished checking. Speak this result naturally and concisely.",
-    "Do not mention tool calls, JSON, or internal routing.",
-    "",
-    text,
-  ].join("\n");
-}
 
 function buildAlreadyDeliveredToolResult(): Record<string, string> {
   return {
     status: "already_delivered",
     message: "OpenClaw already delivered this consult result internally. Do not repeat it.",
   };
+}
+
+function shouldForwardProviderSpeech(
+  session: RelaySession | undefined,
+  forceAgentConsultOnFinalTranscript: boolean,
+  ids: { itemId?: string; responseId?: string } = {},
+  options: { claim?: boolean } = {},
+): boolean {
+  if (!forceAgentConsultOnFinalTranscript) {
+    return true;
+  }
+  if (!session) {
+    return false;
+  }
+  if (!session.suppressProviderSpeech) {
+    return true;
+  }
+  if (Date.now() > session.finalSpeechOutputAllowedUntilMs) {
+    clearFinalProviderSpeechGate(session);
+    return false;
+  }
+  if (!session.finalSpeechOutputStarted) {
+    if (options.claim !== true) {
+      return false;
+    }
+    session.finalSpeechOutputStarted = true;
+    session.finalSpeechOutputItemId = ids.itemId;
+    session.finalSpeechOutputResponseId = ids.responseId;
+    return true;
+  }
+  if (
+    ids.itemId &&
+    session.finalSpeechOutputItemId &&
+    ids.itemId !== session.finalSpeechOutputItemId
+  ) {
+    return false;
+  }
+  if (
+    ids.responseId &&
+    session.finalSpeechOutputResponseId &&
+    ids.responseId !== session.finalSpeechOutputResponseId
+  ) {
+    return false;
+  }
+  if (options.claim === true) {
+    session.finalSpeechOutputItemId ??= ids.itemId;
+    session.finalSpeechOutputResponseId ??= ids.responseId;
+  }
+  return true;
+}
+
+function allowFinalProviderSpeech(session: RelaySession): void {
+  session.finalSpeechOutputAllowedUntilMs = Date.now() + FINAL_SPEECH_OUTPUT_ALLOW_MS;
+  session.finalSpeechOutputStarted = false;
+  session.finalSpeechOutputItemId = undefined;
+  session.finalSpeechOutputResponseId = undefined;
+}
+
+function clearFinalProviderSpeechGate(session: RelaySession): void {
+  session.finalSpeechOutputAllowedUntilMs = 0;
+  session.finalSpeechOutputStarted = false;
+  session.finalSpeechOutputItemId = undefined;
+  session.finalSpeechOutputResponseId = undefined;
+}
+
+function resetProviderSpeechGateForUserTurn(session: RelaySession): void {
+  if (session.suppressProviderSpeech) {
+    clearFinalProviderSpeechGate(session);
+  }
 }
 
 function cancelForcedConsults(session: RelaySession): void {
@@ -271,6 +346,39 @@ function abortRelayAgentRuns(session: RelaySession, reason: string): void {
   session.activeAgentToolCalls.clear();
 }
 
+function abortRelayAgentRunForCall(session: RelaySession, callId: string, reason: string): void {
+  const runId = session.activeAgentToolCalls.get(callId);
+  if (!runId) {
+    return;
+  }
+  const sessionKey = session.activeAgentRuns.get(runId);
+  if (!sessionKey) {
+    session.activeAgentToolCalls.delete(callId);
+    return;
+  }
+  abortChatRunById(session.context, {
+    runId,
+    sessionKey,
+    stopReason: reason,
+  });
+  session.activeAgentToolCalls.delete(callId);
+  session.activeAgentRuns.delete(runId);
+}
+
+function cancelSupersededForcedConsults(session: RelaySession, question: string): void {
+  for (const handle of session.forcedConsults.handles()) {
+    if (
+      handle.question === question ||
+      session.completedAgentToolCalls.has(handle.id) ||
+      !matchRealtimeVoiceConsultQuestions(handle.question, question)
+    ) {
+      continue;
+    }
+    session.forcedConsults.markCancelled(handle);
+    abortRelayAgentRunForCall(session, handle.id, "forced-consult-superseded");
+  }
+}
+
 function pruneInactiveRelayAgentRuns(session: RelaySession): number {
   for (const runId of session.activeAgentRuns.keys()) {
     if (!session.context.chatAbortControllers.has(runId)) {
@@ -309,6 +417,103 @@ function broadcastToolResultToOwner(
       final: params.final,
     }),
   });
+}
+
+function reportFinalSpeechStatus(
+  session: RelaySession,
+  params: {
+    text: string;
+    status: TalkFinalSpeechStatus;
+    detail?: string;
+    source?: string;
+    callId?: string;
+    runId?: string;
+  },
+): void {
+  broadcastToOwner(session.context, session.connId, {
+    relaySessionId: session.id,
+    type: "finalSpeech",
+    text: params.text,
+    status: params.status,
+    ...(params.detail ? { detail: params.detail } : {}),
+    ...(params.source ? { source: params.source } : {}),
+    ...(params.callId ? { callId: params.callId } : {}),
+    ...(params.runId ? { runId: params.runId } : {}),
+    talkEvent: session.talk.emit({
+      type: "health.changed",
+      payload: {
+        component: "final-voice",
+        status: params.status,
+        text: params.text,
+        ...(params.detail ? { detail: params.detail } : {}),
+        ...(params.source ? { source: params.source } : {}),
+        ...(params.callId ? { callId: params.callId } : {}),
+        ...(params.runId ? { runId: params.runId } : {}),
+      },
+      final: params.status === "degraded",
+    }),
+  });
+}
+
+function deliverRelayFinalSpeech(
+  session: RelaySession,
+  params: {
+    text: string | undefined;
+    source: string;
+    callId?: string;
+    runId?: string;
+  },
+): boolean {
+  const text = params.text?.trim();
+  if (!text) {
+    reportFinalSpeechStatus(session, {
+      text: "",
+      status: "degraded",
+      detail: "No speakable final text was returned.",
+      source: params.source,
+      callId: params.callId,
+      runId: params.runId,
+    });
+    return false;
+  }
+  try {
+    if (!session.bridge.bridge.isConnected()) {
+      throw new Error("Realtime voice bridge is not connected");
+    }
+    const previousAllowedUntilMs = session.finalSpeechOutputAllowedUntilMs;
+    allowFinalProviderSpeech(session);
+    try {
+      session.bridge.speakText(text, {
+        source: params.source,
+        mode: "exact",
+        idempotencyKey: [session.id, params.source, params.runId, params.callId]
+          .filter(Boolean)
+          .join(":"),
+      });
+    } catch (error) {
+      session.finalSpeechOutputAllowedUntilMs = previousAllowedUntilMs;
+      throw error;
+    }
+    reportFinalSpeechStatus(session, {
+      text,
+      status: "speaking",
+      detail: "Scheduled through realtime voice provider.",
+      source: params.source,
+      callId: params.callId,
+      runId: params.runId,
+    });
+    return true;
+  } catch (error) {
+    reportFinalSpeechStatus(session, {
+      text,
+      status: "degraded",
+      detail: formatError(error),
+      source: params.source,
+      callId: params.callId,
+      runId: params.runId,
+    });
+    return false;
+  }
 }
 
 function submitRelayAgentControlProviderResults(
@@ -426,6 +631,7 @@ export function createTalkRealtimeRelaySession(
     );
   let currentOutputItemId: string | undefined;
   let currentOutputResponseId: string | undefined;
+  let currentOutputSuppressed = false;
   let ready = false;
   let failureEmitted = false;
   const relayRef: { current?: RelaySession } = {};
@@ -442,7 +648,24 @@ export function createTalkRealtimeRelaySession(
     audioSink: {
       isOpen: () => Boolean(relayRef.current && relaySessions.has(relayRef.current.id)),
       sendAudio: (audio) => {
-        const turnId = relayRef.current ? ensureRelayTurn(relayRef.current) : undefined;
+        const relay = relayRef.current;
+        if (currentOutputSuppressed) {
+          return;
+        }
+        if (
+          !shouldForwardProviderSpeech(
+            relay,
+            forceAgentConsultOnFinalTranscript,
+            {
+              itemId: currentOutputItemId,
+              responseId: currentOutputResponseId,
+            },
+            { claim: true },
+          )
+        ) {
+          return;
+        }
+        const turnId = relay ? ensureRelayTurn(relay) : undefined;
         emit(
           {
             relaySessionId,
@@ -459,7 +682,19 @@ export function createTalkRealtimeRelaySession(
         );
       },
       clearAudio: () => {
-        const turnId = relayRef.current ? ensureRelayTurn(relayRef.current) : undefined;
+        const relay = relayRef.current;
+        if (currentOutputSuppressed) {
+          return;
+        }
+        if (
+          !shouldForwardProviderSpeech(relay, forceAgentConsultOnFinalTranscript, {
+            itemId: currentOutputItemId,
+            responseId: currentOutputResponseId,
+          })
+        ) {
+          return;
+        }
+        const turnId = relay ? ensureRelayTurn(relay) : undefined;
         emit(
           { relaySessionId, type: "clear" },
           {
@@ -471,7 +706,19 @@ export function createTalkRealtimeRelaySession(
         );
       },
       sendMark: (markName) => {
-        const turnId = relayRef.current ? ensureRelayTurn(relayRef.current) : undefined;
+        const relay = relayRef.current;
+        if (currentOutputSuppressed) {
+          return;
+        }
+        if (
+          !shouldForwardProviderSpeech(relay, forceAgentConsultOnFinalTranscript, {
+            itemId: currentOutputItemId,
+            responseId: currentOutputResponseId,
+          })
+        ) {
+          return;
+        }
+        const turnId = relay ? ensureRelayTurn(relay) : undefined;
         emit(
           { relaySessionId, type: "mark", markName },
           {
@@ -492,8 +739,53 @@ export function createTalkRealtimeRelaySession(
         event.type === "response.audio.delta" ||
         event.type === "response.output_audio.delta"
       ) {
-        currentOutputItemId = event.itemId ?? currentOutputItemId;
-        currentOutputResponseId = event.responseId ?? currentOutputResponseId;
+        const nextOutputItemId = event.itemId ?? currentOutputItemId;
+        const nextOutputResponseId = event.responseId ?? currentOutputResponseId;
+        if (
+          !shouldForwardProviderSpeech(
+            relayRef.current,
+            forceAgentConsultOnFinalTranscript,
+            { itemId: nextOutputItemId, responseId: nextOutputResponseId },
+            { claim: true },
+          )
+        ) {
+          currentOutputItemId = nextOutputItemId;
+          currentOutputResponseId = nextOutputResponseId;
+          currentOutputSuppressed = true;
+          return;
+        }
+        currentOutputItemId = nextOutputItemId;
+        currentOutputResponseId = nextOutputResponseId;
+        currentOutputSuppressed = false;
+        return;
+      }
+      if (
+        event.type === "conversation.output_transcript.delta" ||
+        event.type === "response.output_text.delta" ||
+        event.type === "response.audio_transcript.delta" ||
+        event.type === "response.output_audio_transcript.delta" ||
+        event.type === "response.output_text.done" ||
+        event.type === "response.audio_transcript.done" ||
+        event.type === "response.output_audio_transcript.done"
+      ) {
+        const nextOutputItemId = event.itemId ?? currentOutputItemId;
+        const nextOutputResponseId = event.responseId ?? currentOutputResponseId;
+        if (
+          !shouldForwardProviderSpeech(
+            relayRef.current,
+            forceAgentConsultOnFinalTranscript,
+            { itemId: nextOutputItemId, responseId: nextOutputResponseId },
+            { claim: true },
+          )
+        ) {
+          currentOutputItemId = nextOutputItemId;
+          currentOutputResponseId = nextOutputResponseId;
+          currentOutputSuppressed = true;
+          return;
+        }
+        currentOutputItemId = nextOutputItemId;
+        currentOutputResponseId = nextOutputResponseId;
+        currentOutputSuppressed = false;
         return;
       }
       if (
@@ -503,22 +795,50 @@ export function createTalkRealtimeRelaySession(
         event.type === "response.done" ||
         event.type === "response.cancelled"
       ) {
+        const nextOutputItemId = event.itemId ?? currentOutputItemId;
+        const nextOutputResponseId = event.responseId ?? currentOutputResponseId;
+        if (
+          !shouldForwardProviderSpeech(relayRef.current, forceAgentConsultOnFinalTranscript, {
+            itemId: nextOutputItemId,
+            responseId: nextOutputResponseId,
+          })
+        ) {
+          currentOutputItemId = undefined;
+          currentOutputResponseId = undefined;
+          currentOutputSuppressed = false;
+          return;
+        }
         emit({
           relaySessionId,
           type: "audioDone",
-          ...((event.itemId ?? currentOutputItemId)
-            ? { itemId: event.itemId ?? currentOutputItemId }
-            : {}),
-          ...((event.responseId ?? currentOutputResponseId)
-            ? { responseId: event.responseId ?? currentOutputResponseId }
-            : {}),
+          ...(nextOutputItemId ? { itemId: nextOutputItemId } : {}),
+          ...(nextOutputResponseId ? { responseId: nextOutputResponseId } : {}),
         });
+        if (
+          (event.type === "response.done" || event.type === "response.cancelled") &&
+          relayRef.current?.suppressProviderSpeech
+        ) {
+          clearFinalProviderSpeechGate(relayRef.current);
+        }
         currentOutputItemId = undefined;
         currentOutputResponseId = undefined;
+        currentOutputSuppressed = false;
       }
     },
     onTranscript: (role, text, final) => {
       const relay = relayRef.current;
+      if (role === "assistant" && currentOutputSuppressed) {
+        return;
+      }
+      if (
+        role === "assistant" &&
+        !shouldForwardProviderSpeech(relay, forceAgentConsultOnFinalTranscript, {
+          itemId: currentOutputItemId,
+          responseId: currentOutputResponseId,
+        })
+      ) {
+        return;
+      }
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
       if (final && relay) {
         recordRealtimeVoiceTranscript(relay.transcript, role, text);
@@ -543,6 +863,9 @@ export function createTalkRealtimeRelaySession(
       );
       if (role === "user" && final && text.trim()) {
         const question = text.trim();
+        if (relay) {
+          resetProviderSpeechGateForUserTurn(relay);
+        }
         if (isRelayAssistantEchoTranscript(relay, question)) {
           return;
         }
@@ -681,6 +1004,9 @@ export function createTalkRealtimeRelaySession(
     activeAgentToolCalls: new Map(),
     completedAgentToolCalls: new Set(),
     forcedConsults: createRealtimeVoiceForcedConsultCoordinator(),
+    suppressProviderSpeech: forceAgentConsultOnFinalTranscript,
+    finalSpeechOutputAllowedUntilMs: 0,
+    finalSpeechOutputStarted: false,
     transcript: [],
   };
   relayRef.current = relay;
@@ -728,12 +1054,13 @@ function scheduleForcedAgentConsult(session: RelaySession | undefined, question:
   if (session.forcedConsults.hasRecentNativeConsult(question)) {
     return;
   }
+  cancelSupersededForcedConsults(session, question);
   session.forcedConsults.clearPending();
   const handle = session.forcedConsults.prepare(question);
   if (!handle) {
     return;
   }
-  session.forcedConsults.schedule(handle, FORCED_CONSULT_FALLBACK_DELAY_MS, () => {
+  session.forcedConsults.schedule(handle, FORCED_CONSULT_TRANSCRIPT_DEBOUNCE_MS, () => {
     if (!relaySessions.has(session.id)) {
       return;
     }
@@ -751,9 +1078,6 @@ function scheduleForcedAgentConsult(session: RelaySession | undefined, question:
       forced: true,
       args: {
         question: handle.question,
-        context:
-          "The realtime provider produced a final user transcript without invoking openclaw_agent_consult, so OpenClaw is forcing the consult for realtime Talk.",
-        responseStyle: "Reply in a concise spoken tone.",
       },
       talkEvent: session.talk.emit({
         type: "tool.call",
@@ -886,11 +1210,15 @@ export function submitTalkRealtimeRelayToolResult(params: {
     const turnId = ensureRelayTurn(session);
     const cancelled = session.forcedConsults.isCancelled(forcedConsult);
     if (cancelled) {
+      for (const nativeCallId of session.forcedConsults.nativeCallIds(forcedConsult)) {
+        submitAlreadyDeliveredToolResult(session, nativeCallId, turnId);
+      }
       if (params.options?.willContinue !== true) {
         session.forcedConsults.markCancelled(forcedConsult);
+        session.completedAgentToolCalls.add(params.callId);
       }
     } else if (isWorkingToolResult(params.result)) {
-      session.bridge.sendUserMessage(buildForcedConsultCheckingPrompt());
+      // Forced consults should stay silent until OpenClaw has the actual answer.
     } else {
       session.forcedConsults.markDelivered(forcedConsult);
       const text = readSpeakableRealtimeVoiceToolResult(params.result, {
@@ -899,13 +1227,17 @@ export function submitTalkRealtimeRelayToolResult(params: {
       for (const nativeCallId of session.forcedConsults.nativeCallIds(forcedConsult)) {
         submitAlreadyDeliveredToolResult(session, nativeCallId, turnId);
       }
-      if (text) {
-        session.bridge.sendUserMessage(buildForcedConsultSpeechPrompt(text));
-      }
+      deliverRelayFinalSpeech(session, {
+        text,
+        source: "forced-agent-final",
+        callId: params.callId,
+      });
+      session.completedAgentToolCalls.add(params.callId);
     }
     const final = params.options?.willContinue !== true;
     if (final && !cancelled && !isWorkingToolResult(params.result)) {
       session.forcedConsults.markDelivered(forcedConsult);
+      session.completedAgentToolCalls.add(params.callId);
     }
     broadcastToolResultToOwner(session, {
       callId: params.callId,
@@ -916,11 +1248,24 @@ export function submitTalkRealtimeRelayToolResult(params: {
     });
     return;
   }
-  session.bridge.submitToolResult(params.callId, params.result, params.options);
   const turnId = ensureRelayTurn(session);
   const final = params.options?.willContinue !== true;
+  const runId = session.activeAgentToolCalls.get(params.callId);
+  if (final && runId && !isWorkingToolResult(params.result)) {
+    const text = readSpeakableRealtimeVoiceToolResult(params.result);
+    session.bridge.submitToolResult(params.callId, buildAlreadyDeliveredToolResult(), {
+      suppressResponse: true,
+    });
+    deliverRelayFinalSpeech(session, {
+      text,
+      source: "agent-final",
+      callId: params.callId,
+      runId,
+    });
+  } else {
+    session.bridge.submitToolResult(params.callId, params.result, params.options);
+  }
   if (final) {
-    const runId = session.activeAgentToolCalls.get(params.callId);
     if (runId) {
       session.activeAgentRuns.delete(runId);
       session.activeAgentToolCalls.delete(params.callId);
@@ -944,11 +1289,18 @@ export function registerTalkRealtimeRelayAgentRun(params: {
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
   session.activeAgentRuns.set(params.runId, params.sessionKey);
-  if (params.callId?.trim()) {
-    session.activeAgentToolCalls.set(params.callId.trim(), params.runId);
+  const callId = params.callId?.trim();
+  if (callId) {
+    session.activeAgentToolCalls.set(callId, params.runId);
   }
   if (!session.sessionKey) {
     session.sessionKey = params.sessionKey;
+  }
+  const forcedHandle = callId
+    ? session.forcedConsults.handles().find((handle) => handle.id === callId)
+    : undefined;
+  if (forcedHandle && session.forcedConsults.isCancelled(forcedHandle)) {
+    abortRelayAgentRunForCall(session, forcedHandle.id, "forced-consult-superseded");
   }
 }
 

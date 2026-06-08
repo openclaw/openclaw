@@ -127,11 +127,12 @@ remote process polls xAI for the completed token exchange.
 OpenClaw includes the current xAI chat models out of the box, ordered newest
 first in model pickers:
 
-| Family         | Model ids                                                                |
-| -------------- | ------------------------------------------------------------------------ |
-| Grok Build 0.1 | `grok-build-0.1`                                                         |
-| Grok 4.3       | `grok-4.3`                                                               |
-| Grok 4.20 Beta | `grok-4.20-beta-latest-reasoning`, `grok-4.20-beta-latest-non-reasoning` |
+| Family               | Model ids                                                                |
+| -------------------- | ------------------------------------------------------------------------ |
+| Composer 2.5 (OAuth) | `grok-composer-2.5-fast`                                                 |
+| Grok Build 0.1       | `grok-build-0.1`                                                         |
+| Grok 4.3             | `grok-4.3`                                                               |
+| Grok 4.20 Beta       | `grok-4.20-beta-latest-reasoning`, `grok-4.20-beta-latest-non-reasoning` |
 
 The plugin still forward-resolves older Grok 3, Grok 4, Grok 4 Fast, Grok 4.1
 Fast, and Grok Code slugs for existing configs. Official Grok Code Fast aliases
@@ -139,8 +140,9 @@ normalize to `grok-build-0.1`; OpenClaw no longer shows the other retired
 upstream slugs in the selectable catalog.
 
 <Tip>
-Use `grok-4.3` for general chat and `grok-build-0.1` for build/coding-focused
-workloads unless you explicitly need a Grok 4.20 beta alias.
+Use `grok-4.3` for the public xAI API default. Use `grok-composer-2.5-fast`
+or `grok-build-0.1` for Grok OAuth / Grok Build coding workloads unless you
+explicitly need a Grok 4.20 beta alias.
 </Tip>
 
 ## OpenClaw feature coverage
