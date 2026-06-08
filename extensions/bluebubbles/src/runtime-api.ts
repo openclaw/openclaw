@@ -29,7 +29,7 @@ export type {
   OpenClawConfig,
   PluginRuntime,
 } from "openclaw/plugin-sdk/channel-core";
-export { parseFiniteNumber } from "openclaw/plugin-sdk/infra-runtime";
+export { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 export {
   DM_GROUP_ACCESS_REASON,
@@ -39,7 +39,7 @@ export {
 export { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 export { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 export { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 export { buildProbeChannelStatusSummary } from "openclaw/plugin-sdk/channel-status";
 export { stripMarkdown } from "openclaw/plugin-sdk/text-runtime";
@@ -54,7 +54,7 @@ export {
   resolveWebhookTargetWithAuthOrRejectSync,
   withResolvedWebhookRequestPipeline,
 } from "openclaw/plugin-sdk/webhook-ingress";
-export { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
+export { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 export {
   evaluateSupplementalContextVisibility,
   shouldIncludeSupplementalContext,

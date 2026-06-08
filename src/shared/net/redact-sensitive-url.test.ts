@@ -34,12 +34,32 @@ describe("redactSensitiveUrlLikeString", () => {
       "//***:***@example.com/mcp?client_secret=***",
     );
   });
+
+  it("redacts every URL-like userinfo occurrence in arbitrary text", () => {
+    expect(
+      redactSensitiveUrlLikeString(
+        "fatal https://a:b@github.com/one.git and https://c:d@github.com/two.git",
+      ),
+    ).toBe("fatal https://***:***@github.com/one.git and https://***:***@github.com/two.git");
+  });
+
+  it("redacts protocol URLs that are too malformed to parse", () => {
+    expect(
+      redactSensitiveUrlLikeString(
+        "wss://fallback-user:fallback-pass@[bad-host/socket?token=fallback-secret&keep=visible)",
+      ),
+    ).toBe("wss://***:***@[bad-host/socket?token=***&keep=visible)");
+  });
 });
 
 describe("isSensitiveUrlQueryParamName", () => {
   it("matches the auth-oriented query params used by MCP SSE config redaction", () => {
     expect(isSensitiveUrlQueryParamName("token")).toBe(true);
     expect(isSensitiveUrlQueryParamName("refresh_token")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("access-token")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("hook-token")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("passwd")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("signature")).toBe(true);
     expect(isSensitiveUrlQueryParamName("safe")).toBe(false);
   });
 });

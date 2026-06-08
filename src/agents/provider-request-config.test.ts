@@ -457,7 +457,8 @@ describe("provider request config", () => {
     expect(resolved).toEqual({
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "cli-agent",
+      "X-OpenRouter-Categories":
+        "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
       "X-Custom": "1",
     });
   });
@@ -532,5 +533,42 @@ describe("provider request config", () => {
       "User-Agent": expect.stringMatching(/^openclaw\//),
       "X-Custom": "1",
     });
+  });
+
+  it("auto-allows loopback model-provider stream requests", () => {
+    const resolved = resolveProviderRequestPolicyConfig({
+      provider: "local-agent-proxy",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:3000/v1",
+      capability: "llm",
+      transport: "stream",
+    });
+
+    expect(resolved.allowPrivateNetwork).toBe(true);
+  });
+
+  it("keeps explicit private-network denial for loopback model requests", () => {
+    const resolved = resolveProviderRequestPolicyConfig({
+      provider: "local-agent-proxy",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:3000/v1",
+      capability: "llm",
+      transport: "stream",
+      request: { allowPrivateNetwork: false },
+    });
+
+    expect(resolved.allowPrivateNetwork).toBe(false);
+  });
+
+  it("does not auto-allow non-loopback private model-provider hosts", () => {
+    const resolved = resolveProviderRequestPolicyConfig({
+      provider: "local-agent-proxy",
+      api: "openai-completions",
+      baseUrl: "http://192.168.1.20:3000/v1",
+      capability: "llm",
+      transport: "stream",
+    });
+
+    expect(resolved.allowPrivateNetwork).toBe(false);
   });
 });

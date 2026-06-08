@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { PreparedSecretsRuntimeSnapshot, SecretResolverWarning } from "../secrets/runtime.js";
 import { KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS } from "./known-weak-gateway-secrets.js";
@@ -105,6 +106,30 @@ describe("gateway startup config secret preflight", () => {
     expect(emitStateEvent).not.toHaveBeenCalled();
   });
 
+  it("uses persisted auth stores only for startup secret preflight", async () => {
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
+    const activateRuntimeSecrets = createRuntimeSecretsActivator({
+      logSecrets: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      emitStateEvent: vi.fn(),
+      prepareRuntimeSecretsSnapshot,
+      activateRuntimeSecretsSnapshot: vi.fn(),
+    });
+
+    await activateRuntimeSecrets(gatewayTokenConfig({}), {
+      reason: "startup",
+      activate: false,
+    });
+
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
+    });
+  });
+
   it("does not emit degraded or recovered events for warning-only secret reloads", async () => {
     const warning: SecretResolverWarning = {
       code: "WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
@@ -156,6 +181,9 @@ describe("gateway startup config secret preflight", () => {
       "[WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED] web search provider fell back to environment credentials",
     );
     expect(emitStateEvent).not.toHaveBeenCalled();
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith({
+      config: expect.any(Object),
+    });
   });
 
   it.each(KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS)(
@@ -245,6 +273,7 @@ describe("gateway startup config secret preflight", () => {
       config: expect.not.objectContaining({
         channels: expect.anything(),
       }),
+      loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
     });
   });
 
@@ -294,8 +323,42 @@ describe("gateway startup config secret preflight", () => {
           }),
         }),
       }),
+      loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
     });
     expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips inactive gateway auth secret preflight when auth has plain strings", async () => {
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
+    const result = await prepareGatewayStartupConfig({
+      configSnapshot: buildSnapshot(gatewayTokenConfig({})),
+      activateRuntimeSecrets: createRuntimeSecretsActivator({
+        logSecrets: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        emitStateEvent: vi.fn(),
+        prepareRuntimeSecretsSnapshot,
+        activateRuntimeSecretsSnapshot: vi.fn(),
+      }),
+    });
+
+    expect(result.auth).toMatchObject({
+      mode: "token",
+      token: "startup-test-token",
+    });
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith({
+      config: expect.objectContaining({
+        gateway: expect.objectContaining({
+          auth: expect.objectContaining({
+            token: "startup-test-token",
+          }),
+        }),
+      }),
+      loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
+    });
   });
 
   it("uses gateway auth strings resolved during startup preflight for bootstrap auth", async () => {

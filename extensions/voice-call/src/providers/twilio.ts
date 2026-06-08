@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
+import { setTimeout as sleep } from "node:timers/promises";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import type { TwilioConfig } from "../config.js";
 import { getHeader } from "../http-headers.js";
 import type { MediaStreamHandler } from "../media-stream.js";
 import { chunkAudio } from "../telephony-audio.js";
@@ -15,6 +15,7 @@ import type {
   NormalizedEvent,
   PlayTtsInput,
   ProviderWebhookParseResult,
+  SendDtmfInput,
   StartListeningInput,
   StopListeningInput,
   WebhookContext,
@@ -30,10 +31,17 @@ import {
 } from "./shared/call-status.js";
 import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 import type { TwilioProviderOptions } from "./twilio.types.js";
-import { twilioApiRequest } from "./twilio/api.js";
+import { TwilioApiError, twilioApiRequest } from "./twilio/api.js";
 import { decideTwimlResponse, readTwimlRequestView } from "./twilio/twiml-policy.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 export type { TwilioProviderOptions } from "./twilio.types.js";
+
+const TWILIO_CALL_NOT_IN_PROGRESS_CODE = 21220;
+const TWILIO_CALL_UPDATE_RETRY_DELAYS_MS = [250, 750] as const;
+
+function isTwilioCallNotInProgressError(err: unknown): boolean {
+  return err instanceof TwilioApiError && err.twilioCode === TWILIO_CALL_NOT_IN_PROGRESS_CODE;
+}
 
 function createTwilioRequestDedupeKey(ctx: WebhookContext, verifiedRequestKey?: string): string {
   if (verifiedRequestKey) {
@@ -60,9 +68,13 @@ type StreamSendResult = {
   sent: boolean;
 };
 
+type TwilioProviderConfig = {
+  accountSid?: string;
+  authToken?: string;
+};
+
 export class TwilioProvider implements VoiceCallProvider {
   readonly name = "twilio" as const;
-  private static readonly TTS_SYNTH_TIMEOUT_MS = 8000;
 
   private readonly accountSid: string;
   private readonly authToken: string;
@@ -121,7 +133,7 @@ export class TwilioProvider implements VoiceCallProvider {
     this.streamAuthTokens.delete(providerCallId);
   }
 
-  constructor(config: TwilioConfig, options: TwilioProviderOptions = {}) {
+  constructor(config: TwilioProviderConfig, options: TwilioProviderOptions = {}) {
     if (!config.accountSid) {
       throw new Error("Twilio Account SID is required");
     }
@@ -218,6 +230,30 @@ export class TwilioProvider implements VoiceCallProvider {
       body: params,
       allowNotFound: options?.allowNotFound,
     });
+  }
+
+  private async updateLiveCallTwiml(
+    providerCallId: string,
+    twiml: string,
+    operation: string,
+  ): Promise<void> {
+    let retryIndex = 0;
+    while (true) {
+      try {
+        await this.apiRequest(`/Calls/${providerCallId}.json`, { Twiml: twiml });
+        return;
+      } catch (err) {
+        const retryDelayMs = TWILIO_CALL_UPDATE_RETRY_DELAYS_MS[retryIndex];
+        if (retryDelayMs === undefined || !isTwilioCallNotInProgressError(err)) {
+          throw err;
+        }
+        retryIndex += 1;
+        console.warn(
+          `[voice-call] Twilio ${operation} update hit call state race (21220); retrying in ${retryDelayMs}ms`,
+        );
+        await sleep(retryDelayMs);
+      }
+    }
   }
 
   /**
@@ -317,7 +353,7 @@ export class TwilioProvider implements VoiceCallProvider {
         type: "call.speech",
         transcript: speechResult,
         isFinal: true,
-        confidence: parseFloat(params.get("Confidence") || "0.9"),
+        confidence: Number.parseFloat(params.get("Confidence") || "0.9"),
       };
     }
 
@@ -411,6 +447,23 @@ export class TwilioProvider implements VoiceCallProvider {
     }
   }
 
+  consumeInitialTwiML(ctx: WebhookContext): string | null {
+    const view = readTwimlRequestView(ctx);
+    if (!view.callIdFromQuery || view.isStatusCallback) {
+      return null;
+    }
+    const storedTwiml = this.twimlStorage.get(view.callIdFromQuery);
+    if (!storedTwiml) {
+      return null;
+    }
+    const kind = this.notifyCalls.has(view.callIdFromQuery) ? "notify" : "pre-connect";
+    this.deleteStoredTwiml(view.callIdFromQuery);
+    console.log(
+      `[voice-call] Twilio initial TwiML consumed for call ${view.callIdFromQuery} (kind=${kind}, callSid=${view.callSid ?? "unknown"})`,
+    );
+    return storedTwiml;
+  }
+
   /**
    * Get the WebSocket URL for media streaming.
    * Derives from the public URL origin + stream path.
@@ -484,8 +537,8 @@ export class TwilioProvider implements VoiceCallProvider {
 
   /**
    * Initiate an outbound call via Twilio API.
-   * If inlineTwiml is provided, uses that directly (for notify mode).
-   * Otherwise, uses webhook URL for dynamic TwiML.
+   * If preConnectTwiml is provided, the first webhook request receives that
+   * TwiML before normal dynamic TwiML resumes.
    */
   async initiateCall(input: InitiateCallInput): Promise<InitiateCallResult> {
     const url = new URL(input.webhookUrl);
@@ -496,23 +549,29 @@ export class TwilioProvider implements VoiceCallProvider {
     statusUrl.searchParams.set("callId", input.callId);
     statusUrl.searchParams.set("type", "status"); // Differentiate from TwiML requests
 
-    // Store TwiML content if provided (for notify mode)
-    // We now serve it from the webhook endpoint instead of sending inline
-    if (input.inlineTwiml) {
-      this.twimlStorage.set(input.callId, input.inlineTwiml);
-      this.notifyCalls.add(input.callId);
+    if (!input.inlineTwiml && input.preConnectTwiml) {
+      this.twimlStorage.set(input.callId, input.preConnectTwiml);
+      console.log(
+        `[voice-call] Stored Twilio initial TwiML for call ${input.callId} (kind=pre-connect)`,
+      );
     }
 
-    // Build request params - always use URL-based TwiML.
-    // Twilio silently ignores `StatusCallback` when using the inline `Twiml` parameter.
     const params: Record<string, string | string[]> = {
       To: input.to,
       From: input.from,
-      Url: url.toString(), // TwiML serving endpoint
-      StatusCallback: statusUrl.toString(), // Separate status callback endpoint
+      StatusCallback: statusUrl.toString(),
       StatusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       Timeout: "30",
     };
+
+    if (input.inlineTwiml) {
+      params.Twiml = input.inlineTwiml;
+      console.log(
+        `[voice-call] Sending direct Twilio initial TwiML for call ${input.callId} (kind=notify)`,
+      );
+    } else {
+      params.Url = url.toString();
+    }
 
     const result = await this.apiRequest<TwilioCallResponse>("/Calls.json", params);
 
@@ -589,9 +648,22 @@ export class TwilioProvider implements VoiceCallProvider {
   </Gather>
 </Response>`;
 
-    await this.apiRequest(`/Calls/${input.providerCallId}.json`, {
-      Twiml: twiml,
-    });
+    await this.updateLiveCallTwiml(input.providerCallId, twiml, "playTts");
+  }
+
+  async sendDtmf(input: SendDtmfInput): Promise<void> {
+    const webhookUrl = this.callWebhookUrls.get(input.providerCallId);
+    if (!webhookUrl) {
+      throw new Error("Missing webhook URL for this call (provider state not initialized)");
+    }
+
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Play digits="${escapeXml(input.digits)}" />
+  <Redirect method="POST">${escapeXml(webhookUrl)}</Redirect>
+</Response>`;
+
+    await this.updateLiveCallTwiml(input.providerCallId, twiml, "sendDtmf");
   }
 
   /**
@@ -654,16 +726,13 @@ export class TwilioProvider implements VoiceCallProvider {
       // Generate audio with core TTS (returns mu-law at 8kHz)
       let muLawAudio: Buffer;
       let synthTimeout: ReturnType<typeof setTimeout> | null = null;
+      const synthTimeoutMs = ttsProvider.synthesisTimeoutMs;
       try {
         const synthPromise = ttsProvider.synthesizeForTelephony(text);
         const timeoutPromise = new Promise<Buffer>((_, reject) => {
           synthTimeout = setTimeout(() => {
-            reject(
-              new Error(
-                `Telephony TTS synthesis timed out after ${TwilioProvider.TTS_SYNTH_TIMEOUT_MS}ms`,
-              ),
-            );
-          }, TwilioProvider.TTS_SYNTH_TIMEOUT_MS);
+            reject(new Error(`Telephony TTS synthesis timed out after ${synthTimeoutMs}ms`));
+          }, synthTimeoutMs);
         });
         muLawAudio = await Promise.race([synthPromise, timeoutPromise]);
       } finally {
@@ -671,6 +740,10 @@ export class TwilioProvider implements VoiceCallProvider {
           clearTimeout(synthTimeout);
         }
         clearInterval(keepAlive);
+      }
+
+      if (muLawAudio.length === 0) {
+        throw new Error("Telephony TTS produced no audio");
       }
 
       let chunkAttempts = 0;
@@ -736,9 +809,7 @@ export class TwilioProvider implements VoiceCallProvider {
   </Gather>
 </Response>`;
 
-    await this.apiRequest(`/Calls/${input.providerCallId}.json`, {
-      Twiml: twiml,
-    });
+    await this.updateLiveCallTwiml(input.providerCallId, twiml, "startListening");
   }
 
   /**

@@ -1,6 +1,10 @@
-import fs from "node:fs/promises";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { TSchema } from "@sinclair/typebox";
+import type {
+  AgentTool,
+  AgentToolResult,
+  AgentToolUpdateCallback,
+} from "@mariozechner/pi-agent-core";
+import type { TSchema } from "typebox";
+import { readLocalFileSafely } from "../../infra/fs-safe.js";
 import { detectMime } from "../../media/mime.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
@@ -14,12 +18,27 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   displaySummary?: string;
 };
 
-// Cross-package tool registration still mixes concrete schema-typed tools with
-// plugin/runtime factories that are effectively existential over params/details.
-// Tightening this alias without a dedicated adapter seam blows up plugin tool
-// factories and embedded-runner tool plumbing.
-// oxlint-disable-next-line typescript/no-explicit-any
-export type AnyAgentTool = AgentToolWithMeta<any, unknown>;
+type ErasedAgentToolExecute = {
+  execute(
+    this: void,
+    toolCallId: string,
+    params: unknown,
+    signal?: AbortSignal,
+    onUpdate?: AgentToolUpdateCallback<unknown>,
+  ): Promise<AgentToolResult<unknown>>;
+};
+
+export type AnyAgentTool = Omit<AgentTool<TSchema, unknown>, "execute"> &
+  ErasedAgentToolExecute & {
+    ownerOnly?: boolean;
+    displaySummary?: string;
+  };
+
+export function asToolParamsRecord(params: unknown): Record<string, unknown> {
+  return params && typeof params === "object" && !Array.isArray(params)
+    ? (params as Record<string, unknown>)
+    : {};
+}
 
 export type StringParamOptions = {
   required?: boolean;
@@ -326,7 +345,7 @@ export async function imageResultFromFile(params: {
   details?: Record<string, unknown>;
   imageSanitization?: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
-  const buf = await fs.readFile(params.path);
+  const buf = (await readLocalFileSafely({ filePath: params.path })).buffer;
   const mimeType = (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
   return await imageResult({
     label: params.label,

@@ -1,16 +1,20 @@
-import { ChannelType } from "@buape/carbon";
+import type { Readable } from "node:stream";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType } from "../internal/discord.js";
 import { createVoiceCaptureState } from "./capture-state.js";
 import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
 
 const {
   createConnectionMock,
+  getVoiceConnectionMock,
   joinVoiceChannelMock,
   entersStateMock,
   createAudioPlayerMock,
+  createAudioResourceMock,
   resolveAgentRouteMock,
   agentCommandMock,
   transcribeAudioFileMock,
+  textToSpeechStreamMock,
   textToSpeechMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
@@ -83,12 +87,16 @@ const {
     return connection;
   };
 
+  const getVoiceConnectionMock = vi.fn((): MockConnection | undefined => undefined);
+
   return {
     createConnectionMock,
+    getVoiceConnectionMock,
     joinVoiceChannelMock: vi.fn(() => createConnectionMock()),
     entersStateMock: vi.fn(async (_target?: unknown, _state?: string, _timeoutMs?: number) => {
       return undefined;
     }),
+    createAudioResourceMock: vi.fn(),
     createAudioPlayerMock: vi.fn(() => ({
       on: vi.fn(),
       off: vi.fn(),
@@ -99,6 +107,9 @@ const {
     resolveAgentRouteMock: vi.fn(() => ({ agentId: "agent-1", sessionKey: "discord:g1:c1" })),
     agentCommandMock: vi.fn(async (_opts?: unknown, _runtime?: unknown) => ({ payloads: [] })),
     transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
+    textToSpeechStreamMock: vi.fn(
+      async (): Promise<unknown> => ({ success: false, error: "stream unavailable" }),
+    ),
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
   };
 });
@@ -116,8 +127,9 @@ vi.mock("./sdk-runtime.js", () => ({
       Connecting: "connecting",
     },
     createAudioPlayer: createAudioPlayerMock,
-    createAudioResource: vi.fn(),
+    createAudioResource: createAudioResourceMock,
     entersState: entersStateMock,
+    getVoiceConnection: getVoiceConnectionMock,
     joinVoiceChannel: joinVoiceChannelMock,
   }),
 }));
@@ -148,6 +160,7 @@ vi.mock("../runtime.js", () => ({
       transcribeAudioFile: transcribeAudioFileMock,
     },
     tts: {
+      textToSpeechStream: textToSpeechStreamMock,
       textToSpeech: textToSpeechMock,
     },
   }),
@@ -189,6 +202,8 @@ describe("DiscordVoiceManager", () => {
   });
 
   beforeEach(() => {
+    getVoiceConnectionMock.mockReset();
+    getVoiceConnectionMock.mockReturnValue(undefined);
     joinVoiceChannelMock.mockReset();
     joinVoiceChannelMock.mockImplementation(() => createConnectionMock());
     entersStateMock.mockReset();
@@ -199,14 +214,17 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock.mockResolvedValue({ payloads: [] });
     transcribeAudioFileMock.mockReset();
     transcribeAudioFileMock.mockResolvedValue({ text: "hello from voice" });
+    textToSpeechStreamMock.mockReset();
+    textToSpeechStreamMock.mockResolvedValue({ success: false, error: "stream unavailable" });
     textToSpeechMock.mockReset();
     textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
+    createAudioResourceMock.mockClear();
   });
 
   const createManager = (
     discordConfig: ConstructorParameters<
       typeof managerModule.DiscordVoiceManager
-    >[0]["discordConfig"] = {},
+    >[0]["discordConfig"] = { voice: { enabled: true } },
     clientOverride?: ReturnType<typeof createClient>,
     cfgOverride: ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0]["cfg"] = {},
   ) =>
@@ -242,6 +260,17 @@ describe("DiscordVoiceManager", () => {
       new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
     );
   };
+
+  it("rejects joins when Discord voice config is absent", async () => {
+    const manager = createManager({});
+
+    await expect(manager.join({ guildId: "g1", channelId: "1001" })).resolves.toMatchObject({
+      ok: false,
+      message: "Discord voice is disabled (channels.discord.voice.enabled).",
+    });
+
+    expect(joinVoiceChannelMock).not.toHaveBeenCalled();
+  });
 
   type ProcessSegmentInvoker = {
     processSegment: (params: {
@@ -313,6 +342,52 @@ describe("DiscordVoiceManager", () => {
     expectConnectedStatus(manager, "1002");
   });
 
+  it("destroys stale tracked voice connections before joining", async () => {
+    const staleConnection = createConnectionMock();
+    const connection = createConnectionMock();
+    getVoiceConnectionMock.mockReturnValueOnce(staleConnection);
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(getVoiceConnectionMock).toHaveBeenCalledWith("g1");
+    expect(staleConnection.destroy).toHaveBeenCalledTimes(1);
+    expectConnectedStatus(manager, "1001");
+  });
+
+  it("does not throw when stale tracked voice connections are already destroyed", async () => {
+    const staleConnection = createConnectionMock();
+    staleConnection.state.status = "destroyed";
+    staleConnection.destroy.mockImplementation(() => {
+      throw new Error("Cannot destroy VoiceConnection - it has already been destroyed");
+    });
+    getVoiceConnectionMock.mockReturnValueOnce(staleConnection);
+    joinVoiceChannelMock.mockReturnValueOnce(createConnectionMock());
+    const manager = createManager();
+
+    await expect(manager.join({ guildId: "g1", channelId: "1001" })).resolves.toMatchObject({
+      ok: true,
+    });
+
+    expect(staleConnection.destroy).not.toHaveBeenCalled();
+  });
+
+  it("does not throw when leaving an already destroyed voice connection", async () => {
+    const connection = createConnectionMock();
+    connection.destroy.mockImplementation(() => {
+      throw new Error("Cannot destroy VoiceConnection - it has already been destroyed");
+    });
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    connection.state.status = "destroyed";
+
+    await expect(manager.leave({ guildId: "g1" })).resolves.toMatchObject({ ok: true });
+    expect(connection.destroy).not.toHaveBeenCalled();
+  });
+
   it("removes voice listeners on leave", async () => {
     const connection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(connection);
@@ -327,6 +402,29 @@ describe("DiscordVoiceManager", () => {
     expect(connection.off).toHaveBeenCalledWith("disconnected", expect.any(Function));
     expect(connection.off).toHaveBeenCalledWith("destroyed", expect.any(Function));
     expect(player.off).toHaveBeenCalledWith("error", expect.any(Function));
+  });
+
+  it("ignores new capture while playback is running", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const player = createAudioPlayerMock.mock.results.at(-1)?.value;
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1");
+    expect(entry).toBeDefined();
+    expect(player).toBeDefined();
+    player.state.status = "playing";
+
+    await (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart(entry, "u1");
+
+    expect(player.stop).not.toHaveBeenCalled();
+    expect(connection.receiver.subscribe).not.toHaveBeenCalled();
   });
 
   it("passes DAVE options to joinVoiceChannel", async () => {
@@ -347,14 +445,63 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
-  it("keeps the shorter timeout for initial voice connection readiness", async () => {
+  it("uses the default timeout for initial voice connection readiness", async () => {
     const connection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(connection);
     const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "1001" });
 
-    expect(entersStateMock).toHaveBeenCalledWith(connection, "ready", 15_000);
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "ready", 30_000);
+  });
+
+  it("uses configured voice connection and reconnect timeouts", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager({
+      voice: {
+        connectTimeoutMs: 45_000,
+        reconnectGraceMs: 20_000,
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "ready", 45_000);
+
+    entersStateMock.mockClear();
+    entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
+    entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
+
+    const disconnected = connection.handlers.get("disconnected");
+    expect(disconnected).toBeTypeOf("function");
+    await disconnected?.();
+
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "signalling", 20_000);
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "connecting", 20_000);
+    expect(connection.destroy).toHaveBeenCalledTimes(1);
+    expect(manager.status()).toEqual([]);
+  });
+
+  it("uses the default reconnect grace before destroying disconnected sessions", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    entersStateMock.mockClear();
+    entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
+    entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
+
+    const disconnected = connection.handlers.get("disconnected");
+    expect(disconnected).toBeTypeOf("function");
+    await disconnected?.();
+
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "signalling", 15_000);
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "connecting", 15_000);
+    expect(connection.destroy).toHaveBeenCalledTimes(1);
+    expect(manager.status()).toEqual([]);
   });
 
   it("stores guild metadata on joined voice sessions", async () => {
@@ -437,7 +584,7 @@ describe("DiscordVoiceManager", () => {
         }
       ).scheduleCaptureFinalize(entry, "u1", "test");
 
-      await vi.advanceTimersByTimeAsync(1_200);
+      await vi.advanceTimersByTimeAsync(2_500);
 
       expect(firstStream.destroy).toHaveBeenCalledTimes(1);
       expect(entry?.capture.activeSpeakers.has("u1")).toBe(false);
@@ -459,6 +606,44 @@ describe("DiscordVoiceManager", () => {
         "u1",
         expect.objectContaining({ end: { behavior: "Manual" } }),
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses configured silence grace before finalizing voice capture", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createManager({
+        voice: {
+          enabled: true,
+          captureSilenceGraceMs: 4_000,
+        },
+      });
+      const stream = { destroy: vi.fn() };
+      const entry = {
+        guildId: "g1",
+        channelId: "1001",
+        capture: createVoiceCaptureState(),
+      };
+      entry.capture.activeSpeakers.add("u1");
+      entry.capture.captureGenerations.set("u1", 1);
+      entry.capture.activeCaptureStreams.set("u1", {
+        generation: 1,
+        stream: stream as unknown as Readable,
+      });
+
+      (
+        manager as unknown as {
+          scheduleCaptureFinalize: (entry: unknown, userId: string, reason: string) => void;
+        }
+      ).scheduleCaptureFinalize(entry, "u1", "test");
+
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(stream.destroy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stream.destroy).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -504,6 +689,156 @@ describe("DiscordVoiceManager", () => {
       | { senderIsOwner?: boolean }
       | undefined;
     expect(commandArgs?.senderIsOwner).toBe(false);
+  });
+
+  it("passes configured model override to agent command in voice flow", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Guest Nick",
+      user: {
+        id: "u-guest",
+        username: "guest",
+        globalName: "Guest",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        voice: {
+          model: "openai/gpt-5.4-mini",
+        },
+      },
+      client,
+      {
+        commands: { useAccessGroups: false },
+      },
+    );
+    await processVoiceSegment(manager, "u-guest");
+
+    const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
+      | { allowModelOverride?: boolean; model?: string }
+      | undefined;
+
+    expect(commandArgs?.allowModelOverride).toBe(true);
+    expect(commandArgs?.model).toBe("openai/gpt-5.4-mini");
+  });
+
+  it("runs voice replies under Discord voice output policy", async () => {
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello back" }],
+    } as never);
+
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Guest Nick",
+      user: {
+        id: "u-guest",
+        username: "guest",
+        globalName: "Guest",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager({ groupPolicy: "open" }, client, {
+      commands: { useAccessGroups: false },
+    });
+    await processVoiceSegment(manager, "u-guest");
+
+    const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
+      | { message?: string; messageChannel?: string; messageProvider?: string }
+      | undefined;
+
+    expect(commandArgs?.messageChannel).toBe("discord");
+    expect(commandArgs?.messageProvider).toBe("discord-voice");
+    expect(commandArgs?.message).toContain("Do not call the tts tool");
+    expect(commandArgs?.message).toContain("repair obvious transcription artifacts");
+    expect(textToSpeechMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        text: "hello back",
+      }),
+    );
+  });
+
+  it("plays streaming TTS audio before falling back to a synthesized file", async () => {
+    const release = vi.fn(async () => undefined);
+    textToSpeechStreamMock.mockResolvedValue({
+      success: true,
+      audioStream: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.close();
+        },
+      }),
+      release,
+    });
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello back" }],
+    } as never);
+
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Guest Nick",
+      user: {
+        id: "u-guest",
+        username: "guest",
+        globalName: "Guest",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager({ groupPolicy: "open" }, client, {
+      commands: { useAccessGroups: false },
+    });
+    await processVoiceSegment(manager, "u-guest");
+
+    expect(textToSpeechStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        disableFallback: true,
+        text: "hello back",
+      }),
+    );
+    expect(textToSpeechMock).not.toHaveBeenCalled();
+    expect(createAudioResourceMock).toHaveBeenCalledWith(expect.anything());
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+  });
+
+  it("passes per-channel system prompt overrides to voice agent runs", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Guest Nick",
+      user: {
+        id: "u-guest",
+        username: "guest",
+        globalName: "Guest",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        guilds: {
+          g1: {
+            channels: {
+              "1001": {
+                systemPrompt: "  Use short voice replies.  ",
+              },
+            },
+          },
+        },
+      },
+      client,
+      {
+        commands: { useAccessGroups: false },
+      },
+    );
+    await processVoiceSegment(manager, "u-guest");
+
+    const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
+      | { extraSystemPrompt?: string }
+      | undefined;
+
+    expect(commandArgs?.extraSystemPrompt).toBe("Use short voice replies.");
   });
 
   it("reuses speaker context cache for repeated segments from the same speaker", async () => {
@@ -558,19 +893,21 @@ describe("DiscordVoiceManager", () => {
 
     const cache = (
       manager as unknown as {
-        speakerContextCache: Map<
-          string,
-          {
-            id?: string;
-            label: string;
-            name?: string;
-            tag?: string;
-            senderIsOwner: boolean;
-            expiresAt: number;
-          }
-        >;
+        speakerContext: {
+          cache: Map<
+            string,
+            {
+              id?: string;
+              label: string;
+              name?: string;
+              tag?: string;
+              senderIsOwner: boolean;
+              expiresAt: number;
+            }
+          >;
+        };
       }
-    ).speakerContextCache;
+    ).speakerContext.cache;
     const cached = cache.get("g1:u-role");
 
     expect(cached).toEqual(
@@ -689,6 +1026,17 @@ describe("DiscordVoiceManager", () => {
 
     const { DiscordVoiceReadyListener } = managerModule;
     const listener = new DiscordVoiceReadyListener(manager);
+
+    await expect(listener.handle(undefined, undefined as never)).resolves.not.toThrow();
+    expect(autoJoinSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("DiscordVoiceResumedListener: runs autoJoin on gateway resume", async () => {
+    const manager = createManager();
+    const autoJoinSpy = vi.spyOn(manager, "autoJoin").mockResolvedValue(undefined);
+
+    const { DiscordVoiceResumedListener } = managerModule;
+    const listener = new DiscordVoiceResumedListener(manager);
 
     await expect(listener.handle(undefined, undefined as never)).resolves.not.toThrow();
     expect(autoJoinSpy).toHaveBeenCalledTimes(1);

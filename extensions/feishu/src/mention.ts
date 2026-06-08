@@ -1,12 +1,25 @@
 import type { FeishuMessageEvent } from "./event-types.js";
-export type { MentionTarget } from "./mention-target.types.js";
 import type { MentionTarget } from "./mention-target.types.js";
+import { isFeishuGroupChatType } from "./types.js";
 
-/**
- * Escape regex metacharacters so user-controlled mention fields are treated literally.
- */
-export function escapeRegExp(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+type FeishuMentionLike = {
+  key?: string;
+  id?: {
+    open_id?: string;
+    user_id?: string;
+    union_id?: string;
+  };
+  name?: string;
+};
+
+export function isFeishuBroadcastMention(mention: FeishuMentionLike): boolean {
+  const normalizedKey = mention.key?.trim().toLowerCase();
+  if (normalizedKey === "@all" || normalizedKey === "@_all") {
+    return true;
+  }
+
+  const mentionIds = [mention.id?.open_id, mention.id?.user_id, mention.id?.union_id];
+  return mentionIds.some((id) => id?.trim().toLowerCase() === "all");
 }
 
 /**
@@ -20,6 +33,9 @@ export function extractMentionTargets(
 
   return mentions
     .filter((m) => {
+      if (isFeishuBroadcastMention(m)) {
+        return false;
+      }
       // Exclude the bot itself
       if (botOpenId && m.id.open_id === botOpenId) {
         return false;
@@ -46,59 +62,31 @@ export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: s
     return false;
   }
 
-  const isDirectMessage = event.message.chat_type !== "group";
-  const hasOtherMention = mentions.some((m) => m.id.open_id !== botOpenId);
+  const isDirectMessage = !isFeishuGroupChatType(event.message.chat_type);
+  const userMentions = mentions.filter((m) => !isFeishuBroadcastMention(m));
+  const hasOtherMention = userMentions.some((m) => m.id.open_id !== botOpenId);
 
   if (isDirectMessage) {
     // DM: trigger if any non-bot user is mentioned
     return hasOtherMention;
-  } else {
-    // Group: need to mention both bot and other users
-    const hasBotMention = mentions.some((m) => m.id.open_id === botOpenId);
-    return hasBotMention && hasOtherMention;
   }
-}
-
-/**
- * Extract message body from text (remove @ placeholders)
- */
-export function extractMessageBody(text: string, allMentionKeys: string[]): string {
-  let result = text;
-
-  // Remove all @ placeholders
-  for (const key of allMentionKeys) {
-    result = result.replace(new RegExp(escapeRegExp(key), "g"), "");
-  }
-
-  return result.replace(/\s+/g, " ").trim();
+  // Group: need to mention both bot and other users
+  const hasBotMention = userMentions.some((m) => m.id.open_id === botOpenId);
+  return hasBotMention && hasOtherMention;
 }
 
 /**
  * Format @mention for text message
  */
-export function formatMentionForText(target: MentionTarget): string {
+function formatMentionForText(target: MentionTarget): string {
   return `<at user_id="${target.openId}">${target.name}</at>`;
-}
-
-/**
- * Format @everyone for text message
- */
-export function formatMentionAllForText(): string {
-  return `<at user_id="all">Everyone</at>`;
 }
 
 /**
  * Format @mention for card message (lark_md)
  */
-export function formatMentionForCard(target: MentionTarget): string {
+function formatMentionForCard(target: MentionTarget): string {
   return `<at id=${target.openId}></at>`;
-}
-
-/**
- * Format @everyone for card message
- */
-export function formatMentionAllForCard(): string {
-  return `<at id=all></at>`;
 }
 
 /**

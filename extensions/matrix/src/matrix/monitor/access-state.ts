@@ -1,3 +1,4 @@
+import { mergeDmAllowFromSources } from "openclaw/plugin-sdk/allow-from";
 import { normalizeMatrixAllowList, resolveMatrixAllowListMatch } from "./allowlist.js";
 
 type MatrixCommandAuthorizer = {
@@ -11,7 +12,7 @@ type MatrixMonitorAllowListMatch = {
   matchSource?: "wildcard" | "id" | "prefixed-id" | "prefixed-user";
 };
 
-export type MatrixMonitorAccessState = {
+type MatrixMonitorAccessState = {
   effectiveAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
   effectiveRoomUsers: string[];
@@ -25,19 +26,23 @@ export type MatrixMonitorAccessState = {
 export function resolveMatrixMonitorAccessState(params: {
   allowFrom: Array<string | number>;
   storeAllowFrom: Array<string | number>;
+  dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
   groupAllowFrom: Array<string | number>;
   roomUsers: Array<string | number>;
   senderId: string;
   isRoom: boolean;
 }): MatrixMonitorAccessState {
   const configuredAllowFrom = normalizeMatrixAllowList(params.allowFrom);
-  const effectiveAllowFrom = normalizeMatrixAllowList([
-    ...configuredAllowFrom,
-    ...params.storeAllowFrom,
-  ]);
+  const effectiveAllowFrom = normalizeMatrixAllowList(
+    mergeDmAllowFromSources({
+      allowFrom: configuredAllowFrom,
+      storeAllowFrom: params.storeAllowFrom,
+      dmPolicy: params.dmPolicy,
+    }),
+  );
   const effectiveGroupAllowFrom = normalizeMatrixAllowList(params.groupAllowFrom);
   const effectiveRoomUsers = normalizeMatrixAllowList(params.roomUsers);
-  const commandAllowFrom = params.isRoom ? configuredAllowFrom : effectiveAllowFrom;
+  const commandAllowFrom = params.isRoom ? [] : effectiveAllowFrom;
 
   const directAllowMatch = resolveMatrixAllowListMatch({
     allowList: effectiveAllowFrom,

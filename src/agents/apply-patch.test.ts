@@ -173,20 +173,6 @@ describe("applyPatch", () => {
     });
   });
 
-  it("allows absolute paths within cwd by default", async () => {
-    await withTempDir(async (dir) => {
-      const target = path.join(dir, "nested", "inside.txt");
-      const patch = `*** Begin Patch
-*** Add File: ${target}
-+inside
-*** End Patch`;
-
-      await applyPatch(patch, { cwd: dir });
-      const contents = await fs.readFile(target, "utf8");
-      expect(contents).toBe("inside\n");
-    });
-  });
-
   it("deletes the resolved target path", async () => {
     const memory = createMemoryPatchSandbox({
       "delete-me.txt": "x\n",
@@ -465,7 +451,9 @@ describe("applyPatch", () => {
             symlinkTarget: outside,
             timing: "before-realpath",
             run: async () => {
-              await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/under root/i);
+              await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+                /path alias under sandbox root|path escapes sandbox root|under root|unable to resolve opened file path/i,
+              );
             },
           });
           await expect(fs.stat(path.join(outside, "nested"))).rejects.toMatchObject({

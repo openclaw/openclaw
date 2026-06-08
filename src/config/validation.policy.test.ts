@@ -98,6 +98,35 @@ describe("config validation SecretRef policy guards", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("leaves legacy secretref-env marker migration to doctor", () => {
+    const result = validateConfigObjectRaw({
+      secrets: {
+        defaults: {
+          env: "gateway-env",
+        },
+      },
+      channels: {
+        discord: {
+          token: "secretref-env:DISCORD_BOT_TOKEN",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("does not reject invalid legacy secretref-env markers during raw validation", () => {
+    const result = validateConfigObjectRaw({
+      channels: {
+        discord: {
+          token: "secretref-env:not-valid",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("replaces derived unrecognized-key errors with policy guidance for discord thread binding webhookToken", () => {
     const result = validateConfigObjectRaw({
       channels: {

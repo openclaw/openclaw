@@ -66,22 +66,34 @@ struct ExecAllowlistTests {
         #expect(match?.pattern == entry.pattern)
     }
 
-    @Test func `match ignores basename pattern`() {
+    @Test func `match accepts basename pattern for PATH resolved executable`() {
         let entry = ExecAllowlistEntry(pattern: "rg")
         let resolution = Self.homebrewRGResolution()
         let match = ExecAllowlistMatcher.match(entries: [entry], resolution: resolution)
-        #expect(match == nil)
+        #expect(match?.pattern == entry.pattern)
     }
 
-    @Test func `match ignores basename for relative executable`() {
+    @Test func `match accepts basename glob for PATH resolved executable`() {
+        let entry = ExecAllowlistEntry(pattern: "r?")
+        let resolution = Self.homebrewRGResolution()
+        let match = ExecAllowlistMatcher.match(entries: [entry], resolution: resolution)
+        #expect(match?.pattern == entry.pattern)
+    }
+
+    @Test func `match ignores basename for path selected executable`() {
         let entry = ExecAllowlistEntry(pattern: "echo")
-        let resolution = ExecCommandResolution(
+        let relativeResolution = ExecCommandResolution(
             rawExecutable: "./echo",
             resolvedPath: "/tmp/oc-basename/echo",
             executableName: "echo",
             cwd: "/tmp/oc-basename")
-        let match = ExecAllowlistMatcher.match(entries: [entry], resolution: resolution)
-        #expect(match == nil)
+        let absoluteResolution = ExecCommandResolution(
+            rawExecutable: "/tmp/oc-basename/echo",
+            resolvedPath: "/tmp/oc-basename/echo",
+            executableName: "echo",
+            cwd: "/tmp/oc-basename")
+        #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: relativeResolution) == nil)
+        #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: absoluteResolution) == nil)
     }
 
     @Test func `match is case insensitive`() {
@@ -187,7 +199,11 @@ struct ExecAllowlistTests {
     }
 
     @Test func `resolve for allowlist fails closed on chained line-continued command substitution`() {
-        let command = ["/bin/sh", "-lc", "echo ok && $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-chained-line-cont-subst)"]
+        let command = [
+            "/bin/sh",
+            "-lc",
+            "echo ok && $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-chained-line-cont-subst)",
+        ]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: "echo ok && $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-chained-line-cont-subst)",

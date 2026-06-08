@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -49,18 +48,13 @@ import {
   handleQaAction,
   writeWorkspaceSkill,
 } from "./suite-runtime-agent-tools.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-const tempDirs: string[] = [];
+const { cleanup, makeTempDir } = createTempDirHarness();
+const repoRoot = "/repo/openclaw";
+const gatewayTempRoot = "/tmp/openclaw-qa-runtime";
 
-async function makeTempDir(prefix: string) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+afterEach(cleanup);
 
 describe("qa suite runtime agent tools helpers", () => {
   beforeEach(() => {
@@ -119,12 +113,14 @@ describe("qa suite runtime agent tools helpers", () => {
       callPluginToolsMcp({
         env: {
           gateway: {
+            tempRoot: gatewayTempRoot,
             runtimeEnv: {
               PATH: "/usr/bin",
               OPENCLAW_KEY: "1",
               EMPTY: undefined,
             },
           },
+          repoRoot,
         } as never,
         toolName: "plugin.echo",
         args: { text: "hello" },
@@ -135,8 +131,13 @@ describe("qa suite runtime agent tools helpers", () => {
 
     expect(stdioTransportMock).toHaveBeenCalledWith({
       command: "/usr/bin/node",
-      args: ["--import", "tsx", "src/mcp/plugin-tools-serve.ts"],
+      args: [
+        "--import",
+        expect.stringContaining(path.join("node_modules", "tsx")),
+        path.join(repoRoot, "src", "mcp", "plugin-tools-serve.ts"),
+      ],
       stderr: "pipe",
+      cwd: gatewayTempRoot,
       env: {
         PATH: "/usr/bin",
         OPENCLAW_KEY: "1",
@@ -146,6 +147,33 @@ describe("qa suite runtime agent tools helpers", () => {
       name: "plugin.echo",
       arguments: { text: "hello" },
     });
+    expect(closeMock).toHaveBeenCalled();
+  });
+
+  it("reports available plugin-tools MCP names when the requested tool is missing", async () => {
+    listToolsMock.mockResolvedValueOnce({
+      tools: [{ name: "plugin.beta" }, { name: "plugin.alpha" }] as never[],
+    });
+
+    await expect(
+      callPluginToolsMcp({
+        env: {
+          gateway: {
+            tempRoot: gatewayTempRoot,
+            runtimeEnv: {
+              PATH: "/usr/bin",
+            },
+          },
+          repoRoot,
+        } as never,
+        toolName: "plugin.missing",
+        args: {},
+      }),
+    ).rejects.toThrow(
+      "MCP tool missing: plugin.missing; available tools: plugin.alpha, plugin.beta",
+    );
+
+    expect(callToolMock).not.toHaveBeenCalled();
     expect(closeMock).toHaveBeenCalled();
   });
 });

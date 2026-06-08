@@ -6,6 +6,8 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
   ToolPolicySchema,
+  requireAllowlistAllowFrom,
+  requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "openclaw/plugin-sdk/zod";
 import { bluebubblesChannelConfigUiHints } from "./config-ui-hints.js";
@@ -30,6 +32,12 @@ const bluebubblesActionSchema = z
 const bluebubblesGroupConfigSchema = z.object({
   requireMention: z.boolean().optional(),
   tools: ToolPolicySchema,
+  /**
+   * Free-form directive appended to the system prompt for every turn that
+   * handles a message in this group. Use it for per-group persona tweaks or
+   * behavioral rules (reply-threading, tapback conventions, etc.).
+   */
+  systemPrompt: z.string().optional(),
 });
 
 const bluebubblesNetworkSchema = z
@@ -79,6 +87,7 @@ const bluebubblesAccountSchema = z
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     textChunkLimit: z.number().int().positive().optional(),
+    sendTimeoutMs: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     mediaLocalRoots: z.array(z.string()).optional(),
@@ -86,7 +95,23 @@ const bluebubblesAccountSchema = z
     network: bluebubblesNetworkSchema,
     catchup: bluebubblesCatchupSchema,
     blockStreaming: z.boolean().optional(),
+    /**
+     * When an inbound reply lands without `replyToBody`/`replyToSender` and the
+     * in-memory reply cache misses (e.g., multi-instance deployments sharing
+     * one BlueBubbles account, after process restarts, or after long-lived
+     * cache eviction), opt in to fetching the original message from the
+     * BlueBubbles HTTP API as a best-effort fallback. Off by default.
+     *
+     * Left as `.optional()` rather than `.optional().default(false)` so that a
+     * channel-level `channels.bluebubbles.replyContextApiFallback: true` still
+     * propagates to accounts that omit the field. With a hard per-account
+     * default, the merge would clobber the channel value with `false` and
+     * operators would have to duplicate the flag under every `accounts.<id>`.
+     * (PR #71820 review)
+     */
+    replyContextApiFallback: z.boolean().optional(),
     groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
+    coalesceSameSenderDms: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
     const serverUrl = value.serverUrl?.trim() ?? "";
@@ -100,11 +125,57 @@ const bluebubblesAccountSchema = z
     }
   });
 
+type BlueBubblesAccountConfig = z.infer<typeof bluebubblesAccountSchema>;
+type BlueBubblesConfigWithAccounts = BlueBubblesAccountConfig & {
+  accounts?: Record<string, BlueBubblesAccountConfig>;
+};
+
 export const BlueBubblesConfigSchema = buildCatchallMultiAccountChannelSchema(
   bluebubblesAccountSchema,
-).safeExtend({
-  actions: bluebubblesActionSchema,
-});
+)
+  .safeExtend({
+    actions: bluebubblesActionSchema,
+  })
+  .superRefine((value, ctx) => {
+    const config = value as BlueBubblesConfigWithAccounts;
+    requireOpenAllowFrom({
+      policy: config.dmPolicy,
+      allowFrom: config.allowFrom,
+      ctx,
+      path: ["allowFrom"],
+      message:
+        'channels.bluebubbles.dmPolicy="open" requires channels.bluebubbles.allowFrom to include "*"',
+    });
+    requireAllowlistAllowFrom({
+      policy: config.dmPolicy,
+      allowFrom: config.allowFrom,
+      ctx,
+      path: ["allowFrom"],
+      message:
+        'channels.bluebubbles.dmPolicy="allowlist" requires channels.bluebubbles.allowFrom to contain at least one sender ID',
+    });
+
+    for (const [accountId, account] of Object.entries(config.accounts ?? {})) {
+      const effectivePolicy = account.dmPolicy ?? config.dmPolicy;
+      const effectiveAllowFrom = account.allowFrom ?? config.allowFrom;
+      requireOpenAllowFrom({
+        policy: effectivePolicy,
+        allowFrom: effectiveAllowFrom,
+        ctx,
+        path: ["accounts", accountId, "allowFrom"],
+        message:
+          'channels.bluebubbles.accounts.*.dmPolicy="open" requires channels.bluebubbles.accounts.*.allowFrom (or channels.bluebubbles.allowFrom) to include "*"',
+      });
+      requireAllowlistAllowFrom({
+        policy: effectivePolicy,
+        allowFrom: effectiveAllowFrom,
+        ctx,
+        path: ["accounts", accountId, "allowFrom"],
+        message:
+          'channels.bluebubbles.accounts.*.dmPolicy="allowlist" requires channels.bluebubbles.accounts.*.allowFrom (or channels.bluebubbles.allowFrom) to contain at least one sender ID',
+      });
+    }
+  });
 
 export const BlueBubblesChannelConfigSchema = buildChannelConfigSchema(BlueBubblesConfigSchema, {
   uiHints: bluebubblesChannelConfigUiHints,

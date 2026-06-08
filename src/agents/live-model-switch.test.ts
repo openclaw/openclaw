@@ -25,29 +25,17 @@ vi.mock("./pi-embedded-runner/runs.js", () => ({
     state.consumeEmbeddedRunModelSwitchMock(...args),
 }));
 
-vi.mock("./model-selection.js", () => ({
-  normalizeStoredOverrideModel: (params: { providerOverride?: string; modelOverride?: string }) => {
-    const providerOverride = params.providerOverride?.trim();
-    const modelOverride = params.modelOverride?.trim();
-    if (!providerOverride || !modelOverride) {
-      return {
-        providerOverride,
-        modelOverride,
-      };
-    }
-    const providerPrefix = `${providerOverride.toLowerCase()}/`;
-    return {
-      providerOverride,
-      modelOverride: modelOverride.toLowerCase().startsWith(providerPrefix)
-        ? modelOverride.slice(providerOverride.length + 1).trim() || modelOverride
-        : modelOverride,
-    };
-  },
-  resolveDefaultModelForAgent: (...args: unknown[]) =>
-    state.resolveDefaultModelForAgentMock(...args),
-  resolvePersistedSelectedModelRef: (...args: unknown[]) =>
-    state.resolvePersistedSelectedModelRefMock(...args),
-}));
+vi.mock("./model-selection.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./model-selection.js")>("./model-selection.js");
+  return {
+    normalizeStoredOverrideModel: actual.normalizeStoredOverrideModel,
+    resolveDefaultModelForAgent: (...args: unknown[]) =>
+      state.resolveDefaultModelForAgentMock(...args),
+    resolvePersistedSelectedModelRef: (...args: unknown[]) =>
+      state.resolvePersistedSelectedModelRefMock(...args),
+  };
+});
 
 vi.mock("../config/sessions/store.js", () => ({
   loadSessionStore: (...args: unknown[]) => state.loadSessionStoreMock(...args),
@@ -68,6 +56,23 @@ let mod: typeof import("./live-model-switch.js");
 
 async function loadModule() {
   return mod;
+}
+
+type ShouldSwitchParams = Parameters<
+  typeof import("./live-model-switch.js").shouldSwitchToLiveModel
+>[0];
+
+function makeShouldSwitchParams(overrides: Partial<ShouldSwitchParams> = {}): ShouldSwitchParams {
+  return {
+    cfg: { session: { store: "/tmp/custom-store.json" } },
+    sessionKey: "main",
+    agentId: "reply",
+    defaultProvider: "anthropic",
+    defaultModel: "claude-opus-4-6",
+    currentProvider: "anthropic",
+    currentModel: "claude-opus-4-6",
+    ...overrides,
+  };
 }
 
 describe("live model switch", () => {
@@ -403,15 +408,7 @@ describe("live model switch", () => {
 
       const { shouldSwitchToLiveModel } = await loadModule();
 
-      const result = shouldSwitchToLiveModel({
-        cfg: { session: { store: "/tmp/custom-store.json" } },
-        sessionKey: "main",
-        agentId: "reply",
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-6",
-        currentProvider: "anthropic",
-        currentModel: "claude-opus-4-6",
-      });
+      const result = shouldSwitchToLiveModel(makeShouldSwitchParams());
 
       expect(result).toEqual({
         provider: "openai",
@@ -431,15 +428,7 @@ describe("live model switch", () => {
 
       const { shouldSwitchToLiveModel } = await loadModule();
 
-      const result = shouldSwitchToLiveModel({
-        cfg: { session: { store: "/tmp/custom-store.json" } },
-        sessionKey: "main",
-        agentId: "reply",
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-6",
-        currentProvider: "anthropic",
-        currentModel: "claude-opus-4-6",
-      });
+      const result = shouldSwitchToLiveModel(makeShouldSwitchParams());
 
       expect(result).toBeUndefined();
     });
@@ -455,15 +444,7 @@ describe("live model switch", () => {
 
       const { shouldSwitchToLiveModel } = await loadModule();
 
-      const result = shouldSwitchToLiveModel({
-        cfg: { session: { store: "/tmp/custom-store.json" } },
-        sessionKey: "main",
-        agentId: "reply",
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-6",
-        currentProvider: "anthropic",
-        currentModel: "claude-opus-4-6",
-      });
+      const result = shouldSwitchToLiveModel(makeShouldSwitchParams());
 
       expect(result).toBeUndefined();
     });
@@ -484,15 +465,7 @@ describe("live model switch", () => {
 
       const { shouldSwitchToLiveModel } = await loadModule();
 
-      const result = shouldSwitchToLiveModel({
-        cfg: { session: { store: "/tmp/custom-store.json" } },
-        sessionKey: "main",
-        agentId: "reply",
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-6",
-        currentProvider: "anthropic",
-        currentModel: "claude-opus-4-6",
-      });
+      const result = shouldSwitchToLiveModel(makeShouldSwitchParams());
 
       expect(result).toBeUndefined();
       // Give the fire-and-forget clearLiveModelSwitchPending a tick to resolve
@@ -504,15 +477,7 @@ describe("live model switch", () => {
     it("returns undefined when sessionKey is missing", async () => {
       const { shouldSwitchToLiveModel } = await loadModule();
 
-      const result = shouldSwitchToLiveModel({
-        cfg: { session: { store: "/tmp/custom-store.json" } },
-        sessionKey: undefined,
-        agentId: "reply",
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-6",
-        currentProvider: "anthropic",
-        currentModel: "claude-opus-4-6",
-      });
+      const result = shouldSwitchToLiveModel(makeShouldSwitchParams({ sessionKey: undefined }));
 
       expect(result).toBeUndefined();
     });

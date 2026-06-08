@@ -5,6 +5,12 @@ type QaWebSession = {
   browser: Browser;
   context: BrowserContext;
   page: Page;
+  diagnostics: QaWebDiagnosticEntry[];
+};
+
+type QaWebDiagnosticEntry = {
+  kind: "console" | "pageerror" | "requestfailed";
+  text: string;
 };
 
 type QaWebOpenPageParams = {
@@ -44,6 +50,18 @@ type QaWebEvaluateParams = {
 
 const sessions = new Map<string, QaWebSession>();
 const DEFAULT_WEB_TIMEOUT_MS = 20_000;
+const MAX_DIAGNOSTIC_ENTRIES = 50;
+const MAX_DIAGNOSTIC_TEXT_CHARS = 2_000;
+
+function appendDiagnostic(diagnostics: QaWebDiagnosticEntry[], entry: QaWebDiagnosticEntry): void {
+  diagnostics.push({
+    kind: entry.kind,
+    text: entry.text.slice(0, MAX_DIAGNOSTIC_TEXT_CHARS),
+  });
+  if (diagnostics.length > MAX_DIAGNOSTIC_ENTRIES) {
+    diagnostics.splice(0, diagnostics.length - MAX_DIAGNOSTIC_ENTRIES);
+  }
+}
 
 function resolveTimeoutMs(timeoutMs: number | undefined, fallbackMs = DEFAULT_WEB_TIMEOUT_MS) {
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
@@ -71,12 +89,31 @@ export async function qaWebOpenPage(params: QaWebOpenPageParams) {
     viewport: params.viewport ?? { width: 1440, height: 1080 },
   });
   const page = await context.newPage();
+  const diagnostics: QaWebDiagnosticEntry[] = [];
+  page.on("console", (message) => {
+    appendDiagnostic(diagnostics, {
+      kind: "console",
+      text: `[${message.type()}] ${message.text()}`,
+    });
+  });
+  page.on("pageerror", (error) => {
+    appendDiagnostic(diagnostics, {
+      kind: "pageerror",
+      text: error instanceof Error ? (error.stack ?? error.message) : String(error),
+    });
+  });
+  page.on("requestfailed", (request) => {
+    appendDiagnostic(diagnostics, {
+      kind: "requestfailed",
+      text: `${request.method()} ${request.url()} ${request.failure()?.errorText ?? "failed"}`,
+    });
+  });
   await page.goto(params.url, {
     waitUntil: "domcontentloaded",
     timeout: timeoutMs,
   });
   const pageId = randomUUID();
-  sessions.set(pageId, { browser, context, page });
+  sessions.set(pageId, { browser, context, page, diagnostics });
   return {
     pageId,
     url: page.url(),
@@ -93,7 +130,7 @@ export async function qaWebWait(params: QaWebWaitParams) {
   }
   if (params.text) {
     await session.page.waitForFunction(
-      (expected) => document.body?.innerText?.toLowerCase().includes(expected.toLowerCase()),
+      (expected) => document.body?.textContent?.toLowerCase().includes(expected.toLowerCase()),
       params.text,
       { timeout: timeoutMs },
     );
@@ -119,7 +156,7 @@ export async function qaWebSnapshot(params: QaWebSnapshotParams) {
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
   const body = session.page.locator("body");
   await body.waitFor({ timeout: timeoutMs });
-  const text = await body.innerText({ timeout: timeoutMs });
+  const text = (await body.textContent({ timeout: timeoutMs })) ?? "";
   const maxChars =
     typeof params.maxChars === "number" && Number.isFinite(params.maxChars)
       ? Math.max(1, Math.floor(params.maxChars))
@@ -128,6 +165,7 @@ export async function qaWebSnapshot(params: QaWebSnapshotParams) {
     url: session.page.url(),
     title: await session.page.title().catch(() => ""),
     text: maxChars ? text.slice(0, maxChars) : text,
+    diagnostics: [...session.diagnostics],
   };
 }
 

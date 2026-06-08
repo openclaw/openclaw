@@ -1,5 +1,5 @@
-import * as http from "http";
-import * as Lark from "@larksuiteoapi/node-sdk";
+import * as http from "node:http";
+import type * as Lark from "@larksuiteoapi/node-sdk";
 import {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,

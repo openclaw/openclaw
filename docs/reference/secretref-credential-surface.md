@@ -4,10 +4,8 @@ read_when:
   - Verifying SecretRef credential coverage
   - Auditing whether a credential is eligible for `secrets configure` or `secrets apply`
   - Verifying why a credential is outside the supported surface
-title: "SecretRef Credential Surface"
+title: "SecretRef credential surface"
 ---
-
-# SecretRef credential surface
 
 This page defines the canonical SecretRef credential surface.
 
@@ -37,10 +35,12 @@ Scope intent:
 - `models.providers.*.request.tls.passphrase`
 - `skills.entries.*.apiKey`
 - `agents.defaults.memorySearch.remote.apiKey`
+- `agents.list[].tts.providers.*.apiKey`
 - `agents.list[].memorySearch.remote.apiKey`
 - `talk.providers.*.apiKey`
 - `messages.tts.providers.*.apiKey`
 - `tools.web.fetch.firecrawl.apiKey`
+- `plugins.entries.acpx.config.mcpServers.*.env.*`
 - `plugins.entries.brave.config.webSearch.apiKey`
 - `plugins.entries.exa.config.webSearch.apiKey`
 - `plugins.entries.google.config.webSearch.apiKey`
@@ -50,6 +50,10 @@ Scope intent:
 - `plugins.entries.firecrawl.config.webSearch.apiKey`
 - `plugins.entries.minimax.config.webSearch.apiKey`
 - `plugins.entries.tavily.config.webSearch.apiKey`
+- `plugins.entries.voice-call.config.realtime.providers.*.apiKey`
+- `plugins.entries.voice-call.config.streaming.providers.*.apiKey`
+- `plugins.entries.voice-call.config.tts.providers.*.apiKey`
+- `plugins.entries.voice-call.config.twilio.authToken`
 - `tools.web.search.apiKey`
 - `gateway.auth.password`
 - `gateway.auth.token`
@@ -86,6 +90,8 @@ Scope intent:
 - `channels.feishu.accounts.*.appSecret`
 - `channels.feishu.accounts.*.encryptKey`
 - `channels.feishu.accounts.*.verificationToken`
+- `channels.qqbot.clientSecret`
+- `channels.qqbot.accounts.*.clientSecret`
 - `channels.msteams.appPassword`
 - `channels.mattermost.botToken`
 - `channels.mattermost.accounts.*.botToken`
@@ -116,6 +122,7 @@ Notes:
 - Auth-profile plan targets require `agentId`.
 - Plan entries target `profiles.*.key` / `profiles.*.token` and write sibling refs (`keyRef` / `tokenRef`).
 - Auth-profile refs are included in runtime resolution and audit coverage.
+- In `openclaw.json`, SecretRefs must use structured objects such as `{"source":"env","provider":"default","id":"DISCORD_BOT_TOKEN"}`. Legacy `secretref-env:<ENV_VAR>` marker strings are rejected on SecretRef credential paths; run `openclaw doctor --fix` to migrate valid markers.
 - OAuth policy guard: `auth.profiles.<id>.mode = "oauth"` cannot be combined with SecretRef inputs for that profile. Startup/reload and auth-profile resolution fail fast when this policy is violated.
 - For SecretRef-managed model providers, generated `agents/*/agent/models.json` entries persist non-secret markers (not resolved secret values) for `apiKey`/header surfaces.
 - Marker persistence is source-authoritative: OpenClaw writes markers from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
@@ -146,3 +153,8 @@ Out-of-scope credentials include:
 Rationale:
 
 - These credentials are minted, rotated, session-bearing, or OAuth-durable classes that do not fit read-only external SecretRef resolution.
+
+## Related
+
+- [Secrets management](/gateway/secrets)
+- [Auth credential semantics](/auth-credential-semantics)

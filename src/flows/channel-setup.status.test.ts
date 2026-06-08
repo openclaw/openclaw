@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  makeCatalogEntry,
+  makeChannelSetupEntries,
+  makeMeta,
+} from "./channel-setup.test-helpers.js";
 
-type ChannelMeta = import("../channels/plugins/types.core.js").ChannelMeta;
-type ChannelPluginCatalogEntry = import("../channels/plugins/catalog.js").ChannelPluginCatalogEntry;
 type ListChatChannels = typeof import("../channels/chat-meta.js").listChatChannels;
 type ResolveChannelSetupEntries =
   typeof import("../commands/channel-setup/discovery.js").resolveChannelSetupEntries;
@@ -9,41 +12,12 @@ type FormatChannelPrimerLine = typeof import("../channels/registry.js").formatCh
 type FormatChannelSelectionLine =
   typeof import("../channels/registry.js").formatChannelSelectionLine;
 type IsChannelConfigured = typeof import("../config/channel-configured.js").isChannelConfigured;
+type ChannelSetupStatusModule = typeof import("./channel-setup.status.js");
 type NoteChannelPrimerChannels = Parameters<
   typeof import("./channel-setup.status.js").noteChannelPrimer
 >[1];
 
-function makeMeta(id: string, label: string, overrides: Partial<ChannelMeta> = {}): ChannelMeta {
-  return {
-    id: id as ChannelMeta["id"],
-    label,
-    selectionLabel: overrides.selectionLabel ?? label,
-    docsPath: overrides.docsPath ?? `/channels/${id}`,
-    blurb: overrides.blurb ?? "",
-    ...overrides,
-  };
-}
-
-function makeCatalogEntry(
-  id: string,
-  label: string,
-  overrides: Partial<ChannelPluginCatalogEntry> = {},
-): ChannelPluginCatalogEntry {
-  return {
-    id,
-    pluginId: overrides.pluginId ?? id,
-    meta: makeMeta(id, label, overrides.meta),
-    install: overrides.install ?? { npmSpec: `@openclaw/${id}` },
-    ...overrides,
-  };
-}
-
-const listChatChannels = vi.hoisted(() =>
-  vi.fn<ListChatChannels>(() => [
-    makeMeta("discord", "Discord"),
-    makeMeta("bluebubbles", "BlueBubbles"),
-  ]),
-);
+const listChatChannels = vi.hoisted(() => vi.fn<ListChatChannels>(() => []));
 const resolveChannelSetupEntries = vi.hoisted(() =>
   vi.fn<ResolveChannelSetupEntries>(() => ({
     entries: [],
@@ -72,6 +46,7 @@ vi.mock("../channels/registry.js", () => ({
     meta: Parameters<FormatChannelSelectionLine>[0],
     docsLink: Parameters<FormatChannelSelectionLine>[1],
   ) => formatChannelSelectionLine(meta, docsLink),
+  normalizeAnyChannelId: (channelId?: string) => channelId?.trim().toLowerCase() ?? null,
 }));
 
 vi.mock("../commands/channel-setup/discovery.js", () => ({
@@ -88,32 +63,42 @@ vi.mock("../config/channel-configured.js", () => ({
   ) => isChannelConfigured(cfg, channelId),
 }));
 
-import {
-  collectChannelStatus,
-  noteChannelPrimer,
-  resolveChannelSelectionNoteLines,
-  resolveChannelSetupSelectionContributions,
-} from "./channel-setup.status.js";
+// Avoid touching the real `extensions/<id>` tree from unit tests. Status
+// rendering for installable catalog entries asks `bundled-sources` whether
+// a plugin already lives in-tree to decide between
+// "install plugin to enable" vs "bundled · enable to use". For these tests
+// we want the installable-catalog branch unconditionally, so we stub the
+// bundled lookup to "nothing is bundled".
+vi.mock("../plugins/bundled-sources.js", () => ({
+  resolveBundledPluginSources: () => new Map(),
+  findBundledPluginSourceInMap: () => undefined,
+}));
+
+let collectChannelStatus: ChannelSetupStatusModule["collectChannelStatus"];
+let noteChannelPrimer: ChannelSetupStatusModule["noteChannelPrimer"];
+let resolveChannelSelectionNoteLines: ChannelSetupStatusModule["resolveChannelSelectionNoteLines"];
+let resolveChannelSetupSelectionContributions: ChannelSetupStatusModule["resolveChannelSetupSelectionContributions"];
 
 describe("resolveChannelSetupSelectionContributions", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
     listChatChannels.mockReturnValue([
       makeMeta("discord", "Discord"),
       makeMeta("bluebubbles", "BlueBubbles"),
     ]);
-    resolveChannelSetupEntries.mockReturnValue({
-      entries: [],
-      installedCatalogEntries: [],
-      installableCatalogEntries: [],
-      installedCatalogById: new Map(),
-      installableCatalogById: new Map(),
-    });
+    resolveChannelSetupEntries.mockReturnValue(makeChannelSetupEntries());
     formatChannelPrimerLine.mockImplementation(
       (meta: { label: string; blurb: string }) => `${meta.label}: ${meta.blurb}`,
     );
     formatChannelSelectionLine.mockImplementation((meta) => `${meta.label} — ${meta.blurb}`);
     isChannelConfigured.mockReturnValue(false);
+    ({
+      collectChannelStatus,
+      noteChannelPrimer,
+      resolveChannelSelectionNoteLines,
+      resolveChannelSetupSelectionContributions,
+    } = await import("./channel-setup.status.js"));
   });
 
   it("sorts channels alphabetically by picker label", () => {
@@ -247,13 +232,12 @@ describe("resolveChannelSetupSelectionContributions", () => {
 
   it("sanitizes channel labels in status note lines", async () => {
     listChatChannels.mockReturnValue([makeMeta("discord", "Discord\u001B[31m\nCore\u0007")]);
-    resolveChannelSetupEntries.mockReturnValue({
-      entries: [],
-      installedCatalogEntries: [makeCatalogEntry("matrix", "Matrix\u001B[2K\nPlugin\u0007")],
-      installableCatalogEntries: [makeCatalogEntry("zalo", "Zalo\u001B[2K\nPlugin\u0007")],
-      installedCatalogById: new Map(),
-      installableCatalogById: new Map(),
-    });
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        installedCatalogEntries: [makeCatalogEntry("matrix", "Matrix\u001B[2K\nPlugin\u0007")],
+        installableCatalogEntries: [makeCatalogEntry("zalo", "Zalo\u001B[2K\nPlugin\u0007")],
+      }),
+    );
 
     const summary = await collectChannelStatus({
       cfg: {} as never,
@@ -297,27 +281,25 @@ describe("resolveChannelSetupSelectionContributions", () => {
   });
 
   it("sanitizes channel metadata before selection notes", () => {
-    resolveChannelSetupEntries.mockReturnValue({
-      entries: [
-        {
-          id: "zalo",
-          meta: {
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [
+          {
             id: "zalo",
-            label: "Zalo\u001B[31m\nBot\u0007",
-            selectionLabel: "Zalo",
-            docsPath: "/channels/zalo",
-            docsLabel: "Docs\u001B[2K\nLabel",
-            blurb: "Setup\u001B[2K\nhelp\u0007",
-            selectionDocsPrefix: "Docs\u001B[2K\nPrefix",
-            selectionExtras: ["Extra\u001B[2K\nOne", "\u001B[31m\u0007"],
+            meta: {
+              id: "zalo",
+              label: "Zalo\u001B[31m\nBot\u0007",
+              selectionLabel: "Zalo",
+              docsPath: "/channels/zalo",
+              docsLabel: "Docs\u001B[2K\nLabel",
+              blurb: "Setup\u001B[2K\nhelp\u0007",
+              selectionDocsPrefix: "Docs\u001B[2K\nPrefix",
+              selectionExtras: ["Extra\u001B[2K\nOne", "\u001B[31m\u0007"],
+            },
           },
-        },
-      ],
-      installedCatalogEntries: [],
-      installableCatalogEntries: [],
-      installedCatalogById: new Map(),
-      installableCatalogById: new Map(),
-    });
+        ],
+      }),
+    );
 
     const lines = resolveChannelSelectionNoteLines({
       cfg: {} as never,

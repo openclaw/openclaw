@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { resolvePluginWebSearchProviders } from "./web-search-providers.runtime.js";
 
 function hasConfiguredCredentialValue(value: unknown): boolean {
   if (typeof value === "string") {
@@ -43,7 +42,7 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
   if (!env) {
     return false;
   }
-  return loadPluginManifestRegistry({
+  return loadManifestMetadataSnapshot({
     config: params.config,
     env,
   }).plugins.some((plugin) => {
@@ -73,29 +72,13 @@ export function hasConfiguredWebSearchCredential(params: {
   const searchConfig =
     params.searchConfig ??
     (params.config.tools?.web?.search as Record<string, unknown> | undefined);
-  if (
-    !hasConfiguredSearchCredentialCandidate(searchConfig) &&
-    !hasConfiguredPluginWebSearchCandidate(params.config) &&
-    !hasManifestWebSearchEnvCredentialCandidate({
+  return (
+    hasConfiguredSearchCredentialCandidate(searchConfig) ||
+    hasConfiguredPluginWebSearchCandidate(params.config) ||
+    hasManifestWebSearchEnvCredentialCandidate({
       config: params.config,
       env: params.env,
       origin: params.origin,
     })
-  ) {
-    return false;
-  }
-  return resolvePluginWebSearchProviders({
-    config: params.config,
-    env: params.env,
-    bundledAllowlistCompat: params.bundledAllowlistCompat ?? false,
-    origin: params.origin,
-  }).some((provider) => {
-    const configuredCredential =
-      provider.getConfiguredCredentialValue?.(params.config) ??
-      provider.getCredentialValue(searchConfig);
-    if (hasConfiguredCredentialValue(configuredCredential)) {
-      return true;
-    }
-    return provider.envVars.some((envVar) => hasConfiguredCredentialValue(params.env?.[envVar]));
-  });
+  );
 }

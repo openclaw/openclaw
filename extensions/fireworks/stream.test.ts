@@ -55,8 +55,26 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
     ).toMatchObject({ thinking: { type: "disabled" } });
   });
 
+  it("forces thinking disabled for Fireworks Kimi k2.6 models", () => {
+    expect(
+      capturePayload({
+        provider: "fireworks",
+        api: "openai-completions",
+        modelId: "accounts/fireworks/models/kimi-k2p6",
+      }),
+    ).toMatchObject({ thinking: { type: "disabled" } });
+
+    expect(
+      capturePayload({
+        provider: "fireworks",
+        api: "openai-completions",
+        modelId: "accounts/fireworks/routers/kimi-k2.6-turbo",
+      }),
+    ).toMatchObject({ thinking: { type: "disabled" } });
+  });
+
   it("strips reasoning fields when disabling Fireworks Kimi thinking", () => {
-    const payload = capturePayload({
+    const k2p5Payload = capturePayload({
       provider: "fireworks",
       api: "openai-completions",
       modelId: "accounts/fireworks/models/kimi-k2p5",
@@ -66,8 +84,19 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
         reasoningEffort: "low",
       },
     });
+    const k2p6Payload = capturePayload({
+      provider: "fireworks",
+      api: "openai-completions",
+      modelId: "accounts/fireworks/models/kimi-k2p6",
+      initialPayload: {
+        reasoning_effort: "low",
+        reasoning: { effort: "low" },
+        reasoningEffort: "low",
+      },
+    });
 
-    expect(payload).toEqual({ thinking: { type: "disabled" } });
+    expect(k2p5Payload).toEqual({ thinking: { type: "disabled" } });
+    expect(k2p6Payload).toEqual({ thinking: { type: "disabled" } });
   });
 
   it("passes sanitized payloads to caller onPayload hooks", () => {

@@ -96,7 +96,7 @@ steps:
                 - ref: env
             - set: managed
               value:
-                expr: "jobs.find((job) => job.name === 'Memory Dreaming Promotion' && job.payload?.kind === 'systemEvent' && job.payload.text === '__openclaw_memory_core_short_term_promotion_dream__')"
+                expr: "findManagedDreamingCronJob(jobs)"
             - assert:
                 expr: "Boolean(managed?.id)"
                 message: managed dreaming cron job missing after enablement
@@ -249,7 +249,7 @@ steps:
                   afterTs:
                     ref: cronRunStartedAt
                   timeoutMs:
-                    expr: liveTurnTimeoutMs(env, 90000)
+                    expr: liveTurnTimeoutMs(env, 180000)
             - assert:
                 expr: "finishedRun.status === 'ok'"
                 message:
@@ -260,7 +260,7 @@ steps:
                 - lambda:
                     async: true
                     expr: "(async () => { const status = await readDoctorMemoryStatus(env); const lightReport = await fs.readFile(lightReportPath, 'utf8').catch(() => ''); const remReport = await fs.readFile(remReportPath, 'utf8').catch(() => ''); const promotedMemory = await fs.readFile(memoryPath, 'utf8').catch(() => ''); if (!lightReport.includes('# Light Sleep')) return undefined; if (!remReport.includes('# REM Sleep')) return undefined; if (!promotedMemory.includes(config.expectedNeedle)) return undefined; if (status.dreaming?.phases?.deep?.managedCronPresent !== true) return undefined; if ((status.dreaming?.promotedTotal ?? 0) < 1) return undefined; return { status, lightReport, remReport, promotedMemory }; })()"
-                - expr: liveTurnTimeoutMs(env, 90000)
+                - expr: liveTurnTimeoutMs(env, 180000)
                 - 1000
           finally:
             - call: patchConfig

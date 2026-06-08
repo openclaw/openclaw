@@ -1,5 +1,5 @@
 import type { SecretRefSource } from "../config/types.secrets.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
 import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 
 export const MINIMAX_OAUTH_MARKER = "minimax-oauth";
@@ -17,8 +17,11 @@ const AWS_SDK_ENV_MARKERS = new Set([
 ]);
 const CORE_NON_SECRET_API_KEY_MARKERS = [
   CUSTOM_LOCAL_AUTH_MARKER,
+  OLLAMA_LOCAL_AUTH_MARKER,
   NON_ENV_SECRETREF_MARKER,
 ] as const;
+let knownEnvApiKeyMarkersCache: Set<string> | undefined;
+let knownNonSecretApiKeyMarkersCache: string[] | undefined;
 
 // Legacy marker names kept for backward compatibility with existing models.json files.
 const LEGACY_ENV_API_KEY_MARKERS = [
@@ -32,19 +35,34 @@ const LEGACY_ENV_API_KEY_MARKERS = [
   "MINIMAX_CODE_PLAN_KEY",
 ];
 
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+}
+
 function listKnownEnvApiKeyMarkers(): Set<string> {
-  return new Set([
+  knownEnvApiKeyMarkersCache ??= new Set([
     ...listKnownProviderEnvApiKeyNames(),
     ...LEGACY_ENV_API_KEY_MARKERS,
     ...AWS_SDK_ENV_MARKERS,
   ]);
+  return knownEnvApiKeyMarkersCache;
 }
 
 export function listKnownNonSecretApiKeyMarkers(): string[] {
-  const bundledMarkers = loadPluginManifestRegistry({ cache: true }).plugins.flatMap((plugin) =>
-    plugin.origin === "bundled" ? (plugin.nonSecretAuthMarkers ?? []) : [],
-  );
-  return [...new Set([...CORE_NON_SECRET_API_KEY_MARKERS, ...bundledMarkers])];
+  knownNonSecretApiKeyMarkersCache ??= [
+    ...new Set([
+      ...CORE_NON_SECRET_API_KEY_MARKERS,
+      ...listOpenClawPluginManifestMetadata().flatMap((plugin) =>
+        plugin.origin === "bundled"
+          ? normalizeStringList(plugin.manifest.nonSecretAuthMarkers)
+          : [],
+      ),
+    ]),
+  ];
+  return [...knownNonSecretApiKeyMarkersCache];
 }
 
 export function isAwsSdkAuthMarker(value: string): boolean {

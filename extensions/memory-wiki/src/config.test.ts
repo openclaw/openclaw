@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import path from "node:path";
 import AjvPkg from "ajv";
+import type { JsonSchemaObject } from "openclaw/plugin-sdk/config-schema";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_WIKI_RENDER_MODE,
@@ -13,7 +15,7 @@ import {
 function compileManifestConfigSchema() {
   const manifest = JSON.parse(
     fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
-  ) as { configSchema: Record<string, unknown> };
+  ) as { configSchema: JsonSchemaObject };
   const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
   const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
   return ajv.compile(manifest.configSchema);
@@ -44,7 +46,7 @@ describe("resolveMemoryWikiConfig", () => {
     );
 
     expect(config.vaultMode).toBe("bridge");
-    expect(config.vault.path).toBe("/Users/tester/vaults/wiki");
+    expect(config.vault.path).toBe(path.join("/Users/tester", "vaults", "wiki"));
     expect(config.vault.renderMode).toBe("obsidian");
   });
 

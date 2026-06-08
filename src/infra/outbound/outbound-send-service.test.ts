@@ -1,4 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 
 const getDefaultMediaLocalRootsMock = vi.hoisted(() => vi.fn(() => []));
@@ -87,6 +93,8 @@ vi.mock("../../config/sessions.js", () => ({
 }));
 
 type OutboundSendServiceModule = typeof import("./outbound-send-service.js");
+type ExecuteSendInput = Parameters<OutboundSendServiceModule["executeSendAction"]>[0];
+type ExecuteSendContext = ExecuteSendInput["ctx"];
 
 let executePollAction: OutboundSendServiceModule["executePollAction"];
 let executeSendAction: OutboundSendServiceModule["executeSendAction"];
@@ -114,7 +122,7 @@ describe("executeSendAction", () => {
     }>,
   ) {
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
-      expect.objectContaining(expected),
+      expect.objectContaining({ ...expected, config: {} }),
     );
   }
 
@@ -145,11 +153,35 @@ describe("executeSendAction", () => {
     });
   }
 
+  function createPluginMediaSendContext(
+    overrides: Partial<ExecuteSendContext>,
+  ): ExecuteSendContext {
+    return {
+      cfg: {},
+      channel: "demo-outbound",
+      params: { media: "/tmp/host.png" },
+      sessionKey: "agent:main:directchat:group:ops",
+      dryRun: false,
+      ...overrides,
+    } as ExecuteSendContext;
+  }
+
+  async function executePluginMediaSend(ctx: Partial<ExecuteSendContext>) {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    await executeSendAction({
+      ctx: createPluginMediaSendContext(ctx),
+      to: "channel:123",
+      message: "hello",
+    });
+  }
+
   beforeAll(async () => {
     ({ executePollAction, executeSendAction } = await import("./outbound-send-service.js"));
   });
 
   beforeEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
     mocks.dispatchChannelMessageAction.mockClear();
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();
@@ -205,7 +237,7 @@ describe("executeSendAction", () => {
         cfg: {},
         channel: "demo-outbound",
         params: {},
-        sessionKey: "agent:main:whatsapp:group:ops",
+        sessionKey: "agent:main:directchat:group:ops",
         requesterSenderId: "attacker",
         dryRun: false,
       },
@@ -234,7 +266,7 @@ describe("executeSendAction", () => {
         cfg: {},
         channel: "demo-outbound",
         params: {},
-        sessionKey: "agent:main:whatsapp:group:ops",
+        sessionKey: "agent:main:directchat:group:ops",
         requesterSenderName: "Alice",
         requesterSenderUsername: "alice_u",
         requesterSenderE164: "+15551234567",
@@ -267,7 +299,7 @@ describe("executeSendAction", () => {
         cfg: {},
         channel: "demo-outbound",
         params: {},
-        sessionKey: "agent:main:whatsapp:group:ops",
+        sessionKey: "agent:main:directchat:group:ops",
         requesterAccountId: "source-account",
         requesterSenderId: "attacker",
         accountId: "destination-account",
@@ -279,7 +311,7 @@ describe("executeSendAction", () => {
 
     expect(mocks.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        requesterSessionKey: "agent:main:whatsapp:group:ops",
+        requesterSessionKey: "agent:main:directchat:group:ops",
         requesterAccountId: "source-account",
         requesterSenderId: "attacker",
         accountId: "destination-account",
@@ -288,19 +320,8 @@ describe("executeSendAction", () => {
   });
 
   it("forwards requesterSenderId into outbound media access resolution", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
-
-    await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: { media: "/tmp/host.png" },
-        sessionKey: "agent:main:whatsapp:group:ops",
-        requesterSenderId: "attacker",
-        dryRun: false,
-      },
-      to: "channel:123",
-      message: "hello",
+    await executePluginMediaSend({
+      requesterSenderId: "attacker",
     });
 
     expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
@@ -311,21 +332,10 @@ describe("executeSendAction", () => {
   });
 
   it("forwards non-id requester sender fields into outbound media access resolution", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
-
-    await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: { media: "/tmp/host.png" },
-        sessionKey: "agent:main:whatsapp:group:ops",
-        requesterSenderName: "Alice",
-        requesterSenderUsername: "alice_u",
-        requesterSenderE164: "+15551234567",
-        dryRun: false,
-      },
-      to: "channel:123",
-      message: "hello",
+    await executePluginMediaSend({
+      requesterSenderName: "Alice",
+      requesterSenderUsername: "alice_u",
+      requesterSenderE164: "+15551234567",
     });
 
     expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
@@ -338,75 +348,42 @@ describe("executeSendAction", () => {
   });
 
   it("keeps requester session channel authoritative for media policy", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
-
-    await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: { media: "/tmp/host.png" },
-        sessionKey: "agent:main:whatsapp:group:ops",
-        requesterSenderId: "attacker",
-        dryRun: false,
-      },
-      to: "channel:123",
-      message: "hello",
+    await executePluginMediaSend({
+      requesterSenderId: "attacker",
     });
 
     expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:main:whatsapp:group:ops",
+        sessionKey: "agent:main:directchat:group:ops",
         messageProvider: undefined,
       }),
     );
   });
 
   it("uses requester account for media policy when session context is present", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
-
-    await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: { media: "/tmp/host.png" },
-        sessionKey: "agent:main:whatsapp:group:ops",
-        requesterAccountId: "source-account",
-        requesterSenderId: "attacker",
-        accountId: "destination-account",
-        dryRun: false,
-      },
-      to: "channel:123",
-      message: "hello",
+    await executePluginMediaSend({
+      requesterAccountId: "source-account",
+      requesterSenderId: "attacker",
+      accountId: "destination-account",
     });
 
     expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:main:whatsapp:group:ops",
+        sessionKey: "agent:main:directchat:group:ops",
         accountId: "source-account",
       }),
     );
   });
 
   it("falls back to destination account for media policy when requester account is missing", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
-
-    await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: { media: "/tmp/host.png" },
-        sessionKey: "agent:main:whatsapp:group:ops",
-        requesterSenderId: "attacker",
-        accountId: "destination-account",
-        dryRun: false,
-      },
-      to: "channel:123",
-      message: "hello",
+    await executePluginMediaSend({
+      requesterSenderId: "attacker",
+      accountId: "destination-account",
     });
 
     expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:main:whatsapp:group:ops",
+        sessionKey: "agent:main:directchat:group:ops",
         accountId: "destination-account",
       }),
     );
@@ -426,7 +403,7 @@ describe("executeSendAction", () => {
         cfg: {},
         channel: "demo-outbound",
         params: {},
-        sessionKey: "agent:main:whatsapp:group:ops",
+        sessionKey: "agent:main:directchat:group:ops",
         requesterSenderId: "attacker",
         accountId: "destination-account",
         dryRun: false,
@@ -437,7 +414,7 @@ describe("executeSendAction", () => {
 
     expect(mocks.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        requesterSessionKey: "agent:main:whatsapp:group:ops",
+        requesterSessionKey: "agent:main:directchat:group:ops",
         requesterAccountId: "destination-account",
       }),
     );
@@ -615,6 +592,92 @@ describe("executeSendAction", () => {
           token: "tok",
           timeoutMs: 5000,
         }),
+      }),
+    );
+  });
+
+  it("routes prepared plugin send payloads through core best-effort delivery by default", async () => {
+    const prepareSendPayload = vi.fn(({ payload }) => ({
+      ...payload,
+      channelData: { prepared: true },
+    }));
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        prepareSendPayload,
+        handleAction: async () => ({ content: [], details: { ok: true } }),
+      },
+      outbound: { deliveryMode: "direct" },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
+    mocks.sendMessage.mockResolvedValue({
+      channel: "discord",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "hello" },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(prepareSendPayload).toHaveBeenCalled();
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        queuePolicy: "best_effort",
+        payloads: [expect.objectContaining({ channelData: { prepared: true } })],
+      }),
+    );
+  });
+
+  it("uses required core delivery only when the send action opts out of best-effort", async () => {
+    const prepareSendPayload = vi.fn(({ payload }) => ({
+      ...payload,
+      channelData: { prepared: true },
+    }));
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        prepareSendPayload,
+        handleAction: async () => ({ content: [], details: { ok: true } }),
+      },
+      outbound: { deliveryMode: "direct" },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
+    mocks.sendMessage.mockResolvedValue({
+      channel: "discord",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "hello" },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+      bestEffort: false,
+    });
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        queuePolicy: "required",
       }),
     );
   });

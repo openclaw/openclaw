@@ -1,6 +1,10 @@
 import type { WebClient } from "@slack/web-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+import {
+  clearSlackThreadParticipationCache,
+  hasSlackThreadParticipation,
+} from "./sent-thread-cache.js";
 
 // --- Module mocks (must precede dynamic import) ---
 installSlackBlockTestMocks();
@@ -21,14 +25,23 @@ const fetchWithSsrFGuard = vi.fn(
     }) as const,
 );
 
-vi.mock("../../../src/infra/net/fetch-guard.js", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) =>
     fetchWithSsrFGuard(...(args as [params: { url: string; init?: RequestInit }])),
-  withTrustedEnvProxyGuardedFetchMode: (params: Record<string, unknown>) => ({
-    ...params,
-    mode: "trusted_env_proxy",
-  }),
 }));
+
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/fetch-runtime")>(
+    "openclaw/plugin-sdk/fetch-runtime",
+  );
+  return {
+    ...actual,
+    withTrustedEnvProxyGuardedFetchMode: (params: Record<string, unknown>) => ({
+      ...params,
+      mode: "trusted_env_proxy",
+    }),
+  };
+});
 
 vi.mock("./runtime-api.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
@@ -43,7 +56,10 @@ vi.mock("./runtime-api.js", async () => {
 
 let sendMessageSlack: typeof import("./send.js").sendMessageSlack;
 let clearSlackDmChannelCache: typeof import("./send.js").clearSlackDmChannelCache;
-({ sendMessageSlack, clearSlackDmChannelCache } = await import("./send.js"));
+let clearSlackSendQueuesForTest: typeof import("./send.js").clearSlackSendQueuesForTest;
+({ sendMessageSlack, clearSlackDmChannelCache, clearSlackSendQueuesForTest } =
+  await import("./send.js"));
+const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 type UploadTestClient = WebClient & {
   conversations: { open: ReturnType<typeof vi.fn> };
@@ -83,6 +99,8 @@ describe("sendMessageSlack file upload with user IDs", () => {
     fetchWithSsrFGuard.mockClear();
     loadOutboundMediaFromUrlMock.mockClear();
     clearSlackDmChannelCache();
+    clearSlackSendQueuesForTest();
+    clearSlackThreadParticipationCache();
   });
 
   afterEach(() => {
@@ -96,6 +114,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
     // Bare user ID — parseSlackTarget classifies this as kind="channel"
     await sendMessageSlack("U2ZH3MFSR", "screenshot", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       mediaUrl: "/tmp/screenshot.png",
     });
@@ -118,6 +137,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
 
     await sendMessageSlack("user:UABC123", "image", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       mediaUrl: "/tmp/photo.png",
     });
@@ -130,26 +150,81 @@ describe("sendMessageSlack file upload with user IDs", () => {
     );
   });
 
-  it("caches DM channel resolution per account", async () => {
+  it("posts text-only user-target DMs directly without conversations.open", async () => {
     const client = createUploadTestClient();
+    client.conversations.open.mockRejectedValueOnce(new Error("missing_scope"));
 
     await sendMessageSlack("user:UABC123", "first", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
     });
     await sendMessageSlack("user:UABC123", "second", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
     });
 
-    expect(client.conversations.open).toHaveBeenCalledTimes(1);
+    expect(client.conversations.open).not.toHaveBeenCalled();
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
     expect(client.chat.postMessage).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        channel: "D99RESOLVED",
+        channel: "UABC123",
         text: "second",
       }),
+    );
+  });
+
+  it("serializes concurrent sends to the same Slack target", async () => {
+    const client = createUploadTestClient();
+    let resolveFirst!: () => void;
+    client.chat.postMessage.mockImplementation(async (payload: { text?: string }) => {
+      if (payload.text === "first") {
+        await new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        });
+        return { ts: "1.000" };
+      }
+      return { ts: "2.000" };
+    });
+
+    const first = sendMessageSlack("channel:C123CHAN", "first", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+    });
+    await vi.waitFor(() => expect(client.chat.postMessage).toHaveBeenCalledTimes(1));
+
+    const second = sendMessageSlack("channel:C123CHAN", "second", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+    });
+    await Promise.resolve();
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+    resolveFirst();
+
+    await expect(first).resolves.toMatchObject({
+      channelId: "C123CHAN",
+      messageId: "1.000",
+      receipt: expect.objectContaining({
+        primaryPlatformMessageId: "1.000",
+        platformMessageIds: ["1.000"],
+      }),
+    });
+    await expect(second).resolves.toMatchObject({
+      channelId: "C123CHAN",
+      messageId: "2.000",
+      receipt: expect.objectContaining({
+        primaryPlatformMessageId: "2.000",
+        platformMessageIds: ["2.000"],
+      }),
+    });
+    expect(client.chat.postMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "second" }),
     );
   });
 
@@ -158,11 +233,15 @@ describe("sendMessageSlack file upload with user IDs", () => {
 
     await sendMessageSlack("user:UABC123", "first", {
       token: "xoxb-test-a",
+      cfg: SLACK_TEST_CFG,
       client,
+      mediaUrl: "/tmp/first.png",
     });
     await sendMessageSlack("user:UABC123", "second", {
       token: "xoxb-test-b",
+      cfg: SLACK_TEST_CFG,
       client,
+      mediaUrl: "/tmp/second.png",
     });
 
     expect(client.conversations.open).toHaveBeenCalledTimes(2);
@@ -171,8 +250,9 @@ describe("sendMessageSlack file upload with user IDs", () => {
   it("sends file directly to channel without conversations.open", async () => {
     const client = createUploadTestClient();
 
-    await sendMessageSlack("channel:C123CHAN", "chart", {
+    const result = await sendMessageSlack("channel:C123CHAN", "chart", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       mediaUrl: "/tmp/chart.png",
     });
@@ -181,6 +261,17 @@ describe("sendMessageSlack file upload with user IDs", () => {
     expect(client.files.completeUploadExternal).toHaveBeenCalledWith(
       expect.objectContaining({ channel_id: "C123CHAN" }),
     );
+    expect(result.receipt).toMatchObject({
+      primaryPlatformMessageId: "F001",
+      platformMessageIds: ["F001"],
+      parts: [
+        expect.objectContaining({
+          platformMessageId: "F001",
+          kind: "media",
+          raw: expect.objectContaining({ channel: "slack", channelId: "C123CHAN" }),
+        }),
+      ],
+    });
   });
 
   it("resolves mention-style user ID before file upload", async () => {
@@ -188,6 +279,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
 
     await sendMessageSlack("<@U777TEST>", "report", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       mediaUrl: "/tmp/report.png",
     });
@@ -203,8 +295,9 @@ describe("sendMessageSlack file upload with user IDs", () => {
   it("uploads bytes to the presigned URL and completes with thread+caption", async () => {
     const client = createUploadTestClient();
 
-    await sendMessageSlack("channel:C123CHAN", "caption", {
+    const result = await sendMessageSlack("channel:C123CHAN", "caption", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       mediaUrl: "/tmp/threaded.png",
       threadTs: "171.222",
@@ -234,6 +327,8 @@ describe("sendMessageSlack file upload with user IDs", () => {
         thread_ts: "171.222",
       }),
     );
+    expect(hasSlackThreadParticipation("default", "C123CHAN", "171.222")).toBe(true);
+    expect(result.receipt.threadId).toBe("171.222");
   });
 
   it("uses explicit upload filename and title overrides when provided", async () => {
@@ -241,6 +336,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
 
     await sendMessageSlack("channel:C123CHAN", "caption", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       mediaUrl: "/tmp/threaded.png",
       uploadFileName: "custom-name.bin",
@@ -263,6 +359,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
 
     await sendMessageSlack("channel:C123CHAN", "caption", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       mediaUrl: "/tmp/threaded.png",
       uploadFileName: "custom-name.bin",

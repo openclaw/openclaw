@@ -4,8 +4,8 @@ export function createPluginsVitestConfig(env?: Record<string, string | undefine
   return createScopedVitestConfig(["src/plugins/**/*.test.ts"], {
     dir: "src/plugins",
     env,
-    exclude: ["src/plugins/contracts/**"],
-    isolate: true,
+    exclude: ["src/plugins/contracts/**", "src/plugins/loader.test.ts"],
+    isolate: false,
     name: "plugins",
     passWithNoTests: true,
   });

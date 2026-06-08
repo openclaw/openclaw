@@ -5,14 +5,14 @@ read_when:
 title: "Dashboard"
 ---
 
-# Dashboard (Control UI)
-
 The Gateway dashboard is the browser Control UI served at `/` by default
 (override with `gateway.controlUi.basePath`).
 
 Quick open (local Gateway):
 
 - [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/))
+- With `gateway.tls.enabled: true`, use `https://127.0.0.1:18789/` and
+  `wss://127.0.0.1:18789` for the WebSocket endpoint.
 
 Key references:
 
@@ -39,12 +39,18 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
 
 - After onboarding, the CLI auto-opens the dashboard and prints a clean (non-tokenized) link.
 - Re-open anytime: `openclaw dashboard` (copies link, opens browser if possible, shows SSH hint if headless).
+- If clipboard and browser delivery fail, `openclaw dashboard` still prints the
+  clean URL and tells you to use the token from `OPENCLAW_GATEWAY_TOKEN` or
+  `gateway.auth.token` as the URL fragment key `token`; it does not print token
+  values in logs.
 - If the UI prompts for shared-secret auth, paste the configured token or
   password into Control UI settings.
 
 ## Auth basics (local vs remote)
 
 - **Localhost**: open `http://127.0.0.1:18789/`.
+- **Gateway TLS**: when `gateway.tls.enabled: true`, dashboard/status links use
+  `https://` and Control UI WebSocket links use `wss://`.
 - **Shared-secret token source**: `gateway.auth.token` (or
   `OPENCLAW_GATEWAY_TOKEN`); `openclaw dashboard` can pass it via URL fragment
   for one-time bootstrap, and the Control UI keeps it in sessionStorage for the
@@ -93,3 +99,8 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
   then connect.
 - The UI language picker is in **Overview -> Gateway Access -> Language**.
   It is part of the access card, not the Appearance section.
+
+## Related
+
+- [Control UI](/web/control-ui)
+- [WebChat](/web/webchat)

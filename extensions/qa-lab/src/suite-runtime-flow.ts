@@ -2,10 +2,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import {
-  formatMemoryDreamingDay,
-  resolveSessionTranscriptsDirForAgent,
-} from "openclaw/plugin-sdk/memory-core";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-host-core";
+import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
@@ -33,6 +31,7 @@ import {
   extractMediaPathFromText,
   findSkill,
   forceMemoryIndex,
+  findManagedDreamingCronJob,
   handleQaAction,
   listCronJobs,
   readDoctorMemoryStatus,
@@ -98,7 +97,7 @@ type QaSuiteScenarioResult = {
   details?: string;
 };
 
-function createQaSuiteScenarioDeps(params: {
+type QaSuiteScenarioDepsParams = {
   env: QaSuiteScenarioFlowEnv;
   runScenario: (name: string, steps: QaSuiteStep[]) => Promise<QaSuiteScenarioResult>;
   splitModelRef: (ref: string) => { provider: string; model: string } | null;
@@ -111,7 +110,18 @@ function createQaSuiteScenarioDeps(params: {
     env: Pick<QaSuiteRuntimeEnv, "providerMode" | "primaryModel" | "alternateModel">,
     fallbackMs: number,
   ) => number;
-}) {
+};
+
+type QaSuiteScenarioFlowApiParams = QaSuiteScenarioDepsParams & {
+  scenario: QaSeedScenarioWithSource;
+  constants: {
+    imageUnderstandingPngBase64: string;
+    imageUnderstandingLargePngBase64: string;
+    imageUnderstandingValidPngBase64: string;
+  };
+};
+
+function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
   return {
     fs,
     path,
@@ -159,6 +169,7 @@ function createQaSuiteScenarioDeps(params: {
     startAgentRun,
     waitForAgentRun,
     listCronJobs,
+    findManagedDreamingCronJob,
     waitForCronRunCompletion,
     readDoctorMemoryStatus,
     forceMemoryIndex,
@@ -185,26 +196,7 @@ function createQaSuiteScenarioDeps(params: {
   };
 }
 
-export function createQaSuiteScenarioFlowApi(params: {
-  env: QaSuiteScenarioFlowEnv;
-  scenario: QaSeedScenarioWithSource;
-  runScenario: (name: string, steps: QaSuiteStep[]) => Promise<QaSuiteScenarioResult>;
-  splitModelRef: (ref: string) => { provider: string; model: string } | null;
-  formatErrorMessage: (error: unknown) => string;
-  liveTurnTimeoutMs: (
-    env: Pick<QaSuiteRuntimeEnv, "providerMode" | "primaryModel" | "alternateModel">,
-    fallbackMs: number,
-  ) => number;
-  resolveQaLiveTurnTimeoutMs: (
-    env: Pick<QaSuiteRuntimeEnv, "providerMode" | "primaryModel" | "alternateModel">,
-    fallbackMs: number,
-  ) => number;
-  constants: {
-    imageUnderstandingPngBase64: string;
-    imageUnderstandingLargePngBase64: string;
-    imageUnderstandingValidPngBase64: string;
-  };
-}) {
+export function createQaSuiteScenarioFlowApi(params: QaSuiteScenarioFlowApiParams) {
   return createQaScenarioRuntimeApi({
     env: params.env,
     scenario: params.scenario,

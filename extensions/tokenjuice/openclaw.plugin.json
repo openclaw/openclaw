@@ -1,0 +1,16 @@
+{
+  "id": "tokenjuice",
+  "activation": {
+    "onStartup": false
+  },
+  "name": "tokenjuice",
+  "description": "Compacts exec and bash tool results with tokenjuice reducers.",
+  "contracts": {
+    "agentToolResultMiddleware": ["pi", "codex"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

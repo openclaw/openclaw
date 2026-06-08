@@ -11,7 +11,7 @@ coverage:
     - runtime.no-meta-leak
 objective: Verify the Codex app-server harness keeps coordination/meta chatter out of the visible reply.
 successCriteria:
-  - The scenario forces the Codex embedded harness and disables PI fallback.
+  - The scenario forces the Codex embedded harness.
   - The final visible reply includes the requested confirmation token.
   - The visible reply does not include internal coordination or progress chatter.
 docsRefs:
@@ -24,12 +24,11 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model codex/gpt-5.4 --alt-model codex/gpt-5.4 --scenario codex-harness-no-meta-leak`.
+  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.5 --alt-model openai/gpt-5.5 --fast --thinking medium --scenario codex-harness-no-meta-leak`.
   config:
     requiredProvider: codex
-    requiredModel: gpt-5.4
+    requiredModel: gpt-5.5
     harnessRuntime: codex
-    harnessFallback: none
     expectedReply: QA_LEAK_OK
     prompt: |-
       Think through your answer privately, but do not expose any internal planning, thread-context checks, or progress narration.
@@ -47,7 +46,7 @@ execution:
 
 ```yaml qa-flow
 steps:
-  - name: confirms GPT-5.4 Codex harness target
+  - name: confirms GPT-5.5 Codex harness target
     actions:
       - set: selected
         value:
@@ -73,11 +72,9 @@ steps:
                   patch:
                     agents:
                       defaults:
-                        embeddedHarness:
-                          runtime:
+                        agentRuntime:
+                          id:
                             expr: config.harnessRuntime
-                          fallback:
-                            expr: config.harnessFallback
             - call: waitForGatewayHealthy
               args:
                 - ref: env
@@ -91,14 +88,10 @@ steps:
               args:
                 - ref: env
             - assert:
-                expr: "snapshot.config.agents?.defaults?.embeddedHarness?.runtime === config.harnessRuntime"
+                expr: "snapshot.config.agents?.defaults?.agentRuntime?.id === config.harnessRuntime"
                 message:
-                  expr: "`expected embeddedHarness.runtime=${config.harnessRuntime}, got ${JSON.stringify(snapshot.config.agents?.defaults?.embeddedHarness)}`"
-            - assert:
-                expr: "snapshot.config.agents?.defaults?.embeddedHarness?.fallback === config.harnessFallback"
-                message:
-                  expr: "`expected embeddedHarness.fallback=${config.harnessFallback}, got ${JSON.stringify(snapshot.config.agents?.defaults?.embeddedHarness)}`"
-    detailsExpr: "env.providerMode === 'live-frontier' ? `provider=${selected?.provider} model=${selected?.model} runtime=${snapshot.config.agents?.defaults?.embeddedHarness?.runtime} fallback=${snapshot.config.agents?.defaults?.embeddedHarness?.fallback}` : `mock mode: parsed ${scenario.id}`"
+                  expr: "`expected agentRuntime.id=${config.harnessRuntime}, got ${JSON.stringify(snapshot.config.agents?.defaults?.agentRuntime)}`"
+    detailsExpr: "env.providerMode === 'live-frontier' ? `provider=${selected?.provider} model=${selected?.model} runtime=${snapshot.config.agents?.defaults?.agentRuntime?.id}` : `mock mode: parsed ${scenario.id}`"
   - name: keeps codex coordination chatter out of the visible reply
     actions:
       - if:

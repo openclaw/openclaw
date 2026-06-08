@@ -1,13 +1,14 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { applyMistralModelCompat } from "./api.js";
+import { applyMistralModelCompat, MISTRAL_SMALL_LATEST_ID } from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildMistralProvider } from "./provider-catalog.js";
 import { contributeMistralResolvedModelCompat } from "./provider-compat.js";
+import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
 const PROVIDER_ID = "mistral";
-export function buildMistralReplayPolicy() {
+function buildMistralReplayPolicy() {
   return {
     sanitizeToolCallIds: true,
     toolCallIdMode: "strict9" as const,
@@ -46,10 +47,15 @@ export default defineSingleProviderPluginEntry({
     normalizeResolvedModel: ({ model }) => applyMistralModelCompat(model),
     contributeResolvedModelCompat: ({ modelId, model }) =>
       contributeMistralResolvedModelCompat({ modelId, model }),
+    resolveThinkingProfile: ({ modelId }) =>
+      modelId === MISTRAL_SMALL_LATEST_ID
+        ? { levels: [{ id: "off" }, { id: "high" }], defaultLevel: "off" }
+        : undefined,
     buildReplayPolicy: () => buildMistralReplayPolicy(),
   },
   register(api) {
     api.registerMemoryEmbeddingProvider(mistralMemoryEmbeddingProviderAdapter);
     api.registerMediaUnderstandingProvider(mistralMediaUnderstandingProvider);
+    api.registerRealtimeTranscriptionProvider(buildMistralRealtimeTranscriptionProvider());
   },
 });

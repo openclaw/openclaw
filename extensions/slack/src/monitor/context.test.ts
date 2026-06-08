@@ -1,5 +1,5 @@
 import type { App } from "@slack/bolt";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it } from "vitest";
 import { createSlackMonitorContext } from "./context.js";
@@ -15,6 +15,7 @@ function createTestContext() {
     app: { client: {} } as App,
     runtime: {} as RuntimeEnv,
     botUserId: "U_BOT",
+    botId: "B_BOT",
     teamId: "T_EXPECTED",
     apiAppId: "A_EXPECTED",
     historyLimit: 0,

@@ -7,6 +7,7 @@ import {
   isBlockedSpecialUseIpv6Address,
   isCanonicalDottedDecimalIPv4,
   type Ipv4SpecialUseBlockOptions,
+  type Ipv6SpecialUseBlockOptions,
   isIpv4Address,
   isLegacyIpv4Literal,
   parseCanonicalIpAddress,
@@ -26,6 +27,7 @@ type LookupCallback = (
 ) => void;
 
 type LookupResult = LookupAddress | LookupAddress[];
+const DISPATCHER_CLOSE_TIMEOUT_MS = 100;
 
 export class SsrFBlockedError extends Error {
   constructor(message: string) {
@@ -40,9 +42,85 @@ export type SsrFPolicy = {
   allowPrivateNetwork?: boolean;
   dangerouslyAllowPrivateNetwork?: boolean;
   allowRfc2544BenchmarkRange?: boolean;
+  /**
+   * Exempt addresses in `fc00::/7` (IPv6 Unique Local Address block, RFC 4193)
+   * from the SSRF private-IP block. Companion to
+   * `allowRfc2544BenchmarkRange` for fake-ip proxy stacks (sing-box, Clash,
+   * Surge) that resolve foreign domains to ULA addresses alongside the IPv4
+   * 198.18.0.0/15 range. See #74351.
+   */
+  allowIpv6UniqueLocalRange?: boolean;
   allowedHostnames?: string[];
   hostnameAllowlist?: string[];
 };
+
+function normalizeSsrFPolicyHostnames(values?: string[]): string[] {
+  if (!values || values.length === 0) {
+    return [];
+  }
+  return Array.from(
+    new Set(values.map((value) => normalizeHostname(value)).filter(Boolean)),
+  ).toSorted();
+}
+
+function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
+  if (!policy) {
+    return null;
+  }
+  return {
+    allowPrivateNetwork: policy.allowPrivateNetwork === true,
+    dangerouslyAllowPrivateNetwork: policy.dangerouslyAllowPrivateNetwork === true,
+    allowRfc2544BenchmarkRange: policy.allowRfc2544BenchmarkRange === true,
+    allowIpv6UniqueLocalRange: policy.allowIpv6UniqueLocalRange === true,
+    allowedHostnames: normalizeSsrFPolicyHostnames(policy.allowedHostnames),
+    hostnameAllowlist: [...normalizeHostnameAllowlist(policy.hostnameAllowlist)].toSorted(),
+  };
+}
+
+export function isSameSsrFPolicy(a?: SsrFPolicy, b?: SsrFPolicy): boolean {
+  return (
+    JSON.stringify(normalizeSsrFPolicyForComparison(a)) ===
+    JSON.stringify(normalizeSsrFPolicyForComparison(b))
+  );
+}
+
+export function ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl: string): SsrFPolicy | undefined {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    return { allowedHostnames: [parsed.hostname] };
+  } catch {
+    return undefined;
+  }
+}
+
+export function ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(
+  baseUrl: string,
+): SsrFPolicy | undefined {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    return {
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: [parsed.hostname],
+    };
+  } catch {
+    return undefined;
+  }
+}
 
 const BLOCKED_HOSTNAMES = new Set([
   "localhost",
@@ -87,6 +165,12 @@ function resolveIpv4SpecialUseBlockOptions(policy?: SsrFPolicy): Ipv4SpecialUseB
   };
 }
 
+function resolveIpv6SpecialUseBlockOptions(policy?: SsrFPolicy): Ipv6SpecialUseBlockOptions {
+  return {
+    allowUniqueLocalRange: policy?.allowIpv6UniqueLocalRange === true,
+  };
+}
+
 export function isHostnameAllowedByPattern(hostname: string, pattern: string): boolean {
   if (pattern.startsWith("*.")) {
     const suffix = pattern.slice(2);
@@ -125,13 +209,14 @@ export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolea
     return false;
   }
   const blockOptions = resolveIpv4SpecialUseBlockOptions(policy);
+  const ipv6BlockOptions = resolveIpv6SpecialUseBlockOptions(policy);
 
   const strictIp = parseCanonicalIpAddress(normalized);
   if (strictIp) {
     if (isIpv4Address(strictIp)) {
       return isBlockedSpecialUseIpv4Address(strictIp, blockOptions);
     }
-    if (isBlockedSpecialUseIpv6Address(strictIp)) {
+    if (isBlockedSpecialUseIpv6Address(strictIp, ipv6BlockOptions)) {
       return true;
     }
     const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
@@ -432,49 +517,90 @@ export function createPinnedDispatcher(
   pinned: PinnedHostname,
   policy?: PinnedDispatcherPolicy,
   ssrfPolicy?: SsrFPolicy,
+  timeoutMs?: number,
 ): Dispatcher {
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
 
   if (!policy || policy.mode === "direct") {
-    return createHttp1Agent({
-      connect: withPinnedLookup(lookup, policy?.connect),
-    });
+    return createHttp1Agent({ connect: withPinnedLookup(lookup, policy?.connect) }, timeoutMs);
   }
 
   if (policy.mode === "env-proxy") {
-    return createHttp1EnvHttpProxyAgent({
-      connect: withPinnedLookup(lookup, policy.connect),
-      ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
-    });
+    return createHttp1EnvHttpProxyAgent(
+      {
+        connect: withPinnedLookup(lookup, policy.connect),
+        ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
+      },
+      timeoutMs,
+    );
   }
 
   const proxyUrl = policy.proxyUrl.trim();
   const requestTls = withPinnedLookup(lookup, policy.proxyTls);
   if (!requestTls) {
-    return createHttp1ProxyAgent({ uri: proxyUrl });
+    return createHttp1ProxyAgent({ uri: proxyUrl }, timeoutMs);
   }
-  return createHttp1ProxyAgent({
-    uri: proxyUrl,
-    // `PinnedDispatcherPolicy.proxyTls` historically carried target-hop
-    // transport hints for explicit proxies. Translate that to undici's
-    // `requestTls` so HTTPS proxy tunnels keep the pinned DNS lookup.
-    requestTls,
-  });
+  return createHttp1ProxyAgent(
+    {
+      uri: proxyUrl,
+      // `PinnedDispatcherPolicy.proxyTls` historically carried target-hop
+      // transport hints for explicit proxies. Translate that to undici's
+      // `requestTls` so HTTPS proxy tunnels keep the pinned DNS lookup.
+      requestTls,
+    },
+    timeoutMs,
+  );
+}
+
+type ClosableDispatcher = {
+  close?: () => Promise<void> | void;
+  destroy?: () => void;
+};
+
+function destroyDispatcher(candidate: ClosableDispatcher): void {
+  try {
+    candidate.destroy?.();
+  } catch {
+    // ignore dispatcher cleanup errors
+  }
+}
+
+async function waitForDispatcherClose(candidate: ClosableDispatcher): Promise<void> {
+  const close = candidate.close;
+  if (typeof close !== "function") {
+    destroyDispatcher(candidate);
+    return;
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve(close.call(candidate)),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(() => {
+          timeout = undefined;
+          destroyDispatcher(candidate);
+          resolve();
+        }, DISPATCHER_CLOSE_TIMEOUT_MS);
+        timeout.unref?.();
+      }),
+    ]);
+  } catch (err) {
+    destroyDispatcher(candidate);
+    throw err;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<void> {
   if (!dispatcher) {
     return;
   }
-  const candidate = dispatcher as { close?: () => Promise<void> | void; destroy?: () => void };
+  const candidate = dispatcher as ClosableDispatcher;
   try {
-    if (typeof candidate.close === "function") {
-      await candidate.close();
-      return;
-    }
-    if (typeof candidate.destroy === "function") {
-      candidate.destroy();
-    }
+    await waitForDispatcherClose(candidate);
   } catch {
     // ignore dispatcher cleanup errors
   }

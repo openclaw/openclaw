@@ -1,4 +1,3 @@
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import {
   buildApprovalInteractiveReply,
   type ExecApprovalReplyDecision,
@@ -6,10 +5,12 @@ import {
 import {
   buildPluginApprovalRequestMessage,
   buildPluginApprovalResolvedMessage,
+  resolvePluginApprovalRequestAllowedDecisions,
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import type { ReplyPayload } from "./reply-payload.js";
 
 const DEFAULT_ALLOWED_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 
@@ -77,7 +78,9 @@ export function buildPluginApprovalPendingReplyPayload(params: {
     approvalId: params.request.id,
     approvalSlug: params.approvalSlug ?? params.request.id.slice(0, 8),
     text: params.text ?? buildPluginApprovalRequestMessage(params.request, params.nowMs),
-    allowedDecisions: params.allowedDecisions,
+    allowedDecisions:
+      params.allowedDecisions ??
+      resolvePluginApprovalRequestAllowedDecisions(params.request.request),
     channelData: params.channelData,
   });
 }

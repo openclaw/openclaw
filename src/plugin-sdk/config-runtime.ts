@@ -3,14 +3,35 @@
 
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
+  requireRuntimeConfig,
+  resolveLivePluginConfigObject,
+  resolvePluginConfigObject,
+} from "./plugin-config-runtime.js";
+export {
+  clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
+  getRuntimeConfig,
+  /**
+   * @deprecated Use getRuntimeConfig(), runtime.config.current(), or pass the
+   * already loaded config through the call path. Runtime code must not reload
+   * config on demand. Bundled plugins and repo code are blocked from using
+   * this by the deprecated-internal-config-api architecture guard.
+   */
   loadConfig,
   readConfigFileSnapshotForWrite,
   setRuntimeConfigSnapshot,
+  /**
+   * @deprecated Use mutateConfigFile() or replaceConfigFile() with an explicit
+   * afterWrite intent so restart behavior stays under host control. Bundled
+   * plugins and repo code are blocked from using this by the
+   * deprecated-internal-config-api architecture guard.
+   */
   writeConfigFile,
 } from "../config/io.js";
+export { mutateConfigFile, replaceConfigFile } from "../config/mutate.js";
+export type { ConfigWriteAfterWrite } from "../config/runtime-snapshot.js";
 export { logConfigUpdated } from "../config/logging.js";
 export { updateConfig } from "../commands/models/shared.js";
 export { resolveChannelModelOverride } from "../channels/model-overrides.js";
@@ -26,6 +47,7 @@ export { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 export {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
+  resolveToolsBySender,
   type ChannelGroupPolicy,
 } from "../config/group-policy.js";
 export {
@@ -68,12 +90,18 @@ export type {
   DiscordSlashCommandConfig,
   DmConfig,
   DmPolicy,
+  GoogleChatAccountConfig,
+  GoogleChatConfig,
   ContextVisibilityMode,
   GroupPolicy,
   GroupToolPolicyBySenderConfig,
   GroupToolPolicyConfig,
   MarkdownConfig,
   MarkdownTableMode,
+  MSTeamsChannelConfig,
+  MSTeamsConfig,
+  MSTeamsReplyStyle,
+  MSTeamsTeamConfig,
   OpenClawConfig,
   ReplyToMode,
   SignalReactionNotificationMode,
@@ -89,10 +117,14 @@ export type {
   TelegramInlineButtonsScope,
   TelegramNetworkConfig,
   TelegramTopicConfig,
+  ResolvedTtsPersona,
   TtsAutoMode,
   TtsConfig,
   TtsMode,
   TtsModelOverrideConfig,
+  TtsPersonaConfig,
+  TtsPersonaFallbackPolicy,
+  TtsPersonaPromptConfig,
   TtsProvider,
 } from "../config/types.js";
 export {
@@ -103,6 +135,7 @@ export {
   saveSessionStore,
   updateLastRoute,
   updateSessionStore,
+  updateSessionStoreEntry,
   resolveSessionStoreEntry,
 } from "../config/sessions/store.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";

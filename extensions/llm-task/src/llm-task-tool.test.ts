@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@sinclair/typebox", () => ({
+vi.mock("typebox", () => ({
   Type: {
     Object: (schema: unknown) => schema,
     String: (schema?: unknown) => schema,
@@ -41,8 +41,14 @@ vi.mock("../api.js", async () => {
   return {
     ...actual,
     resolvePreferredOpenClawTmpDir: () => "/tmp",
-    supportsXHighThinking: () => false,
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("typebox");
+  vi.doUnmock("ajv");
+  vi.doUnmock("../api.js");
+  vi.resetModules();
 });
 
 import { createLlmTaskTool } from "./llm-task-tool.js";
@@ -51,6 +57,30 @@ const runEmbeddedPiAgent = vi.fn(async () => ({
   meta: { startedAt: Date.now() },
   payloads: [{ text: "{}" }],
 }));
+
+const resolveThinkingPolicy = vi.fn(() => ({
+  levels: [
+    { id: "off", label: "off" },
+    { id: "minimal", label: "minimal" },
+    { id: "low", label: "low" },
+    { id: "medium", label: "medium" },
+    { id: "high", label: "high" },
+  ],
+}));
+
+const normalizeThinkingLevel = vi.fn((raw?: string | null) => {
+  const value = raw?.trim().toLowerCase();
+  if (!value) {
+    return undefined;
+  }
+  if (value === "on") {
+    return "low";
+  }
+  if (["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"].includes(value)) {
+    return value;
+  }
+  return undefined;
+});
 
 function fakeApi(overrides: any = {}) {
   return {
@@ -64,7 +94,10 @@ function fakeApi(overrides: any = {}) {
     runtime: {
       version: "test",
       agent: {
+        defaults: { provider: "openai-codex", model: "gpt-5.2" },
         runEmbeddedPiAgent,
+        resolveThinkingPolicy,
+        normalizeThinkingLevel,
       },
     },
     logger: { debug() {}, info() {}, warn() {}, error() {} },
@@ -80,6 +113,16 @@ function mockEmbeddedRunJson(payload: unknown) {
   });
 }
 
+function resetRunnerMocks() {
+  runEmbeddedPiAgent.mockReset();
+  runEmbeddedPiAgent.mockImplementation(async () => ({
+    meta: { startedAt: Date.now() },
+    payloads: [{ text: "{}" }],
+  }));
+  resolveThinkingPolicy.mockClear();
+  normalizeThinkingLevel.mockClear();
+}
+
 async function executeEmbeddedRun(input: Record<string, unknown>) {
   const tool = createLlmTaskTool(fakeApi());
   await tool.execute("id", input);
@@ -87,7 +130,9 @@ async function executeEmbeddedRun(input: Record<string, unknown>) {
 }
 
 describe("llm-task tool (json-only)", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    resetRunnerMocks();
+  });
 
   it("returns parsed json", async () => {
     (runEmbeddedPiAgent as any).mockResolvedValueOnce({
@@ -155,10 +200,50 @@ describe("llm-task tool (json-only)", () => {
     expect(call.model).toBe("claude-4-sonnet");
   });
 
+  it("accepts model overrides that already include the selected provider prefix", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const call = await executeEmbeddedRun({
+      prompt: "x",
+      provider: "anthropic",
+      model: "anthropic/claude-4-sonnet",
+    });
+    expect(call.provider).toBe("anthropic");
+    expect(call.model).toBe("claude-4-sonnet");
+  });
+
+  it("resolves configured model aliases before dispatching the embedded run", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const tool = createLlmTaskTool(
+      fakeApi({
+        config: {
+          agents: {
+            defaults: {
+              workspace: "/tmp",
+              model: { primary: "anthropic/claude-sonnet-4-6" },
+              models: {
+                "google/gemini-3-flash-preview": { alias: "gemini-flash" },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    await tool.execute("id", { prompt: "x", model: "gemini-flash" });
+
+    const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
+    expect(call.provider).toBe("google");
+    expect(call.model).toBe("gemini-3-flash-preview");
+  });
+
   it("passes thinking override to embedded runner", async () => {
     mockEmbeddedRunJson({ ok: true });
     const call = await executeEmbeddedRun({ prompt: "x", thinking: "high" });
     expect(call.thinkLevel).toBe("high");
+    expect(resolveThinkingPolicy).toHaveBeenCalledWith({
+      provider: "openai-codex",
+      model: "gpt-5.2",
+    });
   });
 
   it("normalizes thinking aliases", async () => {
@@ -178,7 +263,7 @@ describe("llm-task tool (json-only)", () => {
   it("throws on unsupported xhigh thinking level", async () => {
     const tool = createLlmTaskTool(fakeApi());
     await expect(tool.execute("id", { prompt: "x", thinking: "xhigh" })).rejects.toThrow(
-      /only supported/i,
+      /not supported/i,
     );
   });
 

@@ -1,12 +1,10 @@
 ---
-title: "Cloudflare AI Gateway"
 summary: "Cloudflare AI Gateway setup (auth + model selection)"
+title: "Cloudflare AI gateway"
 read_when:
   - You want to use Cloudflare AI Gateway with OpenClaw
   - You need the account ID, gateway ID, or API key env var
 ---
-
-# Cloudflare AI Gateway
 
 Cloudflare AI Gateway sits in front of provider APIs and lets you add analytics, caching, and controls. For Anthropic, OpenClaw uses the Anthropic Messages API through your Gateway endpoint.
 
@@ -14,12 +12,17 @@ Cloudflare AI Gateway sits in front of provider APIs and lets you add analytics,
 | ------------- | ---------------------------------------------------------------------------------------- |
 | Provider      | `cloudflare-ai-gateway`                                                                  |
 | Base URL      | `https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>/anthropic`               |
-| Default model | `cloudflare-ai-gateway/claude-sonnet-4-5`                                                |
+| Default model | `cloudflare-ai-gateway/claude-sonnet-4-6`                                                |
 | API key       | `CLOUDFLARE_AI_GATEWAY_API_KEY` (your provider API key for requests through the Gateway) |
 
 <Note>
 For Anthropic models routed through Cloudflare AI Gateway, use your **Anthropic API key** as the provider key.
 </Note>
+
+When thinking is enabled for Anthropic Messages models, OpenClaw strips trailing
+assistant prefill turns before sending the payload through Cloudflare AI Gateway.
+Anthropic rejects response prefilling with extended thinking, while ordinary
+non-thinking prefill remains available.
 
 ## Getting started
 
@@ -41,7 +44,7 @@ For Anthropic models routed through Cloudflare AI Gateway, use your **Anthropic 
     {
       agents: {
         defaults: {
-          model: { primary: "cloudflare-ai-gateway/claude-sonnet-4-5" },
+          model: { primary: "cloudflare-ai-gateway/claude-sonnet-4-6" },
         },
       },
     }

@@ -7,8 +7,6 @@ read_when:
 title: "WeChat"
 ---
 
-# WeChat
-
 OpenClaw connects to WeChat through Tencent's external
 `@tencent-weixin/openclaw-weixin` channel plugin.
 
@@ -150,6 +148,11 @@ npm view @tencent-weixin/openclaw-weixin version
 openclaw plugins install "@tencent-weixin/openclaw-weixin" --force
 openclaw gateway restart
 ```
+
+If startup reports that the installed plugin package `requires compiled runtime
+output for TypeScript entry`, the npm package was published without the compiled
+JavaScript runtime files OpenClaw needs. Update/reinstall after the plugin
+publisher ships a fixed package, or temporarily disable/uninstall the plugin.
 
 Temporary disable:
 

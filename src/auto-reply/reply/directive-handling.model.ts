@@ -202,6 +202,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
   aliasIndex: ModelAliasIndex;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   resetModelOverride: boolean;
+  workspaceDir?: string;
   surface?: string;
   sessionEntry?: Pick<SessionEntry, "modelProvider" | "model">;
 }): Promise<ReplyPayload | undefined> {
@@ -238,6 +239,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
       currentModel: `${params.provider}/${params.model}`,
       agentId: params.activeAgentId,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
       sessionEntry: isCompleteSessionEntry(params.sessionEntry) ? params.sessionEntry : undefined,
     });
     return reply ?? { text: "No models available." };
@@ -263,6 +265,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
           "",
           "Tap below to browse models, or use:",
           "/model <provider/model> to switch",
+          "/model <provider/model> --runtime <runtime> to switch harnesses",
           "/model status for details",
         ]
           .filter(Boolean)
@@ -277,6 +280,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
         activeRuntimeLine,
         "",
         "Switch: /model <provider/model>",
+        "Runtime: /model <provider/model> --runtime <runtime>",
         "Browse: /models (providers) or /models <provider> (models)",
         "More: /model status",
       ]
@@ -304,6 +308,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
       modelsPath,
       params.agentDir,
       authMode,
+      params.workspaceDir,
     );
     authByProvider.set(provider, formatAuthLabel(auth));
   }

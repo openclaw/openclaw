@@ -5,8 +5,6 @@ read_when:
 title: "Nextcloud Talk"
 ---
 
-# Nextcloud Talk
-
 Status: bundled plugin (webhook bot). Direct messages, rooms, reactions, and markdown messages are supported.
 
 ## Bundled plugin
@@ -15,13 +13,16 @@ Nextcloud Talk ships as a bundled plugin in current OpenClaw releases, so
 normal packaged builds do not need a separate install.
 
 If you are on an older build or a custom install that excludes Nextcloud Talk,
-install it manually:
+install the npm package directly:
 
 Install via CLI (npm registry):
 
 ```bash
 openclaw plugins install @openclaw/nextcloud-talk
 ```
+
+Use the bare package to follow the current official release tag. Pin an exact
+version only when you need a reproducible install.
 
 Local checkout (when running from a git repo):
 
@@ -46,6 +47,31 @@ Details: [Plugins](/tools/plugin)
 4. Configure OpenClaw:
    - Config: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - Or env: `NEXTCLOUD_TALK_BOT_SECRET` (default account only)
+
+   CLI setup:
+
+   ```bash
+   openclaw channels add --channel nextcloud-talk \
+     --url https://cloud.example.com \
+     --token "<shared-secret>"
+   ```
+
+   Equivalent explicit fields:
+
+   ```bash
+   openclaw channels add --channel nextcloud-talk \
+     --base-url https://cloud.example.com \
+     --secret "<shared-secret>"
+   ```
+
+   File-backed secret:
+
+   ```bash
+   openclaw channels add --channel nextcloud-talk \
+     --base-url https://cloud.example.com \
+     --secret-file /path/to/nextcloud-talk-secret
+   ```
+
 5. Restart the gateway (or finish setup).
 
 Minimal config:

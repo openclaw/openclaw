@@ -7,6 +7,8 @@ import type { OpenClawConfig } from "./types.js";
 const OPEN_DM_POLICY_ALLOW_FROM_RE =
   /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
 
+const MANAGED_CONFIG_UNSET_PATHS = [["plugins", "installs"]] as const;
+
 function cloneUnknown<T>(value: T): T {
   return structuredClone(value);
 }
@@ -54,9 +56,197 @@ export function projectSourceOntoRuntimeShape(source: unknown, runtime: unknown)
   const next: Record<string, unknown> = {};
   for (const [key, sourceValue] of Object.entries(source)) {
     if (!(key in runtime)) {
+      next[key] = cloneUnknown(sourceValue);
       continue;
     }
     next[key] = projectSourceOntoRuntimeShape(sourceValue, runtime[key]);
+  }
+  return next;
+}
+
+function hasOwnIncludeKey(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && Object.prototype.hasOwnProperty.call(value, "$include");
+}
+
+function collectIncludeOwnedPaths(value: unknown, path: string[] = []): string[][] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  if (hasOwnIncludeKey(value)) {
+    return [path];
+  }
+  return Object.entries(value).flatMap(([key, child]) =>
+    collectIncludeOwnedPaths(child, [...path, key]),
+  );
+}
+
+function patchTouchesPath(patch: unknown, path: string[]): boolean {
+  if (path.length === 0) {
+    return isRecord(patch) ? Object.keys(patch).length > 0 : true;
+  }
+  if (!isRecord(patch)) {
+    return true;
+  }
+  const [head, ...tail] = path;
+  if (!Object.prototype.hasOwnProperty.call(patch, head)) {
+    return false;
+  }
+  return patchTouchesPath(patch[head], tail);
+}
+
+function formatConfigPath(path: string[]): string {
+  return path.length > 0 ? path.join(".") : "<root>";
+}
+
+function getPathValue(value: unknown, path: string[]): unknown {
+  let current = value;
+  for (const segment of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function setPathValue(value: unknown, path: string[], nextValue: unknown): unknown {
+  if (path.length === 0) {
+    return cloneUnknown(nextValue);
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  const [head, ...tail] = path;
+  return {
+    ...value,
+    [head]: setPathValue(value[head], tail, nextValue),
+  };
+}
+
+function pathStartsWith(path: string[], prefix: string[]): boolean {
+  return prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
+}
+
+function pathOverlapsAny(path: string[], candidates: readonly string[][] | undefined): boolean {
+  return Boolean(
+    candidates?.some(
+      (candidate) => pathStartsWith(path, candidate) || pathStartsWith(candidate, path),
+    ),
+  );
+}
+
+function isIncludeOwnedPath(rootAuthoredConfig: unknown, path: string[]): boolean {
+  return collectIncludeOwnedPaths(rootAuthoredConfig).some(
+    (includePath) => pathStartsWith(path, includePath) || pathStartsWith(includePath, path),
+  );
+}
+
+function setPathValueCreatingParents(value: unknown, path: string[], nextValue: unknown): unknown {
+  if (path.length === 0) {
+    return cloneUnknown(nextValue);
+  }
+  const [head, ...tail] = path;
+  const record = isRecord(value) ? value : {};
+  return {
+    ...record,
+    [head]: setPathValueCreatingParents(record[head], tail, nextValue),
+  };
+}
+
+function preserveSourceValueAtPath(params: {
+  persistedCandidate: unknown;
+  sourceConfig: unknown;
+  nextConfig: unknown;
+  rootAuthoredConfig: unknown;
+  unsetPaths?: readonly string[][];
+  path: string[];
+  sourceValue?: unknown;
+}): unknown {
+  if (pathOverlapsAny(params.path, params.unsetPaths)) {
+    return params.persistedCandidate;
+  }
+  if (isIncludeOwnedPath(params.rootAuthoredConfig, params.path)) {
+    return params.persistedCandidate;
+  }
+  if (getPathValue(params.nextConfig, params.path) !== undefined) {
+    return params.persistedCandidate;
+  }
+  const sourceValue = params.sourceValue ?? getPathValue(params.sourceConfig, params.path);
+  if (
+    sourceValue === undefined ||
+    getPathValue(params.persistedCandidate, params.path) !== undefined
+  ) {
+    return params.persistedCandidate;
+  }
+  return setPathValueCreatingParents(params.persistedCandidate, params.path, sourceValue);
+}
+
+function preserveAuthoredAgentParams(params: {
+  persistedCandidate: unknown;
+  sourceConfig: unknown;
+  nextConfig: unknown;
+  rootAuthoredConfig: unknown;
+  unsetPaths?: readonly string[][];
+}): unknown {
+  const defaults = getPathValue(params.sourceConfig, ["agents", "defaults"]);
+  if (!isRecord(defaults)) {
+    return params.persistedCandidate;
+  }
+
+  let next = params.persistedCandidate;
+  if (Object.prototype.hasOwnProperty.call(defaults, "params")) {
+    next = preserveSourceValueAtPath({
+      ...params,
+      persistedCandidate: next,
+      path: ["agents", "defaults", "params"],
+      sourceValue: defaults.params,
+    });
+  }
+
+  const models = defaults.models;
+  if (!isRecord(models)) {
+    return next;
+  }
+  for (const [modelId, modelEntry] of Object.entries(models)) {
+    if (!isRecord(modelEntry) || !Object.prototype.hasOwnProperty.call(modelEntry, "params")) {
+      continue;
+    }
+    const modelPath = ["agents", "defaults", "models", modelId];
+    const paramsPath = [...modelPath, "params"];
+    if (getPathValue(next, modelPath) === undefined) {
+      next = preserveSourceValueAtPath({
+        ...params,
+        persistedCandidate: next,
+        path: modelPath,
+        sourceValue: modelEntry,
+      });
+      continue;
+    }
+    next = preserveSourceValueAtPath({
+      ...params,
+      persistedCandidate: next,
+      path: paramsPath,
+      sourceValue: modelEntry.params,
+    });
+  }
+  return next;
+}
+
+function preserveUntouchedIncludes(params: {
+  patch: unknown;
+  rootAuthoredConfig: unknown;
+  persistedCandidate: unknown;
+}): unknown {
+  let next = params.persistedCandidate;
+  for (const includePath of collectIncludeOwnedPaths(params.rootAuthoredConfig)) {
+    if (patchTouchesPath(params.patch, includePath)) {
+      throw new Error(
+        `Config write would flatten $include-owned config at ${formatConfigPath(
+          includePath,
+        )}; edit that include file directly or remove the $include first.`,
+      );
+    }
+    next = setPathValue(next, includePath, getPathValue(params.rootAuthoredConfig, includePath));
   }
   return next;
 }
@@ -66,14 +256,27 @@ export function resolvePersistCandidateForWrite(params: {
   sourceConfig: unknown;
   nextConfig: unknown;
   rootAuthoredConfig?: unknown;
+  unsetPaths?: readonly string[][];
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
   const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
-  const persisted = applyMergePatch(projectedSource, patch);
-  return preserveRootSchemaUri({
-    rootAuthoredConfig: params.rootAuthoredConfig ?? params.sourceConfig,
+  const rootAuthoredConfig = params.rootAuthoredConfig ?? params.sourceConfig;
+  const persisted = preserveUntouchedIncludes({
+    patch,
+    rootAuthoredConfig,
+    persistedCandidate: applyMergePatch(projectedSource, patch),
+  });
+  const withSchema = preserveRootSchemaUri({
+    rootAuthoredConfig,
     nextConfig: params.nextConfig,
     persistedCandidate: persisted,
+  });
+  return preserveAuthoredAgentParams({
+    sourceConfig: params.sourceConfig,
+    nextConfig: params.nextConfig,
+    rootAuthoredConfig,
+    persistedCandidate: withSchema,
+    unsetPaths: params.unsetPaths,
   });
 }
 
@@ -235,6 +438,42 @@ export function unsetPathForWrite(
     return { changed: true, next: coerceConfig(result.value) };
   }
   return { changed: false, next: root };
+}
+
+export function applyUnsetPathsForWrite(
+  root: OpenClawConfig,
+  unsetPaths: readonly string[][] | undefined,
+): OpenClawConfig {
+  let next = root;
+  for (const unsetPath of unsetPaths ?? []) {
+    if (!Array.isArray(unsetPath) || unsetPath.length === 0) {
+      continue;
+    }
+    const unsetResult = unsetPathForWrite(next, unsetPath);
+    if (unsetResult.changed) {
+      next = unsetResult.next;
+    }
+  }
+  return next;
+}
+
+export function resolveManagedUnsetPathsForWrite(
+  unsetPaths: readonly string[][] | undefined,
+): string[][] {
+  const next: string[][] = [];
+  for (const managedPath of MANAGED_CONFIG_UNSET_PATHS) {
+    next.push(Array.from(managedPath));
+  }
+  for (const unsetPath of unsetPaths ?? []) {
+    if (!Array.isArray(unsetPath) || unsetPath.length === 0) {
+      continue;
+    }
+    if (next.some((existing) => isDeepStrictEqual(existing, unsetPath))) {
+      continue;
+    }
+    next.push([...unsetPath]);
+  }
+  return next;
 }
 
 export function collectChangedPaths(

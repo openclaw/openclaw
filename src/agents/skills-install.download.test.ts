@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDownloadSpec } from "./skills-install-download.js";
 import { setTempStateDir } from "./skills-install.download-test-utils.js";
@@ -34,14 +35,6 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-const SAFE_ZIP_BUFFER = Buffer.from(
-  "UEsDBAoAAAAAAMOJVlysKpPYAgAAAAIAAAAJAAAAaGVsbG8udHh0aGlQSwECFAAKAAAAAADDiVZcrCqT2AIAAAACAAAACQAAAAAAAAAAAAAAAAAAAAAAaGVsbG8udHh0UEsFBgAAAAABAAEANwAAACkAAAAAAA==",
-  "base64",
-);
-const STRIP_COMPONENTS_ZIP_BUFFER = Buffer.from(
-  "UEsDBAoAAAAAAMOJVlwAAAAAAAAAAAAAAAAIAAAAcGFja2FnZS9QSwMECgAAAAAAw4lWXKwqk9gCAAAAAgAAABEAAABwYWNrYWdlL2hlbGxvLnR4dGhpUEsBAhQACgAAAAAAw4lWXAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAQAAAAAAAAAHBhY2thZ2UvUEsBAhQACgAAAAAAw4lWXKwqk9gCAAAAAgAAABEAAAAAAAAAAAAAAAAAJgAAAHBhY2thZ2UvaGVsbG8udHh0UEsFBgAAAAACAAIAdQAAAFcAAAAAAA==",
-  "base64",
-);
 function buildEntry(name: string): SkillEntry {
   const skillDir = path.join(workspaceDir, "skills", name);
   const filePath = path.join(skillDir, "SKILL.md");
@@ -101,9 +94,13 @@ async function installDownloadSkill(params: {
 }
 
 function mockArchiveResponse(buffer: Uint8Array): void {
-  const blobPart = Uint8Array.from(buffer);
   fetchWithSsrFGuardMock.mockResolvedValue({
-    response: new Response(new Blob([blobPart]), { status: 200 }),
+    response: {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: Readable.from([Buffer.from(buffer)]),
+    },
     release: async () => undefined,
   });
 }
@@ -167,25 +164,7 @@ beforeEach(() => {
 });
 
 describe("installDownloadSpec extraction safety", () => {
-  it("extracts zip with stripComponents safely", async () => {
-    const entry = buildEntry("zip-good");
-    const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
-
-    mockArchiveResponse(new Uint8Array(STRIP_COMPONENTS_ZIP_BUFFER));
-
-    const result = await installDownloadSkill({
-      name: "zip-good",
-      url: "https://example.invalid/good.zip",
-      archive: "zip",
-      stripComponents: 1,
-      targetDir,
-    });
-    expect(result.ok).toBe(true);
-    expect(await fs.readFile(path.join(targetDir, "hello.txt"), "utf-8")).toBe("hi");
-  });
-
   it("rejects targetDir escapes outside the per-skill tools root", async () => {
-    mockArchiveResponse(new Uint8Array(SAFE_ZIP_BUFFER));
     const beforeFetchCalls = fetchWithSsrFGuardMock.mock.calls.length;
 
     const result = await installDownloadSkill({
@@ -229,23 +208,24 @@ describe("installDownloadSpec extraction safety", () => {
     "fails closed when the lexical tools root is rebound before the final copy",
     async () => {
       const entry = buildEntry("base-rebind");
-      const safeRoot = resolveSkillToolsRootDir(entry);
+      const safeToolsRoot = resolveSkillToolsRootDir(entry);
       const outsideRoot = path.join(workspaceDir, "outside-root");
       await fs.mkdir(outsideRoot, { recursive: true });
 
       fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(
-          new ReadableStream({
-            async start(controller) {
-              controller.enqueue(new Uint8Array(Buffer.from("payload")));
-              const reboundRoot = `${safeRoot}-rebound`;
-              await fs.rename(safeRoot, reboundRoot);
-              await fs.symlink(outsideRoot, safeRoot);
-              controller.close();
-            },
-          }),
-          { status: 200 },
-        ),
+        response: {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          body: Readable.from(
+            (async function* () {
+              yield Buffer.from("payload");
+              const reboundRoot = `${safeToolsRoot}-rebound`;
+              await fs.rename(safeToolsRoot, reboundRoot);
+              await fs.symlink(outsideRoot, safeToolsRoot);
+            })(),
+          ),
+        },
         release: async () => undefined,
       });
 

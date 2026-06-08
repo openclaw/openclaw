@@ -14,6 +14,7 @@ import { callGateway } from "../gateway/call.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import {
@@ -21,16 +22,7 @@ import {
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "./run-wait.js";
 import { resolveStoredSubagentCapabilities } from "./subagent-capabilities.js";
-import {
-  buildLatestSubagentRunIndex,
-  buildSubagentList,
-  createPendingDescendantCounter,
-  isActiveSubagentRun,
-  resolveSessionEntryForKey,
-  type BuiltSubagentList,
-  type SessionEntryResolution,
-  type SubagentListItem,
-} from "./subagent-list.js";
+import { buildLatestSubagentRunIndex, resolveSessionEntryForKey } from "./subagent-list.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   getLatestSubagentRunByChildSessionKey,
@@ -50,32 +42,35 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sess
 export const DEFAULT_RECENT_MINUTES = 30;
 export const MAX_RECENT_MINUTES = 24 * 60;
 export const MAX_STEER_MESSAGE_CHARS = 4_000;
-export const STEER_RATE_LIMIT_MS = 2_000;
-export const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
+const STEER_RATE_LIMIT_MS = 2_000;
+const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 const SUBAGENT_REPLY_HISTORY_LIMIT = 50;
 
 const steerRateLimit = new Map<string, number>();
 
 type GatewayCaller = typeof callGateway;
+type UpdateSessionStore = typeof updateSessionStore;
 type AbortEmbeddedPiRun = (sessionId: string) => boolean;
 type ClearSessionQueues = (keys: Array<string | undefined>) => ClearSessionQueueResult;
 
 const defaultSubagentControlDeps = {
   callGateway,
+  updateSessionStore,
 };
 
 let subagentControlDeps: {
   callGateway: GatewayCaller;
+  updateSessionStore: UpdateSessionStore;
   abortEmbeddedPiRun?: AbortEmbeddedPiRun;
   clearSessionQueues?: ClearSessionQueues;
 } = defaultSubagentControlDeps;
 
-let subagentControlRuntimePromise: Promise<typeof import("./subagent-control.runtime.js")> | null =
-  null;
+const subagentControlRuntimeLoader = createLazyImportLoader(
+  () => import("./subagent-control.runtime.js"),
+);
 
 function loadSubagentControlRuntime() {
-  subagentControlRuntimePromise ??= import("./subagent-control.runtime.js");
-  return subagentControlRuntimePromise;
+  return subagentControlRuntimeLoader.load();
 }
 
 async function resolveSubagentControlRuntime(): Promise<{
@@ -101,14 +96,6 @@ export type ResolvedSubagentController = {
   callerIsSubagent: boolean;
   controlScope: "children" | "none";
 };
-export type { BuiltSubagentList, SessionEntryResolution, SubagentListItem };
-export {
-  buildSubagentList,
-  createPendingDescendantCounter,
-  isActiveSubagentRun,
-  resolveSessionEntryForKey,
-};
-
 export function resolveSubagentController(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;
@@ -191,7 +178,7 @@ async function killSubagentRun(params: {
   }
   if (resolved.entry) {
     try {
-      await updateSessionStore(resolved.storePath, (store) => {
+      await subagentControlDeps.updateSessionStore(resolved.storePath, (store) => {
         const current = store[childSessionKey];
         if (!current) {
           return;
@@ -744,6 +731,7 @@ export const __testing = {
   setDepsForTest(
     overrides?: Partial<{
       callGateway: GatewayCaller;
+      updateSessionStore: UpdateSessionStore;
       abortEmbeddedPiRun: AbortEmbeddedPiRun;
       clearSessionQueues: ClearSessionQueues;
     }>,

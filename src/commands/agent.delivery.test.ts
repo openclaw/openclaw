@@ -200,6 +200,21 @@ describe("deliverAgentCommandResult", () => {
     );
   });
 
+  it("stays silent for intentional empty payloads", async () => {
+    const runtime = createRuntime();
+
+    await runDelivery({
+      opts: {
+        message: "hello",
+      },
+      runtime,
+      payloads: [],
+    });
+
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
   it("uses runContext turn source over stale session last route", async () => {
     await runDelivery({
       opts: {
@@ -289,6 +304,29 @@ describe("deliverAgentCommandResult", () => {
     expect(line).toContain("session=agent:main:main");
     expect(line).toContain("run=run-announce");
     expect(line).toContain("channel=webchat");
+    expect(line).toContain("ANNOUNCE_SKIP");
+  });
+
+  it("prefixes per-session nested lanes with the same nested log context (#67502)", async () => {
+    const runtime = createRuntime();
+    await runDelivery({
+      runtime,
+      resultText: "ANNOUNCE_SKIP",
+      opts: {
+        message: "hello",
+        deliver: false,
+        lane: "nested:agent:ebao-next:quietchat:channel:1",
+        sessionKey: "agent:ebao-next:quietchat:channel:1",
+        runId: "run-announce",
+        messageChannel: "webchat",
+      },
+      sessionEntry: undefined,
+    });
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    const line = String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
+    expect(line).toContain("[agent:nested]");
+    expect(line).toContain("session=agent:ebao-next:quietchat:channel:1");
     expect(line).toContain("ANNOUNCE_SKIP");
   });
 

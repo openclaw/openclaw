@@ -4,10 +4,8 @@ read_when:
   - You need to know which env vars are loaded, and in what order
   - You are debugging missing API keys in the Gateway
   - You are documenting provider auth or deployment environments
-title: "Environment Variables"
+title: "Environment variables"
 ---
-
-# Environment variables
 
 OpenClaw pulls environment variables from multiple sources. The rule is **never override existing values**.
 
@@ -105,11 +103,12 @@ Both resolve from process env at activation time. SecretRef details are document
 
 ## Path-related env vars
 
-| Variable               | Purpose                                                                                                                                                                          |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OPENCLAW_HOME`        | Override the home directory used for all internal path resolution (`~/.openclaw/`, agent dirs, sessions, credentials). Useful when running OpenClaw as a dedicated service user. |
-| `OPENCLAW_STATE_DIR`   | Override the state directory (default `~/.openclaw`).                                                                                                                            |
-| `OPENCLAW_CONFIG_PATH` | Override the config file path (default `~/.openclaw/openclaw.json`).                                                                                                             |
+| Variable                 | Purpose                                                                                                                                                                          |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENCLAW_HOME`          | Override the home directory used for all internal path resolution (`~/.openclaw/`, agent dirs, sessions, credentials). Useful when running OpenClaw as a dedicated service user. |
+| `OPENCLAW_STATE_DIR`     | Override the state directory (default `~/.openclaw`).                                                                                                                            |
+| `OPENCLAW_CONFIG_PATH`   | Override the config file path (default `~/.openclaw/openclaw.json`).                                                                                                             |
+| `OPENCLAW_INCLUDE_ROOTS` | Path-list of directories where `$include` directives may resolve files outside the config directory (default: none — `$include` is confined to the config dir). Tilde-expanded.  |
 
 ## Logging
 
@@ -157,6 +156,18 @@ openclaw gateway run
 
 Do not rely on writing only to `~/.openclaw/.env` for this variable; Node reads
 `NODE_EXTRA_CA_CERTS` at process startup.
+
+## Legacy environment variables
+
+OpenClaw only reads `OPENCLAW_*` environment variables. The legacy
+`CLAWDBOT_*` and `MOLTBOT_*` prefixes from earlier releases are silently
+ignored.
+
+If any are still set on the Gateway process at startup, OpenClaw emits a
+single Node deprecation warning (`OPENCLAW_LEGACY_ENV_VARS`) listing the
+detected prefixes and the total count. Rename each value by replacing the
+legacy prefix with `OPENCLAW_` (for example `CLAWDBOT_GATEWAY_TOKEN` →
+`OPENCLAW_GATEWAY_TOKEN`); the old names take no effect.
 
 ## Related
 

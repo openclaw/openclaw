@@ -14,6 +14,16 @@ import {
 type MatrixRoomsConfig = Record<string, MatrixRoomConfig>;
 type ResolveMatrixTargetsFn = typeof resolveMatrixTargets;
 
+export type MatrixResolvedAllowlistEntry = {
+  input: string;
+  id: string;
+};
+
+type MatrixResolvedUserAllowlist = {
+  entries: string[];
+  resolvedEntries: MatrixResolvedAllowlistEntry[];
+};
+
 function normalizeMatrixUserLookupEntry(raw: string): string {
   return raw
     .replace(/^matrix:/i, "")
@@ -39,6 +49,60 @@ function filterResolvedMatrixAllowlistEntries(entries: string[]): string[] {
     }
     return isMatrixQualifiedUserId(normalizeMatrixUserLookupEntry(trimmed));
   });
+}
+
+function listResolvedMatrixAllowlistEntries(params: {
+  entries: Array<string | number>;
+  resolvedMap: Map<string, { resolved: boolean; id?: string }>;
+}): MatrixResolvedAllowlistEntry[] {
+  const resolvedEntries: MatrixResolvedAllowlistEntry[] = [];
+  const seen = new Set<string>();
+  for (const entry of params.entries) {
+    const input = String(entry).trim();
+    if (!input || seen.has(input)) {
+      continue;
+    }
+    seen.add(input);
+    const resolved = params.resolvedMap.get(input);
+    if (!resolved?.resolved || !resolved.id) {
+      continue;
+    }
+    const id = normalizeMatrixUserId(resolved.id);
+    if (isMatrixQualifiedUserId(id)) {
+      resolvedEntries.push({ input, id });
+    }
+  }
+  return resolvedEntries;
+}
+
+function normalizeConfiguredMatrixAllowlistEntries(
+  entries?: ReadonlyArray<string | number>,
+): string[] {
+  const normalized: string[] = [];
+  for (const entry of entries ?? []) {
+    const trimmed = String(entry).trim();
+    if (trimmed) {
+      normalized.push(trimmed);
+    }
+  }
+  return normalized;
+}
+
+function addUniqueMatrixAllowlistEntry(params: {
+  entries: string[];
+  seen: Set<string>;
+  entry: string;
+}): void {
+  const trimmed = params.entry.trim();
+  if (!trimmed) {
+    return;
+  }
+  const key = trimmed.toLowerCase();
+  if (params.seen.has(key)) {
+    return;
+  }
+  params.seen.add(key);
+  params.entries.push(trimmed);
 }
 
 function sanitizeMatrixRoomUserAllowlists(entries: MatrixRoomsConfig): MatrixRoomsConfig {
@@ -119,10 +183,10 @@ async function resolveMatrixMonitorUserAllowlist(params: {
   list?: Array<string | number>;
   runtime: RuntimeEnv;
   resolveTargets: ResolveMatrixTargetsFn;
-}): Promise<string[]> {
+}): Promise<MatrixResolvedUserAllowlist> {
   const allowList = (params.list ?? []).map(String);
   if (allowList.length === 0) {
-    return allowList;
+    return { entries: allowList, resolvedEntries: [] };
   }
 
   const resolution = await resolveMatrixMonitorUserEntries({
@@ -144,7 +208,77 @@ async function resolveMatrixMonitorUserAllowlist(params: {
     );
   }
 
-  return filterResolvedMatrixAllowlistEntries(canonicalized);
+  return {
+    entries: filterResolvedMatrixAllowlistEntries(canonicalized),
+    resolvedEntries: listResolvedMatrixAllowlistEntries({
+      entries: allowList,
+      resolvedMap: resolution.resolvedMap,
+    }),
+  };
+}
+
+export async function resolveMatrixMonitorLiveUserAllowlist(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  entries?: ReadonlyArray<string | number>;
+  startupResolvedEntries?: readonly MatrixResolvedAllowlistEntry[];
+  runtime: RuntimeEnv;
+  resolveTargets?: ResolveMatrixTargetsFn;
+}): Promise<string[]> {
+  const liveEntries = normalizeConfiguredMatrixAllowlistEntries(params.entries);
+  if (liveEntries.length === 0) {
+    return [];
+  }
+
+  const effective: string[] = [];
+  const seen = new Set<string>();
+  const startupByInput = new Map(
+    (params.startupResolvedEntries ?? []).map((entry) => [entry.input, entry.id] as const),
+  );
+  const pending: string[] = [];
+
+  for (const entry of liveEntries) {
+    const query = normalizeMatrixUserLookupEntry(entry);
+    if (entry === "*") {
+      addUniqueMatrixAllowlistEntry({ entries: effective, seen, entry });
+      continue;
+    }
+    if (isMatrixQualifiedUserId(query)) {
+      addUniqueMatrixAllowlistEntry({
+        entries: effective,
+        seen,
+        entry: normalizeMatrixUserId(query),
+      });
+      continue;
+    }
+    const startupId = startupByInput.get(entry);
+    if (startupId) {
+      addUniqueMatrixAllowlistEntry({ entries: effective, seen, entry: startupId });
+      continue;
+    }
+    pending.push(entry);
+  }
+
+  if (pending.length === 0) {
+    return effective;
+  }
+
+  const resolution = await resolveMatrixMonitorUserEntries({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    entries: pending,
+    runtime: params.runtime,
+    resolveTargets: params.resolveTargets ?? resolveMatrixTargets,
+  });
+  const canonicalized = canonicalizeAllowlistWithResolvedIds({
+    existing: pending,
+    resolvedMap: resolution.resolvedMap,
+  });
+  for (const entry of filterResolvedMatrixAllowlistEntries(canonicalized)) {
+    addUniqueMatrixAllowlistEntry({ entries: effective, seen, entry });
+  }
+
+  return effective;
 }
 
 async function resolveMatrixMonitorRoomsConfig(params: {
@@ -264,7 +398,9 @@ export async function resolveMatrixMonitorConfig(params: {
   resolveTargets?: ResolveMatrixTargetsFn;
 }): Promise<{
   allowFrom: string[];
+  allowFromResolvedEntries: MatrixResolvedAllowlistEntry[];
   groupAllowFrom: string[];
+  groupAllowFromResolvedEntries: MatrixResolvedAllowlistEntry[];
   roomsConfig?: MatrixRoomsConfig;
 }> {
   const resolveTargets = params.resolveTargets ?? resolveMatrixTargets;
@@ -296,8 +432,10 @@ export async function resolveMatrixMonitorConfig(params: {
   ]);
 
   return {
-    allowFrom,
-    groupAllowFrom,
+    allowFrom: allowFrom.entries,
+    allowFromResolvedEntries: allowFrom.resolvedEntries,
+    groupAllowFrom: groupAllowFrom.entries,
+    groupAllowFromResolvedEntries: groupAllowFrom.resolvedEntries,
     roomsConfig,
   };
 }

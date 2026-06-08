@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 
 const writeJsonFileAtomicallyMock = vi.hoisted(() => vi.fn());
 const readAcpSessionEntryMock = vi.hoisted(() => vi.fn());
@@ -33,10 +34,31 @@ vi.mock("openclaw/plugin-sdk/json-store", async () => {
 
 import {
   __testing,
-  createTelegramThreadBindingManager,
+  createTelegramThreadBindingManager as createTelegramThreadBindingManagerImpl,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "./thread-bindings.js";
+
+const TELEGRAM_THREAD_BINDINGS_TEST_CFG = {
+  channels: {
+    telegram: {
+      token: "test-token",
+    },
+  },
+} as OpenClawConfig;
+
+type TelegramThreadBindingManagerParams = Parameters<
+  typeof createTelegramThreadBindingManagerImpl
+>[0];
+
+function createTelegramThreadBindingManager(
+  params: Omit<TelegramThreadBindingManagerParams, "cfg">,
+) {
+  return createTelegramThreadBindingManagerImpl({
+    cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
+    ...params,
+  });
+}
 
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
@@ -44,6 +66,7 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe("telegram thread bindings", () => {
+  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
   let stateDirOverride: string | undefined;
 
   beforeEach(async () => {
@@ -60,9 +83,13 @@ describe("telegram thread bindings", () => {
     vi.useRealTimers();
     await __testing.resetTelegramThreadBindingsForTests();
     if (stateDirOverride) {
-      delete process.env.OPENCLAW_STATE_DIR;
       fs.rmSync(stateDirOverride, { recursive: true, force: true });
       stateDirOverride = undefined;
+    }
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
     }
   });
 
@@ -156,11 +183,13 @@ describe("telegram thread bindings", () => {
 
     try {
       const managerA = bindingsA.createTelegramThreadBindingManager({
+        cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
         accountId: "shared-runtime",
         persist: false,
         enableSweeper: false,
       });
       const managerB = bindingsB.createTelegramThreadBindingManager({
+        cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
         accountId: "shared-runtime",
         persist: false,
         enableSweeper: false,

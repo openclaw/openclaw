@@ -75,10 +75,10 @@ describe("agent-events sequencing", () => {
     expect(phases).toEqual(["start", "end"]);
   });
 
-  test("omits sessionKey for runs hidden from Control UI", async () => {
+  test("omits sessionKey for non-lifecycle runs hidden from Control UI", async () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden", {
-      sessionKey: "session-imessage",
+      sessionKey: "session-quietchat",
       isControlUiVisible: false,
     });
 
@@ -90,11 +90,54 @@ describe("agent-events sequencing", () => {
       runId: "run-hidden",
       stream: "assistant",
       data: { text: "hi" },
-      sessionKey: "session-imessage",
+      sessionKey: "session-quietchat",
     });
     stop();
 
     expect(receivedSessionKey).toBeUndefined();
+  });
+
+  test("preserves sessionKey for lifecycle events hidden from Control UI", async () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-hidden-lifecycle", {
+      sessionKey: "session-quietchat",
+      isControlUiVisible: false,
+    });
+
+    let receivedSessionKey: string | undefined;
+    const stop = onAgentEvent((evt) => {
+      receivedSessionKey = evt.sessionKey;
+    });
+    emitAgentEvent({
+      runId: "run-hidden-lifecycle",
+      stream: "lifecycle",
+      data: { phase: "end" },
+      sessionKey: "session-quietchat",
+    });
+    stop();
+
+    expect(receivedSessionKey).toBe("session-quietchat");
+  });
+
+  test("falls back to registered sessionKey for hidden lifecycle events", async () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-hidden-lifecycle-context", {
+      sessionKey: "session-quietchat-context",
+      isControlUiVisible: false,
+    });
+
+    let receivedSessionKey: string | undefined;
+    const stop = onAgentEvent((evt) => {
+      receivedSessionKey = evt.sessionKey;
+    });
+    emitAgentEvent({
+      runId: "run-hidden-lifecycle-context",
+      stream: "lifecycle",
+      data: { phase: "error", error: "boom" },
+    });
+    stop();
+
+    expect(receivedSessionKey).toBe("session-quietchat-context");
   });
 
   test("merges later run context updates into existing runs", async () => {
@@ -106,6 +149,7 @@ describe("agent-events sequencing", () => {
     registerAgentRunContext("run-ctx", {
       verboseLevel: "full",
       isHeartbeat: true,
+      lastActiveAt: 12_345,
     });
 
     expect(getAgentRunContext("run-ctx")).toMatchObject({
@@ -113,6 +157,7 @@ describe("agent-events sequencing", () => {
       verboseLevel: "full",
       isHeartbeat: true,
       isControlUiVisible: true,
+      lastActiveAt: 12_345,
     });
   });
 

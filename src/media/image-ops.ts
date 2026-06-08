@@ -1,18 +1,40 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import { withTempWorkspace, type TempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runExec } from "../process/exec.js";
-
-type Sharp = typeof import("sharp");
-type SharpFactory = (buffer: Buffer) => ReturnType<Sharp>;
+import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 
 export type ImageMetadata = {
   width: number;
   height: number;
 };
 
+type MediaAttachmentImageOps = {
+  getImageMetadata(buffer: Buffer): Promise<ImageMetadata | null>;
+  normalizeExifOrientation(buffer: Buffer): Promise<Buffer>;
+  resizeToJpeg(params: {
+    buffer: Buffer;
+    maxSide: number;
+    quality: number;
+    withoutEnlargement?: boolean;
+  }): Promise<Buffer>;
+  convertHeicToJpeg(buffer: Buffer): Promise<Buffer>;
+  hasAlphaChannel(buffer: Buffer): Promise<boolean>;
+  resizeToPng(params: {
+    buffer: Buffer;
+    maxSide: number;
+    compressionLevel?: number;
+    withoutEnlargement?: boolean;
+  }): Promise<Buffer>;
+};
+
+type MediaAttachmentImageOpsModule = {
+  createMediaAttachmentImageOps?: (options: { maxInputPixels: number }) => MediaAttachmentImageOps;
+};
+
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
 export const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
+const MEDIA_UNDERSTANDING_CORE_PLUGIN_ID = "media-understanding-core";
+const MEDIA_UNDERSTANDING_CORE_IMAGE_OPS_ARTIFACT = "image-ops.js";
 
 export function buildImageResizeSideGrid(maxSide: number, sideStart: number): number[] {
   return [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
@@ -32,18 +54,39 @@ function prefersSips(): boolean {
   );
 }
 
-let sharpFactoryPromise: Promise<SharpFactory> | null = null;
+function isMediaAttachmentImageOps(value: unknown): value is MediaAttachmentImageOps {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Partial<Record<keyof MediaAttachmentImageOps, unknown>>;
+  return (
+    typeof candidate.getImageMetadata === "function" &&
+    typeof candidate.normalizeExifOrientation === "function" &&
+    typeof candidate.resizeToJpeg === "function" &&
+    typeof candidate.convertHeicToJpeg === "function" &&
+    typeof candidate.hasAlphaChannel === "function" &&
+    typeof candidate.resizeToPng === "function"
+  );
+}
 
-async function loadSharp(): Promise<SharpFactory> {
-  sharpFactoryPromise ??= import("sharp").then((mod) => {
-    const sharp = (mod as unknown as { default?: Sharp }).default ?? (mod as unknown as Sharp);
-    return (buffer: Buffer) =>
-      sharp(buffer, {
-        failOnError: false,
-        limitInputPixels: MAX_IMAGE_INPUT_PIXELS,
-      });
+const mediaAttachmentImageOpsLoader = createLazyPromiseLoader(async () => {
+  const { loadBundledPluginPublicArtifactModuleSync } =
+    await import("../plugins/public-surface-loader.js");
+  const mod = loadBundledPluginPublicArtifactModuleSync<MediaAttachmentImageOpsModule>({
+    dirName: MEDIA_UNDERSTANDING_CORE_PLUGIN_ID,
+    artifactBasename: MEDIA_UNDERSTANDING_CORE_IMAGE_OPS_ARTIFACT,
   });
-  return sharpFactoryPromise;
+  const ops = mod.createMediaAttachmentImageOps?.({
+    maxInputPixels: MAX_IMAGE_INPUT_PIXELS,
+  });
+  if (!isMediaAttachmentImageOps(ops)) {
+    throw new Error("Media understanding core did not expose image ops");
+  }
+  return ops;
+});
+
+async function loadMediaAttachmentImageOps(): Promise<MediaAttachmentImageOps> {
+  return await mediaAttachmentImageOpsLoader.load();
 }
 
 function isPositiveImageDimension(value: number): boolean {
@@ -313,19 +356,16 @@ function readJpegExifOrientation(buffer: Buffer): number | null {
   return null;
 }
 
-async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-img-"));
-  try {
-    return await fn(dir);
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
+async function withImageTemp<T>(fn: (workspace: TempWorkspace) => Promise<T>): Promise<T> {
+  return await withTempWorkspace(
+    { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-img-" },
+    fn,
+  );
 }
 
 async function sipsMetadataFromBuffer(buffer: Buffer): Promise<ImageMetadata | null> {
-  return await withTempDir(async (dir) => {
-    const input = path.join(dir, "in.img");
-    await fs.writeFile(input, buffer);
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.img", buffer);
     const { stdout } = await runExec(
       "/usr/bin/sips",
       ["-g", "pixelWidth", "-g", "pixelHeight", input],
@@ -356,10 +396,9 @@ async function sipsResizeToJpeg(params: {
   maxSide: number;
   quality: number;
 }): Promise<Buffer> {
-  return await withTempDir(async (dir) => {
-    const input = path.join(dir, "in.img");
-    const output = path.join(dir, "out.jpg");
-    await fs.writeFile(input, params.buffer);
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.img", params.buffer);
+    const output = workspace.path("out.jpg");
     await runExec(
       "/usr/bin/sips",
       [
@@ -377,20 +416,19 @@ async function sipsResizeToJpeg(params: {
       ],
       { timeoutMs: 20_000, maxBuffer: 1024 * 1024 },
     );
-    return await fs.readFile(output);
+    return await workspace.read("out.jpg");
   });
 }
 
 async function sipsConvertToJpeg(buffer: Buffer): Promise<Buffer> {
-  return await withTempDir(async (dir) => {
-    const input = path.join(dir, "in.heic");
-    const output = path.join(dir, "out.jpg");
-    await fs.writeFile(input, buffer);
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.heic", buffer);
+    const output = workspace.path("out.jpg");
     await runExec("/usr/bin/sips", ["-s", "format", "jpeg", input, "--out", output], {
       timeoutMs: 20_000,
       maxBuffer: 1024 * 1024,
     });
-    return await fs.readFile(output);
+    return await workspace.read("out.jpg");
   });
 }
 
@@ -409,17 +447,9 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
   }
 
   try {
-    const sharp = await loadSharp();
-    const meta = await sharp(buffer).metadata();
-    const width = meta.width ?? 0;
-    const height = meta.height ?? 0;
-    if (!Number.isFinite(width) || !Number.isFinite(height)) {
-      return null;
-    }
-    if (width <= 0 || height <= 0) {
-      return null;
-    }
-    return validateImagePixelLimit({ width, height });
+    const ops = await loadMediaAttachmentImageOps();
+    const meta = await ops.getImageMetadata(buffer);
+    return meta ? validateImagePixelLimit(meta) : null;
   } catch {
     return null;
   }
@@ -459,15 +489,14 @@ async function sipsApplyOrientation(buffer: Buffer, orientation: number): Promis
       return buffer;
   }
 
-  return await withTempDir(async (dir) => {
-    const input = path.join(dir, "in.jpg");
-    const output = path.join(dir, "out.jpg");
-    await fs.writeFile(input, buffer);
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.jpg", buffer);
+    const output = workspace.path("out.jpg");
     await runExec("/usr/bin/sips", [...ops, input, "--out", output], {
       timeoutMs: 20_000,
       maxBuffer: 1024 * 1024,
     });
-    return await fs.readFile(output);
+    return await workspace.read("out.jpg");
   });
 }
 
@@ -492,11 +521,9 @@ export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> 
   }
 
   try {
-    const sharp = await loadSharp();
-    // .rotate() with no args auto-rotates based on EXIF orientation
-    return await sharp(buffer).rotate().toBuffer();
+    const ops = await loadMediaAttachmentImageOps();
+    return await ops.normalizeExifOrientation(buffer);
   } catch {
-    // Sharp not available or failed - return original buffer
     return buffer;
   }
 }
@@ -534,18 +561,8 @@ export async function resizeToJpeg(params: {
     });
   }
 
-  const sharp = await loadSharp();
-  // Use .rotate() BEFORE .resize() to auto-rotate based on EXIF orientation
-  return await sharp(params.buffer)
-    .rotate() // Auto-rotate based on EXIF before resizing
-    .resize({
-      width: params.maxSide,
-      height: params.maxSide,
-      fit: "inside",
-      withoutEnlargement: params.withoutEnlargement !== false,
-    })
-    .jpeg({ quality: params.quality, mozjpeg: true })
-    .toBuffer();
+  const ops = await loadMediaAttachmentImageOps();
+  return await ops.resizeToJpeg(params);
 }
 
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
@@ -554,8 +571,8 @@ export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
   if (prefersSips()) {
     return await sipsConvertToJpeg(buffer);
   }
-  const sharp = await loadSharp();
-  return await sharp(buffer).jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+  const ops = await loadMediaAttachmentImageOps();
+  return await ops.convertHeicToJpeg(buffer);
 }
 
 /**
@@ -566,12 +583,8 @@ export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
   await assertImagePixelLimit(buffer);
 
   try {
-    const sharp = await loadSharp();
-    const meta = await sharp(buffer).metadata();
-    // Check if the image has an alpha channel
-    // PNG color types with alpha: 4 (grayscale+alpha), 6 (RGBA)
-    // Sharp reports this via 'channels' (4 = RGBA) or 'hasAlpha'
-    return meta.hasAlpha || meta.channels === 4;
+    const ops = await loadMediaAttachmentImageOps();
+    return await ops.hasAlphaChannel(buffer);
   } catch {
     return false;
   }
@@ -579,7 +592,7 @@ export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
 
 /**
  * Resizes an image to PNG format, preserving alpha channel (transparency).
- * Falls back to sharp only (no sips fallback for PNG with alpha).
+ * Falls back to the media attachments plugin only (no sips fallback for PNG with alpha).
  */
 export async function resizeToPng(params: {
   buffer: Buffer;
@@ -589,20 +602,8 @@ export async function resizeToPng(params: {
 }): Promise<Buffer> {
   await assertImagePixelLimit(params.buffer);
 
-  const sharp = await loadSharp();
-  // Compression level 6 is a good balance (0=fastest, 9=smallest)
-  const compressionLevel = params.compressionLevel ?? 6;
-
-  return await sharp(params.buffer)
-    .rotate() // Auto-rotate based on EXIF if present
-    .resize({
-      width: params.maxSide,
-      height: params.maxSide,
-      fit: "inside",
-      withoutEnlargement: params.withoutEnlargement !== false,
-    })
-    .png({ compressionLevel })
-    .toBuffer();
+  const ops = await loadMediaAttachmentImageOps();
+  return await ops.resizeToPng(params);
 }
 
 export async function optimizeImageToPng(

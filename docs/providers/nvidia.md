@@ -6,8 +6,6 @@ read_when:
 title: "NVIDIA"
 ---
 
-# NVIDIA
-
 NVIDIA provides an OpenAI-compatible API at `https://integrate.api.nvidia.com/v1` for
 open models for free. Authenticate with an API key from
 [build.nvidia.com](https://build.nvidia.com/settings/api-keys).
@@ -21,7 +19,7 @@ open models for free. Authenticate with an API key from
   <Step title="Export the key and run onboarding">
     ```bash
     export NVIDIA_API_KEY="nvapi-..."
-    openclaw onboard --auth-choice skip
+    openclaw onboard --auth-choice nvidia-api-key
     ```
   </Step>
   <Step title="Set an NVIDIA model">
@@ -32,9 +30,16 @@ open models for free. Authenticate with an API key from
 </Steps>
 
 <Warning>
-If you pass `--token` instead of the env var, the value lands in shell history and
-`ps` output. Prefer the `NVIDIA_API_KEY` environment variable when possible.
+If you pass `--nvidia-api-key` instead of the env var, the value lands in shell
+history and `ps` output. Prefer the `NVIDIA_API_KEY` environment variable when
+possible.
 </Warning>
+
+For non-interactive setup, you can also pass the key directly:
+
+```bash
+openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
+```
 
 ## Config example
 
@@ -66,7 +71,7 @@ If you pass `--token` instead of the env var, the value lands in shell history a
 | `nvidia/minimaxai/minimax-m2.5`            | Minimax M2.5                 | 196,608 | 8,192      |
 | `nvidia/z-ai/glm5`                         | GLM 5                        | 202,752 | 8,192      |
 
-## Advanced notes
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Auto-enable behavior">
@@ -82,6 +87,38 @@ If you pass `--token` instead of the env var, the value lands in shell history a
   <Accordion title="OpenAI-compatible endpoint">
     NVIDIA uses the standard `/v1` completions endpoint. Any OpenAI-compatible
     tooling should work out of the box with the NVIDIA base URL.
+  </Accordion>
+
+  <Accordion title="Slow custom provider responses">
+    Some NVIDIA-hosted custom models can take longer than the default model idle
+    watchdog before they emit a first response chunk. For custom NVIDIA provider
+    entries, raise the provider timeout instead of raising the whole agent
+    runtime timeout:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          "custom-integrate-api-nvidia-com": {
+            baseUrl: "https://integrate.api.nvidia.com/v1",
+            api: "openai-completions",
+            apiKey: "NVIDIA_API_KEY",
+            timeoutSeconds: 300,
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "custom-integrate-api-nvidia-com/meta/llama-3.1-70b-instruct": {
+              params: { thinking: "off" },
+            },
+          },
+        },
+      },
+    }
+    ```
+
   </Accordion>
 </AccordionGroup>
 

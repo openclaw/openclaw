@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./runtime-api.js";
 
 const probeBlueBubblesMock = vi.hoisted(() => vi.fn());
@@ -10,10 +10,10 @@ vi.mock("./channel.runtime.js", () => ({
   },
 }));
 
-vi.mock("../../../src/channels/plugins/bundled.js", () => ({
-  bundledChannelPlugins: [],
-  bundledChannelSetupPlugins: [],
-}));
+afterAll(() => {
+  vi.doUnmock("./channel.runtime.js");
+  vi.resetModules();
+});
 
 let bluebubblesPlugin: typeof import("./channel.js").bluebubblesPlugin;
 

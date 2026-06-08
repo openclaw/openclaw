@@ -1,6 +1,6 @@
-import { Type } from "@sinclair/typebox";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { Type } from "typebox";
 import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
 import { parseZalouserOutboundTarget } from "./session-route.js";
 import {
@@ -28,7 +28,7 @@ function stringEnum<T extends readonly string[]>(
   });
 }
 
-export const ZalouserToolSchema = Type.Object(
+const ZalouserToolSchema = Type.Object(
   {
     action: stringEnum(ACTIONS, { description: `Action to perform: ${ACTIONS.join(", ")}` }),
     threadId: Type.Optional(Type.String({ description: "Thread ID for messaging" })),

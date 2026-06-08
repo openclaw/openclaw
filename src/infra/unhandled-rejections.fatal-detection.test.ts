@@ -7,7 +7,12 @@ vi.mock("../terminal/restore.js", () => ({
   restoreTerminalState: restoreTerminalStateMock,
 }));
 
-import { installUnhandledRejectionHandler } from "./unhandled-rejections.js";
+import { resetFatalErrorHooksForTest } from "./fatal-error-hooks.js";
+import {
+  installUnhandledRejectionHandler,
+  isUncaughtExceptionHandled,
+  registerUncaughtExceptionHandler,
+} from "./unhandled-rejections.js";
 
 describe("installUnhandledRejectionHandler - fatal detection", () => {
   let exitCalls: Array<string | number | null> = [];
@@ -22,6 +27,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
   beforeEach(() => {
     exitCalls = [];
+    resetFatalErrorHooksForTest();
 
     vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
       if (code !== undefined && code !== null) {
@@ -86,6 +92,20 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         "[openclaw] FATAL unhandled rejection:",
         expect.stringContaining("Out of memory"),
       );
+    });
+  });
+
+  describe("scoped uncaught exception handlers", () => {
+    it("lets registered handlers suppress known dependency exceptions", () => {
+      const cleanup = registerUncaughtExceptionHandler((error) => {
+        return error instanceof Error && error.message === "known dependency assertion";
+      });
+
+      expect(isUncaughtExceptionHandled(new Error("known dependency assertion"))).toBe(true);
+      expect(isUncaughtExceptionHandled(new Error("unknown"))).toBe(false);
+
+      cleanup();
+      expect(isUncaughtExceptionHandled(new Error("known dependency assertion"))).toBe(false);
     });
   });
 

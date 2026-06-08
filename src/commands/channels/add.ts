@@ -1,52 +1,69 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
-import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
+import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
-import { channelLabel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
+import { channelLabel } from "./runtime-label.js";
+import { requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
 
 type ChannelSetupPluginInstallModule = typeof import("../channel-setup/plugin-install.js");
 type OnboardChannelsModule = typeof import("../onboard-channels.js");
 
-let channelSetupPluginInstallPromise: Promise<ChannelSetupPluginInstallModule> | undefined;
-let onboardChannelsPromise: Promise<OnboardChannelsModule> | undefined;
+const channelSetupPluginInstallLoader = createLazyImportLoader<ChannelSetupPluginInstallModule>(
+  () => import("../channel-setup/plugin-install.js"),
+);
+const onboardChannelsLoader = createLazyImportLoader<OnboardChannelsModule>(
+  () => import("../onboard-channels.js"),
+);
 
 function loadChannelSetupPluginInstall(): Promise<ChannelSetupPluginInstallModule> {
-  channelSetupPluginInstallPromise ??= import("../channel-setup/plugin-install.js");
-  return channelSetupPluginInstallPromise;
+  return channelSetupPluginInstallLoader.load();
 }
 
 function loadOnboardChannels(): Promise<OnboardChannelsModule> {
-  onboardChannelsPromise ??= import("../onboard-channels.js");
-  return onboardChannelsPromise;
+  return onboardChannelsLoader.load();
 }
 
 export type ChannelsAddOptions = {
   channel?: string;
   account?: string;
-  initialSyncLimit?: number | string;
-  groupChannels?: string;
-  dmAllowlist?: string;
-} & Omit<ChannelSetupInput, "groupChannels" | "dmAllowlist" | "initialSyncLimit">;
+} & Record<string, unknown>;
+
+const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["channel", "account"]);
+const NEXTCLOUD_TALK_CLI_ALIASES = new Set(["nextcloud-talk", "nc-talk", "nc"]);
 
 async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
     return undefined;
   }
-  const { listChannelPluginCatalogEntries } = await import("../../channels/plugins/catalog.js");
-  const workspaceDir = cfg ? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) : undefined;
-  return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
+  const entries = cfg
+    ? await import("../channel-setup/trusted-catalog.js").then(
+        ({ listTrustedChannelPluginCatalogEntries }) =>
+          listTrustedChannelPluginCatalogEntries({
+            cfg,
+            workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
+          }),
+      )
+    : await import("../../channels/plugins/catalog.js").then(
+        ({ listChannelPluginCatalogEntries }) =>
+          listChannelPluginCatalogEntries({ excludeWorkspace: true }),
+      );
+  return entries.find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
       return true;
     }
@@ -54,6 +71,49 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
       (alias) => normalizeOptionalLowercaseString(alias) === trimmed,
     );
   });
+}
+
+function parseOptionalInt(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    return Number.parseInt(value, 10);
+  }
+  return undefined;
+}
+
+function parseOptionalDelimitedInput(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string");
+  }
+  return parseOptionalDelimitedEntries(typeof value === "string" ? value : undefined);
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
+  const input: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(opts)) {
+    if (CHANNEL_ADD_CONTROL_OPTION_KEYS.has(key) || value === undefined) {
+      continue;
+    }
+    input[key] = value;
+  }
+
+  const rawChannel = readOptionalString(opts.channel)?.trim().toLowerCase();
+  if (rawChannel && NEXTCLOUD_TALK_CLI_ALIASES.has(rawChannel)) {
+    input.baseUrl ??= readOptionalString(input.url);
+    input.secret ??= readOptionalString(input.token) ?? readOptionalString(input.password);
+    input.secretFile ??= readOptionalString(input.tokenFile);
+  }
+
+  input.initialSyncLimit = parseOptionalInt(opts.initialSyncLimit);
+  input.groupChannels = parseOptionalDelimitedInput(opts.groupChannels);
+  input.dmAllowlist = parseOptionalDelimitedInput(opts.dmAllowlist);
+  return input as ChannelSetupInput;
 }
 
 export async function channelsAddCommand(
@@ -68,6 +128,7 @@ export async function channelsAddCommand(
   const cfg = (configSnapshot.sourceConfig ?? configSnapshot.config) as OpenClawConfig;
   const baseHash = configSnapshot.hash;
   let nextConfig = cfg;
+  let pluginRegistrySourceChanged = false;
 
   const useWizard = shouldUseWizard(params);
   if (useWizard) {
@@ -110,7 +171,7 @@ export async function channelsAddCommand(
     if (wantsNames) {
       for (const channel of selection) {
         const accountId = accountIds[channel] ?? DEFAULT_ACCOUNT_ID;
-        const plugin = resolvedPlugins.get(channel) ?? getChannelPlugin(channel);
+        const plugin = resolvedPlugins.get(channel) ?? getLoadedChannelPlugin(channel);
         const account = plugin?.config.resolveAccount(nextConfig, accountId) as
           | { name?: string }
           | undefined;
@@ -194,13 +255,22 @@ export async function channelsAddCommand(
       }
     }
 
-    await replaceConfigFile({
+    const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig,
       ...(baseHash !== undefined ? { baseHash } : {}),
     });
+    const writtenConfig = committed.config;
+    if (committed.movedInstallRecords) {
+      await refreshPluginRegistryAfterConfigMutation({
+        config: writtenConfig,
+        reason: "source-changed",
+        installRecords: committed.installRecords,
+        logger: { warn: (message) => runtime.log(message) },
+      });
+    }
     await onboardChannels.runCollectedChannelOnboardingPostWriteHooks({
       hooks: postWriteHooks.drain(),
-      cfg: nextConfig,
+      cfg: writtenConfig,
       runtime,
     });
     await prompter.outro("Channels updated.");
@@ -212,13 +282,13 @@ export async function channelsAddCommand(
   let catalogEntry = channel ? undefined : await resolveCatalogChannelEntry(rawChannel, nextConfig);
   const resolveWorkspaceDir = () =>
     resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
-  // May trigger loadOpenClawPlugins on cache miss (disk scan + jiti import)
+  // May load a scoped plugin when the channel is not already registered.
   const loadScopedPlugin = async (
     channelId: ChannelId,
     pluginId?: string,
   ): Promise<ChannelPlugin | undefined> => {
-    const existing = getChannelPlugin(channelId);
-    if (existing) {
+    const existing = getLoadedChannelPlugin(channelId);
+    if (existing?.setup?.applyAccountConfig) {
       return existing;
     }
     const { loadChannelSetupPluginRegistrySnapshotForChannel } =
@@ -229,10 +299,13 @@ export async function channelsAddCommand(
       channel: channelId,
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
+      forceSetupOnlyChannelPlugins: true,
     });
     return (
+      snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin ??
+      getBundledChannelSetupPlugin(channelId) ??
       snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin ??
-      snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin
+      existing
     );
   };
 
@@ -254,11 +327,13 @@ export async function channelsAddCommand(
         prompter,
         runtime,
         workspaceDir,
+        promptInstall: false,
       });
       nextConfig = result.cfg;
       if (!result.installed) {
         return;
       }
+      pluginRegistrySourceChanged = true;
       catalogEntry = {
         ...catalogEntry,
         ...(result.pluginId ? { pluginId: result.pluginId } : {}),
@@ -282,51 +357,7 @@ export async function channelsAddCommand(
     runtime.exit(1);
     return;
   }
-  const useEnv = opts.useEnv === true;
-  const initialSyncLimit =
-    typeof opts.initialSyncLimit === "number"
-      ? opts.initialSyncLimit
-      : typeof opts.initialSyncLimit === "string" && opts.initialSyncLimit.trim()
-        ? Number.parseInt(opts.initialSyncLimit, 10)
-        : undefined;
-  const groupChannels = parseOptionalDelimitedEntries(opts.groupChannels);
-  const dmAllowlist = parseOptionalDelimitedEntries(opts.dmAllowlist);
-
-  const input: ChannelSetupInput = {
-    name: opts.name,
-    token: opts.token,
-    privateKey: opts.privateKey,
-    tokenFile: opts.tokenFile,
-    botToken: opts.botToken,
-    appToken: opts.appToken,
-    signalNumber: opts.signalNumber,
-    cliPath: opts.cliPath,
-    dbPath: opts.dbPath,
-    service: opts.service,
-    region: opts.region,
-    authDir: opts.authDir,
-    httpUrl: opts.httpUrl,
-    httpHost: opts.httpHost,
-    httpPort: opts.httpPort,
-    webhookPath: opts.webhookPath,
-    webhookUrl: opts.webhookUrl,
-    audienceType: opts.audienceType,
-    audience: opts.audience,
-    homeserver: opts.homeserver,
-    userId: opts.userId,
-    accessToken: opts.accessToken,
-    password: opts.password,
-    deviceName: opts.deviceName,
-    initialSyncLimit,
-    useEnv,
-    ship: opts.ship,
-    url: opts.url,
-    relayUrls: opts.relayUrls,
-    code: opts.code,
-    groupChannels,
-    dmAllowlist,
-    autoDiscoverChannels: opts.autoDiscoverChannels,
-  };
+  const input = buildChannelSetupInput(opts);
   const accountId =
     plugin.setup.resolveAccountId?.({
       cfg: nextConfig,
@@ -368,11 +399,20 @@ export async function channelsAddCommand(
     runtime,
   });
 
-  await replaceConfigFile({
+  const committed = await commitConfigWithPendingPluginInstalls({
     nextConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
   });
-  runtime.log(`Added ${channelLabel(channel)} account "${accountId}".`);
+  const writtenConfig = committed.config;
+  if (committed.movedInstallRecords || pluginRegistrySourceChanged) {
+    await refreshPluginRegistryAfterConfigMutation({
+      config: writtenConfig,
+      reason: "source-changed",
+      ...(committed.movedInstallRecords ? { installRecords: committed.installRecords } : {}),
+      logger: { warn: (message) => runtime.log(message) },
+    });
+  }
+  runtime.log(`Added ${plugin.meta.label ?? channelLabel(channel)} account "${accountId}".`);
   const afterAccountConfigWritten = plugin.setup?.afterAccountConfigWritten;
   if (afterAccountConfigWritten) {
     const { runCollectedChannelOnboardingPostWriteHooks } = await loadOnboardChannels();
@@ -391,7 +431,7 @@ export async function channelsAddCommand(
             }),
         },
       ],
-      cfg: nextConfig,
+      cfg: writtenConfig,
       runtime,
     });
   }

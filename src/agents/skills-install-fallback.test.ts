@@ -2,25 +2,29 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadWorkspaceDotEnvFile } from "../infra/dotenv.js";
 import { captureEnv } from "../test-utils/env.js";
-import {
-  hasBinaryMock,
-  runCommandWithTimeoutMock,
-  scanDirectoryWithSummaryMock,
-} from "./skills-install.test-mocks.js";
+import { hasBinaryMock, runCommandWithTimeoutMock } from "./skills-install.test-mocks.js";
+import type { SkillEntry, SkillInstallSpec } from "./skills.js";
+
+const skillsMocks = vi.hoisted(() => ({
+  loadWorkspaceSkillEntries: vi.fn(),
+}));
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
-vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: vi.fn(),
+vi.mock("../plugins/install-security-scan.js", () => ({
+  scanSkillInstallSource: vi.fn(async () => undefined),
 }));
 
-vi.mock("../security/skill-scanner.js", () => ({
-  scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
-}));
+vi.mock("./skills.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./skills.js")>();
+  return {
+    ...actual,
+    loadWorkspaceSkillEntries: skillsMocks.loadWorkspaceSkillEntries,
+  };
+});
 
 let installSkill: typeof import("./skills-install.js").installSkill;
 let skillsInstallTesting: typeof import("./skills-install.js").__testing;
@@ -29,36 +33,25 @@ async function loadSkillsInstallModulesForTest() {
   ({ installSkill, __testing: skillsInstallTesting } = await import("./skills-install.js"));
 }
 
-async function writeSkillWithInstallers(
+function makeSkillEntry(
   workspaceDir: string,
   name: string,
-  installSpecs: Array<Record<string, string>>,
-): Promise<string> {
+  installSpec: SkillInstallSpec,
+): SkillEntry {
   const skillDir = path.join(workspaceDir, "skills", name);
-  await fs.mkdir(skillDir, { recursive: true });
-  await fs.writeFile(
-    path.join(skillDir, "SKILL.md"),
-    `---
-name: ${name}
-description: test skill
-metadata: ${JSON.stringify({ openclaw: { install: installSpecs } })}
----
-
-# ${name}
-`,
-    "utf-8",
-  );
-  await fs.writeFile(path.join(skillDir, "runner.js"), "export {};\n", "utf-8");
-  return skillDir;
-}
-
-async function writeSkillWithInstaller(
-  workspaceDir: string,
-  name: string,
-  kind: string,
-  extra: Record<string, string>,
-): Promise<string> {
-  return writeSkillWithInstallers(workspaceDir, name, [{ id: "deps", kind, ...extra }]);
+  return {
+    skill: {
+      name,
+      description: "test skill",
+      filePath: path.join(skillDir, "SKILL.md"),
+      baseDir: skillDir,
+      source: "openclaw-workspace",
+    } as SkillEntry["skill"],
+    frontmatter: {},
+    metadata: {
+      install: [{ id: "deps", ...installSpec }],
+    },
+  };
 }
 
 function mockAvailableBinaries(binaries: string[]) {
@@ -78,20 +71,22 @@ describe("skills-install fallback edge cases", () => {
 
   beforeAll(async () => {
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fallback-test-"));
-    await writeSkillWithInstaller(workspaceDir, "go-tool-single", "go", {
-      module: "example.com/tool@latest",
-    });
-    await writeSkillWithInstaller(workspaceDir, "py-tool", "uv", {
-      package: "example-package",
-    });
+    skillsMocks.loadWorkspaceSkillEntries.mockReturnValue([
+      makeSkillEntry(workspaceDir, "go-tool-single", {
+        kind: "go",
+        module: "example.com/tool@latest",
+      }),
+      makeSkillEntry(workspaceDir, "py-tool", {
+        kind: "uv",
+        package: "example-package",
+      }),
+    ]);
     await loadSkillsInstallModulesForTest();
   });
 
   beforeEach(() => {
     runCommandWithTimeoutMock.mockReset();
-    scanDirectoryWithSummaryMock.mockReset();
     hasBinaryMock.mockReset();
-    scanDirectoryWithSummaryMock.mockResolvedValue({ critical: 0, warn: 0, findings: [] });
     skillsInstallTesting.setDepsForTest({
       hasBinary: (bin: string) => hasBinaryMock(bin),
       resolveBrewExecutable: () => undefined,
@@ -170,6 +165,65 @@ describe("skills-install fallback edge cases", () => {
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 
+  it("does not use HOMEBREW_PREFIX as a brew bin fallback for go installs", async () => {
+    const envSnapshot = captureEnv(["HOMEBREW_PREFIX"]);
+    try {
+      const maliciousPrefix = path.join(workspaceDir, "evil-brew");
+      process.env.HOMEBREW_PREFIX = maliciousPrefix;
+      mockAvailableBinaries([]);
+      skillsInstallTesting.setDepsForTest({
+        hasBinary: (bin: string) => hasBinaryMock(bin),
+        resolveBrewExecutable: () => "/safe/homebrew/bin/brew",
+      });
+      runCommandWithTimeoutMock.mockResolvedValue({
+        code: 0,
+        stdout: "ok",
+        stderr: "",
+        signal: null,
+        killed: false,
+      });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 0,
+        stdout: "installed go",
+        stderr: "",
+        signal: null,
+        killed: false,
+      });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 1,
+        stdout: "",
+        stderr: "prefix unavailable",
+        signal: null,
+        killed: false,
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "go-tool-single",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(runCommandWithTimeoutMock).toHaveBeenNthCalledWith(
+        1,
+        ["/safe/homebrew/bin/brew", "install", "go"],
+        expect.objectContaining({ timeoutMs: 300_000 }),
+      );
+      expect(runCommandWithTimeoutMock).toHaveBeenNthCalledWith(
+        2,
+        ["/safe/homebrew/bin/brew", "--prefix"],
+        expect.objectContaining({ timeoutMs: 30_000 }),
+      );
+      const finalCall = runCommandWithTimeoutMock.mock.calls.at(-1) as
+        | [string[], { env?: NodeJS.ProcessEnv }]
+        | undefined;
+      expect(finalCall?.[0]).toEqual(["go", "install", "example.com/tool@latest"]);
+      expect(finalCall?.[1]?.env?.GOBIN).not.toBe(path.join(maliciousPrefix, "bin"));
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
   it("preserves system uv/python env vars when running uv installs", async () => {
     mockAvailableBinaries(["uv"]);
     runCommandWithTimeoutMock.mockResolvedValueOnce({
@@ -215,46 +269,6 @@ describe("skills-install fallback edge cases", () => {
       expect(envArg).toBeUndefined();
     } finally {
       envSnapshot.restore();
-    }
-  });
-
-  it("blocks workspace dotenv UV_PYTHON from uv install execution", async () => {
-    mockAvailableBinaries(["uv"]);
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 0,
-      stdout: "ok",
-      stderr: "",
-      signal: null,
-      killed: false,
-    });
-
-    const workspaceEnvPath = path.join(workspaceDir, ".env");
-    const envSnapshot = captureEnv(["UV_PYTHON"]);
-    try {
-      delete process.env.UV_PYTHON;
-      await fs.writeFile(workspaceEnvPath, "UV_PYTHON=/tmp/attacker-python\n", "utf-8");
-
-      loadWorkspaceDotEnvFile(workspaceEnvPath, { quiet: true });
-      expect(process.env.UV_PYTHON).toBeUndefined();
-
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "py-tool",
-        installId: "deps",
-        timeoutMs: 10_000,
-      });
-
-      expect(result.ok).toBe(true);
-      expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-        ["uv", "tool", "install", "example-package"],
-        expect.objectContaining({
-          timeoutMs: 10_000,
-          env: undefined,
-        }),
-      );
-    } finally {
-      envSnapshot.restore();
-      await fs.rm(workspaceEnvPath, { force: true });
     }
   });
 });

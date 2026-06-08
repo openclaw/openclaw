@@ -3,6 +3,8 @@ import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
+  stripMinimaxToolCallXml,
+  stripToolCallXmlTags,
 } from "./assistant-visible-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 
@@ -150,6 +152,74 @@ describe("stripAssistantInternalScaffolding", () => {
         'Let me run.\n<tool_call>\n{"name": "find", "arguments": {}}\n',
         "Let me run.\n",
       );
+    });
+
+    it("strips standalone bracketed local-model tool blocks", () => {
+      expectVisibleText(
+        [
+          "Let me check.",
+          "[mempalace_mempalace_search]",
+          '{"query":"codename","wing":"personal","room":"identities"}',
+          "[END_TOOL_REQUEST]",
+          "Done.",
+        ].join("\n"),
+        "Let me check.\n\nDone.",
+      );
+    });
+
+    it("strips bracketed local-model tool blocks with named closing tags", () => {
+      expectVisibleText(
+        [
+          "Before",
+          "[mempalace_mempalace_search]",
+          '{"query":"codename","limit":1}',
+          "[/mempalace_mempalace_search]",
+          "After",
+        ].join("\n"),
+        "Before\n\nAfter",
+      );
+    });
+
+    it("strips legacy uppercase TOOL_CALL blocks with hash-style payloads", () => {
+      expectVisibleText(
+        [
+          "Before",
+          '[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}}[/TOOL_CALL]',
+          "After",
+        ].join("\n"),
+        "Before\n\nAfter",
+      );
+    });
+
+    it("hides dangling legacy uppercase TOOL_CALL blocks to end-of-string", () => {
+      expectVisibleText(
+        'Before\n[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}',
+        "Before\n",
+      );
+    });
+
+    it("strips legacy uppercase TOOL_RESULT blocks with object payloads", () => {
+      expectVisibleText(
+        ["Before", '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]', "After"].join("\n"),
+        "Before\n\nAfter",
+      );
+    });
+
+    it("preserves literal legacy TOOL_CALL examples without tool args payloads", () => {
+      expectVisibleText(
+        "Use `[TOOL_CALL]` only when describing legacy logs.",
+        "Use `[TOOL_CALL]` only when describing legacy logs.",
+      );
+    });
+
+    it("preserves legacy uppercase TOOL_CALL blocks inside fenced code", () => {
+      const input = [
+        "```text",
+        '[TOOL_CALL]{tool => "web_search", args => {"query":"x"}}[/TOOL_CALL]',
+        "```",
+        "Visible",
+      ].join("\n");
+      expectVisibleText(input, input);
     });
 
     it("strips Qwen-style <tool_call> with nested <function=...> XML", () => {
@@ -478,6 +548,41 @@ describe("stripAssistantInternalScaffolding", () => {
   });
 });
 
+describe("stripToolCallXmlTags", () => {
+  it("strips plural function/tool wrapper XML only when the opt-in flag is enabled", () => {
+    const input =
+      'prefix <function_calls><invoke name="find">secret</invoke></function_calls> suffix';
+    expect(stripToolCallXmlTags(input)).toBe(input);
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
+      "prefix  suffix",
+    );
+  });
+});
+
+describe("stripMinimaxToolCallXml", () => {
+  it("strips minimax tool-call XML outside code regions", () => {
+    const input = [
+      "Before",
+      '<minimax:tool_call><invoke name="exec">payload</invoke></minimax:tool_call>',
+      "After",
+    ].join("\n");
+
+    expect(stripMinimaxToolCallXml(input)).toBe("Before\n\nAfter");
+  });
+
+  it("preserves minimax tool-call XML examples inside inline and fenced code", () => {
+    const inline = 'Use `<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>`.';
+    const fenced = [
+      "```xml",
+      '<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>',
+      "```",
+    ].join("\n");
+
+    expect(stripMinimaxToolCallXml(inline)).toBe(inline);
+    expect(stripMinimaxToolCallXml(fenced)).toBe(fenced);
+  });
+});
+
 describe("sanitizeAssistantVisibleText", () => {
   it("strips minimax, tool XML, downgraded tool markers, and think tags in one pass", () => {
     const input = [
@@ -502,6 +607,24 @@ describe("sanitizeAssistantVisibleText", () => {
 
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
   });
+
+  it("drops malformed reasoning before orphan close tags when final text follows", () => {
+    expect(sanitizeAssistantVisibleText("private chain of thought </think> Visible answer")).toBe(
+      "Visible answer",
+    );
+  });
+
+  it("recovers fully wrapped unclosed reasoning tags that would otherwise deliver empty text", () => {
+    expect(sanitizeAssistantVisibleText("<think>Visible answer from a malformed local model")).toBe(
+      "Visible answer from a malformed local model",
+    );
+  });
+
+  it("keeps unclosed trailing reasoning hidden when visible text already exists", () => {
+    expect(sanitizeAssistantVisibleText("Visible prefix <think>private reasoning tail")).toBe(
+      "Visible prefix",
+    );
+  });
 });
 
 describe("sanitizeAssistantVisibleTextWithProfile", () => {
@@ -509,6 +632,15 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
     const input = ["Hi ", '<tool_result>{"output":"hidden"}</tool_result>', "there"].join("");
 
     expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe("Hi there");
+  });
+
+  it("uses the history profile to drop malformed reasoning before orphan close tags", () => {
+    expect(
+      sanitizeAssistantVisibleTextWithProfile(
+        "private chain of thought </think> Visible answer",
+        "history",
+      ),
+    ).toBe(" Visible answer");
   });
 
   it("uses the internal-scaffolding profile to preserve downgraded tool text behavior", () => {

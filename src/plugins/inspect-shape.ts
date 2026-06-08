@@ -33,7 +33,7 @@ export type PluginShapeSummary = {
   usesLegacyBeforeAgentStart: boolean;
 };
 
-export function buildPluginCapabilityEntries(
+function buildPluginCapabilityEntries(
   plugin: PluginRegistry["plugins"][number],
 ): PluginCapabilityEntry[] {
   return [
@@ -57,7 +57,7 @@ export function buildPluginCapabilityEntries(
   ].filter((entry) => entry.ids.length > 0);
 }
 
-export function derivePluginInspectShape(params: {
+function derivePluginInspectShape(params: {
   capabilityCount: number;
   typedHookCount: number;
   customHookCount: number;
@@ -65,6 +65,7 @@ export function derivePluginInspectShape(params: {
   commandCount: number;
   cliCount: number;
   serviceCount: number;
+  gatewayDiscoveryServiceCount: number;
   gatewayMethodCount: number;
   httpRouteCount: number;
 }): PluginInspectShape {
@@ -80,6 +81,7 @@ export function derivePluginInspectShape(params: {
     params.commandCount === 0 &&
     params.cliCount === 0 &&
     params.serviceCount === 0 &&
+    params.gatewayDiscoveryServiceCount === 0 &&
     params.gatewayMethodCount === 0 &&
     params.httpRouteCount === 0;
   if (hasOnlyHooks) {
@@ -111,6 +113,7 @@ export function buildPluginShapeSummary(params: {
     commandCount: params.plugin.commands.length,
     cliCount: params.plugin.cliCommands.length,
     serviceCount: params.plugin.services.length,
+    gatewayDiscoveryServiceCount: params.plugin.gatewayDiscoveryServiceIds.length,
     gatewayMethodCount: params.plugin.gatewayMethods.length,
     httpRouteCount: params.plugin.httpRoutes,
   });

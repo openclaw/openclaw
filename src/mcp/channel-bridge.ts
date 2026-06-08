@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
-import { GatewayClient } from "../gateway/client.js";
-import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../gateway/method-scopes.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
+import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import {
@@ -21,6 +18,7 @@ import type {
   ConversationDescriptor,
   PendingApproval,
   QueueEvent,
+  SessionDescribeResult,
   SessionListResult,
   SessionMessagePayload,
   WaitFilter,
@@ -54,6 +52,7 @@ export class OpenClawChannelBridge {
   private closed = false;
   private ready = false;
   private started = false;
+  private retryingInitialConnect = false;
   private readonly readyPromise: Promise<void>;
   private resolveReady!: () => void;
   private rejectReady!: (error: Error) => void;
@@ -87,6 +86,19 @@ export class OpenClawChannelBridge {
       return;
     }
     this.started = true;
+    const [
+      { resolveGatewayClientBootstrap },
+      { GatewayClient: GatewayClientCtor },
+      { startGatewayClientWhenEventLoopReady },
+      { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE },
+      { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES },
+    ] = await Promise.all([
+      import("../gateway/client-bootstrap.js"),
+      import("../gateway/client.js"),
+      import("../gateway/client-start-readiness.js"),
+      import("../gateway/method-scopes.js"),
+      import("../gateway/protocol/client-info.js"),
+    ]);
     const bootstrap = await resolveGatewayClientBootstrap({
       config: this.cfg,
       gatewayUrl: this.params.gatewayUrl,
@@ -101,31 +113,45 @@ export class OpenClawChannelBridge {
       return;
     }
 
-    this.gateway = new GatewayClient({
+    this.gateway = new GatewayClientCtor({
       url: bootstrap.url,
       token: bootstrap.auth.token,
       password: bootstrap.auth.password,
+      preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: "OpenClaw MCP",
       clientVersion: VERSION,
       mode: GATEWAY_CLIENT_MODES.CLI,
       scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
+      requestTimeoutMs: 180_000,
       onEvent: (event) => {
         void this.handleGatewayEvent(event);
       },
       onHelloOk: () => {
+        this.retryingInitialConnect = false;
         void this.handleHelloOk();
       },
       onConnectError: (error) => {
-        this.rejectReadyOnce(error instanceof Error ? error : new Error(String(error)));
+        const normalizedError = error instanceof Error ? error : new Error(String(error));
+        if (shouldRetryInitialMcpGatewayConnect(normalizedError)) {
+          this.retryingInitialConnect = true;
+          return;
+        }
+        this.rejectReadyOnce(normalizedError);
       },
       onClose: (code, reason) => {
-        if (!this.ready && !this.closed) {
+        if (!this.ready && !this.closed && !this.retryingInitialConnect) {
           this.rejectReadyOnce(new Error(`gateway closed before ready (${code}): ${reason}`));
         }
+        this.retryingInitialConnect = false;
       },
     });
-    this.gateway.start();
+    const readiness = await startGatewayClientWhenEventLoopReady(this.gateway, {
+      clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
+    });
+    if (!readiness.ready) {
+      this.rejectReadyOnce(new Error("gateway event loop readiness timeout"));
+    }
     await this.readyPromise;
   }
 
@@ -181,10 +207,13 @@ export class OpenClawChannelBridge {
     if (!normalizedSessionKey) {
       return null;
     }
-    const conversations = await this.listConversations({ limit: 500, includeLastMessage: true });
-    return (
-      conversations.find((conversation) => conversation.sessionKey === normalizedSessionKey) ?? null
-    );
+    await this.waitUntilReady();
+    const response: SessionDescribeResult = await this.requestGateway("sessions.describe", {
+      key: normalizedSessionKey,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+    });
+    return response.session ? toConversation(response.session) : null;
   }
 
   async readMessages(
@@ -192,8 +221,8 @@ export class OpenClawChannelBridge {
     limit = 20,
   ): Promise<NonNullable<ChatHistoryResult["messages"]>> {
     await this.waitUntilReady();
-    const response: ChatHistoryResult = await this.requestGateway("chat.history", {
-      sessionKey,
+    const response: ChatHistoryResult = await this.requestGateway("sessions.get", {
+      key: sessionKey,
       limit,
     });
     return response.messages ?? [];
@@ -513,4 +542,19 @@ export class OpenClawChannelBridge {
     }
     return Boolean(conversation);
   }
+}
+
+export function shouldRetryInitialMcpGatewayConnect(error: Error): boolean {
+  if (
+    error.name === "GatewayClientRequestError" &&
+    "retryable" in error &&
+    typeof error.retryable === "boolean"
+  ) {
+    return error.retryable;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("gateway request timeout for connect") ||
+    message.includes("gateway connect challenge timeout")
+  );
 }

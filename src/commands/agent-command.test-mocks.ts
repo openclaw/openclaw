@@ -22,13 +22,24 @@ vi.mock("../cli/deps.js", () => ({
   createDefaultDeps: vi.fn(() => ({})),
 }));
 
+const acpManagerMock = vi.hoisted(() => ({
+  current: {
+    resolveSession: vi.fn(() => null),
+  } as unknown,
+}));
+
 vi.mock("../acp/control-plane/manager.js", () => ({
   __testing: {
-    resetAcpSessionManagerForTests: vi.fn(),
+    resetAcpSessionManagerForTests: vi.fn(() => {
+      acpManagerMock.current = {
+        resolveSession: vi.fn(() => null),
+      };
+    }),
+    setAcpSessionManagerForTests: vi.fn((manager: unknown) => {
+      acpManagerMock.current = manager;
+    }),
   },
-  getAcpSessionManager: vi.fn(() => ({
-    resolveSession: vi.fn(() => null),
-  })),
+  getAcpSessionManager: vi.fn(() => acpManagerMock.current),
 }));
 
 vi.mock("../agents/pi-embedded.js", () => ({
@@ -38,6 +49,7 @@ vi.mock("../agents/pi-embedded.js", () => ({
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
+  loadManifestModelCatalog: vi.fn(() => []),
   loadModelCatalog: vi.fn(),
 }));
 
@@ -83,8 +95,8 @@ vi.mock("../agents/model-selection.js", () => {
     return primary?.primary;
   };
   const resolveDefaultRef = (cfg?: ConfigWithModels): ModelRef => {
-    const parsed = parseModelRefImpl(resolvePrimary(cfg) ?? "openai/gpt-5.4", "openai");
-    return parsed ?? { provider: "openai", model: "gpt-5.4" };
+    const parsed = parseModelRefImpl(resolvePrimary(cfg) ?? "openai/gpt-5.5", "openai");
+    return parsed ?? { provider: "openai", model: "gpt-5.5" };
   };
   const resolveModelConfig = (cfg: ConfigWithModels | undefined, ref: ModelRef) => {
     const models = cfg?.agents?.defaults?.models ?? {};
@@ -119,6 +131,7 @@ vi.mock("../agents/model-selection.js", () => {
         allowAny: Object.keys(modelConfig).length === 0,
       };
     }),
+    buildConfiguredModelCatalog: vi.fn(() => []),
     isCliProvider: vi.fn(() => false),
     modelKey,
     normalizeModelRef,

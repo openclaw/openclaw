@@ -1,6 +1,6 @@
 import type { PluginLoadResult } from "./loader.js";
 import type { PluginRecord } from "./registry.js";
-import type { PluginCompatibilityNotice, PluginStatusReport } from "./status.js";
+import type { PluginCompatibilityNotice } from "./status.js";
 import type { PluginHookName } from "./types.js";
 
 export const LEGACY_BEFORE_AGENT_START_MESSAGE =
@@ -11,21 +11,27 @@ export const HOOK_ONLY_MESSAGE =
 export function createCompatibilityNotice(
   params: Pick<PluginCompatibilityNotice, "pluginId" | "code">,
 ): PluginCompatibilityNotice {
-  if (params.code === "legacy-before-agent-start") {
-    return {
-      pluginId: params.pluginId,
-      code: params.code,
-      severity: "warn",
-      message: LEGACY_BEFORE_AGENT_START_MESSAGE,
-    };
+  switch (params.code) {
+    case "legacy-before-agent-start":
+      return {
+        pluginId: params.pluginId,
+        code: params.code,
+        compatCode: "legacy-before-agent-start",
+        severity: "warn",
+        message: LEGACY_BEFORE_AGENT_START_MESSAGE,
+      };
+    case "hook-only":
+      return {
+        pluginId: params.pluginId,
+        code: params.code,
+        compatCode: "hook-only-plugin-shape",
+        severity: "info",
+        message: HOOK_ONLY_MESSAGE,
+      };
   }
-
-  return {
-    pluginId: params.pluginId,
-    code: params.code,
-    severity: "info",
-    message: HOOK_ONLY_MESSAGE,
-  };
+  const unsupportedCode: never = params.code;
+  void unsupportedCode;
+  throw new Error("unsupported compatibility notice code");
 }
 
 export function createPluginRecord(
@@ -59,12 +65,14 @@ export function createPluginRecord(
     musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    migrationProviderIds: [],
     contextEngineIds: [],
     memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
+    gatewayDiscoveryServiceIds: [],
     commands: [],
     httpRoutes: 0,
     hookCount: 0,
@@ -128,6 +136,9 @@ export function createPluginLoadResult(
     musicGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
+    migrationProviders: [],
+    codexAppServerExtensionFactories: [],
+    agentToolResultMiddlewares: [],
     memoryEmbeddingProviders: [],
     textTransforms: [],
     agentHarnesses: [],
@@ -139,19 +150,17 @@ export function createPluginLoadResult(
     cliRegistrars: [],
     services: [],
     commands: [],
+    sessionExtensions: [],
+    trustedToolPolicies: [],
+    toolMetadata: [],
+    controlUiDescriptors: [],
+    runtimeLifecycles: [],
+    agentEventSubscriptions: [],
+    sessionSchedulerJobs: [],
     conversationBindingResolvedHandlers: [],
     ...rest,
+    gatewayDiscoveryServices: rest.gatewayDiscoveryServices ?? [],
     realtimeTranscriptionProviders: realtimeTranscriptionProviders ?? [],
     realtimeVoiceProviders: realtimeVoiceProviders ?? [],
-  };
-}
-
-export function createPluginStatusReport(
-  overrides: Partial<PluginStatusReport> & Pick<PluginStatusReport, "plugins">,
-): PluginStatusReport {
-  const { workspaceDir, ...loadResultOverrides } = overrides;
-  return {
-    workspaceDir,
-    ...createPluginLoadResult(loadResultOverrides),
   };
 }

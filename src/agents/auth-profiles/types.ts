@@ -12,6 +12,8 @@ export type OAuthCredentials = {
   enterpriseUrl?: string;
   projectId?: string;
   accountId?: string;
+  chatgptPlanType?: string;
+  idToken?: string;
 };
 
 export type ApiKeyCredential = {
@@ -19,6 +21,8 @@ export type ApiKeyCredential = {
   provider: string;
   key?: string;
   keyRef?: SecretRef;
+  /** Explicit opt-out for copying this profile when creating another agent. */
+  copyToAgents?: boolean;
   email?: string;
   displayName?: string;
   /** Optional provider-specific metadata (e.g., account IDs, gateway IDs). */
@@ -34,6 +38,8 @@ export type TokenCredential = {
   provider: string;
   token?: string;
   tokenRef?: SecretRef;
+  /** Explicit opt-out for copying this profile when creating another agent. */
+  copyToAgents?: boolean;
   /** Optional expiry timestamp (ms since epoch). */
   expires?: number;
   email?: string;
@@ -44,6 +50,11 @@ export type OAuthCredential = OAuthCredentials & {
   type: "oauth";
   provider: string;
   clientId?: string;
+  /**
+   * OAuth refresh tokens are not portable by default. Provider-owned flows may
+   * set this only when copying refresh material across agents is known safe.
+   */
+  copyToAgents?: boolean;
   email?: string;
   displayName?: string;
 };
@@ -60,6 +71,9 @@ export type AuthProfileFailureReason =
   | "timeout"
   | "model_not_found"
   | "session_expired"
+  | "empty_response"
+  | "no_error_details"
+  | "unclassified"
   | "unknown";
 
 /** Per-profile usage statistics for round-robin and cooldown tracking */

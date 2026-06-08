@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import {
@@ -20,12 +20,14 @@ import {
   type WebhookRequestParams,
 } from "./monitor.webhook.test-helpers.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
+import { createBlueBubblesFetchGuardPassthroughInstaller } from "./test-harness.js";
 import {
   createBlueBubblesMonitorTestRuntime,
   EMPTY_DISPATCH_RESULT,
   resetBlueBubblesMonitorTestState,
   type DispatchReplyParams,
 } from "./test-support/monitor-test-support.js";
+import { _setFetchGuardForTesting } from "./types.js";
 
 const { TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS } = vi.hoisted(() => ({
   TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS: 3,
@@ -76,6 +78,16 @@ vi.mock("./webhook-ingress.js", async () => {
         timeoutMs: TEST_WEBHOOK_BODY_TIMEOUT_MS,
       }),
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("./send.js");
+  vi.doUnmock("./chat.js");
+  vi.doUnmock("./attachments.js");
+  vi.doUnmock("./reactions.js");
+  vi.doUnmock("./history.js");
+  vi.doUnmock("./webhook-ingress.js");
+  vi.resetModules();
 });
 
 // Mock runtime
@@ -168,9 +180,13 @@ function createMockRuntime(): PluginRuntime {
 
 describe("BlueBubbles webhook monitor", () => {
   let unregister: () => void;
+  const installFetchGuardPassthrough = createBlueBubblesFetchGuardPassthroughInstaller();
 
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);
+    // See monitor.test.ts for rationale — BlueBubblesClient routes every BB
+    // API call through the SSRF guard now. (#34749, #59722)
+    installFetchGuardPassthrough();
     mockFetch.mockReset();
     mockFetch.mockResolvedValue({
       ok: true,
@@ -191,6 +207,7 @@ describe("BlueBubbles webhook monitor", () => {
   afterEach(() => {
     unregister?.();
     vi.unstubAllGlobals();
+    _setFetchGuardForTesting(null);
   });
 
   function setupWebhookTarget(params?: {
@@ -423,6 +440,16 @@ describe("BlueBubbles webhook monitor", () => {
         createProtectedPasswordQueryRequestParams("wrong-token"),
         401,
       );
+    });
+
+    it("rejects unresolved SecretRef webhook passwords without crashing", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          password: { source: "exec", provider: "vault", id: "bluebubbles/webhook" } as never,
+        }),
+      });
+
+      await expectProtectedPasswordQueryRequestStatus(401);
     });
 
     it("rate limits repeated invalid password guesses from the same client", async () => {

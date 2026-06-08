@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMetrics, createNoopMetrics, type MetricEvent } from "./metrics.js";
 import { createSeenTracker } from "./seen-tracker.js";
 import { TEST_RELAY_URL } from "./test-fixtures.js";
@@ -8,6 +8,10 @@ const TEST_RELAY_URL_2 = "wss://relay2.com";
 const TEST_RELAY_URL_PRIMARY = "wss://relay.com";
 const TEST_RELAY_URL_GOOD = "wss://good-relay.com";
 const TEST_RELAY_URL_BAD = "wss://bad-relay.com";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createTracker(overrides?: Partial<Parameters<typeof createSeenTracker>[0]>) {
   return createSeenTracker({
@@ -459,7 +463,7 @@ describe("Reconnect Backoff", () => {
     const JITTER = 0.3;
 
     for (let attempt = 0; attempt < 10; attempt++) {
-      const exponential = BASE * Math.pow(2, attempt);
+      const exponential = BASE * 2 ** attempt;
       const capped = Math.min(exponential, MAX);
       const minDelay = capped * (1 - JITTER);
       const maxDelay = capped * (1 + JITTER);

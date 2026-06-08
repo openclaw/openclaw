@@ -88,7 +88,7 @@ const TELEGRAM_SUPPORTED_REACTION_EMOJIS = new Set<TelegramReactionEmoji>(
   TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST,
 );
 
-export const TELEGRAM_STATUS_REACTION_VARIANTS: Record<StatusReactionEmojiKey, string[]> = {
+const TELEGRAM_STATUS_REACTION_VARIANTS: Record<StatusReactionEmojiKey, string[]> = {
   queued: ["👀", "👍", "🔥"],
   thinking: ["🤔", "🤓", "👀"],
   tool: ["🔥", "⚡", "👍"],
@@ -165,7 +165,7 @@ export function extractTelegramAllowedEmojiReactions(
     return undefined;
   }
   const availableReactions = chat.available_reactions;
-  if (typeof availableReactions === "undefined") {
+  if (availableReactions === undefined) {
     return undefined;
   }
   if (availableReactions == null) {

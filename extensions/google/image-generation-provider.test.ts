@@ -46,6 +46,7 @@ function installGoogleFetchMock(params?: {
 describe("Google image-generation provider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("generates image buffers from the Gemini generateContent API", async () => {
@@ -274,6 +275,36 @@ describe("Google image-generation provider", () => {
     expect(postJsonRequestSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         pinDns: false,
+      }),
+    );
+  });
+
+  it("honors configured private-network opt-in for Google image generation", async () => {
+    mockGoogleApiKeyAuth();
+    installGoogleFetchMock();
+    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
+
+    const provider = buildGoogleImageGenerationProvider();
+    await provider.generateImage({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      prompt: "draw a fox",
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              request: { allowPrivateNetwork: true },
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(postJsonRequestSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowPrivateNetwork: true,
       }),
     );
   });

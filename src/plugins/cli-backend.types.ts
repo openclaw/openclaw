@@ -18,6 +18,56 @@ export type CliBundleMcpMode =
   | "codex-config-overrides"
   | "gemini-system-settings";
 
+export type CliBackendPrepareExecutionContext = {
+  config?: OpenClawConfig;
+  workspaceDir: string;
+  agentDir?: string;
+  provider: string;
+  modelId: string;
+  authProfileId?: string;
+};
+
+export type CliBackendPreparedExecution = {
+  env?: Record<string, string>;
+  clearEnv?: string[];
+  cleanup?: () => Promise<void>;
+};
+
+export type CliBackendThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max";
+
+export type CliBackendResolveExecutionArgsContext = {
+  config?: OpenClawConfig;
+  workspaceDir: string;
+  provider: string;
+  modelId: string;
+  authProfileId?: string;
+  thinkingLevel?: CliBackendThinkingLevel;
+  useResume: boolean;
+  baseArgs: readonly string[];
+};
+
+export type CliBackendResolveExecutionArgs = (
+  ctx: CliBackendResolveExecutionArgsContext,
+) => readonly string[] | null | undefined;
+
+export type CliBackendAuthEpochMode = "combined" | "profile-only";
+
+export type CliBackendNativeToolMode = "none" | "always-on";
+
+export type CliBackendNormalizeConfigContext = {
+  config?: OpenClawConfig;
+  backendId: string;
+  agentId?: string;
+};
+
 /** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
 export type CliBackendPlugin = {
   /** Provider id used in model refs, for example `claude-cli/opus`. */
@@ -61,7 +111,10 @@ export type CliBackendPlugin = {
    * Use this for backend-specific compatibility rewrites when old config
    * shapes need to stay working.
    */
-  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
+  normalizeConfig?: (
+    config: CliBackendConfig,
+    context?: CliBackendNormalizeConfigContext,
+  ) => CliBackendConfig;
   /**
    * Backend-owned final system-prompt transform.
    *
@@ -84,4 +137,48 @@ export type CliBackendPlugin = {
    * `output` applies to parsed/streamed assistant text from the CLI.
    */
   textTransforms?: PluginTextTransforms;
+  /**
+   * Preferred auth-profile id when the caller did not explicitly lock one.
+   *
+   * Use this when the backend should consume a canonical OpenClaw auth profile
+   * rather than ambient host auth by default.
+   */
+  defaultAuthProfileId?: string;
+  /**
+   * Session/auth epoch source policy.
+   *
+   * `combined` keeps the legacy "host credential + auth profile" fingerprint.
+   * `profile-only` treats the selected OpenClaw auth profile as the sole auth
+   * owner for session invalidation when one is present.
+   */
+  authEpochMode?: CliBackendAuthEpochMode;
+  /**
+   * Backend-owned execution bridge.
+   *
+   * Use this on async run paths when the backend needs a generated auth/config
+   * bridge (for example a private CLI home directory) without teaching the core
+   * runner about provider-specific file formats.
+   */
+  prepareExecution?: (
+    ctx: CliBackendPrepareExecutionContext,
+  ) =>
+    | Promise<CliBackendPreparedExecution | null | undefined>
+    | CliBackendPreparedExecution
+    | null
+    | undefined;
+  /**
+   * Backend-owned per-run argv rewrite.
+   *
+   * Use this for request-scoped CLI dialect flags that should not be modeled
+   * as static config, such as mapping OpenClaw thinking levels to a backend's
+   * native effort flag.
+   */
+  resolveExecutionArgs?: CliBackendResolveExecutionArgs;
+  /**
+   * Whether this CLI backend can expose native tools outside OpenClaw's tool
+   * catalog. Backends that cannot provide a true no-tools mode must mark
+   * themselves as `always-on` so callers that require disabled tools fail
+   * closed instead of launching a native harness.
+   */
+  nativeToolMode?: CliBackendNativeToolMode;
 };

@@ -3,22 +3,20 @@ summary: "Manual logins for browser automation + X/Twitter posting"
 read_when:
   - You need to log into sites for browser automation
   - You want to post updates to X/Twitter
-title: "Browser Login"
+title: "Browser login"
 ---
-
-# Browser login + X/Twitter posting
 
 ## Manual login (recommended)
 
 When a site requires login, **sign in manually** in the **host** browser profile (the openclaw browser).
 
-Do **not** give the model your credentials. Automated logins often trigger anti‑bot defenses and can lock the account.
+Do **not** give the model your credentials. Automated logins often trigger anti-bot defenses and can lock the account.
 
 Back to the main browser docs: [Browser](/tools/browser).
 
 ## Which Chrome profile is used?
 
-OpenClaw controls a **dedicated Chrome profile** (named `openclaw`, orange‑tinted UI). This is separate from your daily browser profile.
+OpenClaw controls a **dedicated Chrome profile** (named `openclaw`, orange-tinted UI). This is separate from your daily browser profile.
 
 For agent browser tool calls:
 
@@ -71,3 +69,9 @@ openclaw browser open https://x.com --browser-profile openclaw --target host
 ```
 
 Or disable sandboxing for the agent that posts updates.
+
+## Related
+
+- [Browser](/tools/browser)
+- [Browser Linux troubleshooting](/tools/browser-linux-troubleshooting)
+- [Browser WSL2 troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)

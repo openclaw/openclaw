@@ -5,8 +5,6 @@ read_when:
 title: "Tlon"
 ---
 
-# Tlon
-
 Tlon is a decentralized messenger built on Urbit. OpenClaw connects to your Urbit ship and can
 respond to DMs and group chat messages. Group replies require an @ mention by default and can
 be further restricted via allowlists.
@@ -19,14 +17,17 @@ image uploads are supported. Reactions and polls are not yet supported.
 Tlon ships as a bundled plugin in current OpenClaw releases, so normal packaged
 builds do not need a separate install.
 
-If you are on an older build or a custom install that excludes Tlon, install it
-manually:
+If you are on an older build or a custom install that excludes Tlon, install a
+current npm package:
 
 Install via CLI (npm registry):
 
 ```bash
 openclaw plugins install @openclaw/tlon
 ```
+
+Use the bare package to follow the current official release tag. Pin an exact
+version only when you need a reproducible install.
 
 Local checkout (when running from a git repo):
 
@@ -189,17 +190,21 @@ Auto-accept DM invites (for ships in dmAllowlist):
 }
 ```
 
-Auto-accept group invites:
+Auto-accept group invites from trusted ships:
 
 ```json5
 {
   channels: {
     tlon: {
       autoAcceptGroupInvites: true,
+      groupInviteAllowlist: ["~zod"],
     },
   },
 }
 ```
+
+`autoAcceptGroupInvites` fails closed when `groupInviteAllowlist` is empty. Set the
+allowlist to the ships whose group invites should be accepted automatically.
 
 ## Delivery targets (CLI/cron)
 
@@ -267,7 +272,8 @@ Provider options:
 - `channels.tlon.ownerShip`: owner ship for approval system (always authorized).
 - `channels.tlon.dmAllowlist`: ships allowed to DM (empty = none).
 - `channels.tlon.autoAcceptDmInvites`: auto-accept DMs from allowlisted ships.
-- `channels.tlon.autoAcceptGroupInvites`: auto-accept all group invites.
+- `channels.tlon.autoAcceptGroupInvites`: auto-accept group invites from allowlisted ships.
+- `channels.tlon.groupInviteAllowlist`: ships whose group invites may be auto-accepted.
 - `channels.tlon.autoDiscoverChannels`: auto-discover group channels (default: true).
 - `channels.tlon.groupChannels`: manually pinned channel nests.
 - `channels.tlon.defaultAuthorizedShips`: ships authorized for all channels.

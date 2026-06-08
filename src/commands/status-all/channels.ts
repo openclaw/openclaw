@@ -1,22 +1,18 @@
 import fs from "node:fs";
-import {
-  hasConfiguredUnavailableCredentialStatus,
-  hasResolvedCredentialValue,
-} from "../../channels/account-snapshot-fields.js";
+import { resolveInspectedChannelAccount } from "../../channels/account-inspection.js";
+import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import {
   buildChannelAccountSnapshot,
   formatChannelAllowFrom,
-  resolveChannelAccountConfigured,
-  resolveChannelAccountEnabled,
 } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import { formatChannelStatusState } from "../../channels/plugins/status-state.js";
 import type {
   ChannelAccountSnapshot,
   ChannelId,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
-import { inspectReadOnlyChannelAccount } from "../../channels/read-only-account-inspect.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { asRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -46,6 +42,63 @@ type ResolvedChannelAccountRowParams = {
   accountId: string;
 };
 
+function getLiveChannelAccounts(params: {
+  liveChannelStatus: unknown;
+  channelId: string;
+}): Array<Record<string, unknown>> {
+  const payload = asRecord(params.liveChannelStatus);
+  const accountsByChannel = asRecord(payload.channelAccounts);
+  const raw = accountsByChannel[params.channelId];
+  return Array.isArray(raw) ? raw.map(asRecord) : [];
+}
+
+function getLiveAccountId(account: Record<string, unknown>): string {
+  return (
+    normalizeOptionalString(account.accountId) ??
+    normalizeOptionalString(account.id) ??
+    normalizeOptionalString(account.name) ??
+    "default"
+  );
+}
+
+function findLiveChannelAccount(params: {
+  liveAccounts: Array<Record<string, unknown>>;
+  accountId: string;
+}): Record<string, unknown> | null {
+  return (
+    params.liveAccounts.find((account) => getLiveAccountId(account) === params.accountId) ??
+    (params.accountId === "default" && params.liveAccounts.length === 1
+      ? (params.liveAccounts[0] ?? null)
+      : null)
+  );
+}
+
+function hasLiveCredentialAvailable(params: {
+  liveAccounts: Array<Record<string, unknown>>;
+  accountId: string;
+}): boolean {
+  const account = findLiveChannelAccount(params);
+  if (!account) {
+    return false;
+  }
+  if (hasConfiguredUnavailableCredentialStatus(account)) {
+    return false;
+  }
+  return account.running === true || account.connected === true;
+}
+
+function markConfiguredUnavailableCredentialStatusesAvailable(
+  account: unknown,
+): Record<string, unknown> {
+  const record = { ...asRecord(account) };
+  for (const key of ["tokenStatus", "botTokenStatus", "appTokenStatus", "signingSecretStatus"]) {
+    if (record[key] === "configured_unavailable") {
+      record[key] = "available";
+    }
+  }
+  return record;
+}
+
 function existsSyncMaybe(p: string | undefined): boolean | null {
   const path = normalizeOptionalString(p) ?? "";
   if (!path) {
@@ -58,54 +111,16 @@ function existsSyncMaybe(p: string | undefined): boolean | null {
   }
 }
 
-async function inspectChannelAccount(
-  plugin: ChannelPlugin,
-  cfg: OpenClawConfig,
-  accountId: string,
-) {
-  return (
-    plugin.config.inspectAccount?.(cfg, accountId) ??
-    (await inspectReadOnlyChannelAccount({
-      channelId: plugin.id,
-      cfg,
-      accountId,
-    }))
-  );
-}
-
 async function resolveChannelAccountRow(
   params: ResolvedChannelAccountRowParams,
 ): Promise<ChannelAccountRow> {
   const { plugin, cfg, sourceConfig, accountId } = params;
-  const sourceInspectedAccount = await inspectChannelAccount(plugin, sourceConfig, accountId);
-  const resolvedInspectedAccount = await inspectChannelAccount(plugin, cfg, accountId);
-  const resolvedInspection = resolvedInspectedAccount as {
-    enabled?: boolean;
-    configured?: boolean;
-  } | null;
-  const sourceInspection = sourceInspectedAccount as {
-    enabled?: boolean;
-    configured?: boolean;
-  } | null;
-  const resolvedAccount = resolvedInspectedAccount ?? plugin.config.resolveAccount(cfg, accountId);
-  const useSourceUnavailableAccount = Boolean(
-    sourceInspectedAccount &&
-    hasConfiguredUnavailableCredentialStatus(sourceInspectedAccount) &&
-    (!hasResolvedCredentialValue(resolvedAccount) ||
-      (sourceInspection?.configured === true && resolvedInspection?.configured === false)),
-  );
-  const account = useSourceUnavailableAccount ? sourceInspectedAccount : resolvedAccount;
-  const selectedInspection = useSourceUnavailableAccount ? sourceInspection : resolvedInspection;
-  const enabled =
-    selectedInspection?.enabled ?? resolveChannelAccountEnabled({ plugin, account, cfg });
-  const configured =
-    selectedInspection?.configured ??
-    (await resolveChannelAccountConfigured({
-      plugin,
-      account,
-      cfg,
-      readAccountConfiguredField: true,
-    }));
+  const { account, enabled, configured } = await resolveInspectedChannelAccount({
+    plugin,
+    cfg,
+    sourceConfig,
+    accountId,
+  });
   const snapshot = buildChannelAccountSnapshot({
     plugin,
     cfg,
@@ -129,6 +144,7 @@ const buildAccountNotes = (params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
   entry: ChannelAccountRow;
+  liveCredentialAvailable?: boolean;
 }) => {
   const { plugin, cfg, entry } = params;
   const notes: string[] = [];
@@ -154,7 +170,9 @@ const buildAccountNotes = (params: {
   ) {
     notes.push(`signing:${snapshot.signingSecretSource}`);
   }
-  if (hasConfiguredUnavailableCredentialStatus(entry.account)) {
+  if (params.liveCredentialAvailable) {
+    notes.push("credential available in gateway runtime");
+  } else if (hasConfiguredUnavailableCredentialStatus(entry.account)) {
     notes.push("secret unavailable in this command path");
   }
   if (snapshot.baseUrl) {
@@ -188,16 +206,18 @@ const buildAccountNotes = (params: {
 };
 
 function resolveLinkFields(summary: unknown): {
+  statusState: string | null;
   linked: boolean | null;
   authAgeMs: number | null;
   selfE164: string | null;
 } {
   const rec = asRecord(summary);
+  const statusState = typeof rec.statusState === "string" ? rec.statusState : null;
   const linked = typeof rec.linked === "boolean" ? rec.linked : null;
   const authAgeMs = typeof rec.authAgeMs === "number" ? rec.authAgeMs : null;
   const self = asRecord(rec.self);
   const selfE164 = typeof self.e164 === "string" && self.e164.trim() ? self.e164.trim() : null;
-  return { linked, authAgeMs, selfE164 };
+  return { statusState, linked, authAgeMs, selfE164 };
 }
 
 function collectMissingPaths(accounts: ChannelAccountRow[]): string[] {
@@ -228,7 +248,12 @@ function collectMissingPaths(accounts: ChannelAccountRow[]): string[] {
 // Keep this generic: channel-specific rules belong in the channel plugin.
 export async function buildChannelsTable(
   cfg: OpenClawConfig,
-  opts?: { showSecrets?: boolean; sourceConfig?: OpenClawConfig },
+  opts?: {
+    showSecrets?: boolean;
+    sourceConfig?: OpenClawConfig;
+    includeSetupFallbackPlugins?: boolean;
+    liveChannelStatus?: unknown;
+  },
 ): Promise<{
   rows: ChannelRow[];
   details: Array<{
@@ -245,7 +270,12 @@ export async function buildChannelsTable(
     rows: Array<Record<string, string>>;
   }> = [];
 
-  for (const plugin of listChannelPlugins()) {
+  const sourceConfig = opts?.sourceConfig ?? cfg;
+  const includeSetupFallbackPlugins = opts?.includeSetupFallbackPlugins ?? true;
+  for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
+    activationSourceConfig: sourceConfig,
+    includeSetupFallbackPlugins,
+  })) {
     const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId = resolveChannelDefaultAccountId({
       plugin,
@@ -255,7 +285,6 @@ export async function buildChannelsTable(
     const resolvedAccountIds = accountIds.length > 0 ? accountIds : [defaultAccountId];
 
     const accounts: ChannelAccountRow[] = [];
-    const sourceConfig = opts?.sourceConfig ?? cfg;
     for (const accountId of resolvedAccountIds) {
       accounts.push(
         await resolveChannelAccountRow({
@@ -266,12 +295,27 @@ export async function buildChannelsTable(
         }),
       );
     }
+    const liveAccounts = getLiveChannelAccounts({
+      liveChannelStatus: opts?.liveChannelStatus,
+      channelId: plugin.id,
+    });
 
     const anyEnabled = accounts.some((a) => a.enabled);
     const enabledAccounts = accounts.filter((a) => a.enabled);
     const configuredAccounts = enabledAccounts.filter((a) => a.configured);
-    const unavailableConfiguredAccounts = enabledAccounts.filter((a) =>
-      hasConfiguredUnavailableCredentialStatus(a.account),
+    const unavailableConfiguredAccounts = enabledAccounts.filter(
+      (a) =>
+        hasConfiguredUnavailableCredentialStatus(a.account) &&
+        !hasLiveCredentialAvailable({ liveAccounts, accountId: a.accountId }),
+    );
+    const accountsForTokenSummary = accounts.map((entry) =>
+      hasConfiguredUnavailableCredentialStatus(entry.account) &&
+      hasLiveCredentialAvailable({ liveAccounts, accountId: entry.accountId })
+        ? {
+            ...entry,
+            account: markConfiguredUnavailableCredentialStatusesAvailable(entry.account),
+          }
+        : entry,
     );
     const defaultEntry = accounts.find((a) => a.accountId === defaultAccountId) ?? accounts[0];
 
@@ -288,7 +332,7 @@ export async function buildChannelsTable(
     const link = resolveLinkFields(summary);
     const missingPaths = collectMissingPaths(enabledAccounts);
     const tokenSummary = summarizeTokenConfig({
-      accounts,
+      accounts: accountsForTokenSummary,
       showSecrets,
     });
 
@@ -309,6 +353,9 @@ export async function buildChannelsTable(
         return "warn";
       }
       if (unavailableConfiguredAccounts.length > 0) {
+        return "warn";
+      }
+      if (link.statusState === "unstable") {
         return "warn";
       }
       if (link.linked === false) {
@@ -338,6 +385,24 @@ export async function buildChannelsTable(
       }
       if (issues.length > 0) {
         return issues[0]?.message ?? "misconfigured";
+      }
+      if (link.statusState) {
+        if (link.statusState === "linked") {
+          const extra: string[] = [];
+          if (link.selfE164) {
+            extra.push(link.selfE164);
+          }
+          if (link.authAgeMs != null && link.authAgeMs >= 0) {
+            extra.push(`auth ${formatTimeAgo(link.authAgeMs)}`);
+          }
+          if (accounts.length > 1 || plugin.meta.forceAccountBinding) {
+            extra.push(`accounts ${accounts.length || 1}`);
+          }
+          return extra.length > 0
+            ? `${formatChannelStatusState(link.statusState)} · ${extra.join(" · ")}`
+            : formatChannelStatusState(link.statusState);
+        }
+        return formatChannelStatusState(link.statusState);
       }
 
       if (link.linked !== null) {
@@ -394,14 +459,19 @@ export async function buildChannelsTable(
         title: `${label} accounts`,
         columns: ["Account", "Status", "Notes"],
         rows: configuredAccounts.map((entry) => {
-          const notes = buildAccountNotes({ plugin, cfg, entry });
+          const liveCredentialAvailable = hasLiveCredentialAvailable({
+            liveAccounts,
+            accountId: entry.accountId,
+          });
+          const notes = buildAccountNotes({ plugin, cfg, entry, liveCredentialAvailable });
           return {
             Account: formatAccountLabel({
               accountId: entry.accountId,
               name: entry.snapshot.name,
             }),
             Status:
-              entry.enabled && !hasConfiguredUnavailableCredentialStatus(entry.account)
+              entry.enabled &&
+              (!hasConfiguredUnavailableCredentialStatus(entry.account) || liveCredentialAvailable)
                 ? "OK"
                 : "WARN",
             Notes: notes.join(" · "),

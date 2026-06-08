@@ -7,6 +7,7 @@ import {
 } from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
+import { resolvePluginSetupProvider } from "./setup-registry.js";
 import type {
   ProviderAuthMethod,
   ProviderPlugin,
@@ -14,7 +15,7 @@ import type {
   ProviderPluginWizardSetup,
 } from "./types.js";
 
-export const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
+const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
 
 export type ProviderWizardOption = {
   value: string;
@@ -33,6 +34,24 @@ export type ProviderModelPickerEntry = {
   label: string;
   hint?: string;
 };
+
+type ProviderWizardProvidersResolver = (params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}) => ProviderPlugin[];
+
+let providerWizardProvidersResolverForTest: ProviderWizardProvidersResolver | undefined;
+
+export function setProviderWizardProvidersResolverForTest(
+  resolver: ProviderWizardProvidersResolver | undefined,
+): () => void {
+  const previous = providerWizardProvidersResolverForTest;
+  providerWizardProvidersResolverForTest = resolver;
+  return () => {
+    providerWizardProvidersResolverForTest = previous;
+  };
+}
 
 function resolveWizardSetupChoiceId(
   provider: ProviderPlugin,
@@ -112,6 +131,9 @@ function resolveProviderWizardProviders(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin[] {
+  if (providerWizardProvidersResolverForTest) {
+    return providerWizardProvidersResolverForTest(params);
+  }
   return resolvePluginProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -293,12 +315,19 @@ export async function runProviderModelSelectedHook(params: {
     return;
   }
 
-  const providers = resolveProviderWizardProviders({
+  const setupProvider = resolvePluginSetupProvider({
+    provider: selectedProviderId,
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  const provider = providers.find((entry) => normalizeProviderId(entry.id) === selectedProviderId);
+  const provider =
+    setupProvider ??
+    resolveProviderWizardProviders({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }).find((entry) => normalizeProviderId(entry.id) === selectedProviderId);
   if (!provider?.onModelSelected) {
     return;
   }

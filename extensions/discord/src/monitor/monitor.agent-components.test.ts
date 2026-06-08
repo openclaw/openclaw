@@ -1,11 +1,14 @@
-import type { ButtonInteraction, ComponentData, StringSelectMenuInteraction } from "@buape/carbon";
 import { ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { peekSystemEvents, resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
-import { expectPairingReplyText } from "../../../../test/helpers/pairing-reply.js";
+import type {
+  ButtonInteraction,
+  ComponentData,
+  StringSelectMenuInteraction,
+} from "../internal/discord.js";
 import {
   enqueueSystemEventMock,
   readAllowFromStoreMock,
@@ -102,11 +105,13 @@ describe("agent components", () => {
   async function expectSuccessfulDmButtonInteraction(params: {
     dmPolicy: "pairing" | "open";
     expectPairingStoreRead: boolean;
+    allowFrom?: string[];
   }) {
     const button = createAgentComponentButton({
       cfg: createCfg(),
       accountId: "default",
       dmPolicy: params.dmPolicy,
+      allowFrom: params.allowFrom,
     });
     const { interaction, defer, reply } = createDmButtonInteraction();
 
@@ -260,6 +265,7 @@ describe("agent components", () => {
     await expectSuccessfulDmButtonInteraction({
       dmPolicy: "open",
       expectPairingStoreRead: false,
+      allowFrom: ["*"],
     });
   });
 

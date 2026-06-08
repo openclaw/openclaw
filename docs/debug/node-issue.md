@@ -3,7 +3,7 @@ summary: Node + tsx "__name is not a function" crash notes and workarounds
 read_when:
   - Debugging Node-only dev scripts or watch mode failures
   - Investigating tsx/esbuild loader crashes in OpenClaw
-title: "Node + tsx Crash"
+title: "Node + tsx crash"
 ---
 
 # Node + tsx "\_\_name is not a function" crash
@@ -49,7 +49,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 
 ## Notes / hypothesis
 
-- `tsx` uses esbuild to transform TS/ESM. esbuild’s `keepNames` emits a `__name` helper and wraps function definitions with `__name(...)`.
+- `tsx` uses esbuild to transform TS/ESM. esbuild's `keepNames` emits a `__name` helper and wraps function definitions with `__name(...)`.
 - The crash indicates `__name` exists but is not a function at runtime, which implies the helper is missing or overwritten for this module in the Node 25 loader path.
 - Similar `__name` helper issues have been reported in other esbuild consumers when the helper is missing or rewritten.
 
@@ -83,3 +83,8 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 - Repro on Node 22/24 to confirm Node 25 regression.
 - Test `tsx` nightly or pin to earlier version if a known regression exists.
 - If reproduces on Node LTS, file a minimal repro upstream with the `__name` stack trace.
+
+## Related
+
+- [Node.js install](/install/node)
+- [Gateway troubleshooting](/gateway/troubleshooting)

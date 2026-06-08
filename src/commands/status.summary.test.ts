@@ -1,12 +1,13 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const statusSummaryMocks = vi.hoisted(() => ({
-  hasPotentialConfiguredChannels: vi.fn(() => true),
+  hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
+  readSessionStoreReadOnly: vi.fn(() => ({})),
 }));
 
-vi.mock("../channels/config-presence.js", () => ({
-  hasPotentialConfiguredChannels: statusSummaryMocks.hasPotentialConfiguredChannels,
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  hasConfiguredChannelsForReadOnlyScope: statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope,
 }));
 
 vi.mock("./status.summary.runtime.js", () => ({
@@ -14,24 +15,37 @@ vi.mock("./status.summary.runtime.js", () => ({
     classifySessionKey: vi.fn(() => "direct"),
     resolveConfiguredStatusModelRef: vi.fn(() => ({
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.5",
     })),
     resolveSessionModelRef: vi.fn(() => ({
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.5",
     })),
+    resolveSessionRuntimeLabel: vi.fn(() => "OpenClaw Pi Default"),
     resolveContextTokensForModel: vi.fn(() => 200_000),
   },
 }));
 
 vi.mock("../agents/defaults.js", () => ({
   DEFAULT_CONTEXT_TOKENS: 200_000,
-  DEFAULT_MODEL: "gpt-5.4",
+  DEFAULT_MODEL: "gpt-5.5",
   DEFAULT_PROVIDER: "openai",
 }));
 
 vi.mock("../config/io.js", () => ({
   loadConfig: vi.fn(() => ({})),
+}));
+
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
+}));
+
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+}));
+
+vi.mock("../config/sessions/store-read.js", () => ({
+  readSessionStoreReadOnly: statusSummaryMocks.readSessionStoreReadOnly,
 }));
 
 vi.mock("../gateway/agent-list.js", () => ({
@@ -58,6 +72,7 @@ vi.mock("../infra/system-events.js", () => ({
 }));
 
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
+  configureTaskRegistryMaintenance: vi.fn(),
   getInspectableTaskRegistrySummary: vi.fn(() => ({
     total: 0,
     active: 0,
@@ -125,8 +140,9 @@ describe("getStatusSummary", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    statusSummaryMocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({});
   });
 
   it("includes runtimeVersion in the status payload", async () => {
@@ -140,12 +156,25 @@ describe("getStatusSummary", () => {
   });
 
   it("skips channel summary imports when no channels are configured", async () => {
-    statusSummaryMocks.hasPotentialConfiguredChannels.mockReturnValue(false);
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(false);
 
     const summary = await getStatusSummary();
 
     expect(summary.channelSummary).toEqual([]);
     expect(summary.linkChannel).toBeUndefined();
+    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).toHaveBeenCalledWith({
+      config: {},
+    });
+    expect(buildChannelSummary).not.toHaveBeenCalled();
+    expect(resolveLinkChannelContext).not.toHaveBeenCalled();
+  });
+
+  it("skips channel summary imports when explicitly disabled", async () => {
+    const summary = await getStatusSummary({ includeChannelSummary: false });
+
+    expect(summary.channelSummary).toEqual([]);
+    expect(summary.linkChannel).toBeUndefined();
+    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(buildChannelSummary).not.toHaveBeenCalled();
     expect(resolveLinkChannelContext).not.toHaveBeenCalled();
   });
@@ -156,5 +185,19 @@ describe("getStatusSummary", () => {
     expect(vi.mocked(statusSummaryRuntime.resolveContextTokensForModel)).toHaveBeenCalledWith(
       expect.objectContaining({ allowAsyncLoad: false }),
     );
+  });
+
+  it("includes the selected agent runtime on recent sessions", async () => {
+    vi.mocked(statusSummaryRuntime.resolveSessionRuntimeLabel).mockReturnValue("OpenAI Codex");
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.runtime).toBe("OpenAI Codex");
   });
 });

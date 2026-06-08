@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import { getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import { buildFoundryConnectionTest, isValidTenantIdentifier } from "./onboard.js";
@@ -696,6 +696,40 @@ describe("microsoft-foundry plugin", () => {
       "microsoft-foundry:entra",
       "microsoft-foundry:default",
     ]);
+  });
+
+  it("keeps Foundry profile selection compatible with unrelated AWS SDK profile modes", async () => {
+    const provider = registerProvider();
+    const config: OpenClawConfig = {
+      ...buildFoundryConfig({
+        profileIds: ["microsoft-foundry:entra"],
+        orderedProfileIds: ["microsoft-foundry:entra"],
+      }),
+      auth: {
+        profiles: {
+          "amazon-bedrock:default": {
+            provider: "amazon-bedrock",
+            mode: "aws-sdk",
+          },
+          "microsoft-foundry:entra": {
+            provider: "microsoft-foundry",
+            mode: "api_key",
+          },
+        },
+        order: {
+          "microsoft-foundry": ["microsoft-foundry:entra"],
+        },
+      },
+    };
+
+    await provider.onModelSelected?.({
+      config,
+      model: "microsoft-foundry/gpt-5.4",
+      prompter: {} as never,
+      agentDir: defaultFoundryAgentDir,
+    });
+
+    expect(config.auth?.order?.["microsoft-foundry"]).toEqual(["microsoft-foundry:entra"]);
   });
 
   it("persists discovered deployments alongside the selected default model", () => {

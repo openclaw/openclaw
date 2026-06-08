@@ -1,5 +1,5 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
 
@@ -7,6 +7,15 @@ const hookMocks = vi.hoisted(() => ({
   runner: {
     hasHooks: vi.fn((_: string) => true),
     runAfterToolCall: vi.fn(async () => {}),
+  },
+  BeforeToolCallBlockedError: class BeforeToolCallBlockedError extends Error {
+    reason: string;
+
+    constructor(reason: string) {
+      super(reason);
+      this.name = "BeforeToolCallBlockedError";
+      this.reason = reason;
+    }
   },
   isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
   consumeAdjustedParamsForToolCall: vi.fn((_: string) => undefined as unknown),
@@ -21,7 +30,14 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 }));
 
 vi.mock("./pi-tools.before-tool-call.js", () => ({
+  BeforeToolCallBlockedError: hookMocks.BeforeToolCallBlockedError,
+  buildBlockedToolResult: ({ reason }: { reason: string }) => ({
+    content: [{ type: "text", text: reason }],
+    details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason },
+  }),
   consumeAdjustedParamsForToolCall: hookMocks.consumeAdjustedParamsForToolCall,
+  isBeforeToolCallBlockedError: (error: unknown) =>
+    error instanceof hookMocks.BeforeToolCallBlockedError,
   isToolWrappedWithBeforeToolCallHook: hookMocks.isToolWrappedWithBeforeToolCallHook,
   runBeforeToolCallHook: hookMocks.runBeforeToolCallHook,
 }));

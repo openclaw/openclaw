@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withPathResolutionEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
-import { writeSkill } from "./skills.e2e-test-helpers.js";
+import { writeSkill, writeWorkspaceSkills } from "./skills.e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
@@ -199,21 +199,11 @@ describe("buildWorkspaceSkillSnapshot", () => {
 
   it("uses agents.list[].skills as a full replacement for inherited defaults", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "github"),
-      name: "github",
-      description: "GitHub",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "weather"),
-      name: "weather",
-      description: "Weather",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "docs-search"),
-      name: "docs-search",
-      description: "Docs",
-    });
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "github", description: "GitHub" },
+      { name: "weather", description: "Weather" },
+      { name: "docs-search", description: "Docs" },
+    ]);
 
     const snapshot = buildSnapshot(workspaceDir, {
       agentId: "writer",
@@ -257,9 +247,14 @@ describe("buildWorkspaceSkillSnapshot", () => {
     );
 
     // We should only have loaded a small subset.
-    expect(snapshot.skills.length).toBeLessThanOrEqual(5);
-    expect(snapshot.prompt).toContain("repo-skill-00");
-    expect(snapshot.prompt).not.toContain("repo-skill-07");
+    const skillNames = snapshot.skills.map((skill) => skill.name);
+    expect(skillNames.length).toBeGreaterThan(0);
+    expect(skillNames.length).toBeLessThanOrEqual(5);
+    expect(new Set(skillNames).size).toBe(skillNames.length);
+    for (const name of skillNames) {
+      expect(name).toMatch(/^repo-skill-\d{2}$/);
+      expect(snapshot.prompt).toContain(name);
+    }
   });
 
   it("skips skills whose SKILL.md exceeds maxSkillFileBytes", async () => {
