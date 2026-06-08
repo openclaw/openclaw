@@ -1239,6 +1239,7 @@ describe("runCodexAppServerAttempt", () => {
       contentItems: [
         { type: "inputText", text: `lookup result: ${rawToolSecret}` },
         { type: "inputImage", imageUrl: "data:image/png;base64,abc" },
+        { type: "unsupportedCodexOutput", imageUrl: "data:image/png;base64,ignored" },
       ],
     });
     const content = result.content as Array<{ text?: string; type?: string; url?: string }>;
@@ -1249,6 +1250,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(content[0]?.text).toContain("lookup result:");
     expect(content[0]?.text).not.toContain(rawToolSecret);
     expect(content[1]).toEqual({ type: "image", url: "data:image/png;base64,abc" });
+    expect(content[2]).toEqual({
+      type: "text",
+      text: "[Unsupported Codex dynamic tool output: unsupportedCodexOutput]",
+    });
     expect(JSON.stringify(result)).not.toContain(rawToolSecret);
   });
 
