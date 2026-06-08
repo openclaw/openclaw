@@ -104,13 +104,12 @@ export async function ensureLoaded(
     previousJobsById.set(job.id, job);
   }
   const loaded = await loadCronJobsStoreWithConfigJobs(state.deps.storePath);
-  const loadedJobs = (loaded.store.jobs ?? []) as unknown as CronJob[];
+  const loadedJobs = loaded.store.jobs ?? [];
   const jobs: CronJob[] = [];
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
   for (const [index, job] of loadedJobs.entries()) {
-    const decodedRaw = job as unknown as Record<string, unknown>;
-    const rawConfigJob = loaded.configJobs[index] ?? structuredClone(decodedRaw);
-    const raw = decodedRaw;
+    const raw = job as unknown as Record<string, unknown>;
+    const rawConfigJob = loaded.configJobs[index] ?? structuredClone(raw);
     const sourceIndex = loaded.configJobIndexes[index] ?? index;
     const runtimeEntry = loaded.configJobRuntimeEntries[index];
     // Accept old `jobId` rows at the raw boundary only; the in-memory store
@@ -131,9 +130,7 @@ export async function ensureLoaded(
     }
     const hydrated =
       normalized && typeof normalized === "object" ? (normalized as unknown as CronJob) : job;
-    const invalidReason = getInvalidPersistedCronJobReason(
-      hydrated as unknown as Record<string, unknown>,
-    );
+    const invalidReason = getInvalidPersistedCronJobReason(hydrated as Record<string, unknown>);
     if (invalidReason) {
       const quarantineEntry: QuarantinedCronConfigJob = {
         sourceIndex,
