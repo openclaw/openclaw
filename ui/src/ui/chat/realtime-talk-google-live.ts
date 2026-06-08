@@ -6,6 +6,7 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
   REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
+  captureFrameFromVideoStream,
   createRealtimeTalkEventEmitter,
   steerRealtimeTalkActiveConsult,
   shouldAutoControlRealtimeVoiceAgentText,
@@ -75,6 +76,7 @@ export function buildGoogleLiveUrl(session: RealtimeTalkJsonPcmWebSocketSessionR
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private ws: WebSocket | null = null;
   private media: MediaStream | null = null;
+  private videoStream: MediaStream | null = null;
   private inputContext: AudioContext | null = null;
   private outputContext: AudioContext | null = null;
   private inputSource: MediaStreamAudioSourceNode | null = null;
@@ -102,6 +104,14 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     const wsUrl = buildGoogleLiveUrl(this.session);
     this.closed = false;
     this.media = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (this.ctx.videoEnabled) {
+      try {
+        this.videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        this.ctx.callbacks.onVideoStream?.(this.videoStream);
+      } catch {
+        this.videoStream = null;
+      }
+    }
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
     this.outputContext = new AudioContext({ sampleRate: this.session.audio.outputSampleRateHz });
     this.ws = new WebSocket(wsUrl);
@@ -144,6 +154,11 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.inputSource = null;
     this.media?.getTracks().forEach((track) => track.stop());
     this.media = null;
+    this.videoStream?.getTracks().forEach((track) => track.stop());
+    this.videoStream = null;
+    if (this.ctx.videoEnabled) {
+      this.ctx.callbacks.onVideoStream?.(null);
+    }
     this.stopOutput();
     void this.inputContext?.close();
     this.inputContext = null;
@@ -313,9 +328,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       return;
     }
     if (name === REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME) {
-      this.submitToolResult(callId, {
-        error: "describe_view is only available in Video Talk (WebRTC) mode.",
-      });
+      await this.handleDescribeViewToolCall(callId);
       return;
     }
     if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
@@ -358,6 +371,48 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         },
       },
     };
+  }
+
+  // Gemini Live reads the returned frame from functionResponses[].parts[].inlineData.
+  private async handleDescribeViewToolCall(callId: string): Promise<void> {
+    const pending = this.pendingCalls.get(callId);
+    if (!pending) {
+      return;
+    }
+    if (!this.ctx.videoEnabled) {
+      this.submitToolResult(callId, {
+        error:
+          "describe_view is only available in Video Talk mode. Please restart using the video button.",
+      });
+      return;
+    }
+    this.ctx.callbacks.onStatus?.("thinking");
+    try {
+      const imageBase64 = await captureFrameFromVideoStream(this.videoStream);
+      if (!imageBase64) {
+        this.submitToolResult(callId, {
+          result: "Camera capture failed. Describe the current situation based on audio context.",
+        });
+        return;
+      }
+      this.pendingCalls.delete(callId);
+      this.send({
+        toolResponse: {
+          functionResponses: [
+            {
+              id: callId,
+              name: pending.name,
+              response: { result: "Image captured. Please describe what you see." },
+              parts: [{ inlineData: { data: imageBase64, mimeType: "image/jpeg" } }],
+            },
+          ],
+        },
+      });
+    } catch {
+      this.submitToolResult(callId, { error: "Camera capture failed" });
+    } finally {
+      this.ctx.callbacks.onStatus?.("listening");
+    }
   }
 
   private submitToolResult(callId: string, result: unknown): void {

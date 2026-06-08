@@ -4,11 +4,20 @@ import {
   buildGoogleLiveUrl,
   GoogleLiveRealtimeTalkTransport,
 } from "./chat/realtime-talk-google-live.ts";
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "./chat/realtime-talk-shared.ts";
+import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
+} from "./chat/realtime-talk-shared.ts";
 import type {
   RealtimeTalkJsonPcmWebSocketSessionResult,
   RealtimeTalkTransportContext,
 } from "./chat/realtime-talk-shared.ts";
+
+// jsdom has no canvas/video pipeline, so stub frame capture to assert the inline-image wiring.
+vi.mock("./chat/realtime-talk-shared.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat/realtime-talk-shared.ts")>();
+  return { ...actual, captureFrameFromVideoStream: async () => "MOCK_FRAME_B64" };
+});
 
 type MockWebSocketEvent = {
   data?: unknown;
@@ -600,6 +609,84 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
     const sent = ws.sent.map((payload) => JSON.parse(payload));
     expect(sent.some((event) => event.clientContent)).toBe(false);
+    transport.stop();
+  });
+
+  it("acquires a camera stream and notifies onVideoStream when video is enabled", async () => {
+    const onVideoStream = vi.fn();
+    const transport = new GoogleLiveRealtimeTalkTransport(
+      createSession(
+        "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+      ),
+      {
+        callbacks: { onVideoStream },
+        client: createClient(),
+        sessionKey: "main",
+        videoEnabled: true,
+      },
+    );
+
+    await transport.start();
+    expect(onVideoStream).toHaveBeenCalledTimes(1);
+    expect(onVideoStream.mock.calls[0]?.[0]).not.toBeNull();
+
+    transport.stop();
+    expect(onVideoStream).toHaveBeenLastCalledWith(null);
+  });
+
+  it("embeds a captured frame as inlineData parts for passive describe_view", async () => {
+    const transport = new GoogleLiveRealtimeTalkTransport(
+      createSession(
+        "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+      ),
+      { callbacks: {}, client: createClient(), sessionKey: "main", videoEnabled: true },
+    );
+
+    await transport.start();
+    const ws = latestWebSocket();
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCall: { functionCalls: [{ id: "d1", name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME }] },
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(ws.sent.map((p) => JSON.parse(p)).some((e) => e.toolResponse)).toBe(true),
+    );
+    const toolResponse = ws.sent
+      .map((p) => JSON.parse(p))
+      .find((e) => e.toolResponse)?.toolResponse;
+    const fnResponse = toolResponse.functionResponses[0];
+    expect(fnResponse.id).toBe("d1");
+    expect(fnResponse.parts).toEqual([
+      { inlineData: { data: "MOCK_FRAME_B64", mimeType: "image/jpeg" } },
+    ]);
+    transport.stop();
+  });
+
+  it("returns an honest describe_view error when video is not enabled", async () => {
+    const transport = new GoogleLiveRealtimeTalkTransport(
+      createSession(
+        "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+      ),
+      { callbacks: {}, client: createClient(), sessionKey: "main" },
+    );
+
+    await transport.start();
+    const ws = latestWebSocket();
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCall: { functionCalls: [{ id: "d2", name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME }] },
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(ws.sent.map((p) => JSON.parse(p)).some((e) => e.toolResponse)).toBe(true),
+    );
+    const fnResponse = ws.sent.map((p) => JSON.parse(p)).find((e) => e.toolResponse)?.toolResponse
+      .functionResponses[0];
+    expect(fnResponse.parts).toBeUndefined();
+    expect(JSON.stringify(fnResponse.response)).toContain("Video Talk mode");
     transport.stop();
   });
 });

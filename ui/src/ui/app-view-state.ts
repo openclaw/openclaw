@@ -147,6 +147,7 @@ export type AppViewState = {
   chatInputHistoryIndex: number;
   chatDraftBeforeHistory: string | null;
   realtimeTalkActive: boolean;
+  realtimeTalkMode: "audio" | "video" | null;
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
   realtimeTalkTranscript: string | null;

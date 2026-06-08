@@ -67,6 +67,7 @@ type LifecycleHost = {
   pendingGatewayUrl?: string | null;
   realtimeTalkSession?: { stop: () => void } | null;
   realtimeTalkActive?: boolean;
+  realtimeTalkMode?: "audio" | "video" | null;
   realtimeTalkStatus?: string;
   realtimeTalkDetail?: string | null;
   realtimeTalkTranscript?: string | null;
@@ -214,6 +215,7 @@ export function handleDisconnected(host: LifecycleHost) {
   host.realtimeTalkSession?.stop();
   host.realtimeTalkSession = null;
   host.realtimeTalkActive = false;
+  host.realtimeTalkMode = null;
   host.realtimeTalkStatus = "idle";
   host.realtimeTalkDetail = null;
   host.realtimeTalkTranscript = null;

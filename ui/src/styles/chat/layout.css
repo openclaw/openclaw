@@ -982,30 +982,24 @@
 }
 
 .agent-chat__talk-video-pip-source {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.agent-chat__talk-status--video {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding-top: 8px;
-}
-
-.agent-chat__talk-video-inline {
-  position: static;
-  width: 120px;
-  height: 90px;
-  opacity: 1;
-  flex-shrink: 0;
-  border-radius: var(--radius-sm);
+  position: fixed;
+  bottom: 80px;
+  right: 16px;
+  width: 160px;
+  height: 120px;
+  border-radius: var(--radius-md);
   object-fit: cover;
   background: var(--bg-elevated);
-  transform: scaleX(-1);
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--border);
+  cursor: grab;
+  z-index: 1000;
+  touch-action: none;
+  user-select: none;
+}
+
+.agent-chat__talk-video-pip-source:active {
+  cursor: grabbing;
 }
 
 .agent-chat__talk-status-text {

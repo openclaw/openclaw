@@ -986,6 +986,48 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("chat Video Talk buttons", () => {
+  it("keeps the Video Talk button visible (showing Stop) while a video session is active", () => {
+    const container = renderChatView({
+      realtimeTalkActive: true,
+      realtimeTalkMode: "video",
+      onToggleRealtimeTalk: () => undefined,
+      onToggleRealtimeTalkWithVideo: () => undefined,
+    });
+
+    // Regression: the Video Talk button used to disappear once any Talk session was active.
+    const videoStop = container.querySelector<HTMLButtonElement>('button[aria-label="Stop Talk"]');
+    expect(videoStop).not.toBeNull();
+    expect(videoStop?.disabled).toBe(false);
+
+    // The audio Talk button stays visible but disabled so the modes cannot be crossed mid-session.
+    const audioBlocked = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Talk unavailable during Video Talk"]',
+    );
+    expect(audioBlocked).not.toBeNull();
+    expect(audioBlocked?.disabled).toBe(true);
+  });
+
+  it("disables the Video Talk button while an audio session is active", () => {
+    const container = renderChatView({
+      realtimeTalkActive: true,
+      realtimeTalkMode: "audio",
+      onToggleRealtimeTalk: () => undefined,
+      onToggleRealtimeTalkWithVideo: () => undefined,
+    });
+
+    const videoBlocked = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Video Talk unavailable during Talk"]',
+    );
+    expect(videoBlocked).not.toBeNull();
+    expect(videoBlocked?.disabled).toBe(true);
+
+    const audioStop = container.querySelector<HTMLButtonElement>('button[aria-label="Stop Talk"]');
+    expect(audioStop).not.toBeNull();
+    expect(audioStop?.disabled).toBe(false);
+  });
+});
+
 describe("chat transcript rendering cache", () => {
   it("does not rebuild transcript items for draft-only rerenders", () => {
     const messages = [{ role: "assistant", content: "ready" }];
