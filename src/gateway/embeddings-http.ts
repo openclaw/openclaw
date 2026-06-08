@@ -17,10 +17,7 @@ import {
   type EmbeddingProvider as GenericEmbeddingProvider,
   type EmbeddingProviderAdapter as GenericEmbeddingProviderAdapter,
 } from "../plugins/embedding-provider-runtime.js";
-import {
-  getMemoryEmbeddingProvider,
-  listMemoryEmbeddingProviders,
-} from "../plugins/memory-embedding-provider-runtime.js";
+import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
 import type {
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderAdapter,
@@ -164,18 +161,6 @@ async function createConfiguredEmbeddingProvider(params: {
       throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
     }
     return provider;
-  }
-
-  // Fallback: try to resolve by authProviderId so config-level provider names
-  // like "google" map to the registered "gemini" embedding adapter.
-  const byAuthProvider = listMemoryEmbeddingProviders().find(
-    (candidate) => candidate.authProviderId === providerId,
-  );
-  if (byAuthProvider) {
-    const provider = await createWithAdapter(byAuthProvider);
-    if (provider) {
-      return provider;
-    }
   }
 
   const genericAdapter = getGenericEmbeddingProvider(providerId, params.cfg);

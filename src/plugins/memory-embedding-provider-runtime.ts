@@ -50,10 +50,23 @@ export function getMemoryEmbeddingProvider(
   id: string,
   cfg?: OpenClawConfig,
 ): MemoryEmbeddingProviderAdapter | undefined {
-  return getRuntimeEmbeddingProviderAdapter({
+  const result = getRuntimeEmbeddingProviderAdapter({
     key: "memoryEmbeddingProviders",
     cfg,
     lookupIds: resolveMemoryEmbeddingProviderLookupIds(id, cfg),
     getRegisteredProvider: getRegisteredMemoryEmbeddingProvider,
   });
+  if (result) {
+    return result;
+  }
+  // When the caller provides a config-level provider name (e.g. "google")
+  // that differs from the registered adapter id (e.g. "gemini"), fall back
+  // to matching on authProviderId so every lookup path (memory manager,
+  // Gateway /v1/embeddings, startup warnings) agrees on the resolution.
+  for (const entry of listRegisteredMemoryEmbeddingProviders()) {
+    if (entry.adapter.authProviderId === id) {
+      return entry.adapter;
+    }
+  }
+  return undefined;
 }

@@ -24,8 +24,14 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
   createLocalEmbeddingProvider: async () => {
     throw new Error("local embedding provider is not used by these tests");
   },
-  getMemoryEmbeddingProvider: (id: string) =>
-    mockEmbeddingRegistry.adapters.find((adapter) => adapter.id === id),
+  getMemoryEmbeddingProvider: (id: string) => {
+    const direct = mockEmbeddingRegistry.adapters.find((adapter) => adapter.id === id);
+    if (direct) return direct;
+    // Centralized authProviderId fallback (mirrors runtime resolver)
+    return mockEmbeddingRegistry.adapters.find(
+      (adapter) => adapter.authProviderId === id,
+    );
+  },
   listMemoryEmbeddingProviders: () => [...mockEmbeddingRegistry.adapters],
   listRegisteredMemoryEmbeddingProviderAdapters: () => [...mockEmbeddingRegistry.adapters],
   listRegisteredMemoryEmbeddingProviders: () =>

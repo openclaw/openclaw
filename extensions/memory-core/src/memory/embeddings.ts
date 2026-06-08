@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/embedding-providers";
 import {
   getMemoryEmbeddingProvider as getLegacyMemoryEmbeddingProvider,
-  listMemoryEmbeddingProviders,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderAdapter,
   type MemoryEmbeddingProviderCreateOptions,
@@ -118,15 +117,6 @@ function getAdapter(
   const adapter = getLegacyMemoryEmbeddingProvider(id, config);
   if (adapter) {
     return adapter;
-  }
-  // Fallback: resolve provider id to the registered adapter by authProviderId
-  // so that a config-level provider name like "google" maps to the "gemini"
-  // embedding adapter (which declares authProviderId: "google").
-  const byAuthProvider = listMemoryEmbeddingProviders().find(
-    (candidate) => candidate.authProviderId === id,
-  );
-  if (byAuthProvider) {
-    return byAuthProvider;
   }
   const genericAdapter = getEmbeddingProvider(id, config);
   if (genericAdapter) {
