@@ -1066,24 +1066,27 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
   let unsubscribe: (() => void) | null = null;
   let stopActiveTrustedSpans: (() => void) | null = null;
   let unregisterUnhandledRejectionHandler: (() => void) | null = null;
+  let continuationTracerInstalled = false;
 
   const stopStarted = async () => {
     const currentUnsubscribe = unsubscribe;
     const currentLogProvider = logProvider;
     const currentSdk = sdk;
+    const currentContinuationTracerInstalled = continuationTracerInstalled;
     const currentStopActiveTrustedSpans = stopActiveTrustedSpans;
     const currentUnregisterUnhandledRejectionHandler = unregisterUnhandledRejectionHandler;
 
     unsubscribe = null;
     logProvider = null;
     sdk = null;
+    continuationTracerInstalled = false;
     stopActiveTrustedSpans = null;
     unregisterUnhandledRejectionHandler = null;
 
     currentUnregisterUnhandledRejectionHandler?.();
     currentUnsubscribe?.();
     currentStopActiveTrustedSpans?.();
-    if (currentSdk) {
+    if (currentContinuationTracerInstalled) {
       resetContinuationTracer();
     }
     if (currentLogProvider) {
@@ -3434,6 +3437,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             resolveParentContext: adapterResolveParentContext,
           }),
         );
+        continuationTracerInstalled = true;
       }
 
       unsubscribe = subscribe((evt, metadata, privateData) => {
