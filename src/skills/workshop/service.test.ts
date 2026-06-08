@@ -138,6 +138,75 @@ describe("skill workshop proposals", () => {
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("applied");
   });
 
+  it.runIf(process.platform !== "win32")(
+    "applies updates through trusted workspace skills symlink targets",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-target-skills-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      const skillDir = path.join(targetSkillsDir, "shared-skill");
+      await writeSkill({
+        dir: skillDir,
+        name: "shared-skill",
+        description: "Shared skill target",
+        body: "# Shared Skill\n\nOld body.\n",
+      });
+      const config = { skills: { load: { allowSymlinkTargets: [targetSkillsDir] } } };
+      const proposal = await proposeUpdateSkill({
+        workspaceDir,
+        config,
+        skillName: "shared-skill",
+        content: "# Shared Skill\n\nNew body.\n",
+      });
+
+      const applied = await applySkillProposal({
+        workspaceDir,
+        config,
+        proposalId: proposal.record.id,
+      });
+
+      expect(applied.targetSkillFile).toBe(
+        path.join(workspaceDir, "skills", "shared-skill", "SKILL.md"),
+      );
+      await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+        "New body.",
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "blocks untrusted workspace skills symlink targets before support files are written",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-untrusted-skills-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      const proposal = await proposeCreateSkill({
+        workspaceDir,
+        name: "Untrusted Symlink Skill",
+        description: "Must not write through an untrusted symlink",
+        content: "# Untrusted\n\nDo not write.\n",
+        supportFiles: [
+          {
+            path: "references/details.md",
+            content: "This support file must not be written.\n",
+          },
+        ],
+      });
+
+      await expect(
+        applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+      ).rejects.toThrow("untrusted symlink target");
+      await expect(
+        fs.access(path.join(targetSkillsDir, "untrusted-symlink-skill", "SKILL.md")),
+      ).rejects.toThrow();
+      await expect(
+        fs.access(
+          path.join(targetSkillsDir, "untrusted-symlink-skill", "references", "details.md"),
+        ),
+      ).rejects.toThrow();
+    },
+  );
+
   it("preserves non-proposal frontmatter when proposals become active skills", async () => {
     const workspaceDir = await makeWorkspace();
     const created = await proposeCreateSkill({

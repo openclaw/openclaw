@@ -10,6 +10,7 @@ import {
   resolveSkillStatusEntry,
   type SkillStatusEntry,
 } from "../discovery/status.js";
+import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-targets.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { scanSkillContent, scanSource } from "../security/scanner.js";
 import { resolveSkillWorkshopConfig, type SkillWorkshopConfig } from "./config.js";
@@ -20,6 +21,7 @@ import {
 } from "./frontmatter.js";
 import {
   assertInsideWorkspace,
+  assertWorkspaceSkillWriteTarget,
   createSkillProposalId,
   createSkillProposalRollback,
   hashSkillProposalContent,
@@ -530,6 +532,12 @@ export async function applySkillProposal(
 
     assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
     assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+    const allowedSymlinkTargetRealPaths = resolveAllowedSkillSymlinkTargetRealPaths(input.config);
+    await assertWorkspaceSkillWriteTarget({
+      workspaceDir: input.workspaceDir,
+      filePath: record.target.skillFile,
+      allowedSymlinkTargetRealPaths,
+    });
     const targetState = await readApplyTargetState(record, supportFiles);
     const rollback = createSkillProposalRollback({
       proposalId: record.id,
@@ -554,6 +562,7 @@ export async function applySkillProposal(
       skillContent,
       supportFiles,
       previousSupportFiles: targetState.previousSupportFiles,
+      allowedSymlinkTargetRealPaths,
     });
     bumpSkillsSnapshotVersion({
       workspaceDir: input.workspaceDir,
@@ -646,6 +655,7 @@ async function publishProposalTarget(params: {
   skillContent: string;
   supportFiles: readonly PreparedSkillProposalSupportFile[];
   previousSupportFiles: NonNullable<SkillProposalRollback["supportFiles"]>;
+  allowedSymlinkTargetRealPaths: readonly string[];
 }): Promise<void> {
   const writtenSupportPaths: string[] = [];
   try {
@@ -663,6 +673,7 @@ async function publishProposalTarget(params: {
       filePath: params.record.target.skillFile,
       content: params.skillContent,
       overwrite: params.record.kind === "update",
+      allowedSymlinkTargetRealPaths: params.allowedSymlinkTargetRealPaths,
     });
   } catch (error) {
     if (params.record.kind === "create") {
