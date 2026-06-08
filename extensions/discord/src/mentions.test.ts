@@ -116,6 +116,18 @@ describe("rewriteDiscordKnownMentions", () => {
     );
   });
 
+  it("rewrites mentions after same-line fenced code blocks", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "123456789",
+      handles: ["alice", "bob"],
+    });
+    const rewritten = rewriteDiscordKnownMentions("```@alice``` outside @bob", {
+      accountId: "default",
+    });
+    expect(rewritten).toBe("```@alice``` outside <@123456789>");
+  });
+
   it("keeps shorter backtick fence lines inside longer fenced code blocks", () => {
     rememberDiscordDirectoryUser({
       accountId: "default",
