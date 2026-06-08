@@ -40,6 +40,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
+import { resolveStaleActiveSubagentOutcome } from "./subagent-lost-context-completion.js";
 import {
   emitSubagentEndedHookOnce,
   resolveLifecycleOutcomeFromRunOutcome,
@@ -958,20 +959,25 @@ async function sweepSubagentRuns() {
             continue;
           }
 
+          const lostContextOutcome = await resolveStaleActiveSubagentOutcome({
+            childSessionKey: entry.childSessionKey,
+          });
           await completeSubagentRunWithRecovery(
             {
               runId,
               endedAt: now,
-              outcome: {
-                status: "error",
-                error: "subagent run lost active execution context",
-              },
-              reason: SUBAGENT_ENDED_REASON_ERROR,
+              outcome: lostContextOutcome,
+              reason:
+                lostContextOutcome.status === "ok"
+                  ? SUBAGENT_ENDED_REASON_COMPLETE
+                  : SUBAGENT_ENDED_REASON_ERROR,
               sendFarewell: true,
               accountId: entry.requesterOrigin?.accountId,
               triggerCleanup: true,
             },
-            "sweeper-lost-context",
+            lostContextOutcome.status === "ok"
+              ? "sweeper-lost-context-recovered"
+              : "sweeper-lost-context",
           );
           continue;
         }

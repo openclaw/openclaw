@@ -2314,6 +2314,124 @@ describe("subagent registry seam flow", () => {
     expect(run?.outcome).toBeUndefined();
   });
 
+  it("recovers stale active runs as ok when child session has readable assistant output", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "# ARCHITECTURE.md\nrelease readiness design" }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: 1,
+        status: "running",
+      },
+    });
+
+    const createdAt = Date.parse("2026-03-24T11:00:00Z");
+    vi.setSystemTime(createdAt);
+    mod.registerSubagentRun({
+      runId: "run-lost-context-with-output",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver architecture doc",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    vi.setSystemTime(createdAt + 65_000);
+    await mod.testing.sweepOnceForTests();
+
+    await waitForFast(() => {
+      const announceParams = findRecordCallArg(
+        mocks.runSubagentAnnounceFlow,
+        0,
+        "lost context recovered announce",
+        (record) => record.childRunId === "run-lost-context-with-output",
+      );
+      expectRecordFields(
+        announceParams.outcome,
+        { status: "ok" },
+        "lost context recovered announce outcome",
+      );
+    });
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-lost-context-with-output");
+    expectRecordFields(run?.outcome, { status: "ok" }, "lost context recovered run outcome");
+    expect(run?.outcome?.error).toBeUndefined();
+  });
+
+  it("reports lost-context error when child session has no readable output", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: 1,
+        status: "running",
+      },
+    });
+
+    const createdAt = Date.parse("2026-03-24T11:00:00Z");
+    vi.setSystemTime(createdAt);
+    mod.registerSubagentRun({
+      runId: "run-lost-context-no-output",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver architecture doc",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    vi.setSystemTime(createdAt + 65_000);
+    await mod.testing.sweepOnceForTests();
+
+    await waitForFast(() => {
+      const announceParams = findRecordCallArg(
+        mocks.runSubagentAnnounceFlow,
+        0,
+        "lost context no-output announce",
+        (record) => record.childRunId === "run-lost-context-no-output",
+      );
+      expectRecordFields(
+        announceParams.outcome,
+        {
+          status: "error",
+          error: "subagent run lost active execution context",
+        },
+        "lost context no-output announce outcome",
+      );
+    });
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-lost-context-no-output");
+    expect(run?.outcome?.status).toBe("error");
+    expect(run?.outcome?.error).toBe("subagent run lost active execution context");
+  });
+
   it("completes a registered run across timing persistence, lifecycle status, and announce cleanup", async () => {
     mod.registerSubagentRun({
       runId: "run-1",
