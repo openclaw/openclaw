@@ -708,6 +708,60 @@ describe("createOpenClawCodingTools", () => {
     expect(inheritedAllow?.includes("process")).toBe(false);
   });
 
+  it("passes group-restricted tool surface to cron-created agent turns", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      sessionKey: "agent:main:whatsapp:group:restricted-room",
+      config: {
+        tools: { allow: ["read", "exec", "process", "cron"] },
+        channels: {
+          whatsapp: {
+            groups: {
+              "restricted-room": {
+                tools: { allow: ["read", "cron"] },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
+    expectListIncludes(cronAllow, ["read", "cron"]);
+    expect(cronAllow?.includes("exec")).toBe(false);
+    expect(cronAllow?.includes("process")).toBe(false);
+  });
+
+  it("passes deny-restricted tool surface to cron-created agent turns", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      sessionKey: "agent:main:whatsapp:group:restricted-room",
+      config: {
+        tools: { allow: ["read", "exec", "process", "cron"] },
+        channels: {
+          whatsapp: {
+            groups: {
+              "restricted-room": {
+                tools: { deny: ["exec", "process"] },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
+    expectListIncludes(cronAllow, ["read", "cron"]);
+    expect(cronAllow?.includes("exec")).toBe(false);
+    expect(cronAllow?.includes("process")).toBe(false);
+  });
+
   it("records core tool-prep stages for hot-path diagnostics", () => {
     const stages: string[] = [];
 
