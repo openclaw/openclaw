@@ -461,6 +461,7 @@ export async function processMessage(params: {
       ? resolveWhatsAppGroupSystemPrompt({
           accountConfig: account,
           groupId: conversationId,
+          groupSubject: params.msg.groupSubject,
         })
       : resolveWhatsAppDirectSystemPrompt({
           accountConfig: account,

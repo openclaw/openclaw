@@ -187,4 +187,32 @@ describe("resolveGroupActivationFor", () => {
 
     expect(activation).toBe("always");
   });
+
+  it("uses exact group subject config for the default activation mode", async () => {
+    const { storePath, cleanup } = await makeSessionStore();
+    cleanups.push(cleanup);
+
+    const activation = await resolveGroupActivationFor({
+      cfg: {
+        channels: {
+          whatsapp: {
+            dangerouslyAllowGroupNameMatching: true,
+            groups: {
+              "Family Chat": {
+                requireMention: false,
+              },
+            },
+          },
+        },
+        session: { store: storePath },
+      } as never,
+      accountId: "default",
+      agentId: "main",
+      sessionKey: LEGACY_GROUP_SESSION_KEY,
+      conversationId: GROUP_CONVERSATION_ID,
+      groupSubject: "Family Chat",
+    });
+
+    expect(activation).toBe("always");
+  });
 });

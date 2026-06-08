@@ -1,9 +1,5 @@
 // Whatsapp plugin module implements inbound policy behavior.
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import {
-  resolveChannelGroupPolicy,
-  resolveChannelGroupRequireMention,
-} from "openclaw/plugin-sdk/channel-policy";
 import type {
   ChannelGroupPolicy,
   DmPolicy,
@@ -13,6 +9,10 @@ import type {
 import { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
+import {
+  resolveWhatsAppChannelGroupPolicy,
+  resolveWhatsAppGroupRequireMention,
+} from "./group-policy.js";
 import { getSelfIdentity, getSenderIdentity } from "./identity.js";
 import type { WebInboundMessage } from "./inbound/types.js";
 import { resolveWhatsAppRuntimeGroupPolicy } from "./runtime-group-policy.js";
@@ -28,8 +28,14 @@ export type ResolvedWhatsAppInboundPolicy = {
   isSelfChat: boolean;
   providerMissingFallbackApplied: boolean;
   isSamePhone: (value?: string | null) => boolean;
-  resolveConversationGroupPolicy: (conversationId: string) => ChannelGroupPolicy;
-  resolveConversationRequireMention: (conversationId: string) => boolean;
+  resolveConversationGroupPolicy: (
+    conversationId: string,
+    groupSubject?: string | null,
+  ) => ChannelGroupPolicy;
+  resolveConversationRequireMention: (
+    conversationId: string,
+    groupSubject?: string | null,
+  ) => boolean;
 };
 
 function normalizeWhatsAppIngressPhone(value: string): string | null {
@@ -64,12 +70,14 @@ function maybeSamePhoneDmAllowFrom(params: {
 function buildResolvedWhatsAppGroupConfig(params: {
   groupPolicy: GroupPolicy;
   groups: ResolvedWhatsAppAccount["groups"];
+  dangerouslyAllowGroupNameMatching?: boolean;
 }): OpenClawConfig {
   return {
     channels: {
       whatsapp: {
         groupPolicy: params.groupPolicy,
         groups: params.groups,
+        dangerouslyAllowGroupNameMatching: params.dangerouslyAllowGroupNameMatching,
       },
     },
   } as OpenClawConfig;
@@ -105,6 +113,7 @@ export function resolveWhatsAppInboundPolicy(params: {
   const resolvedGroupCfg = buildResolvedWhatsAppGroupConfig({
     groupPolicy,
     groups: account.groups,
+    dangerouslyAllowGroupNameMatching: account.dangerouslyAllowGroupNameMatching,
   });
   const isSamePhone = (value?: string | null) =>
     typeof value === "string" && typeof params.selfE164 === "string" && value === params.selfE164;
@@ -118,18 +127,18 @@ export function resolveWhatsAppInboundPolicy(params: {
     isSelfChat: account.selfChatMode ?? isSelfChatMode(params.selfE164, configuredAllowFrom),
     providerMissingFallbackApplied,
     isSamePhone,
-    resolveConversationGroupPolicy: (conversationId) =>
-      resolveChannelGroupPolicy({
+    resolveConversationGroupPolicy: (conversationId, groupSubject) =>
+      resolveWhatsAppChannelGroupPolicy({
         cfg: resolvedGroupCfg,
-        channel: "whatsapp",
         groupId: resolveGroupConversationId(conversationId),
+        groupSubject,
         hasGroupAllowFrom: groupAllowFrom.length > 0,
       }),
-    resolveConversationRequireMention: (conversationId) =>
-      resolveChannelGroupRequireMention({
+    resolveConversationRequireMention: (conversationId, groupSubject) =>
+      resolveWhatsAppGroupRequireMention({
         cfg: resolvedGroupCfg,
-        channel: "whatsapp",
         groupId: resolveGroupConversationId(conversationId),
+        groupSubject,
       }),
   };
 }

@@ -41,9 +41,8 @@ function resolveChannelGroupConfig(
   if (!groups) {
     return undefined;
   }
-  const direct = groups[groupId];
-  if (direct) {
-    return direct;
+  if (Object.hasOwn(groups, groupId)) {
+    return groups[groupId];
   }
   if (!caseInsensitive) {
     return undefined;

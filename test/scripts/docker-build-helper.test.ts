@@ -2359,9 +2359,18 @@ printf "container output\\n" >"$run_log"
 docker_e2e_sample_stats_until_exit demo sampled-docker-pid "$stats_log" "$run_log" "Docker stats" 08 >"$sampler_log" 2>&1
 output="$(cat "$sampler_log")"
 
-[[ "$output" = *"Docker stats still running (8s elapsed,"* ]]
-[[ "$output" != *"value too great for base"* ]]
-[[ -s "$stats_log" ]]
+if [[ "$output" != *"Docker stats still running (8s elapsed,"* ]]; then
+  printf "missing Docker stats heartbeat output:\\n%s\\n" "$output" >&2
+  exit 1
+fi
+if [[ "$output" = *"value too great for base"* ]]; then
+  printf "heartbeat interval used octal arithmetic:\\n%s\\n" "$output" >&2
+  exit 1
+fi
+if [[ ! -s "$stats_log" ]]; then
+  echo "missing Docker stats samples" >&2
+  exit 1
+fi
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });

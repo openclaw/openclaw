@@ -98,4 +98,63 @@ describe("createWhatsAppStatusReactionController", () => {
     });
     await controller?.clear();
   });
+
+  it("uses exact group-name activation for group status reactions when enabled", async () => {
+    const cfg = {
+      messages: {
+        statusReactions: {
+          enabled: true,
+          timing: {
+            debounceMs: 1_000_000,
+            stallSoftMs: 1_000_000,
+            stallHardMs: 1_000_000,
+            doneHoldMs: 0,
+            errorHoldMs: 0,
+          },
+        },
+      },
+      channels: {
+        whatsapp: {
+          reactionLevel: "ack",
+          dangerouslyAllowGroupNameMatching: true,
+          ackReaction: {
+            emoji: "👀",
+            direct: true,
+            group: "mentions",
+          },
+          groups: {
+            "Family Chat": { requireMention: false },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const controller = await createWhatsAppStatusReactionController({
+      cfg,
+      msg: createMessage({
+        chatType: "group",
+        conversationId: "123@g.us",
+        from: "123@g.us",
+        chatId: "123@g.us",
+        groupSubject: "Family Chat",
+        wasMentioned: false,
+      }),
+      agentId: "agent",
+      sessionKey: "whatsapp:default:123@g.us",
+      conversationId: "123@g.us",
+      verbose: false,
+      accountId: "default",
+    });
+
+    void controller?.setQueued();
+    await vi.waitFor(() => {
+      expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith("123@g.us", "msg-1", "👀", {
+        verbose: false,
+        fromMe: false,
+        accountId: "default",
+        cfg,
+      });
+    });
+    await controller?.clear();
+  });
 });

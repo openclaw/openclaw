@@ -511,7 +511,7 @@ Group/channel tool restrictions are applied in addition to global/agent tool pol
 
 ## Group allowlists
 
-When `channels.whatsapp.groups`, `channels.telegram.groups`, or `channels.imessage.groups` is configured, the keys act as a group allowlist. Use `"*"` to allow all groups while still setting default mention behavior.
+When `channels.whatsapp.groups`, `channels.telegram.groups`, or `channels.imessage.groups` is configured, the keys act as a group allowlist. Use `"*"` to allow all groups while still setting default mention behavior. WhatsApp keys should be stable group JIDs; exact current group names require `channels.whatsapp.dangerouslyAllowGroupNameMatching: true` and are break-glass only.
 
 <Warning>
 Common confusion: DM pairing approval is not the same as group authorization. For channels that support DM pairing, the pairing store unlocks DMs only. Group commands still require explicit group sender authorization from config allowlists such as `groupAllowFrom` or the documented config fallback for that channel.
@@ -532,9 +532,10 @@ Common intents (copy/paste):
     {
       channels: {
         whatsapp: {
+          dangerouslyAllowGroupNameMatching: true,
           groups: {
             "123@g.us": { requireMention: true },
-            "456@g.us": { requireMention: false },
+            "Family Chat": { requireMention: false },
           },
         },
       },

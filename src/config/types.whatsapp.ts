@@ -64,6 +64,8 @@ type WhatsAppSharedConfig = {
   defaultTo?: string;
   /** Optional allowlist for WhatsApp group senders (E.164). */
   groupAllowFrom?: string[];
+  /** Break-glass: allow mutable exact WhatsApp group names in groups keys. Prefer stable group JIDs. */
+  dangerouslyAllowGroupNameMatching?: boolean;
   /**
    * Controls how group messages are handled:
    * - "open": groups bypass allowFrom, only mention-gating applies

@@ -97,6 +97,19 @@ export function collectEnabledInsecureOrDangerousFlagsFromContracts(
   if (cfg.tools?.fs?.workspaceOnly === false) {
     enabledFlags.push("tools.fs.workspaceOnly=false");
   }
+  const whatsapp = cfg.channels?.whatsapp;
+  if (whatsapp?.dangerouslyAllowGroupNameMatching === true) {
+    enabledFlags.push("channels.whatsapp.dangerouslyAllowGroupNameMatching=true");
+  }
+  if (isRecord(whatsapp?.accounts)) {
+    for (const [accountId, account] of Object.entries(whatsapp.accounts)) {
+      if (isRecord(account) && account.dangerouslyAllowGroupNameMatching === true) {
+        enabledFlags.push(
+          `channels.whatsapp.accounts.${accountId}.dangerouslyAllowGroupNameMatching=true`,
+        );
+      }
+    }
+  }
   collectSandboxDockerDangerousFlags(
     isRecord(cfg.agents?.defaults?.sandbox?.docker)
       ? cfg.agents?.defaults?.sandbox?.docker

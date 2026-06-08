@@ -85,6 +85,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     allowFrom: z.array(z.string()).optional(),
     defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.string()).optional(),
+    dangerouslyAllowGroupNameMatching: z.boolean().optional(),
     groupPolicy: params.useDefaults
       ? GroupPolicySchema.optional().default("allowlist")
       : GroupPolicySchema.optional(),

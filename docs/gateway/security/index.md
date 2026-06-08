@@ -349,6 +349,7 @@ active audit output even when matching findings move to `suppressedFindings`.
     - `channels.slack.dangerouslyAllowNameMatching`
     - `channels.googlechat.dangerouslyAllowNameMatching`
     - `channels.msteams.dangerouslyAllowNameMatching`
+    - `channels.whatsapp.dangerouslyAllowGroupNameMatching`
     - `channels.synology-chat.dangerouslyAllowNameMatching` (plugin channel)
     - `channels.synology-chat.dangerouslyAllowInheritedWebhookPath` (plugin channel)
     - `channels.zalouser.dangerouslyAllowNameMatching` (plugin channel)

@@ -1,15 +1,33 @@
 // Whatsapp plugin module implements system prompt behavior.
 export function resolveWhatsAppGroupSystemPrompt(params: {
-  accountConfig?: { groups?: Record<string, { systemPrompt?: string | null }> } | null;
+  accountConfig?: {
+    dangerouslyAllowGroupNameMatching?: boolean;
+    groups?: Record<string, { systemPrompt?: string | null }>;
+  } | null;
   groupId?: string | null;
+  groupSubject?: string | null;
 }): string | undefined {
-  if (!params.groupId) {
+  const groupIds = [
+    params.groupId,
+    ...(params.accountConfig?.dangerouslyAllowGroupNameMatching === true
+      ? [params.groupSubject]
+      : []),
+  ]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  if (groupIds.length === 0) {
     return undefined;
   }
   const groups = params.accountConfig?.groups;
-  const specific = groups?.[params.groupId];
-  if (specific != null && specific.systemPrompt != null) {
-    return specific.systemPrompt.trim() || undefined;
+  for (const groupId of Array.from(new Set(groupIds))) {
+    if (!groups || !Object.hasOwn(groups, groupId)) {
+      continue;
+    }
+    const specific = groups[groupId];
+    if (specific?.systemPrompt != null) {
+      return specific.systemPrompt.trim() || undefined;
+    }
+    break;
   }
   const wildcard = groups?.["*"]?.systemPrompt;
   return wildcard != null ? wildcard.trim() || undefined : undefined;
