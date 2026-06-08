@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import {
   readSessionStoreForTest,
   writeSessionStoreForTestAsync,
@@ -707,23 +706,14 @@ describe("CLI attempt execution", () => {
       startedAt: 2,
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: {
-            ...sessionEntry,
-            updatedAt: 5,
-            status: "done",
-            endedAt: 4,
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    clearSessionStoreCacheForTest();
+    await seedSessionStore({
+      [sessionKey]: {
+        ...sessionEntry,
+        updatedAt: 5,
+        status: "done",
+        endedAt: 4,
+      },
+    });
 
     const nowCalls: number[] = [];
     let nextNow = 10_000;
