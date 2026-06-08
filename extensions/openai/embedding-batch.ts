@@ -51,7 +51,9 @@ type OpenAiBatchOutputLine = ProviderBatchOutputLine;
 export const OPENAI_BATCH_ENDPOINT = EMBEDDING_BATCH_ENDPOINT;
 const OPENAI_BATCH_COMPLETION_WINDOW = "24h";
 const OPENAI_BATCH_MAX_REQUESTS = 50000;
-const OPENAI_BATCH_MAX_JSONL_BYTES = 9 * 1024 * 1024;
+// OpenAI accepts 200 MB Batch input files. Keep a safety margin so the JSONL
+// splitter avoids boundary-size uploads while preserving source-wide batching.
+const OPENAI_BATCH_MAX_JSONL_BYTES = 190 * 1024 * 1024;
 const OPENAI_BATCH_MAX_POLL_BACKOFF_MS = 5 * 60_000;
 
 async function submitOpenAiBatch(params: {
