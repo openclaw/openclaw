@@ -113,7 +113,7 @@ export function registerCronAddCommand(cron: Command) {
       .option(
         "--command-env <KEY=VALUE>",
         "Environment override for command payloads (repeatable)",
-        (value: string, previous: string[] = []) => [...previous, value],
+        (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
       )
       .option("--command-input <text>", "stdin for command payloads")
       .option(
