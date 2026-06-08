@@ -11,6 +11,7 @@ import {
   getSessionEntry,
   saveSessionStore,
   upsertSessionEntry,
+  type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
@@ -1437,7 +1438,7 @@ describe("matrix monitor handler pairing account scope", () => {
             accountId: "ops",
           },
         },
-      },
+      } as Record<string, SessionEntry>,
       { skipMaintenance: true },
     );
     const sendNotice = vi.fn(async () => "$notice");
@@ -1484,7 +1485,7 @@ describe("matrix monitor handler pairing account scope", () => {
             accountId: "ops",
           },
         },
-      },
+      } as Record<string, SessionEntry>,
       { skipMaintenance: true },
     );
     const sendNotice = vi.fn(async () => "$notice");

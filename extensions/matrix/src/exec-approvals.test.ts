@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { saveSessionStore, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getMatrixExecApprovalApprovers,
@@ -360,7 +360,7 @@ describe("matrix exec approvals", () => {
           lastTo: "channel:C999",
           lastAccountId: "work",
         },
-      },
+      } as Record<string, SessionEntry>,
       { skipMaintenance: true },
     );
     const cfg = buildMultiAccountMatrixConfig({ sessionStorePath: storePath });

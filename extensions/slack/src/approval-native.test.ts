@@ -2,7 +2,11 @@
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  clearSessionStoreCacheForTest,
+  saveSessionStore,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
 import { slackApprovalCapability, slackNativeApprovalAdapter, testing } from "./approval-native.js";
 
@@ -27,8 +31,11 @@ function buildConfig(
 
 const STORE_PATH = path.join(os.tmpdir(), "openclaw-slack-approval-native-test.json");
 
-async function writeStore(store: Parameters<typeof saveSessionStore>[1]) {
-  await saveSessionStore(STORE_PATH, store, { skipMaintenance: true });
+async function writeStore(store: Record<string, unknown>) {
+  await saveSessionStore(STORE_PATH, store as Record<string, SessionEntry>, {
+    skipMaintenance: true,
+  });
+  clearSessionStoreCacheForTest();
 }
 
 function createExecApprovalRequest(

@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { saveSessionStore, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import {
@@ -1734,11 +1734,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     await saveSessionStore(
       storePath,
       {
-        [prepared.ctxPayload.SessionKey!]: {
-          sessionId: "existing-channel-session",
-          updatedAt: Date.now(),
-        },
-      },
+        [prepared.ctxPayload.SessionKey!]: { updatedAt: Date.now() },
+      } as Record<string, SessionEntry>,
       { skipMaintenance: true },
     );
     const existing = await prepareMessageWith(
@@ -1870,11 +1867,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     await saveSessionStore(
       storePath,
       {
-        [threadKeys.sessionKey]: {
-          sessionId: "existing-thread-session",
-          updatedAt: Date.now(),
-        },
-      },
+        [threadKeys.sessionKey]: { updatedAt: Date.now() },
+      } as Record<string, SessionEntry>,
       { skipMaintenance: true },
     );
 
@@ -2079,12 +2073,9 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     await saveSessionStore(
       storePath,
       {
-        "agent:main:main": { sessionId: "existing-dm-session", updatedAt: Date.now() },
-        "agent:main:main:thread:650.000": {
-          sessionId: "existing-dm-thread-session",
-          updatedAt: Date.now(),
-        },
-      },
+        "agent:main:main": { updatedAt: Date.now() },
+        "agent:main:main:thread:650.000": { updatedAt: Date.now() },
+      } as Record<string, SessionEntry>,
       { skipMaintenance: true },
     );
     const replies = vi
