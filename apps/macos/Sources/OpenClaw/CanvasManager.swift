@@ -13,6 +13,7 @@ final class CanvasManager {
     private var panelController: CanvasWindowController?
     private var panelSessionKey: String?
     private var lastAutoA2UIUrl: String?
+    private var canvasPluginSurfaceUrl: String?
     private var gatewayWatchTask: Task<Void, Never>?
 
     private init() {
@@ -57,6 +58,7 @@ final class CanvasManager {
             }
             controller.presentAnchoredPanel(anchorProvider: anchorProvider)
             controller.applyPreferredPlacement(placement)
+            controller.canvasPluginSurfaceUrl = self.canvasPluginSurfaceUrl
             self.refreshDebugStatus()
 
             // Existing session: only navigate when an explicit target was provided.
@@ -93,6 +95,7 @@ final class CanvasManager {
         controller.onVisibilityChanged = { [weak self] visible in
             self?.onPanelVisibilityChanged?(visible)
         }
+        controller.canvasPluginSurfaceUrl = self.canvasPluginSurfaceUrl
         self.panelController = controller
         self.panelSessionKey = session
         controller.applyPreferredPlacement(placement)
@@ -155,6 +158,7 @@ final class CanvasManager {
         let raw =
             (snapshot.pluginsurfaceurls?["canvas"]?.value as? String)?
                 .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
+        self.canvasPluginSurfaceUrl = raw.isEmpty ? nil : raw
         if raw.isEmpty {
             Self.logger.debug("canvas plugin surface URL missing in gateway snapshot")
         } else {
@@ -170,6 +174,7 @@ final class CanvasManager {
             }
             return
         }
+        controller.canvasPluginSurfaceUrl = self.canvasPluginSurfaceUrl
         self.maybeAutoNavigateToA2UI(controller: controller, a2uiUrl: a2uiUrl)
     }
 

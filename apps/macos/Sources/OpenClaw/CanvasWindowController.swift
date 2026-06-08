@@ -16,6 +16,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     private let container: HoverChromeContainerView
     let presentation: CanvasPresentation
     var preferredPlacement: CanvasPlacement?
+    var canvasPluginSurfaceUrl: String?
     private(set) var currentTarget: String?
     private var debugStatusEnabled = false
     private var debugStatusTitle: String?
@@ -214,6 +215,13 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
         self.currentTarget = trimmed
 
+        // Resolve hosted canvas/a2ui paths through the gateway capability URL.
+        if let resolved = Self.resolveCanvasUrl(target: trimmed, canvasPluginSurfaceUrl: self.canvasPluginSurfaceUrl) {
+            canvasWindowLogger.debug("canvas load resolved \(resolved.absoluteString, privacy: .public)")
+            self.webView.load(URLRequest(url: resolved))
+            return
+        }
+
         if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
             if scheme == "https" || scheme == "http" {
                 canvasWindowLogger.debug("canvas load url \(url.absoluteString, privacy: .public)")
@@ -265,6 +273,57 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
             enabled: self.debugStatusEnabled,
             title: self.debugStatusTitle,
             subtitle: self.debugStatusSubtitle)
+    }
+
+    // MARK: - Capability URL resolution
+
+    private static let canvasHostPath = "/__openclaw__/canvas"
+    private static let a2uiPath = "/__openclaw__/a2ui"
+    private static let capabilityPrefix = "/__openclaw__/cap"
+
+    private static func isCanvasHttpPath(_ pathname: String) -> Bool {
+        pathname == canvasHostPath || pathname.hasPrefix("\(canvasHostPath)/")
+            || pathname == a2uiPath || pathname.hasPrefix("\(a2uiPath)/")
+    }
+
+    static func resolveCanvasUrl(target: String, canvasPluginSurfaceUrl: String?) -> URL? {
+        guard let surfaceUrl = canvasPluginSurfaceUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !surfaceUrl.isEmpty
+        else { return nil }
+        guard let base = URL(string: surfaceUrl) else { return nil }
+        let scopedPrefix = base.path.replacingOccurrences(of: #"/+$"#, with: "", options: .regularExpression)
+        guard scopedPrefix.hasPrefix(capabilityPrefix) else { return nil }
+
+        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let entry: URL
+        if let absolute = URL(string: trimmed), absolute.scheme != nil {
+            entry = absolute
+        } else {
+            guard let relative = URL(string: trimmed, relativeTo: base) else { return nil }
+            entry = relative
+        }
+
+        let pathname = entry.path
+        guard isCanvasHttpPath(pathname) else { return nil }
+
+        var components = URLComponents()
+        components.scheme = base.scheme
+        components.host = base.host
+        if let port = base.port {
+            components.port = port
+        }
+        components.user = base.user
+        components.password = base.password
+        components.path = "\(scopedPrefix)\(pathname)"
+
+        if let entryComponents = URLComponents(url: entry, resolvingAgainstBaseURL: true) {
+            components.query = entryComponents.query
+            components.fragment = entryComponents.fragment
+        }
+
+        return components.url
     }
 
     private func loadFile(_ url: URL) {
