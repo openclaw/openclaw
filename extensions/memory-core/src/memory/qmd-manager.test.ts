@@ -1240,6 +1240,13 @@ describe("QmdMemoryManager", () => {
         emitAndClose(child, "stdout", JSON.stringify(["workspace-legacy"]));
         return child;
       }
+      if (args[0] === "collection" && args[1] === "show") {
+        // Old qmd: `collection show` cannot surface the path either, so the conflict stays
+        // unverifiable and the rebind must refuse (no remove on a parsed name alone).
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stderr", `Collection not found: ${args[2] ?? ""}`, 1);
+        return child;
+      }
       if (args[0] === "collection" && args[1] === "remove") {
         const child = createMockChild({ autoClose: false });
         const name = args[2] ?? "";
@@ -1283,10 +1290,134 @@ describe("QmdMemoryManager", () => {
     expectMockMessageNotContains(logWarnMock, "rebinding");
     expectMockMessageContains(
       logWarnMock,
-      "qmd reported existing collection workspace-legacy, but list output did not include verifiable path/pattern metadata",
+      "qmd reported existing collection workspace-legacy, but its path/pattern could not be confirmed via 'qmd collection show'",
     );
     expectMockMessageContains(logWarnMock, "qmd collection remove workspace-legacy");
     expectMockMessageContains(logWarnMock, "qmd collection add skipped for workspace");
+  });
+
+  it("migrates a disambiguated legacy scoped duplicate (custom names) via show-verified rebind", async () => {
+    // Upgrade regression: two custom collections share an explicit name ("notes") at
+    // different roots. OLD code scoped-then-disambiguated -> "notes-main", "notes-main-2".
+    // NEW code disambiguates unscoped -> "notes", "notes-2", so the legacy probe for the
+    // second is "notes-2-main" (deriveLegacyScopedName) which never matches the shipped
+    // "notes-main-2". migrateLegacyScopedCollections therefore misses it, and qmd rejects
+    // adding "notes-2" because "notes-main-2" still binds the same path+pattern. The fix:
+    // confirm the qmd-reported conflict via `collection show` and rebind it.
+    const notesA = path.join(tmpRoot, "notes-a");
+    const notesB = path.join(tmpRoot, "notes-b");
+    await fs.mkdir(notesA, { recursive: true });
+    await fs.mkdir(notesB, { recursive: true });
+
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [
+            { path: notesA, pattern: "**/*.md", name: "notes" },
+            { path: notesB, pattern: "**/*.md", name: "notes" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    // qmd's own index, seeded with the two legacy scoped duplicates.
+    const store = new Map<string, { path: string; pattern: string }>([
+      ["notes-main", { path: notesA, pattern: "**/*.md" }],
+      ["notes-main-2", { path: notesB, pattern: "**/*.md" }],
+    ]);
+    const removeCalls: string[] = [];
+    const addCalls: Array<{ name: string; path: string }> = [];
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        // Real qmd 2.5.2 `collection list` emits names only (no path/pattern).
+        emitAndClose(child, "stdout", JSON.stringify([...store.keys()]));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "show") {
+        const name = args[2] ?? "";
+        const child = createMockChild({ autoClose: false });
+        const entry = store.get(name);
+        if (entry) {
+          emitAndClose(
+            child,
+            "stdout",
+            [
+              `Collection: ${name}`,
+              `  Path:     ${entry.path}`,
+              `  Pattern:  ${entry.pattern}`,
+              `  Include:  yes (default)`,
+            ].join("\n"),
+          );
+        } else {
+          emitAndClose(child, "stderr", `Collection not found: ${name}`, 1);
+        }
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "remove") {
+        const name = args[2] ?? "";
+        removeCalls.push(name);
+        store.delete(name);
+        const child = createMockChild({ autoClose: false });
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const child = createMockChild({ autoClose: false });
+        const pathArg = args[2] ?? "";
+        const name = args[args.indexOf("--name") + 1] ?? "";
+        const maskIdx = args.indexOf("--mask");
+        const globIdx = args.indexOf("--glob");
+        const pattern =
+          (maskIdx !== -1 ? args[maskIdx + 1] : globIdx !== -1 ? args[globIdx + 1] : "") ?? "";
+        const conflict = [...store.entries()].find(
+          ([existingName, info]) =>
+            existingName !== name && info.path === pathArg && info.pattern === pattern,
+        );
+        if (conflict) {
+          emitAndClose(
+            child,
+            "stderr",
+            [
+              "A collection already exists for this path and pattern:",
+              `  Name: ${conflict[0]} (qmd://${conflict[0]}/)`,
+              `  Pattern: ${pattern}`,
+              "",
+              `Use 'qmd update' to re-index it, or remove it first with 'qmd collection remove ${conflict[0]}'`,
+            ].join("\n"),
+            1,
+          );
+          return child;
+        }
+        store.set(name, { path: pathArg, pattern });
+        addCalls.push({ name, path: pathArg });
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    // First duplicate migrates by name; the disambiguated second is reached only through
+    // the show-verified conflict rebind (the regression: red before the fix).
+    expect(removeCalls).toContain("notes-main");
+    expect(removeCalls).toContain("notes-main-2");
+
+    // Both unscoped collections end up bound to their correct roots; no scoped name lingers.
+    expect(addCalls.find((c) => c.name === "notes")?.path).toBe(notesA);
+    expect(addCalls.find((c) => c.name === "notes-2")?.path).toBe(notesB);
+    expect(store.has("notes-main")).toBe(false);
+    expect(store.has("notes-main-2")).toBe(false);
+    expect(store.get("notes")).toEqual({ path: notesA, pattern: "**/*.md" });
+    expect(store.get("notes-2")).toEqual({ path: notesB, pattern: "**/*.md" });
+    expectMockMessageContains(logWarnMock, "rebinding");
   });
 
   it("recreates a managed collection when list fails but add reports the same name exists", async () => {

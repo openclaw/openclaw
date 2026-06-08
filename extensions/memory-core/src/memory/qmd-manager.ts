@@ -746,13 +746,28 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     if (!conflictName) {
+      // `qmd collection list` omits the path, so a conflicting collection whose name we
+      // cannot reconstruct stays invisible to path/pattern matching — the duplicate
+      // custom-name upgrade case, where the legacy scoped name disambiguated as
+      // `<base>-<agent>-<n>` while the unscoped probe is `<base>-<n>-<agent>`, so
+      // migrateLegacyScopedCollections never removes it. Fall back to the name qmd reports
+      // in the add error and confirm its path+pattern via `collection show` before
+      // rebinding — never remove on a parsed name alone.
       const parsedConflictName = this.parseConflictingCollectionNameFromAddError(addErrorMessage);
-      if (parsedConflictName) {
-        log.warn(
-          `qmd collection add conflict for ${collection.name}: qmd reported existing collection ${parsedConflictName}, but list output did not include verifiable path/pattern metadata; refusing automatic rebind. If ${parsedConflictName} is stale, remove it manually with 'qmd collection remove ${parsedConflictName}'`,
-        );
+      if (
+        parsedConflictName &&
+        parsedConflictName !== collection.name &&
+        (await this.conflictMatchesManagedCollection(collection, parsedConflictName))
+      ) {
+        conflictName = parsedConflictName;
+      } else {
+        if (parsedConflictName) {
+          log.warn(
+            `qmd collection add conflict for ${collection.name}: qmd reported existing collection ${parsedConflictName}, but its path/pattern could not be confirmed via 'qmd collection show'; refusing automatic rebind. If ${parsedConflictName} is stale, remove it manually with 'qmd collection remove ${parsedConflictName}'`,
+          );
+        }
+        return false;
       }
-      return false;
     }
     if (conflictName === collection.name) {
       existing.set(collection.name, {
@@ -790,6 +805,28 @@ export class QmdMemoryManager implements MemorySearchManager {
       );
       return false;
     }
+  }
+
+  // Confirms the collection qmd named in a path+pattern add-conflict actually binds the
+  // same (path, pattern) as the desired managed collection before we remove it. Reuses the
+  // `collection show` enrichment (the only command that surfaces the path); with no verified
+  // matching path we fail closed — never remove a collection on a parsed name alone.
+  private async conflictMatchesManagedCollection(
+    collection: ManagedCollection,
+    conflictName: string,
+  ): Promise<boolean> {
+    const shown = await this.enrichLegacyCollectionPath(conflictName, {});
+    if (!shown.path || !this.pathsMatch(shown.path, collection.path)) {
+      return false;
+    }
+    if (typeof shown.pattern !== "string") {
+      return false;
+    }
+    return this.patternsMatchForManagedCollection(
+      collection.path,
+      shown.pattern,
+      collection.pattern,
+    );
   }
 
   private async migrateLegacyScopedCollections(
