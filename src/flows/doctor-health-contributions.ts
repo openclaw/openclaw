@@ -763,14 +763,12 @@ async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<v
     try {
       const { gatherDaemonStatus } = await import("../cli/daemon-cli/status.gather.js");
       const allowExecSecretRefs = ctx.options.allowExec === true;
-      const shouldProbeGateway =
-        allowExecSecretRefs || !(await hasActiveGatewayExecCredential(ctx, "local"));
       const status = await gatherDaemonStatus({
         rpc: {
           timeout: ctx.options.nonInteractive === true ? "3000" : "10000",
           json: true,
         },
-        probe: shouldProbeGateway,
+        probe: true,
         requireRpc: false,
         deep: ctx.options.deep === true,
         allowExecSecretRefs,

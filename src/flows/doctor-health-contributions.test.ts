@@ -451,20 +451,21 @@ describe("doctor health contributions", () => {
     });
   });
 
-  it("uses non-probing daemon status for exec SecretRefs without emitting fallback drift", async () => {
+  it("lets daemon status decide exec SecretRef probing from daemon config", async () => {
     const contribution = requireDoctorContribution("doctor:workspace-status");
     const pluginVersionDrift = {
-      gatewayVersion: "2026.5.2-test",
+      gatewayVersion: "2026.6.1",
       drifts: [
         {
           pluginId: "codex",
           installedVersion: "2026.5.30-beta.1",
-          gatewayVersion: "2026.5.2-test",
+          gatewayVersion: "2026.6.1",
           source: "npm",
         },
       ],
     };
     mocks.gatherDaemonStatus.mockResolvedValueOnce({
+      gateway: { version: "2026.6.1" },
       pluginVersionDrift,
     });
     const cfg = {
@@ -490,14 +491,12 @@ describe("doctor health contributions", () => {
         timeout: "3000",
         json: true,
       },
-      probe: false,
+      probe: true,
       requireRpc: false,
       deep: false,
       allowExecSecretRefs: false,
     });
-    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
-      pluginVersionDrift: undefined,
-    });
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
   });
 
   it("ignores remote-only exec SecretRefs for local daemon-context plugin drift probes", async () => {
