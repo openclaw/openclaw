@@ -47,8 +47,7 @@ const checks: Array<{ file: string; snippets: string[] }> = [
     snippets: [
       "permissions?: string | null",
       "dynamicTools?: Array<DynamicToolSpec> | null",
-      "experimentalRawEvents: boolean",
-      "persistExtendedHistory: boolean",
+      "experimentalRawEvents",
     ],
   },
   {

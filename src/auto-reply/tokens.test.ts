@@ -4,6 +4,7 @@ import {
   CONTINUE_WORK_TOKEN,
   HEARTBEAT_TOKEN,
   SILENT_REPLY_TOKEN,
+  isInternalFormattingArtifact,
   isSilentReplyPrefixText,
   isSilentReplyPayloadText,
   isSilentReplyText,
@@ -447,6 +448,67 @@ describe("stripContinuationSignal", () => {
     const result = stripContinuationSignal("  CONTINUE_WORK");
     expect(result.text).toBe("");
     expect(result.signal).toEqual({ kind: "work", delayMs: undefined });
+  });
+});
+
+describe("isInternalFormattingArtifact", () => {
+  it("matches Harmony channel markers (#88128)", () => {
+    expect(isInternalFormattingArtifact("<channel|>")).toBe(true);
+    expect(isInternalFormattingArtifact("  <channel|>  ")).toBe(true);
+    expect(isInternalFormattingArtifact("\n<channel|>\n")).toBe(true);
+    expect(isInternalFormattingArtifact("<channel|answer>")).toBe(true);
+    expect(isInternalFormattingArtifact("<lane|reasoning>")).toBe(true);
+    expect(isInternalFormattingArtifact("<|>")).toBe(true);
+    expect(isInternalFormattingArtifact("<|channel|>")).toBe(true);
+    expect(isInternalFormattingArtifact("<|message|>")).toBe(true);
+    expect(isInternalFormattingArtifact("<|call|>")).toBe(true);
+  });
+
+  it("matches set-thought directives (#88128)", () => {
+    expect(isInternalFormattingArtifact("set-thought <channel|>")).toBe(true);
+    expect(isInternalFormattingArtifact("  set-thought <channel|>  ")).toBe(true);
+    expect(isInternalFormattingArtifact("set-thought <lane|reasoning>")).toBe(true);
+  });
+
+  it("matches box-drawing HR separators (#88128)", () => {
+    expect(isInternalFormattingArtifact("───")).toBe(true);
+    expect(isInternalFormattingArtifact("─────────")).toBe(true);
+    expect(isInternalFormattingArtifact("  ───  ")).toBe(true);
+  });
+
+  it("does NOT match generic markdown separators (avoids false positives)", () => {
+    expect(isInternalFormattingArtifact("---")).toBe(false);
+    expect(isInternalFormattingArtifact("___")).toBe(false);
+    expect(isInternalFormattingArtifact("***")).toBe(false);
+  });
+
+  it("does NOT match generic XML-like tags (avoids false positives)", () => {
+    expect(isInternalFormattingArtifact("<tag>")).toBe(false);
+    expect(isInternalFormattingArtifact("</tag>")).toBe(false);
+    expect(isInternalFormattingArtifact("<br/>")).toBe(false);
+  });
+
+  it("returns false for undefined/empty", () => {
+    expect(isInternalFormattingArtifact(undefined)).toBe(false);
+    expect(isInternalFormattingArtifact("")).toBe(false);
+  });
+
+  it("returns false for normal user-facing text", () => {
+    expect(isInternalFormattingArtifact("Hello! How can I help?")).toBe(false);
+    expect(isInternalFormattingArtifact("The answer is 42.")).toBe(false);
+  });
+
+  it("returns false for text that merely contains an artifact pattern", () => {
+    expect(isInternalFormattingArtifact("Here are the options:\n───\n1. Option A")).toBe(false);
+    expect(isInternalFormattingArtifact("Use <channel|> in your config.")).toBe(false);
+    expect(isInternalFormattingArtifact("The set-thought mechanism works like this...")).toBe(
+      false,
+    );
+  });
+
+  it("returns false for code blocks and multi-line content", () => {
+    expect(isInternalFormattingArtifact("```js\nconsole.log('hi')\n```")).toBe(false);
+    expect(isInternalFormattingArtifact("**bold** and *italic* text")).toBe(false);
   });
 });
 
