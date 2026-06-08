@@ -552,7 +552,14 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.migrateLegacyUnscopedCollections(existing);
 
     for (const collection of this.qmd.collections) {
-      const listed = existing.get(collection.name);
+      let listed = existing.get(collection.name);
+      if (listed && !listed.path) {
+        // collectionList may omit path; show reveals the actual root to detect drift.
+        const showedPath = await this.showCollectionPath(collection.name);
+        if (showedPath) {
+          listed = { ...listed, path: showedPath };
+        }
+      }
       if (listed && !this.shouldRebindCollection(collection, listed)) {
         continue;
       }
@@ -658,6 +665,23 @@ export class QmdMemoryManager implements MemorySearchManager {
       // ignore; older qmd versions might not support list --json.
     }
     return existing;
+  }
+
+  private async showCollectionPath(name: string): Promise<string | null> {
+    try {
+      const result = await this.runQmd(["collection", "show", name], {
+        timeoutMs: this.qmd.update.commandTimeoutMs,
+      });
+      for (const rawLine of result.stdout.split(/\r?\n/)) {
+        const pathLine = /^\s*path\s*:\s*(.+?)\s*$/i.exec(rawLine);
+        if (pathLine) {
+          return pathLine[1].trim();
+        }
+      }
+    } catch {
+      // Older qmd versions may not support collection show; conservative no-rebind preserved.
+    }
+    return null;
   }
 
   private findCollectionByPathPattern(

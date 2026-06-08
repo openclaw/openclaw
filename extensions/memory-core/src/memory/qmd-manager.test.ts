@@ -948,6 +948,92 @@ describe("QmdMemoryManager", () => {
     expect(workspaceAddCall).toContain("**/*.md");
   });
 
+  it("rebinds collection when qmd show reveals a changed root path despite list having no path (#91251)", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        // List output omits path — only the name is known.
+        emitAndClose(child, "stdout", JSON.stringify([`workspace-${agentId}`]));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "show") {
+        const child = createMockChild({ autoClose: false });
+        // Show reveals the stale root path that differs from the current config.
+        emitAndClose(child, "stdout", "Path: /old/stale/root\nPattern: **/*.md");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    const commands = spawnMock.mock.calls.map((call: unknown[]) => call[1] as string[]);
+    const removeCalls = commands.filter(
+      (args) =>
+        args[0] === "collection" && args[1] === "remove" && args[2] === `workspace-${agentId}`,
+    );
+    expect(removeCalls).toHaveLength(1);
+
+    const addCall = commands.find((args) => {
+      if (args[0] !== "collection" || args[1] !== "add") return false;
+      const nameIdx = args.indexOf("--name");
+      return nameIdx >= 0 && args[nameIdx + 1] === `workspace-${agentId}`;
+    });
+    expect(addCall).toBeDefined();
+    expect(addCall![2]).toBe(workspaceDir);
+  });
+
+  it("skips rebind when qmd show confirms root path is unchanged (#91251)", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", JSON.stringify([`workspace-${agentId}`]));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "show") {
+        const child = createMockChild({ autoClose: false });
+        // Show confirms the current path — no drift.
+        emitAndClose(child, "stdout", `Path: ${workspaceDir}\nPattern: **/*.md`);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    const commands = spawnMock.mock.calls.map((call: unknown[]) => call[1] as string[]);
+    const removeCalls = commands.filter((args) => args[0] === "collection" && args[1] === "remove");
+    expect(removeCalls).toHaveLength(0);
+    const addCalls = commands.filter((args) => args[0] === "collection" && args[1] === "add");
+    expect(addCalls).toHaveLength(0);
+  });
+
   it("migrates unscoped legacy collections before adding scoped names", async () => {
     cfg = {
       ...cfg,
