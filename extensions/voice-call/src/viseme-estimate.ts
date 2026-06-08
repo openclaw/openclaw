@@ -10,7 +10,12 @@
 
 export type VisemeMark = { tMs: number; visemeId: number };
 
-/** Coarse grapheme → Azure viseme id. Vowels carry the visible shape; consonants approximate. */
+/**
+ * Coarse grapheme → Azure viseme id (the Microsoft viseme set, 0–21: 0 = silence, the rest are mouth
+ * shapes grouped by phoneme — vowels, diphthongs, and consonant classes). Vowels carry the visible
+ * shape; consonants approximate. The worker maps these ids to a small set of drawn mouth shapes.
+ * Ref: Azure Speech "Viseme ID" table (mstts viseme events).
+ */
 const CHAR_VISEME: Readonly<Record<string, number>> = {
   a: 2, // ɑ (open)
   e: 4, // ɛ
