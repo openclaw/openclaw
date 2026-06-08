@@ -37,12 +37,14 @@ const slackConfig = {
   },
 } as OpenClawConfig;
 
-function registerSlackTextPlugin() {
-  const sendText = vi.fn().mockResolvedValue({
+function registerSlackTextPlugin(
+  result: Record<string, unknown> = {
     channel: "slack",
     messageId: "m1",
     chatId: "C123",
-  });
+  },
+) {
+  const sendText = vi.fn().mockResolvedValue(result);
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -235,6 +237,122 @@ describe("runMessageAction core send routing", () => {
     expect(result.to).toBe("telegram:-1001234567890:topic:42");
     expect(payload.to).toBe("telegram:-1001234567890:topic:42");
     expect(payload.dryRun).toBe(true);
+  });
+
+  it("marks successful current-session sends as delivered source replies", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        message: "visible source reply",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+      },
+      sessionKey: "agent:main:slack:channel:c123",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(result.payload).toMatchObject({
+      deliveryStatus: "sent",
+      sourceReplySink: "internal-ui",
+      sourceReply: {
+        text: "visible source reply",
+      },
+      message: "visible source reply",
+    });
+  });
+
+  it("does not mark sends to another session as current-source replies", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        target: "channel:C999",
+        message: "send elsewhere",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+      },
+      sessionKey: "agent:main:slack:channel:c123",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(result.payload).not.toMatchObject({
+      sourceReplySink: "internal-ui",
+    });
+  });
+
+  it("does not mark ambiguous current-session sends as delivered source replies", async () => {
+    const sendText = registerSlackTextPlugin({
+      channel: "slack",
+      chatId: "C123",
+    });
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        message: "final should remain eligible when delivery is ambiguous",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+      },
+      sessionKey: "agent:main:slack:channel:c123",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(result.payload).not.toMatchObject({
+      deliveryStatus: "sent",
+      sourceReplySink: "internal-ui",
+    });
+  });
+
+  it("does not mark failed current-session sends as delivered source replies", async () => {
+    const sendText = registerSlackTextPlugin({
+      channel: "slack",
+      chatId: "C123",
+      deliveryStatus: "failed",
+      error: "send failed",
+    });
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        message: "final should remain eligible after failed delivery",
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+      },
+      sessionKey: "agent:main:slack:channel:c123",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(result.payload).toMatchObject({
+      result: {
+        deliveryStatus: "failed",
+      },
+    });
+    expect(result.payload).not.toMatchObject({
+      sourceReplySink: "internal-ui",
+    });
   });
 
   it("uses best-effort delivery for implicit message-tool-only source replies", async () => {

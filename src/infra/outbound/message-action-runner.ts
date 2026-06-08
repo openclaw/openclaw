@@ -87,7 +87,11 @@ import {
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
-import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import {
+  ensureOutboundSessionEntry,
+  resolveOutboundSessionRoute,
+  type OutboundSessionRoute,
+} from "./outbound-session.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
@@ -1073,6 +1077,116 @@ async function buildSendPayloadParts(params: {
   };
 }
 
+function isCurrentSourceOutboundRoute(params: {
+  input: RunMessageActionParams;
+  actionParams: Record<string, unknown>;
+  outboundRoute: OutboundSessionRoute | null;
+  dryRun: boolean;
+}): boolean {
+  if (params.dryRun) {
+    return false;
+  }
+  const currentSessionKey = normalizeOptionalLowercaseString(params.input.sessionKey);
+  const outboundSessionKey = normalizeOptionalLowercaseString(params.outboundRoute?.sessionKey);
+  if (currentSessionKey && outboundSessionKey && currentSessionKey === outboundSessionKey) {
+    return true;
+  }
+  return (
+    !hasExplicitNonCurrentChannelParam(params.input, params.actionParams) &&
+    isCurrentSourceTargetParam(params.input, params.actionParams)
+  );
+}
+
+function collectDeliveryEvidencePayloads(
+  payloadRecord: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const nested = payloadRecord.result;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    return [payloadRecord, nested as Record<string, unknown>];
+  }
+  return [payloadRecord];
+}
+
+function payloadHasPositiveDeliveryEvidence(payloadRecord: Record<string, unknown>): boolean {
+  let hasDeliveredStatus = false;
+  let hasMessageId = false;
+  for (const candidate of collectDeliveryEvidencePayloads(payloadRecord)) {
+    const deliveryStatus = normalizeOptionalString(candidate.deliveryStatus)?.toLowerCase();
+    const status = normalizeOptionalString(candidate.status)?.toLowerCase();
+    if (
+      deliveryStatus === "failed" ||
+      deliveryStatus === "error" ||
+      deliveryStatus === "undelivered" ||
+      status === "failed" ||
+      status === "error" ||
+      status === "undelivered" ||
+      candidate.ok === false
+    ) {
+      return false;
+    }
+    hasDeliveredStatus ||= deliveryStatus === "sent" || deliveryStatus === "delivered";
+    hasDeliveredStatus ||= status === "sent" || status === "delivered";
+    hasMessageId ||= Boolean(
+      normalizeOptionalString(candidate.messageId) ?? normalizeOptionalString(candidate.message_id),
+    );
+  }
+  return hasDeliveredStatus || hasMessageId;
+}
+
+function annotatePayloadForCurrentSourceReply(params: {
+  payload: unknown;
+  sendPayload: SendPayloadParts;
+  input: RunMessageActionParams;
+  actionParams: Record<string, unknown>;
+  outboundRoute: OutboundSessionRoute | null;
+  dryRun: boolean;
+}): unknown {
+  if (!isCurrentSourceOutboundRoute(params)) {
+    return params.payload;
+  }
+  const payloadRecord: Record<string, unknown> =
+    params.payload && typeof params.payload === "object" && !Array.isArray(params.payload)
+      ? { ...(params.payload as Record<string, unknown>) }
+      : { result: params.payload };
+  if (!payloadHasPositiveDeliveryEvidence(payloadRecord)) {
+    return params.payload;
+  }
+  return {
+    ...payloadRecord,
+    deliveryStatus: "sent",
+    sourceReplySink: "internal-ui" as const,
+    ...(params.input.sourceReplyDeliveryMode
+      ? { sourceReplyDeliveryMode: params.input.sourceReplyDeliveryMode }
+      : {}),
+    sourceReply: params.sendPayload.payload,
+    ...(params.sendPayload.message ? { message: params.sendPayload.message } : {}),
+    ...(params.sendPayload.mediaUrl ? { mediaUrl: params.sendPayload.mediaUrl } : {}),
+    ...(params.sendPayload.mediaUrls?.length ? { mediaUrls: params.sendPayload.mediaUrls } : {}),
+  };
+}
+
+function annotateToolResultForCurrentSourceReply(
+  toolResult: AgentToolResult<unknown> | undefined,
+  params: {
+    sendPayload: SendPayloadParts;
+    input: RunMessageActionParams;
+    actionParams: Record<string, unknown>;
+    outboundRoute: OutboundSessionRoute | null;
+    dryRun: boolean;
+  },
+): AgentToolResult<unknown> | undefined {
+  if (!toolResult || !isCurrentSourceOutboundRoute(params)) {
+    return toolResult;
+  }
+  return {
+    ...toolResult,
+    details: annotatePayloadForCurrentSourceReply({
+      payload: toolResult.details,
+      ...params,
+    }),
+  };
+}
+
 async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
   const {
     cfg,
@@ -1171,7 +1285,27 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     }),
   });
   if (gatewayPluginAction) {
-    return gatewayPluginAction;
+    if (gatewayPluginAction.kind !== "send") {
+      return gatewayPluginAction;
+    }
+    return {
+      ...gatewayPluginAction,
+      payload: annotatePayloadForCurrentSourceReply({
+        payload: gatewayPluginAction.payload,
+        sendPayload,
+        input,
+        actionParams: params,
+        outboundRoute,
+        dryRun,
+      }),
+      toolResult: annotateToolResultForCurrentSourceReply(gatewayPluginAction.toolResult, {
+        sendPayload,
+        input,
+        actionParams: params,
+        outboundRoute,
+        dryRun,
+      }),
+    };
   }
 
   const send = await executeSendAction({
@@ -1230,8 +1364,21 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     action,
     to,
     handledBy: send.handledBy,
-    payload: send.payload,
-    toolResult: send.toolResult,
+    payload: annotatePayloadForCurrentSourceReply({
+      payload: send.payload,
+      sendPayload,
+      input,
+      actionParams: params,
+      outboundRoute,
+      dryRun,
+    }),
+    toolResult: annotateToolResultForCurrentSourceReply(send.toolResult, {
+      sendPayload,
+      input,
+      actionParams: params,
+      outboundRoute,
+      dryRun,
+    }),
     sendResult: send.sendResult,
     dryRun,
   };

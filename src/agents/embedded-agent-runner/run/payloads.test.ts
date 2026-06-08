@@ -225,6 +225,27 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "The schema export is fixed.");
   });
 
+  it("suppresses private finals after delivered current-source message-tool replies", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["I already sent the answer through the message tool."],
+      didSendViaMessagingTool: true,
+      messagingToolSourceReplyPayloads: [
+        {
+          text: "The requested status check completed successfully.",
+        },
+      ],
+      sourceReplyDeliveryMode: "automatic",
+      sessionKey: "agent:main:test:direct:source",
+      agentId: "main",
+      runId: "run-current-source-reply",
+    });
+
+    // Automatic-mode message-tool sends have already been delivered by the
+    // message tool path; the final payload builder should only suppress the
+    // follow-up private bookkeeping text, not resend the source reply.
+    expect(payloads).toEqual([]);
+  });
+
   it("turns internal message-tool source replies into suppression-safe final payloads", () => {
     // message_tool_only source replies are already delivered internally but
     // still need mirror metadata so transcript/persistence can record them.

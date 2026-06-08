@@ -262,10 +262,25 @@ export function buildEmbeddedRunPayloads(params: {
     };
   }> = [];
 
+  const deliveredSourceReplyPayloads = params.messagingToolSourceReplyPayloads ?? [];
+  const sourceReplyPayloadHasContent = (payload: MessagingToolSourceReplyPayload): boolean => {
+    const text = normalizeOptionalString(payload.text) ?? "";
+    const media = Array.from(
+      new Set([...(payload.mediaUrl ? [payload.mediaUrl] : []), ...(payload.mediaUrls ?? [])]),
+    ).filter((value) => value.trim().length > 0);
+    return Boolean(
+      text ||
+      media.length > 0 ||
+      payload.presentation ||
+      payload.interactive ||
+      payload.channelData,
+    );
+  };
+  const hasDeliveredSourceReplyPayload = deliveredSourceReplyPayloads.some(
+    sourceReplyPayloadHasContent,
+  );
   const sourceReplyPayloads =
-    params.sourceReplyDeliveryMode === "message_tool_only"
-      ? (params.messagingToolSourceReplyPayloads ?? [])
-      : [];
+    params.sourceReplyDeliveryMode === "message_tool_only" ? deliveredSourceReplyPayloads : [];
   const sourceReplyStartIndex = replyItems.length;
   sourceReplyPayloads.forEach((payload, index) => {
     const text = normalizeOptionalString(payload.text) ?? "";
@@ -302,7 +317,9 @@ export function buildEmbeddedRunPayloads(params: {
 
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts =
-    params.didSendDeterministicApprovalPrompt === true || hasSourceReplyPayload;
+    params.didSendDeterministicApprovalPrompt === true ||
+    hasSourceReplyPayload ||
+    hasDeliveredSourceReplyPayload;
   const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
   const currentAssistant = params.currentAssistant ?? undefined;
   const assistantForPayload =
