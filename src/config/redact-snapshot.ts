@@ -1,3 +1,4 @@
+// Redacts runtime config snapshots before diagnostics or UI exposure.
 import {
   hasSensitiveUrlHintTag,
   isSensitiveUrlConfigPath,

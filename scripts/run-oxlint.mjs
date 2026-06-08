@@ -1,3 +1,5 @@
+// Runs oxlint with local heavy-check policy, sparse-checkout filtering, and
+// plugin package-boundary artifact preparation when needed.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -38,10 +40,33 @@ const OXLINT_VALUE_FLAGS = new Set([
   "--warn",
 ]);
 
+function hasOxlintFormatArg(args) {
+  return args.some(
+    (arg) =>
+      arg === "--format" ||
+      arg.startsWith("--format=") ||
+      arg === "-f" ||
+      arg.startsWith("-f=") ||
+      (arg.startsWith("-f") && arg.length > 2),
+  );
+}
+
+function addOxlintFormatArg(args, value) {
+  const separatorIndex = args.indexOf("--");
+  const insertIndex = separatorIndex === -1 ? args.length : separatorIndex;
+  args.splice(insertIndex, 0, "--format", value);
+}
+
+/**
+ * Returns whether oxlint args need package-boundary declaration artifacts first.
+ */
 export function shouldPrepareExtensionPackageBoundaryArtifacts(args) {
   return !args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg));
 }
 
+/**
+ * Drops tracked-but-missing sparse-checkout targets so narrow sparse checks can pass.
+ */
 export function filterSparseMissingOxlintTargets(
   args,
   {
@@ -194,6 +219,9 @@ async function prepareExtensionPackageBoundaryArtifacts(env) {
   }
 }
 
+/**
+ * Applies wrapper policy and runs oxlint with the final argument list.
+ */
 export async function main(argv = process.argv.slice(2), runtimeEnv = process.env) {
   const { args: policyArgs, env } = applyLocalOxlintPolicy(
     argv,
@@ -201,6 +229,9 @@ export async function main(argv = process.argv.slice(2), runtimeEnv = process.en
   );
   const sparseTargets = filterSparseMissingOxlintTargets(policyArgs);
   const finalArgs = sparseTargets.args;
+  if (env.GITHUB_ACTIONS === "true" && !hasOxlintFormatArg(finalArgs)) {
+    addOxlintFormatArg(finalArgs, "stylish");
+  }
   if (sparseTargets.skippedTargets.length > 0) {
     console.error(
       `[oxlint] sparse checkout is missing tracked target(s); skipping ${sparseTargets.skippedTargets.join(", ")}`,

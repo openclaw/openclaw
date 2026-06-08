@@ -1,3 +1,4 @@
+// TTS core tests cover provider selection, synthesis, and error handling.
 import { describe, expect, it, vi } from "vitest";
 import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";
 import { AuthStorage, ModelRegistry } from "../agents/sessions/index.js";

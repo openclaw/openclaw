@@ -1,3 +1,4 @@
+// Summarizes task registry records for CLI and API surfaces.
 import type {
   TaskRecord,
   TaskRegistrySummary,

@@ -1,3 +1,4 @@
+// Drains queued follow-up runs while preserving route and session identity.
 import { channelRouteCompactKey } from "../../../plugin-sdk/channel-route.js";
 import {
   getGatewayDrainingStartedAt,

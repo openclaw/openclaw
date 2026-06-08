@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Finds core/plugin architecture boundary smells in TypeScript sources.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -165,6 +166,9 @@ function scanRuntimeServiceLocatorSmells(source, filePath) {
   return entries;
 }
 
+/**
+ * Collects architecture smell findings from the configured source roots.
+ */
 export async function collectArchitectureSmells() {
   if (!architectureSmellsPromise) {
     architectureSmellsPromise = (async () => {
@@ -231,6 +235,9 @@ async function runArchitectureSmellsCheck(argv, io) {
   return 0;
 }
 
+/**
+ * Runs the architecture smell check and writes human/JSON output.
+ */
 export async function main(argv, io) {
   return await runArchitectureSmellsCheck(argv, io);
 }

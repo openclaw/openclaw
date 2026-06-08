@@ -1,3 +1,4 @@
+// Covers default Vitest scheduling config helpers.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parseVitestProcessStats } from "../../test/vitest/vitest.system-load.ts";

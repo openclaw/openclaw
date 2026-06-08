@@ -1,3 +1,4 @@
+// Inspects installed package metadata for update/install verification.
 import fsSync from "node:fs";
 import path from "node:path";
 import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";

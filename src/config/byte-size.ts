@@ -1,3 +1,4 @@
+// Parses byte-size config values for logging and retention limits.
 import { parseByteSize } from "../cli/parse-bytes.js";
 
 /**

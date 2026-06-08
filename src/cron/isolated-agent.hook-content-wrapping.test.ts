@@ -1,3 +1,4 @@
+// Hook content wrapping tests cover isolated agent message wrapping for hooks.
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";

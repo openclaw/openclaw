@@ -1,3 +1,4 @@
+// Package Openclaw For Docker tests cover package openclaw for docker script behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -7,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildPackageArtifacts,
   packOpenClawPackageForDocker,
+  parseArgs,
   runCommandForTest,
 } from "../../scripts/package-openclaw-for-docker.mjs";
 
@@ -68,6 +70,32 @@ async function waitForExit(
 }
 
 describe("package-openclaw-for-docker", () => {
+  it("parses package artifact output options", () => {
+    expect(
+      parseArgs([
+        "--output-dir",
+        ".artifacts/docker",
+        "--output-name=openclaw-current.tgz",
+        "--source-dir",
+        "/repo",
+        "--skip-build",
+      ]),
+    ).toEqual({
+      outputDir: ".artifacts/docker",
+      outputName: "openclaw-current.tgz",
+      skipBuild: true,
+      sourceDir: "/repo",
+    });
+  });
+
+  it("rejects missing package artifact option values", () => {
+    for (const flag of ["--output-dir", "--output-name", "--source-dir"]) {
+      expect(() => parseArgs([flag])).toThrow(`${flag} requires a value`);
+      expect(() => parseArgs([flag, "--skip-build"])).toThrow(`${flag} requires a value`);
+      expect(() => parseArgs([`${flag}=`])).toThrow(`${flag} requires a value`);
+    }
+  });
+
   it("uses build-all as the single bounded package artifact build step", async () => {
     const calls: Array<{
       command: string;

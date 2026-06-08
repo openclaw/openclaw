@@ -1,3 +1,4 @@
+/** Main ACP session manager implementation and public control-plane facade. */
 import type {
   AcpRuntime,
   AcpRuntimeCapabilities,

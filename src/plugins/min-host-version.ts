@@ -1,3 +1,4 @@
+// Checks plugin minimum host version compatibility.
 import { isAtLeast, parseSemver } from "../infra/runtime-guard.js";
 
 /** Validation message for plugin minHostVersion manifest fields. */

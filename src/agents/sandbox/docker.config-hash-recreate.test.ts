@@ -1,3 +1,5 @@
+// Docker sandbox recreation tests cover config-hash labels, bind ordering, and
+// mount labels used to decide when shared containers must be rebuilt.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -58,6 +60,8 @@ function createMockDockerChild(): MockDockerChild {
 }
 
 function spawnDockerProcess(command: string, args: string[]) {
+  // The tests assert docker CLI arguments without requiring Docker; this mock
+  // implements only the inspect/create/start/rm calls used by ensureSandboxContainer.
   spawnState.calls.push({ command, args });
   const child = createMockDockerChild();
 
@@ -212,6 +216,8 @@ describe("ensureSandboxContainer config-hash recreation", () => {
   });
 
   it("recreates shared container when array-order change alters hash", async () => {
+    // Docker flag order is part of the runtime contract, so order-sensitive
+    // config changes must invalidate a shared container.
     const workspaceDir = makeTempDir();
     const oldCfg = createSandboxConfig(["1.1.1.1", "8.8.8.8"], [`${workspaceDir}:/workspace:rw`]);
     const newCfg = createSandboxConfig(["8.8.8.8", "1.1.1.1"], [`${workspaceDir}:/workspace:rw`]);
@@ -353,6 +359,8 @@ describe("ensureSandboxContainer config-hash recreation", () => {
   });
 
   it("applies read-only skill overlays after custom binds", async () => {
+    // Protected skill overlays must be appended last so even an overlapping
+    // custom bind cannot make checked-in skills writable.
     const workspaceDir = makeTempDir();
     const customRoot = makeTempDir();
     fs.mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });

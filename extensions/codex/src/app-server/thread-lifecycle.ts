@@ -1,3 +1,4 @@
+// Codex plugin module implements thread lifecycle behavior.
 import {
   buildSkillWorkshopPromptSection,
   embeddedAgentLog,

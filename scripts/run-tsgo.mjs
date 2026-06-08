@@ -1,3 +1,4 @@
+// Runs tsgo through local heavy-check policy and sparse-checkout guards.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

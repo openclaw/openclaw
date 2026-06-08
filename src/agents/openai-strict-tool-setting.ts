@@ -1,6 +1,14 @@
+/**
+ * Strict tool-schema default resolution for native OpenAI-compatible routes.
+ *
+ * Compatible providers can support strict schemas without inheriting OpenAI's required default.
+ */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 
+// Resolves OpenAI strict-tool schema defaults. Native OpenAI routes require
+// strict=true, while compatible providers that merely support strict mode get
+// false so callers can opt in without forcing provider-specific behavior.
 type OpenAITransportKind = "stream" | "websocket";
 
 type OpenAIStrictToolModel = {
@@ -36,6 +44,7 @@ function resolvesToNativeOpenAIStrictTools(
   );
 }
 
+/** Resolve the strict-tool setting for one OpenAI-compatible model/transport. */
 export function resolveOpenAIStrictToolSetting(
   model: OpenAIStrictToolModel,
   options?: { transport?: OpenAITransportKind; supportsStrictMode?: boolean },

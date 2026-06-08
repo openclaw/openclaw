@@ -1,3 +1,4 @@
+// Memory Core plugin module implements tokenize behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Ts Topology script supports OpenClaw repository automation.
 import path from "node:path";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";

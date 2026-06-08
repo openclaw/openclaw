@@ -1,3 +1,4 @@
+// Applies JSON merge-patch updates to config-like objects.
 import { isPlainObject } from "../infra/plain-object.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 

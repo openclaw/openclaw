@@ -1,3 +1,4 @@
+/** SQLite-backed ACP session metadata storage keyed through session-store entries. */
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Insertable, Selectable } from "kysely";
@@ -26,6 +27,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { isRecord } from "../../utils.js";
 
+/** ACP metadata joined with its legacy session-store row and config context. */
 export type AcpSessionStoreEntry = {
   cfg: OpenClawConfig;
   storePath: string;
@@ -70,6 +72,7 @@ function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey:
   return lower;
 }
 
+/** Resolves the session store path that owns an ACP session key. */
 export function resolveSessionStorePathForAcp(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;

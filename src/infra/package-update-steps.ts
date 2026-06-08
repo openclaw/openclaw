@@ -1,3 +1,4 @@
+// Runs package update move, inventory, and cleanup steps.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

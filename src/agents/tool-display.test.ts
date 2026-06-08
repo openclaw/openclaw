@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for compact tool display formatting.
+ * Ensures tool names, actions, and details stay readable and redacted.
+ */
 import { describe, expect, it } from "vitest";
 import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
 import { resolveExecDetail } from "./tool-display-exec.js";
@@ -156,6 +160,23 @@ describe("tool display details", () => {
         }),
       ),
     ).toBe('for "latest Kimi model", "latest Gemini model", "latest Claude model"…');
+  });
+
+  it("formats Parallel's native objective + search_queries shape", () => {
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({
+          name: "web_search",
+          args: {
+            objective: "Find the OpenClaw repository on GitHub",
+            search_queries: ["openclaw github", "openclaw repository"],
+            count: 5,
+          },
+        }),
+      ),
+    ).toBe(
+      'for "Find the OpenClaw repository on GitHub", "openclaw github", "openclaw repository" (top 5)',
+    );
   });
 
   it("summarizes exec commands with context", () => {

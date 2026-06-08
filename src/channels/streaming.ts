@@ -1,3 +1,4 @@
+// Channel streaming config normalization and progress-draft formatting helpers.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
@@ -42,6 +43,9 @@ export type StreamingCompatEntry = {
   /** Legacy native streaming transport toggle. */
   nativeStreaming?: unknown;
 };
+
+// Config reads accept legacy flat keys and current nested streaming config so
+// channel plugins can consume one normalized API surface.
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -897,6 +901,23 @@ function removeUnbalancedInlineBackticks(value: string): string {
   return value.trimStart().startsWith("`") ? value.replaceAll("`", "'") : value.replaceAll("`", "");
 }
 
+function repairCompactedProgressMarkdown(value: string): string {
+  const withoutDanglingBackticks = removeUnbalancedInlineBackticks(value);
+  const trimmedStart = withoutDanglingBackticks.trimStart();
+  if (!trimmedStart.startsWith("_") || trimmedStart.endsWith("_")) {
+    return withoutDanglingBackticks;
+  }
+  const underscoreCount = Array.from(trimmedStart).filter((char) => char === "_").length;
+  if (underscoreCount % 2 === 0) {
+    return withoutDanglingBackticks;
+  }
+  const leadingWhitespace = withoutDanglingBackticks.slice(
+    0,
+    withoutDanglingBackticks.length - trimmedStart.length,
+  );
+  return `${leadingWhitespace}${trimmedStart.slice(1)}`;
+}
+
 function compactPlainProgressLine(line: string, maxChars: number): string {
   const head = sliceCodePoints(line, 0, maxChars - 1).trimEnd();
   const boundary = head.search(/\s+\S*$/u);
@@ -927,7 +948,7 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     }
     // Keep the stable tool label/icon visible while trimming volatile command
     // detail; this reduces progress draft edit churn in chat UIs.
-    return removeUnbalancedInlineBackticks(
+    return repairCompactedProgressMarkdown(
       `${prefix}${compactProgressLineDetail(detail, detailLimit)}`,
     );
   };
@@ -950,7 +971,7 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     }
   }
 
-  return removeUnbalancedInlineBackticks(compactPlainProgressLine(normalized, maxChars));
+  return repairCompactedProgressMarkdown(compactPlainProgressLine(normalized, maxChars));
 }
 
 function getProgressDraftLineText(line: string | ChannelProgressDraftLine): string {

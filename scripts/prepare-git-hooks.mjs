@@ -1,3 +1,5 @@
+// Configures this checkout's Git hooks path during package prepare when git
+// and the hooks directory are available.
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -21,6 +23,9 @@ function runGit(spawn, gitBin, args, cwd, stdio) {
   });
 }
 
+/**
+ * Installs the repo-local hooks path and returns a structured reason if skipped.
+ */
 export function configurePrepareGitHooks(params = {}) {
   const cwd = params.cwd ?? DEFAULT_PACKAGE_ROOT;
   const exists = params.existsSync ?? existsSync;

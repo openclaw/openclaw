@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.upload paths plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   installPwToolsCoreTestHooks,

@@ -1,3 +1,4 @@
+// Check Docs Mdx tests cover check docs mdx script behavior.
 import { describe, expect, it } from "vitest";
 import { parseArgs } from "../../scripts/check-docs-mdx.mjs";
 
@@ -20,5 +21,12 @@ describe("scripts/check-docs-mdx", () => {
       "--max-errors must be a positive integer",
     );
     expect(() => parseArgs(["--max-errors"])).toThrow("--max-errors must be a positive integer");
+  });
+
+  it("rejects missing JSON report output paths", () => {
+    expect(() => parseArgs(["--json-out"])).toThrow("--json-out requires a value");
+    expect(() => parseArgs(["--json-out", "--max-errors", "3"])).toThrow(
+      "--json-out requires a value",
+    );
   });
 });

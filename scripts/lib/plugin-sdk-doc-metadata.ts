@@ -1,3 +1,4 @@
+// Plugin Sdk Doc Metadata script supports OpenClaw repository automation.
 export type PluginSdkDocCategory =
   | "channel"
   | "core"
@@ -102,6 +103,9 @@ export const pluginSdkDocMetadata = {
     category: "provider",
   },
   "provider-selection-runtime": {
+    category: "provider",
+  },
+  "provider-catalog-live-runtime": {
     category: "provider",
   },
   "runtime-store": {

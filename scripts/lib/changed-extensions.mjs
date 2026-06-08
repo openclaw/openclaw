@@ -1,3 +1,4 @@
+// Resolves changed bundled extension ids from git diff paths.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -102,6 +103,7 @@ function listAvailableExtensionIdsFromDirectory() {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/** List bundled extension ids available in git or the local extensions directory. */
 export function listAvailableExtensionIds() {
   try {
     return listAvailableExtensionIdsFromGit();
@@ -110,6 +112,7 @@ export function listAvailableExtensionIds() {
   }
 }
 
+/** Map changed paths to bundled extension ids, ignoring unknown extension-like paths. */
 export function detectChangedExtensionIds(changedPaths) {
   const availableExtensionIds = new Set(listAvailableExtensionIds());
   const extensionIds = new Set();
@@ -140,6 +143,7 @@ export function detectChangedExtensionIds(changedPaths) {
   return [...extensionIds].toSorted((left, right) => left.localeCompare(right));
 }
 
+/** List changed bundled extension ids between a resolved base and head revision. */
 export function listChangedExtensionIds(params = {}) {
   const head = params.head ?? "HEAD";
   const unavailableBaseBehavior = params.unavailableBaseBehavior ?? "error";

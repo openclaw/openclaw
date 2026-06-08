@@ -1,3 +1,4 @@
+// Sandbox Common Smoke Workflow tests cover sandbox common smoke workflow script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 

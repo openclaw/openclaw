@@ -1,3 +1,4 @@
+// Stores and broadcasts agent lifecycle and streaming events.
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";

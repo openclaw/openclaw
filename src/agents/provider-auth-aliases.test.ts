@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for provider auth alias resolution.
+ * Verifies plugin metadata aliases, origin priority, trust, and cache behavior.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const pluginRegistryMocks = vi.hoisted(() => {

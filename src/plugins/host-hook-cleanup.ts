@@ -1,3 +1,4 @@
+/** Runs plugin cleanup callbacks and clears host-side plugin session/runtime state. */
 import fs from "node:fs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
@@ -17,6 +18,7 @@ import { getActivePluginRegistry } from "./runtime.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 
 /** Failure captured while running plugin cleanup hooks. */
+/** Failure captured while running one plugin cleanup callback. */
 export type PluginHostCleanupFailure = {
   pluginId: string;
   hookId: string;
@@ -344,6 +346,7 @@ function collectSessionEntrySlotKeys(
 }
 
 /** Runs persistent and in-memory cleanup for a plugin, session, or host lifecycle event. */
+/** Runs cleanup callbacks for one plugin and returns failures instead of throwing. */
 export async function runPluginHostCleanup(params: {
   cfg?: OpenClawConfig;
   registry?: PluginRegistry | null;

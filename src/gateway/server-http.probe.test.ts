@@ -1,3 +1,5 @@
+// Server HTTP probe tests cover readiness, health, disabled compat routes, and
+// auth handling through the in-memory HTTP harness.
 import { describe, expect, it, vi } from "vitest";
 import {
   AUTH_TOKEN,

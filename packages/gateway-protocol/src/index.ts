@@ -385,6 +385,10 @@ import {
   SkillsProposalInspectResultSchema,
   type SkillsProposalRecordResult,
   SkillsProposalRecordResultSchema,
+  type SkillsProposalRequestRevisionParams,
+  SkillsProposalRequestRevisionParamsSchema,
+  type SkillsProposalRequestRevisionResult,
+  SkillsProposalRequestRevisionResultSchema,
   type SkillsProposalReviseParams,
   SkillsProposalReviseParamsSchema,
   type SkillsProposalUpdateParams,
@@ -458,11 +462,17 @@ import {
   WizardStepSchema,
 } from "./schema.js";
 
+/** Normalized validation error shape exposed by every protocol validator. */
 export type ValidationError = {
+  /** Failed schema keyword, when the validator can report one. */
   keyword?: string;
+  /** JSON-pointer path to the failing data location. */
   instancePath?: string;
+  /** JSON-pointer path to the failing schema location. */
   schemaPath?: string;
+  /** Validator-specific keyword parameters for richer diagnostics. */
   params?: Record<string, unknown>;
+  /** Human-readable validation message. */
   message?: string;
 };
 
@@ -785,6 +795,8 @@ export const validateSkillsProposalUpdateParams = lazyCompile<SkillsProposalUpda
 export const validateSkillsProposalReviseParams = lazyCompile<SkillsProposalReviseParams>(
   SkillsProposalReviseParamsSchema,
 );
+export const validateSkillsProposalRequestRevisionParams =
+  lazyCompile<SkillsProposalRequestRevisionParams>(SkillsProposalRequestRevisionParamsSchema);
 export const validateSkillsProposalActionParams = lazyCompile<SkillsProposalActionParams>(
   SkillsProposalActionParamsSchema,
 );
@@ -1105,6 +1117,8 @@ export {
   SkillsProposalCreateParamsSchema,
   SkillsProposalUpdateParamsSchema,
   SkillsProposalReviseParamsSchema,
+  SkillsProposalRequestRevisionParamsSchema,
+  SkillsProposalRequestRevisionResultSchema,
   SkillsProposalActionParamsSchema,
   SkillsProposalApplyResultSchema,
   SkillsProposalRecordResultSchema,
@@ -1269,6 +1283,8 @@ export type {
   SkillsProposalCreateParams,
   SkillsProposalUpdateParams,
   SkillsProposalReviseParams,
+  SkillsProposalRequestRevisionParams,
+  SkillsProposalRequestRevisionResult,
   SkillsProposalActionParams,
   SkillsProposalApplyResult,
   SkillsProposalRecordResult,
