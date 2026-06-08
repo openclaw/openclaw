@@ -1515,7 +1515,10 @@ describe("QmdMemoryManager", () => {
     expect(addCalls).toEqual(["memory-root", "memory-dir"]);
   });
 
-  it("does not migrate scoped legacy collection when listed metadata path differs", async () => {
+  it("removes memory-kind legacy scoped collection with drifted pattern (kind-gate, no path field)", async () => {
+    // Reflects qmd 2.5.2 reality: `collection list` emits no Path field.
+    // The old pattern-mismatch guard would have blocked removal; the kind-gate
+    // now bypasses it for engine-owned (memory/sessions) collections.
     cfg = {
       ...cfg,
       memory: {
@@ -1528,17 +1531,21 @@ describe("QmdMemoryManager", () => {
       },
     } as OpenClawConfig;
 
-    const differentPath = path.join(tmpRoot, "other-memory");
-    await fs.mkdir(differentPath, { recursive: true });
+    const legacyScopedName = `memory-dir-${agentId}`;
+    // Listed pattern deliberately differs from the desired "**/*.md" to
+    // trigger the old pattern-mismatch guard (proves the kind-gate overrides
+    // it for memory collections).
+    const driftedPattern = "MEMORY.md";
     const removeCalls: string[] = [];
-    const legacyScopedName = `memory-root-${agentId}`;
+
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
         const child = createMockChild({ autoClose: false });
+        // No path field — matches real qmd 2.5.2 output.
         emitAndClose(
           child,
           "stdout",
-          JSON.stringify([{ name: legacyScopedName, path: differentPath, mask: "MEMORY.md" }]),
+          JSON.stringify([{ name: legacyScopedName, pattern: driftedPattern }]),
         );
         return child;
       }
@@ -1554,6 +1561,56 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager({ mode: "full" });
     await manager.close();
 
+    // Engine-owned: must be removed regardless of pattern drift.
+    expect(removeCalls).toContain(legacyScopedName);
+  });
+
+  it("does not remove custom-kind legacy scoped collection with drifted pattern (user-owned guard)", async () => {
+    // Custom collections are user-named; auto-deletion requires a provable
+    // match. A drifted pattern keeps the existing guards in place.
+    const notesPath = path.join(tmpRoot, "notes");
+    await fs.mkdir(notesPath, { recursive: true });
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: notesPath, pattern: "**/*.md", name: "notes" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const legacyScopedName = `notes-${agentId}`;
+    // Drifted pattern — differs from desired "**/*.md".
+    const driftedPattern = "MEMORY.md";
+    const removeCalls: string[] = [];
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        // No path field — matches real qmd 2.5.2 output.
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([{ name: legacyScopedName, pattern: driftedPattern }]),
+        );
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "remove") {
+        const child = createMockChild({ autoClose: false });
+        removeCalls.push(args[2] ?? "");
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    // User-owned: pattern mismatch must leave the collection in place.
     expect(removeCalls).not.toContain(legacyScopedName);
     expectMockMessageContains(
       logDebugMock,
@@ -1632,6 +1689,45 @@ describe("QmdMemoryManager", () => {
     // Legacy entry must be gone from the simulated index.
     expect(legacyCollections.has(legacyScopedName)).toBe(false);
     expect(legacyCollections.has("sessions")).toBe(true);
+  });
+
+  it("always sets kind on collections produced by the bootstrap path (contract: sessions kind)", async () => {
+    // canMigrateLegacyCollection gates removal on collection.kind. This
+    // covers the sessions collection, which is added by the manager
+    // constructor (not resolveMemoryBackendConfig), so backend-config tests
+    // cannot observe it. The manager mutates the passed resolved config, so
+    // resolved.qmd.collections reflects the full assembled list after create().
+    const notesPath = path.join(tmpRoot, "notes-contract");
+    await fs.mkdir(notesPath, { recursive: true });
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: notesPath, pattern: "**/*.md", name: "notes" }],
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const { resolved } = await createManager({ mode: "status" });
+    const collections = resolved.qmd?.collections ?? [];
+
+    const byKind = (kind: string) => collections.filter((c) => c.kind === kind).map((c) => c.name);
+
+    // Default memory collections.
+    expect(byKind("memory").toSorted()).toStrictEqual(["memory-dir", "memory-root"]);
+    // Sessions collection added by the constructor.
+    expect(byKind("sessions")).toHaveLength(1);
+    // User-supplied extra path.
+    expect(byKind("custom").some((n) => n === "notes")).toBe(true);
+
+    // No collection is missing a kind value.
+    for (const collection of collections) {
+      expect(["memory", "custom", "sessions"]).toContain(collection.kind);
+    }
   });
 
   it("times out qmd update during sync when configured", async () => {

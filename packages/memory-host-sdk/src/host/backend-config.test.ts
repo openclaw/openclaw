@@ -719,4 +719,46 @@ describe("memorySearch.extraPaths integration", () => {
 
     expect(docsCollections).toHaveLength(1);
   });
+
+  it("always populates kind on every resolved collection (contract: kind-gate safety)", async () => {
+    // canMigrateLegacyCollection gates removal on collection.kind; every
+    // collection produced by the bootstrap path must carry a defined kind.
+    const customDir = await createFixtureDir("kind-contract-custom");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/workspace/root" },
+        list: [{ id: "main", default: true, workspace: "/workspace/root" }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          paths: [{ path: customDir, pattern: "**/*.md", name: "notes" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const collections = resolved.qmd?.collections ?? [];
+
+    // At least memory-root, memory-dir, and the custom "notes" collection.
+    expect(collections.length).toBeGreaterThanOrEqual(3);
+
+    const memoryCollections = collections.filter((c) => c.kind === "memory");
+    const customCollections = collections.filter((c) => c.kind === "custom");
+
+    // Default memory collections carry kind "memory".
+    expect(memoryCollections.map((c) => c.name).toSorted()).toStrictEqual([
+      "memory-dir",
+      "memory-root",
+    ]);
+
+    // Extra paths carry kind "custom".
+    expect(customCollections.some((c) => c.name === "notes")).toBe(true);
+
+    // No collection is missing a kind value.
+    for (const collection of collections) {
+      expect(["memory", "custom", "sessions"]).toContain(collection.kind);
+    }
+  });
 });
