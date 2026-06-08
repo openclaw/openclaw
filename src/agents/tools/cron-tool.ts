@@ -347,6 +347,26 @@ type NormalizedCronCreatorTool = {
   pluginId?: string;
 };
 
+export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: string }>(
+  target: CronCreatorToolAllowlistEntry[],
+  tools: readonly T[],
+  toolMeta?: (tool: T) => { pluginId?: string } | undefined,
+): void {
+  target.length = 0;
+  const seen = new Set<string>();
+  for (const tool of tools) {
+    const name = normalizeToolName(tool.name);
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    const meta = toolMeta?.(tool);
+    const pluginId =
+      typeof meta?.pluginId === "string" ? normalizeToolName(meta.pluginId) : undefined;
+    target.push(pluginId ? { name, pluginId } : { name });
+  }
+}
+
 type GatewayToolCaller = typeof callGatewayTool;
 
 type CronToolDeps = {
