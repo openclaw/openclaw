@@ -3,9 +3,15 @@ import { describe, expect, it } from "vitest";
 import { applyPluginTextReplacements } from "../../src/agents/plugin-text-transforms.js";
 import { buildGoogleAntigravityCliBackend, buildGoogleGeminiCliBackend } from "./cli-backend.js";
 
-/** Sentences agy emits as pre-tool narration that should be filtered out. */
+/**
+ * Pre-tool narration agy emits in English — must be filtered out wholesale.
+ * Both "I will <verb> …" and "I am <verb-ing> …" forms, with or without
+ * leading numbered prefix. The setup contract is that legitimate user-facing
+ * Teto answers are in German, so any English first-person narration line is
+ * by definition chatter.
+ */
 const ANTIGRAVITY_NARRATION_POSITIVES = [
-  // "I will <verb> the <obj>." form
+  // "I will …" — narrow tool verbs
   "I will list the contents of the project workspace.",
   "I will read the memory files at ~/.openclaw.",
   "I will search the web for No Game No Life and Disboard.",
@@ -13,23 +19,39 @@ const ANTIGRAVITY_NARRATION_POSITIVES = [
   "I will view the remaining lines of the log.",
   "I will edit the file extensions/google/cli-backend.ts.",
   "I will search the repository for mentions of agy.",
-  // "I am <verb-ing> <obj>." form (background/long-running narration)
-  "I am running the openclaw status command in the background to inspect the overall state of the gateway, channels, and recent sessions.",
-  "I am running a deep probe status check (openclaw status --deep) in the background to inspect all active services, database states, and connection parameters.",
-  "I am fetching the latest 20 lines of Gateway logs to check for any hidden errors or warnings in the background execution.",
-];
-
-/** Legitimate assistant sentences that start with "I will"/"I am" and MUST stay. */
-const ANTIGRAVITY_NARRATION_NEGATIVES = [
-  // I-will legitimates
+  // "I will …" — broader phrasings (previously assumed legitimate, now also dropped)
   "I will see how to start a goal or update the plan.",
   "I will maintain a conversational tone by using natural language.",
   "I will add the following files to the list.",
   "I will return tomorrow with results.",
-  // I-am legitimates — short copular phrases must stay (min-20-char bound)
-  "I am running late today.",
-  "I am happy with the result.",
-  "I am a developer working on this project full time.",
+  "I will review the output as soon as it completes.",
+  "I will report back immediately when the log retrieval completes.",
+  // "I am <verb-ing> …" — background/long-running narration
+  "I am running the openclaw status command in the background to inspect the overall state of the gateway, channels, and recent sessions.",
+  "I am running a deep probe status check (openclaw status --deep) in the background to inspect all active services, database states, and connection parameters.",
+  "I am fetching the latest 20 lines of Gateway logs to check for any hidden errors or warnings in the background execution.",
+  "I am starting by checking the contents of the default project scratch directory to see if we have any existing projects.",
+  // Numbered-prefix variant (agy sometimes lists narration items)
+  "1. I will list the files and subdirectories located in /tmp/step4-smoke.",
+  "2. I am reading the contents of the configuration file.",
+];
+
+/**
+ * Legitimate assistant output that MUST pass through. The contract is
+ * "English I will/am at line-start = pre-tool narration"; everything else
+ * (German answers, prose that happens to contain "I will" mid-sentence,
+ * code blocks, headers) stays intact.
+ */
+const ANTIGRAVITY_NARRATION_NEGATIVES = [
+  // German legitimate Teto responses (the canonical user-facing language)
+  "Ich habe den aktuellen Session- und Gateway-Status für OpenClaw geprüft.",
+  "Hey! Bei mir ist alles super, ich bin startklar.",
+  "Wie kann ich dir heute helfen?",
+  "Möchtest du ein neues Projekt in unserem Arbeitsverzeichnis starten?",
+  // Markdown structure (headers, code refs) — must never be matched
+  "### Option C: Die 5-Ebenen-Aufteilung unserer Antigravity-Integration",
+  // Lines that mention "I will" mid-sentence but do not start with it
+  "Note that I will not run any tool here.",
 ];
 
 describe("google cli backends", () => {
