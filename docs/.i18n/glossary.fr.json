@@ -77,172 +77,130 @@
   },
   {
     "source": "Getting Started",
-    "target": "Prise en main",
-    "ignore_case": true
+    "target": "Prise en main"
   },
   {
     "source": "Quick Start",
-    "target": "Démarrage rapide",
-    "ignore_case": true
+    "target": "Démarrage rapide"
   },
   {
     "source": "Install overview",
-    "target": "Vue d'ensemble de l'installation",
-    "ignore_case": true
+    "target": "Vue d'ensemble de l'installation"
   },
   {
     "source": "SDK overview",
-    "target": "Vue d'ensemble du SDK",
-    "ignore_case": true
+    "target": "Vue d'ensemble du SDK"
   },
   {
     "source": "Model Providers",
-    "target": "Fournisseurs de modèles",
-    "ignore_case": true
+    "target": "Fournisseurs de modèles"
   },
   {
     "source": "Provider directory",
-    "target": "Répertoire des fournisseurs",
-    "ignore_case": true
+    "target": "Répertoire des fournisseurs"
   },
   {
     "source": "Channel Routing",
-    "target": "Routage des canaux",
-    "ignore_case": true
+    "target": "Routage des canaux"
   },
   {
     "source": "Web tools",
-    "target": "Outils web",
-    "ignore_case": true
+    "target": "Outils web"
   },
   {
     "source": "Secure file operations",
-    "target": "Opérations sécurisées sur les fichiers",
-    "ignore_case": true
+    "target": "Opérations sécurisées sur les fichiers"
   },
   {
     "source": "Creating skills",
-    "target": "Créer des skills",
-    "ignore_case": true
+    "target": "Créer des skills"
   },
   {
     "source": "Setup Wizard Reference",
-    "target": "Référence de l'assistant de configuration",
-    "ignore_case": true
+    "target": "Référence de l'assistant de configuration"
   },
   {
     "source": "CLI Setup Reference",
-    "target": "Référence de configuration de la CLI",
-    "ignore_case": true
+    "target": "Référence de configuration de la CLI"
   },
   {
     "source": "macOS platform notes",
-    "target": "Notes sur la plateforme macOS",
-    "ignore_case": true
+    "target": "Notes sur la plateforme macOS"
   },
   {
     "source": "Linux server",
-    "target": "Serveur Linux",
-    "ignore_case": true
+    "target": "Serveur Linux"
   },
   {
     "source": "VPS hosting",
-    "target": "Hébergement VPS",
-    "ignore_case": true
+    "target": "Hébergement VPS"
   },
   {
     "source": "Code mode",
-    "target": "Mode code",
-    "ignore_case": true
+    "target": "Mode code"
   },
   {
     "source": "Overview",
-    "target": "Vue d'ensemble",
-    "ignore_case": true,
-    "whole_word": true
+    "target": "Vue d'ensemble"
   },
   {
     "source": "Platforms",
-    "target": "Plateformes",
-    "ignore_case": true
+    "target": "Plateformes"
   },
   {
     "source": "Models",
-    "target": "Modèles",
-    "ignore_case": true,
-    "whole_word": true
+    "target": "Modèles"
   },
   {
     "source": "Sessions",
-    "target": "Sessions",
-    "ignore_case": true,
-    "whole_word": true
+    "target": "Sessions"
   },
   {
     "source": "Status",
-    "target": "État",
-    "ignore_case": true,
-    "whole_word": true
+    "target": "État"
   },
   {
     "source": "Logging",
-    "target": "Journalisation",
-    "ignore_case": true
+    "target": "Journalisation"
   },
   {
     "source": "Settings",
-    "target": "Paramètres",
-    "ignore_case": true,
-    "whole_word": true
+    "target": "Paramètres"
   },
   {
     "source": "Credentials",
-    "target": "Identifiants",
-    "ignore_case": true,
-    "whole_word": true
+    "target": "Identifiants"
   },
   {
     "source": "Deployment",
-    "target": "Déploiement",
-    "ignore_case": true,
-    "whole_word": true
+    "target": "Déploiement"
   },
   {
     "source": "Channel",
-    "target": "Canal",
-    "ignore_case": true,
-    "whole_word": true
+    "target": "Canal"
   },
   {
     "source": "Channels",
-    "target": "Canaux",
-    "ignore_case": true,
-    "whole_word": true
+    "target": "Canaux"
   },
   {
     "source": "Agent runtimes",
-    "target": "Environnements d'exécution des agents",
-    "ignore_case": true
+    "target": "Environnements d'exécution des agents"
   },
   {
     "source": "Talk mode",
-    "target": "Mode vocal",
-    "ignore_case": true
+    "target": "Mode vocal"
   },
   {
     "source": "Capability Cookbook",
-    "target": "Recueil de capacités",
-    "ignore_case": true
+    "target": "Recueil de capacités"
   },
   {
     "source": "Steering queue",
-    "target": "File de pilotage",
-    "ignore_case": true
+    "target": "File de pilotage"
   },
   {
     "source": "Steer",
-    "target": "Piloter",
-    "ignore_case": true,
-    "whole_word": true
+    "target": "Piloter"
   }
 ]
