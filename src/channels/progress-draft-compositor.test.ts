@@ -56,6 +56,28 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  it("allows explicit post-final progress notices", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    progress.markFinalReplyDelivered();
+
+    expect(await progress.pushToolProgress("🛠️ Hidden", { startImmediately: true })).toBe(false);
+    expect(
+      await progress.pushToolProgress("💨Fast: auto-on", {
+        startImmediately: true,
+        allowAfterFinal: true,
+      }),
+    ).toBe(true);
+    expect(update).toHaveBeenCalledWith("Shelling\n\n💨Fast: auto-on", { flush: true });
+  });
+
   it("composes reasoning deltas with tool progress", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
