@@ -20,7 +20,7 @@ import {
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
 
-export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat" | "internalArtifact";
+export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
 
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
@@ -98,10 +98,8 @@ export function normalizeReplyPayload(
     text = stripped.text;
   }
 
-  // Suppress standalone internal protocol artifacts (Codex/Harmony channel
-  // markers, reasoning directives) before they reach messaging channels. #88128
   if (text && isInternalFormattingArtifact(text) && !hasContent("")) {
-    opts.onSkip?.("internalArtifact");
+    opts.onSkip?.("silent");
     return null;
   }
 

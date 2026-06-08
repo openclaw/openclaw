@@ -18,6 +18,9 @@ describe("isInternalFormattingArtifact", () => {
     expect(isInternalFormattingArtifact("<channel|answer>")).toBe(true);
     expect(isInternalFormattingArtifact("<lane|reasoning>")).toBe(true);
     expect(isInternalFormattingArtifact("<|>")).toBe(true);
+    expect(isInternalFormattingArtifact("<|channel|>")).toBe(true);
+    expect(isInternalFormattingArtifact("<|message|>")).toBe(true);
+    expect(isInternalFormattingArtifact("<|call|>")).toBe(true);
   });
 
   it("matches set-thought directives (#88128)", () => {

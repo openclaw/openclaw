@@ -4660,6 +4660,22 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("does not emit an empty-response fallback for internal artifact skips", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.({ text: "<channel|>" }, { kind: "final", reason: "silent" });
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("does not emit a silent-reply fallback for no-response group turns", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
