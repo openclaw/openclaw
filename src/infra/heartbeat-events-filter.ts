@@ -1,5 +1,6 @@
 // Filters heartbeat event text before it is added to prompts.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getFinishedSession, listFinishedSessions } from "../agents/bash-process-registry.js";
 import { HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 
@@ -138,6 +139,13 @@ export function buildExecEventPrompt(
       "Reply HEARTBEAT_OK only. Do not mention, summarize, or reuse output from any earlier run."
     );
   }
+  // Background/yielded exec completions: agent hasn't seen the result yet,
+  // so tell it to check the output and continue the original task.
+  // This is orthogonal to deliverToUser — always prompt for task continuation.
+  if (eventText && pendingEvents.some(isBackgroundExecEvent)) {
+    return buildBackgroundExecPromptText(eventText);
+  }
+
   if (!deliverToUser) {
     if (useHeartbeatResponseTool) {
       return (
@@ -197,6 +205,38 @@ function isHeartbeatNoiseEvent(evt: string): boolean {
     isHeartbeatAckEvent(lower) ||
     lower.includes("heartbeat poll") ||
     lower.includes("heartbeat wake")
+  );
+}
+
+/** Detect if an exec completion event corresponds to a backgrounded/yielded session. */
+function isBackgroundExecEvent(evt: string): boolean {
+  // Gateway format: Exec finished (node=abc id=<fullSessionId>, code 0)
+  const gatewayMatch = /id=([a-zA-Z0-9_-]+)/.exec(evt);
+  if (gatewayMatch) {
+    const session = getFinishedSession(gatewayMatch[1]);
+    if (session) {
+      return true;
+    }
+  }
+  // Local structured format: Exec completed (<idPrefix>, code 0) :: output
+  // The prefix is session.id.slice(0, 8). Match by prefix since the full
+  // ID is not included in the event text.
+  const structured = parseStructuredExecCompletionEvent(evt);
+  if (structured && structured.id) {
+    return listFinishedSessions().some((s) => s.id.startsWith(structured.id));
+  }
+  return false;
+}
+
+/** Prompt text for background exec completions: examine result and continue task. */
+function buildBackgroundExecPromptText(eventText: string): string {
+  return (
+    "A background command you started earlier has completed. The completion details are:\n\n" +
+    eventText +
+    "\n\n" +
+    "Examine the result. If the command failed, diagnose and fix the issue.\n" +
+    "Continue with your original task. Use process(action=poll, sessionId=<id>)\n" +
+    "to retrieve the full output if needed."
   );
 }
 

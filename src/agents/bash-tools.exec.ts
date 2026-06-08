@@ -1908,15 +1908,24 @@ export function createExecTool(
       }
 
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
-        const resolveRunning = () => {
+        const resolveRunning = (backgrounded?: boolean) => {
           cleanupToolRunListeners();
+          const warning = getWarningText();
+          // Only promise auto-notification when notifyOnExit is enabled.
+          // When disabled, the agent needs to poll for results manually.
+          const canNotify = backgrounded && notifyOnExit;
+          const text = canNotify
+            ? `${warning}Command running in background (session ${run.session.id}, pid ${
+                run.session.pid ?? "n/a"
+              }). The system will automatically notify you when it completes. Continue with other work.`
+            : `${warning}Command still running (session ${run.session.id}, pid ${
+                run.session.pid ?? "n/a"
+              }). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`;
           resolve({
             content: [
               {
                 type: "text",
-                text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
-                  run.session.pid ?? "n/a"
-                }). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
+                text,
               },
             ],
             details: {
@@ -1936,7 +1945,7 @@ export function createExecTool(
           }
           yielded = true;
           markBackgrounded(run.session);
-          resolveRunning();
+          resolveRunning(true);
         };
 
         if (allowBackground && yieldWindow !== null) {
@@ -1949,7 +1958,7 @@ export function createExecTool(
               }
               yielded = true;
               markBackgrounded(run.session);
-              resolveRunning();
+              resolveRunning(true);
             }, yieldWindow);
           }
         }

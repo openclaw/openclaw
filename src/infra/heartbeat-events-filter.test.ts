@@ -1,6 +1,14 @@
 // Covers heartbeat event prompt filtering.
 import { describe, expect, it } from "vitest";
 import {
+  addSession,
+  createSessionSlug,
+  markBackgrounded,
+  markExited,
+  resetProcessRegistryForTests,
+} from "../agents/bash-process-registry.js";
+import type { ProcessSession } from "../agents/bash-process-registry.js";
+import {
   buildCronEventPrompt,
   buildExecEventPrompt,
   isCronSystemEvent,
@@ -126,6 +134,94 @@ describe("heartbeat event prompts", () => {
     expect(prompt).toContain("heartbeat_respond");
     expect(prompt).toContain("notify=false");
     expect(prompt).not.toContain("HEARTBEAT_OK");
+  });
+
+  it("uses task-continuation prompt for gateway-format backgrounded exec completions", async () => {
+    const sessionId = createSessionSlug();
+    const session: ProcessSession = {
+      id: sessionId,
+      command: "test",
+      startedAt: Date.now(),
+      maxOutputChars: 10_000,
+      totalOutputChars: 0,
+      pendingStdout: [],
+      pendingStderr: [],
+      pendingStdoutChars: 0,
+      pendingStderrChars: 0,
+      aggregated: "",
+      tail: "",
+      exited: false,
+      truncated: false,
+      backgrounded: false,
+      cursorKeyMode: "unknown",
+    };
+
+    addSession(session);
+    markBackgrounded(session);
+    markExited(session, 0, null, "completed");
+
+    try {
+      const events = [`Exec finished (node=abc id=${sessionId}, code 0)\nSome output`];
+      const prompt = buildExecEventPrompt(events);
+
+      expect(prompt).toContain("background command you started earlier has completed");
+      expect(prompt).toContain("Continue with your original task");
+      expect(prompt).toContain("process(action=poll, sessionId=<id>)");
+      expect(prompt).toContain("Some output");
+      expect(prompt).not.toContain("HEARTBEAT_OK");
+      expect(prompt).not.toContain("relay the command output to the user");
+    } finally {
+      resetProcessRegistryForTests();
+    }
+  });
+
+  it("uses task-continuation prompt for local-format backgrounded exec completions", async () => {
+    const sessionId = createSessionSlug();
+    const session: ProcessSession = {
+      id: sessionId,
+      command: "test",
+      startedAt: Date.now(),
+      maxOutputChars: 10_000,
+      totalOutputChars: 0,
+      pendingStdout: [],
+      pendingStderr: [],
+      pendingStdoutChars: 0,
+      pendingStderrChars: 0,
+      aggregated: "",
+      tail: "",
+      exited: false,
+      truncated: false,
+      backgrounded: false,
+      cursorKeyMode: "unknown",
+    };
+
+    addSession(session);
+    markBackgrounded(session);
+    markExited(session, 0, null, "completed");
+
+    try {
+      // Local format uses session.id.slice(0, 8) as prefix
+      const prefix = sessionId.slice(0, 8);
+      const events = [`Exec completed (${prefix}, code 0) :: Some output`];
+      const prompt = buildExecEventPrompt(events);
+
+      expect(prompt).toContain("background command you started earlier has completed");
+      expect(prompt).toContain("Continue with your original task");
+      expect(prompt).toContain("Some output");
+      expect(prompt).not.toContain("HEARTBEAT_OK");
+      expect(prompt).not.toContain("relay the command output to the user");
+    } finally {
+      resetProcessRegistryForTests();
+    }
+  });
+
+  it("falls back to existing exec prompt for foreground exec completions", () => {
+    // No matching session in finishedSessions → not detected as backgrounded
+    const events = ["Exec finished (node=abc id=no-such-session, code 1)\nSome output"];
+    const prompt = buildExecEventPrompt(events);
+
+    expect(prompt).toContain("Please relay the command output to the user");
+    expect(prompt).not.toContain("background command you started earlier has completed");
   });
 });
 
