@@ -83,6 +83,8 @@ const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 const CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 const CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 const CODEX_SIDE_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
+// any skill_workshop action may become a lifecycle call after before_tool_call hooks; approval waits up to 130s.
+const CODEX_SIDE_DYNAMIC_SKILL_WORKSHOP_TOOL_TIMEOUT_MS = 150_000;
 const SIDE_QUESTION_COMPLETION_TIMEOUT_MS = 600_000;
 const CODEX_SIDE_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 const CODEX_SIDE_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
@@ -706,6 +708,9 @@ function resolveSideDynamicToolCallTimeoutMs(params: {
     (params.call.tool === "image"
       ? (readSideTimeoutSecondsAsMs(params.config?.tools?.media?.image?.timeoutSeconds) ??
         CODEX_SIDE_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS)
+      : undefined) ??
+    (params.call.tool === "skill_workshop"
+      ? CODEX_SIDE_DYNAMIC_SKILL_WORKSHOP_TOOL_TIMEOUT_MS
       : undefined);
   return clampSideDynamicToolTimeoutMs(configured ?? CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS);
 }

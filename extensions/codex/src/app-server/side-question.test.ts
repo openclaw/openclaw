@@ -1213,6 +1213,22 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(timeoutMs).toBe(90_000);
   });
 
+  it("uses extended 150s for all side-thread skill_workshop calls regardless of action", () => {
+    for (const action of ["apply", "reject", "quarantine", "list", "inspect"]) {
+      const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "side-thread",
+          turnId: "turn-1",
+          callId: `tool-skill-workshop-${action}`,
+          tool: "skill_workshop",
+          arguments: { action, proposal_id: "weather-20260530-a1b2c3d4e5" },
+        },
+        config: {} as never,
+      });
+      expect(timeoutMs).toBe(150_000);
+    }
+  });
+
   it("cleans up notification handlers when side tool setup fails", async () => {
     const client = createFakeClient();
     createOpenClawCodingToolsMock.mockImplementation(() => {

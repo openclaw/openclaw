@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
   CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS,
+  CODEX_DYNAMIC_SKILL_WORKSHOP_TOOL_TIMEOUT_MS,
   CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
   CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
   handleDynamicToolCallWithTimeout,
@@ -121,6 +122,24 @@ describe("dynamic tool execution helpers", () => {
         config: undefined,
       }),
     ).toBe(CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS);
+  });
+
+  it("uses an extended deadline for all skill_workshop calls regardless of action", () => {
+    for (const action of ["apply", "reject", "quarantine", "list", "inspect"]) {
+      expect(
+        resolveDynamicToolCallTimeoutMs({
+          call: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: `call-skill-workshop-${action}`,
+            namespace: null,
+            tool: "skill_workshop",
+            arguments: { action, proposal_id: "weather-20260530-a1b2c3d4e5" },
+          },
+          config: undefined,
+        }),
+      ).toBe(CODEX_DYNAMIC_SKILL_WORKSHOP_TOOL_TIMEOUT_MS);
+    }
   });
 
   it("uses media image config and caps excessive dynamic tool timeouts", () => {
