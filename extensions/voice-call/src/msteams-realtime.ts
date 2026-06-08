@@ -38,6 +38,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps } from "./core-bridge.js";
+import { inferEmotion } from "./expression.js";
 import type { GroupCallGateConfig } from "./group-call-gate.js";
 import {
   MSTEAMS_PCM_SAMPLE_RATE_HZ,
@@ -435,6 +436,15 @@ export function createMsteamsRealtimeCall(params: {
     onTranscript: (role, text, isFinal) => {
       if (isFinal) {
         recordTranscript(role, text);
+        // CVI Phase 6b: cue the avatar's emotion from the assistant's spoken transcript. Best-effort
+        // cosmetic hint — the worker ignores unknown tags; a send failure must not disrupt the call.
+        if (role === "assistant" && !closed) {
+          try {
+            session.send({ type: "expression", emotion: inferEmotion(text) });
+          } catch {
+            // non-fatal
+          }
+        }
       }
     },
     onToolCall: (event, rtSession) => {
