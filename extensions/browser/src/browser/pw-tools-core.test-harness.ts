@@ -6,18 +6,21 @@ import { beforeEach, vi } from "vitest";
 
 let currentPage: Record<string, unknown> | null = null;
 let currentRefLocator: Record<string, unknown> | null = null;
-let currentDownloadCapture:
-  | {
-      armed: boolean;
-      promise: Promise<{
-        triggered: true;
-        url: string;
-        suggestedFilename: string;
-        path: string;
-      }>;
-      cancel: ReturnType<typeof vi.fn>;
-    }
-  | undefined;
+type HarnessManagedDownload = {
+  triggered: true;
+  url: string;
+  suggestedFilename: string;
+  path: string;
+};
+type HarnessDownloadCapture = {
+  armed: boolean;
+  promise: Promise<HarnessManagedDownload>;
+  cancel: ReturnType<typeof vi.fn>;
+};
+type HarnessDownloadCaptureOptions = {
+  beforeSave?: (download: Omit<HarnessManagedDownload, "path">) => Promise<void> | void;
+};
+let currentDownloadCapture: HarnessDownloadCapture | undefined;
 let pageState: {
   console: unknown[];
   armIdUpload: number;
@@ -42,12 +45,29 @@ const sessionMocks = vi.hoisted(() => ({
   ensurePageState: vi.fn(() => pageState),
   forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
   createManagedDownloadCaptureForPage: vi.fn(
-    () =>
-      currentDownloadCapture ?? {
-        armed: true,
-        promise: new Promise(() => {}),
-        cancel: vi.fn(),
-      },
+    (_page?: unknown, _timeoutMs?: unknown, opts?: HarnessDownloadCaptureOptions) => {
+      const capture =
+        currentDownloadCapture ??
+        ({
+          armed: true,
+          promise: new Promise<HarnessManagedDownload>(() => {}),
+          cancel: vi.fn(),
+        } satisfies HarnessDownloadCapture);
+      if (!opts?.beforeSave) {
+        return capture;
+      }
+      return {
+        ...capture,
+        promise: capture.promise.then(async (download) => {
+          await opts.beforeSave?.({
+            triggered: true,
+            url: download.url,
+            suggestedFilename: download.suggestedFilename,
+          });
+          return download;
+        }),
+      };
+    },
   ),
   gotoPageWithNavigationGuard: vi.fn(
     async (opts: {
@@ -130,20 +150,7 @@ export function setPwToolsCoreCurrentRefLocator(locator: Record<string, unknown>
   currentRefLocator = locator;
 }
 
-export function setPwToolsCoreDownloadCapture(
-  capture:
-    | {
-        armed: boolean;
-        promise: Promise<{
-          triggered: true;
-          url: string;
-          suggestedFilename: string;
-          path: string;
-        }>;
-        cancel: ReturnType<typeof vi.fn>;
-      }
-    | undefined,
-) {
+export function setPwToolsCoreDownloadCapture(capture: HarnessDownloadCapture | undefined) {
   currentDownloadCapture = capture;
 }
 

@@ -432,7 +432,14 @@ export async function navigateViaPlaywright(opts: {
     response: Awaited<ReturnType<typeof navigate>> | null;
     download?: BrowserManagedDownload;
   }> => {
-    const downloadCapture = createManagedDownloadCaptureForPage(page, timeout);
+    const downloadCapture = createManagedDownloadCaptureForPage(page, timeout, {
+      beforeSave: async (download) => {
+        await assertBrowserNavigationResultAllowed({
+          url: download.url || url,
+          ...navigationPolicy,
+        });
+      },
+    });
     try {
       const response = await navigate();
       downloadCapture.cancel();
@@ -450,6 +457,13 @@ export async function navigateViaPlaywright(opts: {
           downloadErr.message === "Timeout waiting for navigation download"
         ) {
           throw err;
+        }
+        if (isPolicyDenyNavigationError(downloadErr)) {
+          await closeBlockedNavigationTarget({
+            cdpUrl: opts.cdpUrl,
+            page,
+            targetId: opts.targetId,
+          });
         }
         throw downloadErr;
       }
@@ -475,12 +489,7 @@ export async function navigateViaPlaywright(opts: {
     navigationResult = await navigateWithDownloadCapture();
   }
   try {
-    if (navigationResult.download) {
-      await assertBrowserNavigationResultAllowed({
-        url: navigationResult.download.url || url,
-        ...navigationPolicy,
-      });
-    } else {
+    if (!navigationResult.download) {
       await assertPageNavigationCompletedSafely({
         cdpUrl: opts.cdpUrl,
         page,
