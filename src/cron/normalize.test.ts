@@ -832,6 +832,46 @@ describe("normalizeCronJobPatch", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 
+  it("preserves null model so patches can clear the model override", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        model: null,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.model).toBeNull();
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
+  it("treats empty-string model as an explicit clear", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        model: "",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.model).toBeNull();
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
+  it("preserves a non-empty model override and trims surrounding whitespace", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        model: "  anthropic/claude-sonnet-4-5  ",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.model).toBe("anthropic/claude-sonnet-4-5");
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
   it("preserves null sessionKey patches and trims string values", () => {
     const trimmed = normalizeCronJobPatch({
       sessionKey: "  agent:main:telegram:group:-100123  ",

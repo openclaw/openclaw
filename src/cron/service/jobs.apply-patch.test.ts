@@ -22,6 +22,46 @@ function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   };
 }
 
+describe("applyJobPatch payload model clear", () => {
+  it("clears a stale model override when patched with null", () => {
+    const job = makeJob({
+      payload: { kind: "agentTurn", message: "hello", model: "openai/gpt-5.4-mini" },
+    });
+    const patch = {
+      payload: { kind: "agentTurn", model: null },
+    } as Parameters<typeof applyJobPatch>[1];
+    applyJobPatch(job, patch);
+    expect(job.payload).toEqual({ kind: "agentTurn", message: "hello" });
+    expect("model" in job.payload).toBe(false);
+  });
+
+  it("preserves an existing model when the patch omits model", () => {
+    const job = makeJob({
+      payload: { kind: "agentTurn", message: "hello", model: "openai/gpt-5.4-mini" },
+    });
+    const patch = {
+      payload: { kind: "agentTurn", message: "updated" },
+    } as Parameters<typeof applyJobPatch>[1];
+    applyJobPatch(job, patch);
+    expect(job.payload).toEqual({
+      kind: "agentTurn",
+      message: "updated",
+      model: "openai/gpt-5.4-mini",
+    });
+  });
+
+  it("replaces the model override when patched with a new value", () => {
+    const job = makeJob({
+      payload: { kind: "agentTurn", message: "hello", model: "openai/gpt-5.4-mini" },
+    });
+    const patch = {
+      payload: { kind: "agentTurn", model: "anthropic/claude-sonnet-4-5" },
+    } as Parameters<typeof applyJobPatch>[1];
+    applyJobPatch(job, patch);
+    expect((job.payload as { model?: string }).model).toBe("anthropic/claude-sonnet-4-5");
+  });
+});
+
 describe("applyJobPatch delivery merge", () => {
   it("threads explicit delivery threadId patches into delivery", () => {
     const job = makeJob();

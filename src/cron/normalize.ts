@@ -170,11 +170,17 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("model" in next) {
-    const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
-    if (model !== undefined) {
-      next.model = model;
+    if (next.model === null || next.model === "") {
+      // Explicit clear: preserve null so cron.update can reset model to inherit
+      // the agent default, mirroring the toolsAllow clear-on-null contract.
+      next.model = null;
     } else {
-      delete next.model;
+      const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
+      if (model !== undefined) {
+        next.model = model;
+      } else {
+        delete next.model;
+      }
     }
   }
   if ("thinking" in next) {
