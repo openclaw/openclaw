@@ -64,9 +64,7 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
   it("uses group-level agent when no topic agentId is set", async () => {
     const ctx = await buildForumContext({ topicConfig: { systemPrompt: "Be nice" } });
 
-    expect(ctx?.ctxPayload?.SessionKey).toBe(
-      "agent:main:telegram:group:-1001234567890:topic:3:thread:topic:3:message:1",
-    );
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:3");
   });
 
   it("routes to topic-specific agent when agentId is set", async () => {

@@ -232,7 +232,7 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
     expect(resolveStorePath).toHaveBeenCalledTimes(1);
   });
 
-  it("uses root-message topic session for forum groups with message_thread_id", async () => {
+  it("uses topic session for forum groups with message_thread_id", async () => {
     const ctx = await buildContext({
       message_id: 1,
       chat: { id: -1001234567890, type: "supergroup", title: "Test Forum", is_forum: true },
@@ -242,10 +242,8 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
       from: { id: 42, first_name: "Alice" },
     });
 
-    // Session key should include the forum topic and root message for concurrent topic requests.
-    expect(ctx?.ctxPayload?.SessionKey).toBe(
-      "agent:main:telegram:group:-1001234567890:topic:99:thread:topic:99:message:1",
-    );
+    // Session key SHOULD include :topic:99 for forums
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:99");
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(99);
     expect(ctx?.ctxPayload?.OriginatingTo).toBe("telegram:-1001234567890:topic:99");
   });

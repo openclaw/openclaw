@@ -171,7 +171,7 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
     expect(ctx?.route.accountId).toBe("atlas");
     expect(ctx?.route.agentId).toBe("topic-agent");
     expect(ctx?.ctxPayload?.SessionKey).toBe(
-      "agent:topic-agent:telegram:group:-1001234567890:topic:42:thread:topic:42:message:1",
+      "agent:topic-agent:telegram:group:-1001234567890:topic:42",
     );
   });
 

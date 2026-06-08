@@ -169,9 +169,7 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     const [activationOptions] = activationCalls[0] ?? [];
     expect(activationOptions?.chatId).toBe(-1001234567890);
     expect(activationOptions?.messageThreadId).toBe(99);
-    expect(activationOptions?.sessionKey).toBe(
-      "agent:main:telegram:group:-1001234567890:topic:99:thread:topic:99:message:1",
-    );
+    expect(activationOptions?.sessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:99");
   });
 
   it("lets explicit topic requireMention=true override always activation", async () => {
