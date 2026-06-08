@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyProviderRequestError,
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+  PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
 } from "./provider-request-error-classifier.js";
 
 describe("provider request error classifier", () => {
@@ -32,7 +33,26 @@ describe("provider request error classifier", () => {
     });
   });
 
-  it("ignores unrelated provider errors", () => {
+  it("leaves explicit HTTP 429 rate-limit failures on the existing rate-limit path", () => {
     expect(classifyProviderRequestError(new Error("429: rate limit exceeded"))).toBeUndefined();
+  });
+
+  it("classifies structured HTTP 429 errors even when the body is generic", () => {
+    const error = new Error(
+      "Something went wrong while processing your request. Please try again.",
+    );
+    Object.assign(error, { status: 429 });
+
+    expect(classifyProviderRequestError(error)).toEqual({
+      code: "provider_rate_limit_or_quota_error",
+      userMessage: PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
+      technicalMessage: "Something went wrong while processing your request. Please try again.",
+    });
+  });
+
+  it("ignores unrelated provider errors", () => {
+    expect(
+      classifyProviderRequestError(new Error("INVALID_ARGUMENT: some other failure")),
+    ).toBeUndefined();
   });
 });

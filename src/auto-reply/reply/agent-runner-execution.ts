@@ -801,7 +801,7 @@ function buildExternalRunFailureReply(
   if (authProfileFailoverFailure) {
     return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
   }
-  const providerRequestError = classifyProviderRequestError(normalizedMessage);
+  const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
   if (providerRequestError) {
     return {
       text: providerRequestError.userMessage,
