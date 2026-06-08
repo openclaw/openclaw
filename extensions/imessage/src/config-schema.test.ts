@@ -72,6 +72,31 @@ describe("imessage config schema", () => {
     }
   });
 
+  it("accepts nested delivery streaming config", () => {
+    const res = IMessageConfigSchema.safeParse({
+      enabled: true,
+      streaming: {
+        chunkMode: "newline",
+        block: {
+          enabled: true,
+          coalesce: { minChars: 200, idleMs: 50 },
+        },
+      },
+      accounts: {
+        personal: {
+          streaming: { chunkMode: "length", block: { enabled: false } },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.streaming?.chunkMode).toBe("newline");
+      expect(res.data.streaming?.block?.enabled).toBe(true);
+      expect(res.data.accounts?.personal?.streaming?.block?.enabled).toBe(false);
+    }
+  });
+
   it("accepts reaction notification mode overrides", () => {
     const res = IMessageConfigSchema.safeParse({
       reactionNotifications: "all",
