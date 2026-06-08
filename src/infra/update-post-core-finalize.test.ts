@@ -94,6 +94,9 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
     ]);
     // Host-compat resolution is pinned to the just-installed core version.
     expect(call.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.6.1");
+    // Outer whole-process timeout is decoupled from the per-step --timeout (120s):
+    // a generous floor so a valid multi-step finalize is not killed prematurely.
+    expect(call.timeoutMs).toBe(30 * 60_000);
   });
 
   it("strips the gateway service identity from the finalizer child env", async () => {
@@ -116,16 +119,22 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
     expect(env.OPENCLAW_GATEWAY_SERVICE_PID).toBeUndefined();
   });
 
-  it("omits channel/timeout flags when not provided", async () => {
+  it("defaults to the git/dev channel and omits --timeout when not provided", async () => {
     const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({ code: 0 }));
     await runPostCoreFinalizeAfterGatewayUpdate({
       result: gitOkResult(),
       resolveEntrypoint: resolveEntrypointOk,
       spawnFinalize,
     });
-    const argv = spawnFinalize.mock.calls[0][0].argv;
-    expect(argv).not.toContain("--channel");
-    expect(argv).not.toContain("--timeout");
+    const call = spawnFinalize.mock.calls[0][0];
+    // git/source updates default to the dev channel (matches runGatewayUpdate),
+    // not the package (stable) channel.
+    const channelIdx = call.argv.indexOf("--channel");
+    expect(channelIdx).toBeGreaterThan(-1);
+    expect(call.argv[channelIdx + 1]).toBe("dev");
+    expect(call.argv).not.toContain("--timeout");
+    // No per-step timeout requested → outer backstop is the floor.
+    expect(call.timeoutMs).toBe(30 * 60_000);
   });
 
   it("reports error on a non-zero finalize exit", async () => {
