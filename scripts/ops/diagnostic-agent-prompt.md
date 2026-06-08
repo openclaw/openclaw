@@ -84,20 +84,16 @@ Send a concise, skimmable summary:
   5. **Changed since last run:** what you added/updated/resolved in the bug list.
   6. **Link:** https://github.com/cryptolir/openclaw/blob/main/scripts/ops/bug_list.md
 
-**Send command** (the dev server has only `curl`; use the configured email API):
+**Send command** (msmtp + Gmail is configured on the dev server; sender `onetrue2023@gmail.com`):
 
 ```
-curl -s https://api.resend.com/emails \
-  -H "Authorization: Bearer $RESEND_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d "$(jq -nc --arg s "$SUBJECT" --arg b "$BODY" \
-        '{from:"diagnostics@agentglob.com", to:"liran@agentglob.com", subject:$s, text:$b}')"
+printf 'Subject: %s\nFrom: AgentGlob Diagnostics <onetrue2023@gmail.com>\nTo: liran@agentglob.com\nContent-Type: text/plain; charset=UTF-8\n\n%s\n' \
+  "$SUBJECT" "$BODY" | msmtp liran@agentglob.com
 ```
 
-> ⚠️ **Prerequisite — not yet configured.** The dev server has no mail sender and no
-> `RESEND_API_KEY` set. Before the first scheduled run, wire up one sender (Resend/SendGrid
-> via `curl`, **or** install `msmtp` + a Gmail app password) and export its key/config so
-> this step works unattended. Until then, write the summary to
+> Config lives in `~/.msmtprc` (chmod 600) on the dev server. If a send fails, check
+> `~/.msmtp.log` — the most likely cause is a missing/expired Gmail **app password** in
+> `~/.msmtprc`. As a safety net, also write the summary to
 > `/root/projects/openclaw/scripts/ops/last-diagnostic-summary.txt` so it isn't lost.
 
 ## Failure handling
