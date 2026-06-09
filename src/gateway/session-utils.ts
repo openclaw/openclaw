@@ -975,6 +975,10 @@ export function resolveDeletedAgentIdFromSessionKey(
   if (!parsed) {
     return null;
   }
+  const agentId = normalizeAgentId(parsed.agentId);
+  if (listAgentIds(cfg).includes(agentId)) {
+    return null;
+  }
   if (isAcpSessionKey(sessionKey) && !parsed.rest.startsWith("acp:binding:")) {
     // Free ACP runtime keys use agent:<harnessId>:acp:<uuid>, but key shape is
     // not proof: ACP bridge sessions can use ACP-shaped keys without SessionAcpMeta.
@@ -988,10 +992,6 @@ export function resolveDeletedAgentIdFromSessionKey(
     if (acpMeta) {
       return null;
     }
-  }
-  const agentId = normalizeAgentId(parsed.agentId);
-  if (listAgentIds(cfg).includes(agentId)) {
-    return null;
   }
   return agentId;
 }

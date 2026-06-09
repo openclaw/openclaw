@@ -860,6 +860,12 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
 
     expect(
+      resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:acp:configured-bridge-without-meta", {
+        acp: undefined,
+      } as SessionEntry),
+    ).toBeNull();
+
+    expect(
       resolveDeletedAgentIdFromSessionKey(
         cfg,
         "agent:deleted-agent:acp:bridge-session-without-runtime-meta",
