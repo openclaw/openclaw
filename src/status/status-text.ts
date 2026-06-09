@@ -369,18 +369,21 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     selectedModelAuth = activeModelAuth;
   }
   const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
-  const useCodexSyntheticUsage = shouldUseCodexSyntheticUsage({
-    provider: activeStatusProvider,
-    effectiveHarness,
-  });
-  const codexUsageAuthProfileId = resolveCodexSyntheticUsageAuthProfileId({
-    profileId: sessionEntry?.authProfileOverride,
-    cfg,
-    agentDir: statusAgentDir,
-  });
-  const usageCredentialType = useCodexSyntheticUsage
-    ? "token"
-    : resolveUsageCredentialType(usageAuthLabel);
+  const selectedUsageCredentialType = resolveUsageCredentialType(usageAuthLabel);
+  const useCodexSyntheticUsage =
+    shouldUseCodexSyntheticUsage({
+      provider: activeStatusProvider,
+      effectiveHarness,
+    }) &&
+    (selectedUsageCredentialType === "oauth" || selectedUsageCredentialType === "token");
+  const codexUsageAuthProfileId = useCodexSyntheticUsage
+    ? resolveCodexSyntheticUsageAuthProfileId({
+        profileId: sessionEntry?.authProfileOverride,
+        cfg,
+        agentDir: statusAgentDir,
+      })
+    : undefined;
+  const usageCredentialType = useCodexSyntheticUsage ? "token" : selectedUsageCredentialType;
   const currentUsageProvider =
     resolveUsageProviderId(activeStatusProvider, { credentialType: usageCredentialType }) ??
     resolveUsageProviderId(activeProvider, { credentialType: usageCredentialType });

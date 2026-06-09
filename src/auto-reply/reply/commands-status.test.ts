@@ -125,14 +125,25 @@ function saveStatusTestAuthProfile(params: {
   profileId: string;
   provider: "openai" | "anthropic";
 }): void {
+  saveStatusTestAuthProfiles({
+    dir: params.dir,
+    profiles: [{ profileId: params.profileId, provider: params.provider }],
+  });
+}
+
+function saveStatusTestAuthProfiles(params: {
+  dir: string;
+  profiles: Array<{ profileId: string; provider: "openai" | "anthropic" }>;
+}): void {
   const agentDir = path.join(params.dir, ".openclaw", "agents", "main", "agent");
   fs.mkdirSync(agentDir, { recursive: true });
   saveAuthProfileStore(
     {
       version: 1,
-      profiles: {
-        [params.profileId]:
-          params.provider === "openai"
+      profiles: Object.fromEntries(
+        params.profiles.map((profile) => [
+          profile.profileId,
+          profile.provider === "openai"
             ? {
                 type: "oauth",
                 provider: "openai",
@@ -145,7 +156,8 @@ function saveStatusTestAuthProfile(params: {
                 provider: "anthropic",
                 key: "anthropic-api-key",
               },
-      },
+        ]),
+      ),
     },
     agentDir,
     { filterExternalAuthProfiles: false, syncExternalCli: false },
@@ -661,6 +673,11 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalized).toContain("Runtime: OpenAI Codex");
     expect(normalized).toContain("Fast");
     expect(normalized).not.toContain("Fast · codex");
+    expect(
+      providerUsageMock.loadProviderUsageSummary.mock.calls.some(([params]) =>
+        params?.providers?.includes("openai"),
+      ),
+    ).toBe(false);
   });
 
   it("uses Codex OAuth auth labels for openai models running on the Codex harness", async () => {
@@ -953,7 +970,13 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     await withTempHome(async (dir) => {
-      saveStatusTestAuthProfile({ dir, profileId: "anthropic:work", provider: "anthropic" });
+      saveStatusTestAuthProfiles({
+        dir,
+        profiles: [
+          { profileId: "openai:status", provider: "openai" },
+          { profileId: "anthropic:work", provider: "anthropic" },
+        ],
+      });
 
       await buildStatusText({
         cfg: {
