@@ -539,7 +539,29 @@ export type PluginHookReplyUsageState = {
   compactionCount?: number;
   /** Effective context-token budget after model/config/agent caps. */
   contextTokenBudget?: number;
+  /**
+   * Actual context-window occupancy at the END of the turn — the final model
+   * call's prompt tokens, NOT the per-turn aggregate. This is the value
+   * `context.used_tokens` / `context.pct_used` must use: the aggregate prompt
+   * total over a multi-call tool loop overstates occupancy (often beyond the
+   * window). Absent on harnesses that don't report it (the contract then falls
+   * back to the aggregate prompt total, which is correct for single-call turns).
+   */
+  contextUsedTokens?: number;
   usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+  /**
+   * Usage from the FINAL model call of the turn only — vs `usage`, which is the
+   * turn aggregate summed across every tool-loop call. Lets a footer render the
+   * last exchange's i/o + cache instead of the whole turn. Absent on harnesses
+   * that don't report per-call usage.
+   */
+  lastUsage?: {
     input?: number;
     output?: number;
     cacheRead?: number;

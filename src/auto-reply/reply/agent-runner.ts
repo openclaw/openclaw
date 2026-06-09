@@ -1748,6 +1748,7 @@ export async function runReplyAgent(params: {
       const winnerModel = runResult.meta?.executionTrace?.winnerModel ?? modelUsed;
       const ctxTokens = runResult.meta?.agentMeta?.contextTokens;
       const compactions = runResult.meta?.agentMeta?.compactionCount;
+      const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
       recordReplyUsageState(
         { runId, sessionKey },
         {
@@ -1790,6 +1791,14 @@ export async function runReplyAgent(params: {
           compactionCount: typeof compactions === "number" ? compactions : undefined,
           contextTokenBudget:
             typeof ctxTokens === "number" && Number.isFinite(ctxTokens) ? ctxTokens : undefined,
+          // Real end-of-turn context occupancy (final call's prompt tokens), so
+          // the footer's context gauge is a point-in-time state and not the
+          // multi-call aggregate. `promptTokens` is the agentMeta value already
+          // resolved above.
+          contextUsedTokens:
+            typeof promptTokens === "number" && Number.isFinite(promptTokens)
+              ? promptTokens
+              : undefined,
           usage: usage
             ? {
                 input: usage.input,
@@ -1797,6 +1806,16 @@ export async function runReplyAgent(params: {
                 cacheRead: usage.cacheRead,
                 cacheWrite: usage.cacheWrite,
                 total: usage.total,
+              }
+            : undefined,
+          // Final model call only (vs the turn aggregate in `usage`).
+          lastUsage: lastCallUsage
+            ? {
+                input: lastCallUsage.input,
+                output: lastCallUsage.output,
+                cacheRead: lastCallUsage.cacheRead,
+                cacheWrite: lastCallUsage.cacheWrite,
+                total: lastCallUsage.total,
               }
             : undefined,
           // Provider subscription/limit windows for the 📊 readout. Non-blocking
