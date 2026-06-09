@@ -2,7 +2,6 @@
   "id": "diffs",
   "name": "Diffs",
   "description": "Read-only diff viewer and file renderer for agents.",
-  "skills": ["./skills"],
   "uiHints": {
     "viewerBaseUrl": {
       "label": "Viewer Base URL",

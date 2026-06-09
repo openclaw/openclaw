@@ -2,7 +2,6 @@
   "id": "memory-wiki",
   "name": "Memory Wiki",
   "description": "Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.",
-  "skills": ["./skills"],
   "uiHints": {
     "vaultMode": {
       "label": "Vault Mode",

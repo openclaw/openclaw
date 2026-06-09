@@ -9,7 +9,6 @@
       "FEISHU_ENCRYPT_KEY"
     ]
   },
-  "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

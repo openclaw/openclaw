@@ -1,6 +1,5 @@
 {
   "id": "tavily",
-  "skills": ["./skills"],
   "providerAuthEnvVars": {
     "tavily": ["TAVILY_API_KEY"]
   },
