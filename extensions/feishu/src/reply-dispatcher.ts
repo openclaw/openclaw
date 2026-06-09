@@ -24,7 +24,11 @@ import {
 } from "./reply-dispatcher-runtime-api.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
-import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
+import {
+  FeishuStreamingSession,
+  mergeFinalStreamingText,
+  mergeStreamingText,
+} from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
@@ -702,9 +706,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               queueStreamingUpdate(text, { mode: "delta", dedupeWithLastPartial: true });
             }
             if (info?.kind === "final") {
-              streamText = text;
+              // Accumulate incremental `final` chunks instead of overwriting the
+              // buffer with the latest fragment, so streamed replies keep their
+              // earlier tokens (你 / 你好 / 你好啊 rather than 你 / 好 / 啊 — #91562).
+              streamText = mergeFinalStreamingText(streamText, text);
               snapshotBaseText = "";
-              lastSnapshotTextLength = text.length;
+              lastSnapshotTextLength = streamText.length;
               flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
             }
             // Send media even when streaming handled the text

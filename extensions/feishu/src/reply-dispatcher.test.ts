@@ -54,6 +54,32 @@ function mergeStreamingText(
   return `${previous}${next}`;
 }
 
+function mergeFinalStreamingText(
+  previousText: string | undefined,
+  nextText: string | undefined,
+): string {
+  const previous = typeof previousText === "string" ? previousText : "";
+  const next = typeof nextText === "string" ? nextText : "";
+  if (!next) {
+    return previous;
+  }
+  if (!previous || next === previous) {
+    return next;
+  }
+  if (next.startsWith(previous) || next.includes(previous)) {
+    return next;
+  }
+  if (previous.startsWith(next) || previous.includes(next)) {
+    return previous;
+  }
+  let shared = 0;
+  const limit = Math.min(previous.length, next.length);
+  while (shared < limit && previous[shared] === next[shared]) {
+    shared += 1;
+  }
+  return shared > 0 ? next : `${previous}${next}`;
+}
+
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
   resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
@@ -77,6 +103,7 @@ vi.mock("./typing.js", () => ({
 vi.mock("./streaming-card.js", () => {
   return {
     mergeStreamingText,
+    mergeFinalStreamingText,
     FeishuStreamingSession: class {
       active = false;
       start = vi.fn(async () => {
@@ -704,6 +731,95 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("accumulates incremental final delta chunks into the streaming card (#91562)", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.onReplyStart?.();
+    await options.deliver({ text: "你" }, { kind: "final" });
+    await options.deliver({ text: "好" }, { kind: "final" });
+    await options.deliver({ text: "啊" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    // The streamed preview must accumulate (你 / 你好 / 你好啊), not show only the
+    // latest token (你 / 好 / 啊).
+    expect(streamingUpdateTexts()).toEqual(["你", "你好", "你好啊"]);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("你好啊", {
+      note: "Agent: agent",
+    });
+  });
+
+  it("keeps accumulated streaming text when a trailing final delta arrives (#91562)", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "你" });
+    result.replyOptions.onPartialReply?.({ text: "你好" });
+    result.replyOptions.onPartialReply?.({ text: "你好啊" });
+    // A trailing final that only carries the last delta must not downgrade the
+    // accumulated reply back to the latest token.
+    await options.deliver({ text: "啊" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("你好啊", {
+      note: "Agent: agent",
+    });
+  });
+
+  it("replaces the streamed preview with a cumulative final extension", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.onReplyStart?.();
+    await options.deliver({ text: "你好" }, { kind: "final" });
+    await options.deliver({ text: "你好啊，我是助手" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("你好啊，我是助手", {
+      note: "Agent: agent",
+    });
   });
 
   it("skips exact duplicate final text after streaming close", async () => {

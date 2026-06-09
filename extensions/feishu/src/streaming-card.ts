@@ -191,6 +191,53 @@ export function mergeStreamingText(
   return `${previous}${next}`;
 }
 
+function sharedPrefixLength(a: string, b: string): number {
+  const limit = Math.min(a.length, b.length);
+  let index = 0;
+  while (index < limit && a[index] === b[index]) {
+    index += 1;
+  }
+  return index;
+}
+
+/**
+ * Coalesce a streamed `final` payload into the accumulated reply buffer.
+ *
+ * A `final` payload normally carries the complete reply, so it replaces the
+ * streamed preview. Some runtimes (e.g. DeepSeek streaming) instead deliver the
+ * reply as a sequence of incremental `final` chunks; replacing the buffer on
+ * each one drops every earlier token and surfaces only the latest fragment
+ * (你 / 好 / 啊 instead of 你 / 你好 / 你好啊 — see #91562). Accumulate those
+ * deltas while still letting a genuine re-render replace the buffer.
+ */
+export function mergeFinalStreamingText(
+  previousText: string | undefined,
+  nextText: string | undefined,
+): string {
+  const previous = typeof previousText === "string" ? previousText : "";
+  const next = typeof nextText === "string" ? nextText : "";
+  if (!next) {
+    return previous;
+  }
+  if (!previous || next === previous) {
+    return next;
+  }
+  // Cumulative re-render or extension: the fuller payload already contains the
+  // buffer, so prefer it.
+  if (next.startsWith(previous) || next.includes(previous)) {
+    return next;
+  }
+  // The final restates text we already buffered: keep the longer accumulation.
+  if (previous.startsWith(next) || previous.includes(next)) {
+    return previous;
+  }
+  // No containment. A complete re-render restates the reply from the start and
+  // therefore shares a leading run with the buffer; an incremental token delta
+  // continues from where the buffer ends and shares no prefix. Replace on a
+  // re-render, append the delta otherwise.
+  return sharedPrefixLength(previous, next) > 0 ? next : `${previous}${next}`;
+}
+
 export function resolveStreamingCardSendMode(options?: StreamingStartOptions) {
   if (options?.replyToMessageId) {
     return "reply";
