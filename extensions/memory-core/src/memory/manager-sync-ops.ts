@@ -40,6 +40,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import {
   createEmbeddingProvider,
   resolveEmbeddingProviderAdapterId,
+  resolveEmbeddingProviderAdapterTransport,
   resolveEmbeddingProviderFallbackModel,
   type EmbeddingProvider,
   type EmbeddingProviderId,
@@ -406,24 +407,11 @@ export abstract class MemoryManagerSyncOps {
     hasIndexedChunks?: boolean;
   }): MemoryIndexIdentityState {
     const hasProviderOverride = params && "provider" in params;
-    // Plain status can compare identity before provider init. Mirror provider
-    // init's empty-model fallback so adapter defaults do not look mismatched.
-    const configuredProvider =
-      this.settings.provider === "none"
-        ? null
-        : {
-            id:
-              resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
-              this.settings.provider,
-            model:
-              this.settings.model.trim() ||
-              resolveEmbeddingProviderFallbackModel(this.settings.provider, "", this.cfg),
-          };
     const provider = hasProviderOverride
       ? params.provider!
       : this.provider
         ? { id: this.provider.id, model: this.provider.model }
-        : configuredProvider;
+        : this.resolveConfiguredProviderIdentity();
     const vectorReady =
       params && "vectorReady" in params
         ? Boolean(params.vectorReady)
@@ -452,6 +440,33 @@ export abstract class MemoryManagerSyncOps {
           : this.hasIndexedChunks(),
       ftsTokenizer: this.settings.store.fts.tokenizer,
     });
+  }
+
+  // Plain status can compare identity before provider init. Mirror the model
+  // the live provider would report so adapter defaults do not look mismatched.
+  private resolveConfiguredProviderIdentity(): { id: string; model: string } | null {
+    if (this.settings.provider === "none") {
+      return null;
+    }
+    return {
+      id:
+        resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
+        this.settings.provider,
+      model: this.resolveConfiguredProviderModel(),
+    };
+  }
+
+  private resolveConfiguredProviderModel(): string {
+    const fallbackModel = () =>
+      resolveEmbeddingProviderFallbackModel(this.settings.provider, "", this.cfg);
+    // Local-transport adapters (llama.cpp) take their model identity from
+    // local.modelPath and ignore settings.model. The status mirror must do the
+    // same, or an index built from a configured modelPath looks mismatched
+    // against the adapter default and stays Dirty forever (#91001).
+    if (resolveEmbeddingProviderAdapterTransport(this.settings.provider, this.cfg) === "local") {
+      return this.settings.local?.modelPath?.trim() || fallbackModel();
+    }
+    return this.settings.model.trim() || fallbackModel();
   }
 
   protected resetVectorState(): void {
