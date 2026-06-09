@@ -779,7 +779,7 @@ export function createMsteamsRealtimeCall(params: {
           }
           return { bytes, mime };
         } finally {
-          release?.();
+          void release?.();
         }
       } catch {
         return null;
