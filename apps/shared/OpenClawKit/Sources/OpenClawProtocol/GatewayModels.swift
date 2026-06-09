@@ -2782,7 +2782,7 @@ public struct ConfigPatchParams: Codable, Sendable {
         deliverycontext: [String: AnyCodable]?,
         note: String?,
         restartdelayms: Int?,
-        replacepaths: [String]? = nil)
+        replacepaths: [String]?)
     {
         self.raw = raw
         self.basehash = basehash
