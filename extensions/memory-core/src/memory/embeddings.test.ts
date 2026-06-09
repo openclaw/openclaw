@@ -249,6 +249,54 @@ describe("createEmbeddingProvider", () => {
     );
   });
 
+  it("backfills provider.model when adapter returns empty model string", async () => {
+    registerMemoryEmbeddingProvider({
+      id: "openai",
+      transport: "remote",
+      defaultModel: "text-embedding-3-small",
+      create: async () => ({
+        provider: {
+          id: "openai",
+          model: "",
+          embedQuery: async () => [1],
+          embedBatch: async (texts) => texts.map(() => [1]),
+        },
+      }),
+    });
+
+    const result = await createEmbeddingProvider({
+      ...createOptions("openai"),
+      model: "",
+    });
+
+    expect(result.provider?.id).toBe("openai");
+    expect(result.provider?.model).toBe("text-embedding-3-small");
+  });
+
+  it("preserves provider.model when adapter already populates it correctly", async () => {
+    registerMemoryEmbeddingProvider({
+      id: "openai",
+      transport: "remote",
+      defaultModel: "text-embedding-3-small",
+      create: async (options) => ({
+        provider: {
+          id: "openai",
+          model: options.model,
+          embedQuery: async () => [1],
+          embedBatch: async (texts) => texts.map(() => [1]),
+        },
+      }),
+    });
+
+    const result = await createEmbeddingProvider({
+      ...createOptions("openai"),
+      model: "text-embedding-3-large",
+    });
+
+    expect(result.provider?.id).toBe("openai");
+    expect(result.provider?.model).toBe("text-embedding-3-large");
+  });
+
   it("uses config-scoped lookup for generic fallback model resolution", () => {
     registerGenericEmbeddingProvider({
       id: "openai-compatible",
