@@ -76,17 +76,26 @@ function resolveProviderRef(model: string): string {
   return model.trim();
 }
 
-/** Map a produced output format / file extension to a binary Content-Type. */
-function resolveAudioContentType(outputFormat?: string, fileExtension?: string): string {
+/** Resolve the produced bytes to one of the supported short format tokens, if recognizable. */
+function resolveProducedFormatToken(
+  outputFormat?: string,
+  fileExtension?: string,
+): string | undefined {
   const normalizedFormat = outputFormat?.trim().toLowerCase();
   if (normalizedFormat && SUPPORTED_RESPONSE_FORMATS[normalizedFormat]) {
-    return SUPPORTED_RESPONSE_FORMATS[normalizedFormat];
+    return normalizedFormat;
   }
   const ext = fileExtension?.replace(/^\./u, "").trim().toLowerCase();
   if (ext && SUPPORTED_RESPONSE_FORMATS[ext]) {
-    return SUPPORTED_RESPONSE_FORMATS[ext];
+    return ext;
   }
-  return "application/octet-stream";
+  return undefined;
+}
+
+/** Map a produced output format / file extension to a binary Content-Type. */
+function resolveAudioContentType(outputFormat?: string, fileExtension?: string): string {
+  const token = resolveProducedFormatToken(outputFormat, fileExtension);
+  return token ? SUPPORTED_RESPONSE_FORMATS[token] : "application/octet-stream";
 }
 
 /** Handles OpenAI-compatible text-to-speech requests for configured TTS providers. */
@@ -196,6 +205,20 @@ export async function handleOpenAiAudioSpeechHttpRequest(
           type: "api_error",
         },
       });
+      return true;
+    }
+
+    // `response_format` must genuinely take effect. Some providers read a
+    // different override key (e.g. `outputFormat`) and emit their own default,
+    // so reject instead of silently returning a format the client did not ask
+    // for. Providers that honor the override report the produced short token.
+    const producedFormat = resolveProducedFormatToken(result.outputFormat, result.fileExtension);
+    if (requestedFormat && producedFormat !== requestedFormat) {
+      sendInvalidRequest(
+        res,
+        `Provider '${providerId}' does not support response_format '${requestedFormat}' ` +
+          `(produced '${producedFormat ?? result.outputFormat}').`,
+      );
       return true;
     }
 
