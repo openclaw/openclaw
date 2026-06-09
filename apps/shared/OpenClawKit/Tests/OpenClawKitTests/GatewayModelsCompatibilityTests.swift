@@ -20,6 +20,7 @@ struct GatewayModelsCompatibilityTests {
             timeoutms: nil,
             systeminputprovenance: nil,
             systemprovenancereceipt: nil,
+            suppresscommandinterpretation: nil,
             idempotencykey: "id"
         )
 
@@ -48,6 +49,7 @@ struct GatewayModelsCompatibilityTests {
             timeoutms: nil,
             systeminputprovenance: nil,
             systemprovenancereceipt: nil,
+            suppresscommandinterpretation: nil,
             idempotencykey: "id"
         )
 
@@ -72,6 +74,7 @@ struct GatewayModelsCompatibilityTests {
             timeoutms: nil,
             systeminputprovenance: nil,
             systemprovenancereceipt: nil,
+            suppresscommandinterpretation: nil,
             idempotencykey: "id"
         )
 

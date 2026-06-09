@@ -1808,6 +1808,8 @@ export const dispatchTelegramMessage = async ({
                           reply,
                           buttons: telegramButtons,
                         });
+                        const isFastModeProgressPayload =
+                          isFastModeAutoProgressPayload(effectivePayload);
                         if (nativeToolProgressDraft && canRepresentAsTransientProgress) {
                           if (await pushStreamToolProgress(segment.update.text)) {
                             blockDelivered = true;
@@ -1818,7 +1820,7 @@ export const dispatchTelegramMessage = async ({
                           if (
                             canRepresentAsTransientProgress &&
                             answerLane.stream &&
-                            !isFastModeAutoProgressPayload(effectivePayload)
+                            !isFastModeProgressPayload
                           ) {
                             // Progress-mode streams render tool status in the
                             // live draft. Do not also emit text-only tool output
@@ -1827,9 +1829,10 @@ export const dispatchTelegramMessage = async ({
                             continue;
                           }
                           if (
-                            await pushStreamToolProgress(segment.update.text, {
+                            (canRepresentAsTransientProgress || isFastModeProgressPayload) &&
+                            (await pushStreamToolProgress(segment.update.text, {
                               startImmediately: true,
-                            })
+                            }))
                           ) {
                             blockDelivered = true;
                             continue;
