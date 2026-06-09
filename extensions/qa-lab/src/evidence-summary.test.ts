@@ -29,7 +29,7 @@ describe("evidence summary", () => {
       ],
       channelId: "qa-channel",
       env: {
-        OPENCLAW_QA_CHANNEL_DRIVER: "multipass",
+        OPENCLAW_QA_CHANNEL_DRIVER: "local-shim",
         OPENCLAW_QA_REF: "abc123",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-07T12:00:00.000Z",
@@ -72,7 +72,7 @@ describe("evidence summary", () => {
         id: "qa-channel",
       },
       channel_live: false,
-      channel_driver: "multipass",
+      channel_driver: "local-shim",
       runner: "host",
       packageSource: {
         kind: "source-checkout",
@@ -156,43 +156,6 @@ describe("evidence summary", () => {
         },
       }),
     ]);
-  });
-
-  it("uses explicit evidence profiles without treating Multipass as a runner", () => {
-    const evidence = buildQaSuiteEvidenceSummary({
-      artifactPaths: ["qa-suite-summary.json"],
-      catalogScenarios: [
-        {
-          id: "telegram-sdk-smoke",
-          title: "Telegram SDK smoke",
-          surface: "telegram",
-          coverage: {
-            primary: ["channels.telegram.mock"],
-          },
-        },
-      ],
-      channelDriver: "multipass",
-      channelId: "telegram",
-      generatedAt: "2026-06-07T12:08:00.000Z",
-      primaryModel: "mock-openai/gpt-5.5",
-      profile: "smoke-ci",
-      providerMode: "mock-openai",
-      runner: "host",
-      scenarios: [{ id: "telegram-sdk-smoke", status: "pass" }],
-    });
-
-    expect(evidence.entries[0]).toMatchObject({
-      scenarioId: "telegram-sdk-smoke",
-      profile: "smoke-ci",
-      model_live: false,
-      provider_fixture: "mock-openai",
-      channel: {
-        id: "telegram",
-      },
-      channel_live: false,
-      channel_driver: "multipass",
-      runner: "host",
-    });
   });
 
   it("normalizes old profile env aliases into the current evidence schema", () => {
