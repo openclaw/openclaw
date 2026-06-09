@@ -18,6 +18,7 @@ import {
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
   onceMessage,
+  readSessionStore,
   rpcReq,
   testState,
   writeSessionStore,
@@ -377,6 +378,27 @@ describe("gateway server chat", () => {
 
   test("chat.startup returns chat history with the initial agents list", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await writeGatewayConfig({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-main",
+            },
+            models: {
+              "openai/gpt-main": {},
+            },
+          },
+          list: [{ id: "main", default: true }],
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com/v1",
+              models: [{ id: "gpt-main", name: "GPT Main" }],
+            },
+          },
+        },
+      });
       await connectOk(ws);
       const sessionDir = await createSessionDir();
       const updatedAt = Date.now();
@@ -406,6 +428,10 @@ describe("gateway server chat", () => {
           defaultId?: string | null;
           mainKey?: string | null;
         };
+        metadata?: {
+          commands?: Array<{ name?: string; textAliases?: string[] }>;
+          models?: Array<{ id?: string; provider?: string }>;
+        };
         messages?: unknown[];
         sessionInfo?: { key?: string; sessionId?: string };
       }>(ws, "chat.startup", { sessionKey: "main" });
@@ -418,11 +444,107 @@ describe("gateway server chat", () => {
         key: "agent:main:main",
         sessionId: "sess-main",
       });
+      expect(startup.payload?.metadata?.models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "gpt-main",
+            provider: "openai",
+          }),
+        ]),
+      );
+      expect(startup.payload?.metadata?.commands).toBeUndefined();
       expect(startup.payload?.messages).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             role: "user",
             content: [{ type: "text", text: "startup hydrate" }],
+          }),
+        ]),
+      );
+    });
+  });
+
+  test("chat.startup omits metadata when configured model visibility needs full discovery", async () => {
+    await withGatewayChatHarness(async ({ ws }) => {
+      await writeGatewayConfig({
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-main" },
+            models: {
+              "openai/*": {},
+            },
+          },
+          list: [{ id: "main", default: true }],
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com/v1",
+              models: [{ id: "gpt-main", name: "GPT Main" }],
+            },
+          },
+        },
+      });
+      await connectOk(ws);
+
+      const startup = await rpcReq<{ metadata?: unknown }>(ws, "chat.startup", {
+        sessionKey: "main",
+      });
+
+      expect(startup.ok).toBe(true);
+      expect(startup.payload?.metadata).toBeUndefined();
+    });
+  });
+
+  test("chat.startup scopes metadata to agent session keys without explicit agentId", async () => {
+    await withGatewayChatHarness(async ({ ws }) => {
+      await writeGatewayConfig({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-main",
+            },
+            models: {
+              "openai/gpt-main": {},
+            },
+          },
+          list: [
+            { id: "main", default: true },
+            {
+              id: "work",
+              model: {
+                primary: "minimax/MiniMax-M2.7-highspeed",
+              },
+            },
+          ],
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com/v1",
+              models: [{ id: "gpt-main", name: "GPT Main" }],
+            },
+            minimax: {
+              baseUrl: "https://minimax.example.com/v1",
+              models: [{ id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" }],
+            },
+          },
+        },
+      });
+      await connectOk(ws);
+
+      const startup = await rpcReq<{
+        metadata?: {
+          models?: Array<{ id?: string; provider?: string }>;
+        };
+      }>(ws, "chat.startup", { sessionKey: "agent:work:main" });
+
+      expect(startup.ok).toBe(true);
+      expect(startup.payload?.metadata?.models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "MiniMax-M2.7-highspeed",
+            provider: "minimax",
           }),
         ]),
       );
@@ -1815,10 +1937,7 @@ describe("gateway server chat", () => {
       if (!sessionStorePath) {
         throw new Error("expected session store path");
       }
-      const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
-        string,
-        { lastChannel?: string; lastTo?: string } | undefined
-      >;
+      const stored = readSessionStore(sessionStorePath);
       expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
       expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
     });

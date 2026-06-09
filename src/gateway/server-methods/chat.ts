@@ -43,6 +43,8 @@ import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js"
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -213,6 +215,11 @@ type PreRegisteredAgentRun = {
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
 
+type ChatMetadataResult = {
+  commands?: unknown[];
+  models?: unknown[];
+};
+
 type ChatSendAckServerTiming = {
   receivedToAckMs: number;
   loadSessionMs: number;
@@ -324,28 +331,73 @@ async function handleChatMetadataRequest({
     return;
   }
   try {
-    const [{ buildModelsListResult }, { buildCommandsListResult }] = await Promise.all([
-      import("./models-list-result.js"),
-      import("./commands-list-result.js"),
-    ]);
-    const [models, commands] = await Promise.all([
-      buildModelsListResult({
+    respond(
+      true,
+      await buildChatMetadataResult({
+        cfg,
         context,
         agentId: requestedAgentId,
-        params: { view: "configured" },
       }),
-      Promise.resolve(
-        buildCommandsListResult({
-          cfg,
-          agentId: requestedAgentId,
-          includeArgs: true,
-          scope: "text",
-        }),
-      ),
-    ]);
-    respond(true, { ...models, ...commands });
+    );
   } catch (err) {
     respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+  }
+}
+
+async function buildChatMetadataResult(params: {
+  cfg: OpenClawConfig;
+  context: GatewayRequestContext;
+  agentId: string;
+  preloadedModelCatalog?: ModelCatalogEntry[];
+}): Promise<ChatMetadataResult> {
+  const [{ buildModelsListResult }, { buildCommandsListResult }] = await Promise.all([
+    import("./models-list-result.js"),
+    import("./commands-list-result.js"),
+  ]);
+  const [models, commands] = await Promise.all([
+    buildModelsListResult({
+      context: params.context,
+      agentId: params.agentId,
+      params: { view: "configured" },
+      preloadedCatalog: params.preloadedModelCatalog,
+    }),
+    Promise.resolve(
+      buildCommandsListResult({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        includeArgs: true,
+        scope: "text",
+      }),
+    ),
+  ]);
+  return { ...models, ...commands };
+}
+
+async function buildChatStartupMetadataResult(params: {
+  cfg: OpenClawConfig;
+  context: GatewayRequestContext;
+  agentId: string;
+  modelCatalog: ModelCatalogEntry[] | undefined;
+}): Promise<ChatMetadataResult | undefined> {
+  if (!params.modelCatalog) {
+    return undefined;
+  }
+  if (modelCatalogBrowseRequiresFullDiscovery({ cfg: params.cfg, view: "configured" })) {
+    return undefined;
+  }
+  try {
+    const { buildModelsListResult } = await import("./models-list-result.js");
+    return await buildModelsListResult({
+      context: params.context,
+      agentId: params.agentId,
+      params: { view: "configured" },
+      preloadedCatalog: params.modelCatalog,
+    });
+  } catch (err) {
+    params.context.logGateway.debug(
+      `chat.startup continuing without metadata: ${formatErrorMessage(err)}`,
+    );
+    return undefined;
   }
 }
 
@@ -2380,9 +2432,11 @@ async function handleChatHistoryRequest({
   context,
   method,
   includeAgentsList,
+  includeMetadata,
 }: GatewayRequestHandlerOptions & {
   method: ChatHistoryMethod;
   includeAgentsList?: boolean;
+  includeMetadata?: boolean;
 }) {
   if (!validateChatHistoryParams(params)) {
     respond(
@@ -2510,6 +2564,15 @@ async function handleChatHistoryRequest({
     );
   }
   const modelCatalog = await modelCatalogPromise;
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const startupMetadata = includeMetadata
+    ? await buildChatStartupMetadataResult({
+        cfg,
+        context,
+        agentId: sessionAgentId,
+        modelCatalog,
+      })
+    : undefined;
   const sessionInfo = buildGatewaySessionInfo({
     cfg,
     storePath,
@@ -2519,7 +2582,6 @@ async function handleChatHistoryRequest({
     agentId: selectedAgent.agentId,
     modelCatalog,
   });
-  const defaultAgentId = resolveDefaultAgentId(cfg);
   const activeRunAgentId =
     canonicalKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
   sessionInfo.hasActiveRun = hasTrackedActiveSessionRun({
@@ -2560,6 +2622,7 @@ async function handleChatHistoryRequest({
     verboseLevel,
     ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
     ...(includeAgentsList ? { agentsList: listAgentsForGateway(cfg, modelCatalog) } : {}),
+    ...(startupMetadata ? { metadata: startupMetadata } : {}),
   };
   respond(true, payload);
 }
@@ -2569,7 +2632,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     await handleChatHistoryRequest({ ...opts, method: "chat.history" });
   },
   "chat.startup": async (opts) => {
-    await handleChatHistoryRequest({ ...opts, method: "chat.startup", includeAgentsList: true });
+    await handleChatHistoryRequest({
+      ...opts,
+      method: "chat.startup",
+      includeAgentsList: true,
+      includeMetadata: true,
+    });
   },
   "chat.metadata": handleChatMetadataRequest,
   "chat.message.get": async ({ params, respond, context }) => {

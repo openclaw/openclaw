@@ -40,6 +40,11 @@ Docs: https://docs.openclaw.ai
 - Security/config/tooling: guard MCP HTTP redirects, protect global agent config defaults, and keep release/test/tooling proof failures bounded and explicit. (#89732, #90145)
 - Channels: WhatsApp restarts when per-account config changes, bounds background startup waits, closes failed sockets, and preserves reconnect behavior; Mattermost slash commands keep their state on `globalThis`; Feishu streaming cards preserve full merged content; voice-call tracks Twilio streams after connect; ClickClack reply tools respect `toolsAllow`. (#87951, #87965, #90486, #68113, #90534, #90181, #90607, #89500) Thanks @MukundaKatta, @mcaxtr, @infoanton, @mushuiyu886, and @sahibzada-allahyar.
 - Release/CI/E2E: main CI guard drift, PR merge diff scoping, live Docker credential staging, base-image qualification, installer Docker classification, Playwright dependency install recovery, API-key auth for Codex live Docker lanes, Parallels option terminators, and JSON-mode progress handling are tighter so release proof fails cleaner. (#90532, #90287, #90058) Thanks @RomneyDa, @hxy91819, and @mrunalp.
+- Release/CI/E2E: Docker E2E and live Docker harness runs now apply default memory, CPU, and process ceilings while preserving explicit per-lane overrides.
+- Release/CI/E2E: plugin lifecycle matrix resource sampling now fails phases that exceed RSS, wall-clock, or CPU ceilings instead of only logging the measurements.
+- Release/CI/E2E: Codex npm plugin live assertions now cap transcript discovery and diagnostic log reads so failure proof stays bounded.
+- Tests/state isolation: QA Lab valid-tool-call metrics now require runtime tool-call evidence when runtime parity data is available instead of counting tool-backed scenario pass status alone.
+- Tests/state isolation: QA Lab runtime parity now fails planned-only tool-call rows without matching tool results instead of treating matching mock plans as real tool evidence.
 - Tests/state isolation: provider, media, auth, cron, task, session, sandbox, Gateway, and Codex timeout fixtures now scope more home/state/env data per test, reducing cross-test leakage and making release validation failures less noisy. (#90027, #89974)
 
 ## 2026.6.2

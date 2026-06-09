@@ -19,6 +19,32 @@ function withReport(payload: unknown, run: (reportPath: string) => void) {
 }
 
 describe("test perf budget script", () => {
+  it("requires a budget source unless report-only mode is explicit", () => {
+    expect(() => testing.parseArgs([], {})).toThrow(
+      "provide --max-wall-ms, --baseline-wall-ms, or set --report-only",
+    );
+    expect(testing.parseArgs(["--report-only"], {})).toMatchObject({
+      baselineWallMs: null,
+      maxWallMs: null,
+      reportOnly: true,
+    });
+    expect(
+      testing.parseArgs([], {
+        OPENCLAW_TEST_PERF_REPORT_ONLY: "yes",
+      }),
+    ).toMatchObject({
+      baselineWallMs: null,
+      maxWallMs: null,
+      reportOnly: true,
+    });
+    expect(testing.parseArgs(["--baseline-wall-ms", "1000"], {})).toMatchObject({
+      baselineWallMs: 1000,
+      maxRegressionPct: 10,
+      maxWallMs: null,
+      reportOnly: false,
+    });
+  });
+
   it("parses numeric budget env vars strictly before running Vitest", () => {
     expect(
       testing.parseArgs([], {

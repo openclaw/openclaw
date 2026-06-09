@@ -474,6 +474,92 @@ export function summarizeRttSamples(samples) {
   };
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function assertPayloadObject(method, payload) {
+  if (!isRecord(payload)) {
+    throw new Error(`${method} returned invalid payload: expected object.`);
+  }
+  return payload;
+}
+
+function assertHealthSmokePayload(payload) {
+  const summary = assertPayloadObject("health", payload);
+  if (summary.ok !== true) {
+    throw new Error("health returned invalid payload: expected ok=true.");
+  }
+  if (!Number.isFinite(summary.ts)) {
+    throw new Error("health returned invalid payload: expected numeric ts.");
+  }
+  if (!Number.isFinite(summary.durationMs)) {
+    throw new Error("health returned invalid payload: expected numeric durationMs.");
+  }
+  if (typeof summary.defaultAgentId !== "string" || summary.defaultAgentId.trim() === "") {
+    throw new Error("health returned invalid payload: expected defaultAgentId.");
+  }
+  if (!Array.isArray(summary.agents)) {
+    throw new Error("health returned invalid payload: expected agents array.");
+  }
+  if (!isRecord(summary.channels)) {
+    throw new Error("health returned invalid payload: expected channels object.");
+  }
+  if (!Array.isArray(summary.channelOrder)) {
+    throw new Error("health returned invalid payload: expected channelOrder array.");
+  }
+  if (!isRecord(summary.sessions)) {
+    throw new Error("health returned invalid payload: expected sessions object.");
+  }
+}
+
+function assertConfigGetSmokePayload(payload) {
+  const snapshot = assertPayloadObject("config.get", payload);
+  if (typeof snapshot.path !== "string" || snapshot.path.trim() === "") {
+    throw new Error("config.get returned invalid payload: expected config path.");
+  }
+  if (typeof snapshot.exists !== "boolean") {
+    throw new Error("config.get returned invalid payload: expected exists boolean.");
+  }
+  if (typeof snapshot.valid !== "boolean") {
+    throw new Error("config.get returned invalid payload: expected valid boolean.");
+  }
+  if (!isRecord(snapshot.sourceConfig)) {
+    throw new Error("config.get returned invalid payload: expected sourceConfig object.");
+  }
+  if (!isRecord(snapshot.resolved)) {
+    throw new Error("config.get returned invalid payload: expected resolved object.");
+  }
+  if (!isRecord(snapshot.runtimeConfig)) {
+    throw new Error("config.get returned invalid payload: expected runtimeConfig object.");
+  }
+  if (!isRecord(snapshot.config)) {
+    throw new Error("config.get returned invalid payload: expected config object.");
+  }
+  if (!Array.isArray(snapshot.issues)) {
+    throw new Error("config.get returned invalid payload: expected issues array.");
+  }
+  if (!Array.isArray(snapshot.warnings)) {
+    throw new Error("config.get returned invalid payload: expected warnings array.");
+  }
+  if (!Array.isArray(snapshot.legacyIssues)) {
+    throw new Error("config.get returned invalid payload: expected legacyIssues array.");
+  }
+}
+
+export function assertRpcSmokeResponse(method, response) {
+  if (!response?.ok) {
+    throw new Error(`${method} failed: ${JSON.stringify(response?.error)}`);
+  }
+  if (method === "health") {
+    assertHealthSmokePayload(response.payload);
+    return;
+  }
+  if (method === "config.get") {
+    assertConfigGetSmokePayload(response.payload);
+  }
+}
+
 function toText(data) {
   if (typeof data === "string") {
     return data;
@@ -487,7 +573,7 @@ function toText(data) {
   return Buffer.from(data).toString("utf8");
 }
 
-function createGatewayClient({ WebSocket, url }) {
+export function createGatewayClient({ WebSocket, openTimeoutMs = 8_000, url }) {
   const ws = new WebSocket(url, { handshakeTimeout: 8_000 });
   const pending = new Map();
   const rejectPending = (error) => {
@@ -522,15 +608,28 @@ function createGatewayClient({ WebSocket, url }) {
   });
   const waitOpen = async () =>
     await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("gateway websocket open timeout")), 8_000);
-      ws.once("open", () => {
+      let settled = false;
+      const settle = (callback) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         clearTimeout(timer);
-        resolve();
-      });
-      ws.once("error", (error) => {
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      });
+        ws.off?.("open", onOpen);
+        ws.off?.("error", onError);
+        callback();
+      };
+      const onOpen = () => settle(resolve);
+      const onError = (error) =>
+        settle(() => reject(error instanceof Error ? error : new Error(String(error))));
+      const timer = setTimeout(() => {
+        settle(() => {
+          ws.close();
+          reject(new Error("gateway websocket open timeout"));
+        });
+      }, openTimeoutMs);
+      ws.once("open", onOpen);
+      ws.once("error", onError);
     });
   const request = async (method, params, timeoutMs = 10_000) =>
     await new Promise((resolve, reject) => {
@@ -622,6 +721,7 @@ async function main() {
   const stdoutPath = path.join(tempRoot, "gateway.stdout.log");
   const stderrPath = path.join(tempRoot, "gateway.stderr.log");
   let gatewayChild;
+  let client;
   let removeGatewayParentCleanup = () => {};
   let status = "fail";
   let details = "";
@@ -663,7 +763,7 @@ async function main() {
     const protocol = await import(
       pathToFileURL(path.join(repoRoot, "packages/gateway-protocol/src/version.ts")).href
     );
-    const client = createGatewayClient({ WebSocket, url: `ws://127.0.0.1:${port}` });
+    client = createGatewayClient({ WebSocket, url: `ws://127.0.0.1:${port}` });
     await client.waitOpen();
     const connectStarted = performance.now();
     const connect = await client.request(
@@ -706,9 +806,7 @@ async function main() {
         const response = await client.request(method, {}, 10_000);
         const durationMs = performance.now() - requestStartedAtMs;
         const roundedDurationMs = roundMeasuredMs(durationMs, `${method} durationMs`);
-        if (!response.ok) {
-          throw new Error(`${method} failed: ${JSON.stringify(response.error)}`);
-        }
+        assertRpcSmokeResponse(method, response);
         samples.push({ method, durationMs });
         events.push({
           event: "gateway-rpc",
@@ -722,7 +820,6 @@ async function main() {
         });
       }
     }
-    client.close();
     const sampleStats = summarizeRttSamples(samples.map((sample) => sample.durationMs));
     const byMethod = Object.fromEntries(
       args.methods.map((method) => [
@@ -749,6 +846,7 @@ async function main() {
     details = error instanceof Error ? (error.stack ?? error.message) : String(error);
   } finally {
     try {
+      client?.close();
       if (gatewayChild) {
         await stopGateway(gatewayChild).catch(() => {});
       }
