@@ -1996,10 +1996,15 @@ export const dispatchTelegramMessage = async ({
                           }
                           continue;
                         }
+                        const canRepresentAsTransientProgress =
+                          !reply.hasMedia &&
+                          telegramButtons === undefined &&
+                          !hasExecApprovalPayload(effectivePayload);
                         const isFastModeProgressPayload =
                           isFastModeAutoProgressPayload(effectivePayload);
                         if (streamMode === "progress") {
                           if (
+                            canRepresentAsTransientProgress &&
                             answerLane.stream &&
                             !isFastModeProgressPayload
                           ) {
@@ -2010,10 +2015,10 @@ export const dispatchTelegramMessage = async ({
                             continue;
                           }
                           if (
-                            isFastModeProgressPayload &&
-                            await pushStreamToolProgress(segment.update.text, {
+                            (canRepresentAsTransientProgress || isFastModeProgressPayload) &&
+                            (await pushStreamToolProgress(segment.update.text, {
                               startImmediately: true,
-                            })
+                            }))
                           ) {
                             blockDelivered = true;
                             continue;

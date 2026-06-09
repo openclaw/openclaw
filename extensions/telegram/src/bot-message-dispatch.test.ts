@@ -2439,6 +2439,32 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("delivers non-transient progress-mode tool media outside progress drafts", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver(
+          { text: "Rendered chart", mediaUrl: "/tmp/chart.png" },
+          { kind: "tool" },
+        );
+        return { queuedFinal: false };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Shelling\n\n`🛠️ Exec`");
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith(
+      expect.stringContaining("Rendered chart"),
+    );
+    expectDeliveredReply(0, { text: "Rendered chart", mediaUrl: "/tmp/chart.png" });
+  });
+
   it("does not restart progress drafts after final answer delivery", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
