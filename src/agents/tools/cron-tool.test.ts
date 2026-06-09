@@ -447,6 +447,101 @@ describe("cron tool", () => {
     expect(params).toEqual({ includeDisabled: true, agentId: "ops" });
   });
 
+  describe("wake routing", () => {
+    // Pin the agentId / sessionKey resolution contract for `action: "wake"`.
+    // The gateway target resolver treats `agentId` as authoritative, so
+    // pairing the caller's inferred agentId with a foreign explicit
+    // sessionKey would canonicalize the wake back to the caller agent's
+    // main lane.
+
+    it("infers sessionKey + agentId from the calling agent's session when neither is supplied", async () => {
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
+      });
+      await tool.execute("call-wake-default", { action: "wake", text: "ping" });
+      const params = expectSingleGatewayCallMethod("wake");
+      expect(params).toEqual({
+        mode: "next-heartbeat",
+        text: "ping",
+        sessionKey: "agent:agent-123:telegram:direct:channing",
+        agentId: "agent-123",
+      });
+    });
+
+    it("derives agentId from an explicit cross-agent sessionKey instead of the caller's agentId", async () => {
+      // A caller in agent-123 explicitly waking an agent-456 session must
+      // NOT have agent-123's agentId paired with agent-456's sessionKey —
+      // that would canonicalize back to agent-123's main lane on the
+      // gateway side.
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
+      });
+      await tool.execute("call-wake-cross-agent", {
+        action: "wake",
+        text: "follow up",
+        sessionKey: "agent:agent-456:discord:thread-xyz",
+      });
+      const params = expectSingleGatewayCallMethod("wake");
+      expect(params).toEqual({
+        mode: "next-heartbeat",
+        text: "follow up",
+        sessionKey: "agent:agent-456:discord:thread-xyz",
+        agentId: "agent-456",
+      });
+    });
+
+    it("honours an explicit agentId override even when the explicit sessionKey parses to a different agent", async () => {
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
+      });
+      await tool.execute("call-wake-explicit-pair", {
+        action: "wake",
+        text: "manual",
+        sessionKey: "agent:agent-456:discord:thread-xyz",
+        agentId: "ops",
+      });
+      const params = expectSingleGatewayCallMethod("wake");
+      expect(params).toEqual({
+        mode: "next-heartbeat",
+        text: "manual",
+        sessionKey: "agent:agent-456:discord:thread-xyz",
+        agentId: "ops",
+      });
+    });
+
+    it("omits agentId when explicit sessionKey is not in agent:<id>:* form and no explicit agentId is given", async () => {
+      // Defence-in-depth: if the explicit sessionKey can't be parsed for an
+      // agentId, we'd rather omit it (gateway falls back to default routing
+      // for that session) than incorrectly attach the caller's agentId.
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
+      });
+      await tool.execute("call-wake-unparseable", {
+        action: "wake",
+        text: "x",
+        sessionKey: "subagent:weird:format",
+      });
+      const params = expectSingleGatewayCallMethod("wake");
+      expect(params).toEqual({
+        mode: "next-heartbeat",
+        text: "x",
+        sessionKey: "subagent:weird:format",
+        // No agentId — explicit sessionKey wasn't parseable + no explicit
+        // override, so we deliberately drop agentId rather than inherit
+        // the caller's.
+      });
+    });
+
+    it('threads mode: "now" through unchanged', async () => {
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
+      });
+      await tool.execute("call-wake-now", { action: "wake", text: "ping", mode: "now" });
+      const params = expectSingleGatewayCallMethod("wake");
+      expect(params).toMatchObject({ mode: "now", text: "ping" });
+    });
+  });
+
   it("documents deferred follow-up guidance in the tool description", () => {
     const tool = createTestCronTool();
     expect(tool.description).toContain(
