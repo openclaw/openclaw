@@ -924,6 +924,7 @@ export async function handleControlUiHttpRequest(
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
       chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
+      seamColor: config?.ui?.seamColor,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }

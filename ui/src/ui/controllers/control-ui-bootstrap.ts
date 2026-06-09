@@ -24,6 +24,7 @@ export type ControlUiBootstrapState = {
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   chatMessageMaxWidth?: string | null;
+  seamColor?: string | null;
   sessionKey?: string | null;
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
   settings?: { token?: string | null } | null;
@@ -53,6 +54,38 @@ function applyLocalAssistantAvatarOverride(state: ControlUiBootstrapState) {
   state.assistantAvatarSource = localAvatar;
   state.assistantAvatarStatus = "data";
   state.assistantAvatarReason = null;
+}
+
+const SEAM_COLOR_CSS_VARS = [
+  "--accent",
+  "--accent-hover",
+  "--accent-muted",
+  "--accent-subtle",
+  "--accent-glow",
+  "--ring",
+];
+
+function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function applySeamColor(seamColor: string | null | undefined) {
+  const root = document.documentElement.style;
+  if (!seamColor) {
+    for (const v of SEAM_COLOR_CSS_VARS) {
+      root.removeProperty(v);
+    }
+    return;
+  }
+  root.setProperty("--accent", seamColor);
+  root.setProperty("--accent-hover", `color-mix(in srgb, ${seamColor}, white 15%)`);
+  root.setProperty("--accent-muted", seamColor);
+  root.setProperty("--accent-subtle", hexToRgba(seamColor, 0.1));
+  root.setProperty("--accent-glow", hexToRgba(seamColor, 0.2));
+  root.setProperty("--ring", seamColor);
 }
 
 export async function loadControlUiBootstrapConfig(
@@ -136,6 +169,8 @@ export async function loadControlUiBootstrapConfig(
       typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
         ? parsed.chatMessageMaxWidth
         : null;
+    state.seamColor = typeof parsed.seamColor === "string" ? parsed.seamColor : null;
+    applySeamColor(state.seamColor);
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
   }

@@ -68,6 +68,90 @@ describe("loadControlUiBootstrapConfig", () => {
     vi.unstubAllGlobals();
   });
 
+  it("applies seamColor from bootstrap to CSS custom properties", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Main",
+        assistantAvatar: "M",
+        assistantAgentId: "main",
+        serverVersion: "2026.4.27",
+        localMediaPreviewRoots: [],
+        embedSandbox: "scripts",
+        allowExternalEmbedUrls: false,
+        seamColor: "#00aaff",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(state.seamColor).toBe("#00aaff");
+    const root = document.documentElement.style;
+    expect(root.getPropertyValue("--accent")).toBe("#00aaff");
+    expect(root.getPropertyValue("--accent-hover")).toBe("color-mix(in srgb, #00aaff, white 15%)");
+    expect(root.getPropertyValue("--accent-muted")).toBe("#00aaff");
+    expect(root.getPropertyValue("--accent-subtle")).toBe("rgba(0, 170, 255, 0.1)");
+    expect(root.getPropertyValue("--accent-glow")).toBe("rgba(0, 170, 255, 0.2)");
+    expect(root.getPropertyValue("--ring")).toBe("#00aaff");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("removes seamColor CSS custom properties when bootstrap omits seamColor", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Main",
+        assistantAvatar: "M",
+        assistantAgentId: "main",
+        serverVersion: "2026.4.27",
+        localMediaPreviewRoots: [],
+        embedSandbox: "scripts",
+        allowExternalEmbedUrls: false,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    // Pre-seed a prior seamColor so we can verify removal
+    document.documentElement.style.setProperty("--accent", "#00aaff");
+    document.documentElement.style.setProperty("--ring", "#00aaff");
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+      seamColor: "#00aaff",
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(state.seamColor).toBeNull();
+    const root = document.documentElement.style;
+    expect(root.getPropertyValue("--accent")).toBe("");
+    expect(root.getPropertyValue("--ring")).toBe("");
+
+    vi.unstubAllGlobals();
+  });
+
   it("can refresh runtime bootstrap settings without clobbering session identity", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
