@@ -852,7 +852,10 @@ describe("web monitor inbox", () => {
       }),
     );
     await waitForMessageCalls(onMessage, 1);
-    const inbound = inboundMessage(onMessage) as { reply: (text: string) => Promise<void> };
+    const inbound = inboundMessage(onMessage) as {
+      reply: (text: string) => Promise<void>;
+      sendMedia: (payload: Record<string, unknown>) => Promise<void>;
+    };
 
     // The mock harness socket exposes user.id = "123@s.whatsapp.net"; the
     // successor handle must report a self identity that overlaps that JID
@@ -882,10 +885,16 @@ describe("web monitor inbox", () => {
 
     try {
       await inbound.reply("pong");
+      await inbound.sendMedia({ text: "media after restart" });
 
       // Captured A reply routed through B via the registry handle.
-      expect(sockB.sendMessage).toHaveBeenCalledTimes(1);
-      expect(sockB.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", { text: "pong" });
+      expect(sockB.sendMessage).toHaveBeenCalledTimes(2);
+      expect(sockB.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
+        text: "pong",
+      });
+      expect(sockB.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
+        text: "media after restart",
+      });
     } finally {
       unregisterWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleB);
       await listenerA.close();
