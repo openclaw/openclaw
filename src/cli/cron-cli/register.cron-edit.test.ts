@@ -107,4 +107,32 @@ describe("cron edit command", () => {
       },
     );
   });
+
+  it("clears the model override with --clear-model (CLI parity with cron.update model:null)", async () => {
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--clear-model"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({ clearModel: true }),
+      {
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            model: null,
+          },
+        },
+      },
+    );
+  });
+
+  it("documents the --clear-model flag alongside the sibling --clear-tools", () => {
+    const editCommand = createCronProgram().commands.find((command) => command.name() === "edit");
+    const help = editCommand?.helpInformation() ?? "";
+
+    expect(help).toContain("--clear-model");
+    expect(help).toContain("--clear-tools");
+  });
 });
