@@ -17,6 +17,7 @@ import {
   OPENCLAW_MODEL_ID,
   authorizeGatewayHttpRequestOrReply,
   type AuthorizedGatewayHttpRequest,
+  resolveAgentIdForRequest,
   resolveAgentIdFromModel,
   resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
@@ -76,9 +77,12 @@ function loadAgentModelIds(): string[] {
 }
 
 /** List configured-and-available TTS providers as `tts/<provider>` model ids. */
-function loadTtsModelIds(): string[] {
+function loadTtsModelIds(agentId: string): string[] {
   const cfg = getRuntimeConfig();
-  const ttsConfig = resolveTtsConfig(cfg);
+  // Resolve TTS config against the same request agent context that
+  // `/v1/audio/speech` routes with, so agent-scoped TTS overrides do not make
+  // the two endpoints disagree about which providers are available.
+  const ttsConfig = resolveTtsConfig(cfg, agentId);
   return listSpeechProviders(cfg)
     .filter((provider) => isTtsProviderConfigured(ttsConfig, provider.id, cfg))
     .map((provider) => `tts/${provider.id}`);
@@ -117,7 +121,9 @@ export async function handleOpenAiModelsHttpRequest(
   }
 
   const ids = loadAgentModelIds();
-  const ttsIds = opts.audioSpeechEnabled ? loadTtsModelIds() : [];
+  const ttsIds = opts.audioSpeechEnabled
+    ? loadTtsModelIds(resolveAgentIdForRequest({ req, model: undefined }))
+    : [];
   if (requestPath === "/v1/models") {
     sendJson(res, 200, {
       object: "list",
