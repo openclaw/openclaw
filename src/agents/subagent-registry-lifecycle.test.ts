@@ -572,6 +572,29 @@ describe("subagent registry lifecycle hardening", () => {
     expect(entry.completedFromYieldPause).toBe(true);
   });
 
+  it("does not credit delivery status for sessions_yield completions (#90944)", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+      pauseReason: "sessions_yield",
+    });
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+
+    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: true,
+    });
+
+    // Parent session owns delivery; subagent run must not be marked as delivered.
+    expect(entry.delivery?.status).not.toBe("delivered");
+    expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
+  });
+
   it("records completion announcement timestamps from transcript delivery", async () => {
     const persist = vi.fn();
     const entry = createRunEntry({

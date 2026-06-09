@@ -1026,10 +1026,16 @@ export function createSubagentRegistryLifecycleController(params: {
       if (!didAnnounce && latestDeliveryError) {
         ensureDeliveryState(entry).lastError = latestDeliveryError;
       }
+      // For yield completions the parent session owns delivery; skipAnnounce prevents
+      // delivery.status from being credited on B's run record without external proof.
+      const yieldCleanupOptions = entry.completedFromYieldPause
+        ? { skipAnnounce: true }
+        : undefined;
       void finalizeSubagentCleanup(
         runId,
         entry.cleanup,
         didAnnounce || shouldCreditPriorDelivery,
+        yieldCleanupOptions,
       ).catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
