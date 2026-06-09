@@ -956,6 +956,62 @@ describe("getApiKeyForModel", () => {
     ).resolves.toBe(false);
   });
 
+  it("hasAuthForModelProvider respects inline api key cooldown (visibility check)", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {},
+      usageStats: {},
+    } as unknown as AuthProfileStore;
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "demo-local": {
+            apiKey: "demo-key",
+          },
+        },
+      },
+    };
+
+    // Initially available
+    await expect(
+      hasAuthForModelProvider({
+        provider: "demo-local",
+        cfg,
+        store,
+      }),
+    ).resolves.toBe(true);
+
+    // Mark failure to trigger cooldown
+    const usageId = resolveInlineProviderApiKeyUsageId("demo-local");
+    store.usageStats[usageId] = {
+      disabledUntil: Date.now() + 60_000,
+      disabledReason: "billing",
+    };
+
+    // Now unavailable for visibility listing (cooldown)
+    await expect(
+      hasAuthForModelProvider({
+        provider: "demo-local",
+        cfg,
+        store,
+      }),
+    ).resolves.toBe(false);
+
+    // But still available if there is a healthy stored profile
+    store.profiles["test-profile"] = {
+      type: "api_key",
+      provider: "demo-local",
+      key: "profile-key",
+    } as unknown as AuthProfileCredential;
+    await expect(
+      hasAuthForModelProvider({
+        provider: "demo-local",
+        cfg,
+        store,
+      }),
+    ).resolves.toBe(true);
+  });
+
   it("hasAvailableAuthForProvider('google') accepts GOOGLE_API_KEY fallback", async () => {
     await withEnvAsync(
       {
