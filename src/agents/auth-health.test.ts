@@ -181,6 +181,12 @@ describe("buildAuthHealthSummary", () => {
     const provider = summary.providers.find((entry) => entry.provider === "openai");
     expect(provider?.status).toBe("ok");
     expect(provider?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 60_000);
+    expect(summary.profiles[0]?.externalCli).toMatchObject({
+      status: "synced",
+      persistence: "runtime-only",
+      externalProvider: "openai",
+      externalExpires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
+    });
     expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledWith(
       expect.objectContaining({ allowKeychainPrompt: false }),
     );

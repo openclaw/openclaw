@@ -27,12 +27,31 @@ const authProfileMocks = vi.hoisted(() => ({
   resolveProfileUnusableUntilForDisplay: vi.fn(),
 }));
 
+const cliCredentialMocks = vi.hoisted(() => ({
+  readCodexCliCredentialsCached: vi.fn<
+    () => {
+      type: "oauth";
+      provider: "openai";
+      access: string;
+      refresh: string;
+      expires: number;
+      accountId?: string;
+    } | null
+  >(() => null),
+}));
+
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: authProfileMocks.ensureAuthProfileStore,
   hasAnyAuthProfileStoreSource: authProfileMocks.hasAnyAuthProfileStoreSource,
   hasLocalAuthProfileStoreSource: authProfileMocks.hasLocalAuthProfileStoreSource,
   resolveApiKeyForProfile: authProfileMocks.resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay: authProfileMocks.resolveProfileUnusableUntilForDisplay,
+}));
+
+vi.mock("../agents/cli-credentials.js", () => ({
+  readClaudeCliCredentialsCached: () => null,
+  readCodexCliCredentialsCached: cliCredentialMocks.readCodexCliCredentialsCached,
+  readMiniMaxCliCredentialsCached: () => null,
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
@@ -54,6 +73,8 @@ describe("noteAuthProfileHealth", () => {
     authProfileMocks.hasLocalAuthProfileStoreSource.mockReturnValue(false);
     authProfileMocks.resolveApiKeyForProfile.mockReset();
     authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReset();
+    cliCredentialMocks.readCodexCliCredentialsCached.mockReset();
+    cliCredentialMocks.readCodexCliCredentialsCached.mockReturnValue(null);
     noteMock.mockReset();
   });
 
@@ -81,6 +102,7 @@ describe("noteAuthProfileHealth", () => {
       },
     };
   }
+
   it("skips external auth profile resolution when no auth source exists", async () => {
     await noteAuthProfileHealth({
       cfg: { channels: { telegram: { enabled: true } } } as OpenClawConfig,
@@ -116,6 +138,55 @@ describe("noteAuthProfileHealth", () => {
     expect(authProfileMocks.ensureAuthProfileStore).toHaveBeenCalledWith(defaultDir, {
       allowKeychainPrompt: false,
     });
+  });
+
+  it("surfaces successful Codex CLI runtime auth sync without prompting for refresh", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const defaultDir = path.join(tempDir, "default-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockImplementation(
+      (agentDir) => agentDir === defaultDir,
+    );
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "oauth",
+          provider: "openai",
+        },
+      },
+    } as never);
+    cliCredentialMocks.readCodexCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "openai",
+      access: "codex-access",
+      refresh: "codex-refresh",
+      expires: now + 86_400_000 + 60_000,
+      accountId: "acct-codex",
+    });
+    const confirmAutoFix = vi.fn(async () => false);
+
+    await noteAuthProfileHealth({
+      cfg: {
+        agents: {
+          list: [{ id: "main", default: true, agentDir: defaultDir }],
+        },
+      } as OpenClawConfig,
+      prompter: {
+        confirmAutoFix,
+      } as unknown as DoctorPrompter,
+      allowKeychainPrompt: false,
+    });
+
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("Codex CLI credentials are being used at runtime"),
+      "External CLI auth sync",
+    );
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw models auth login --provider openai"),
+      "External CLI auth sync",
+    );
+    expect(confirmAutoFix).not.toHaveBeenCalled();
   });
 
   it("labels model auth diagnostics by agent when multiple agent auth stores are checked", async () => {

@@ -2010,6 +2010,54 @@ describe("modelsStatusCommand auth overview", () => {
     );
   });
 
+  it("renders external CLI auth sync diagnostics in text status", async () => {
+    const localRuntime = createRuntime();
+    buildAuthHealthSummaryMock.mockReturnValue({
+      now: Date.now(),
+      warnAfterMs: 86_400_000,
+      profiles: [
+        {
+          profileId: "openai:default",
+          provider: "openai",
+          type: "oauth",
+          status: "expired",
+          source: "store",
+          label: "openai:default",
+          externalCli: {
+            profileId: "openai:default",
+            provider: "openai",
+            externalProvider: "openai",
+            status: "local_stale",
+            persistence: "runtime-only",
+            localExpires: Date.now() - 60_000,
+            externalExpires: Date.now() + 60_000,
+            message:
+              "Codex CLI has usable credentials, but this local profile must be refreshed directly.",
+            action:
+              "Run `openclaw models auth login --provider openai` to refresh the local profile.",
+          },
+        },
+      ],
+      providers: [
+        {
+          provider: "openai",
+          status: "expired",
+          profiles: [],
+          effectiveProfiles: [],
+        },
+      ],
+    });
+
+    await modelsStatusCommand({}, localRuntime as never);
+    const output = (localRuntime.log as Mock).mock.calls
+      .map((call: unknown[]) => String(call[0]))
+      .join("\n");
+
+    expect(output).toContain("external CLI");
+    expect(output).toContain("Codex CLI has usable credentials");
+    expect(output).toContain("openclaw models auth login --provider openai");
+  });
+
   it("throws when agent id is unknown", async () => {
     const localRuntime = createRuntime();
     await expect(modelsStatusCommand({ agent: "unknown" }, localRuntime as never)).rejects.toThrow(

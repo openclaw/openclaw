@@ -260,6 +260,32 @@ async function formatAuthIssueLine(
   return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
 }
 
+function formatExternalCliSyncLine(
+  profile: ReturnType<typeof buildAuthHealthSummary>["profiles"][number],
+): string | null {
+  const diagnostic = profile.externalCli;
+  if (!diagnostic || diagnostic.status === "local_kept") {
+    return null;
+  }
+  const externalExpiry =
+    diagnostic.externalExpires !== undefined
+      ? ` (external expires in ${formatRemainingShort(diagnostic.externalExpires - Date.now())})`
+      : "";
+  return `- ${diagnostic.profileId}: ${diagnostic.message}${externalExpiry} ${diagnostic.action}`;
+}
+
+function noteExternalCliSyncDiagnostics(
+  summary: ReturnType<typeof buildAuthHealthSummary>,
+  noteTitle: (title: string) => string,
+): void {
+  const externalCliSyncLines = summary.profiles
+    .map((profile) => formatExternalCliSyncLine(profile))
+    .filter((line): line is string => Boolean(line));
+  if (externalCliSyncLines.length > 0) {
+    note(externalCliSyncLines.join("\n"), noteTitle("External CLI auth sync"));
+  }
+}
+
 async function noteAuthProfileHealthForTarget(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
@@ -314,6 +340,8 @@ async function noteAuthProfileHealthForTarget(params: {
           profile.status === "expiring" ||
           profile.status === "missing"),
     );
+
+  noteExternalCliSyncDiagnostics(summary, noteTitle);
 
   let issues = findIssues();
   if (issues.length === 0) {

@@ -1263,6 +1263,24 @@ export async function modelsStatusCommand(
                 ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
                 : " expires unknown";
           runtime.log(`  - ${labelLocal} ${status}${expiry}`);
+          if (profile.externalCli && profile.externalCli.status !== "local_kept") {
+            const diagnostic = profile.externalCli;
+            const externalExpiry =
+              diagnostic.externalExpires !== undefined
+                ? ` external expires in ${formatRemainingShort(
+                    diagnostic.externalExpires - Date.now(),
+                  )};`
+                : "";
+            runtime.log(
+              `    ${colorize(
+                rich,
+                diagnostic.status === "synced" ? theme.success : theme.warn,
+                "external CLI",
+              )}: ${diagnostic.message}${externalExpiry ? ` ${externalExpiry}` : ""} ${
+                diagnostic.action
+              }`,
+            );
+          }
         }
       }
     }

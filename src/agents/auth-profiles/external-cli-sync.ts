@@ -39,6 +39,26 @@ export type ExternalCliResolvedProfile = {
   persistence?: "runtime-only" | "persisted";
 };
 
+export type ExternalCliAuthSyncDiagnosticStatus =
+  | "synced"
+  | "local_kept"
+  | "local_stale"
+  | "external_stale"
+  | "account_mismatch"
+  | "missing_identity_binding";
+
+export type ExternalCliAuthSyncDiagnostic = {
+  profileId: string;
+  provider: string;
+  externalProvider: string;
+  status: ExternalCliAuthSyncDiagnosticStatus;
+  persistence?: "runtime-only" | "persisted";
+  localExpires?: number;
+  externalExpires?: number;
+  message: string;
+  action: string;
+};
+
 export type ExternalCliAuthProfileOptions = {
   allowKeychainPrompt?: boolean;
   providerIds?: Iterable<string>;
@@ -199,6 +219,23 @@ function hasInlineOAuthTokenMaterial(credential: OAuthCredential): boolean {
   );
 }
 
+function buildAuthLoginAction(provider: string): string {
+  return `Run \`openclaw models auth login --provider ${provider}\` to refresh the local profile.`;
+}
+
+function externalCliLabel(provider: ExternalCliSyncProvider): string {
+  if (provider.profileId === OPENAI_CODEX_DEFAULT_PROFILE_ID) {
+    return "Codex CLI";
+  }
+  if (provider.profileId === CLAUDE_CLI_PROFILE_ID) {
+    return "Claude CLI";
+  }
+  if (provider.profileId === MINIMAX_CLI_PROFILE_ID) {
+    return "MiniMax CLI";
+  }
+  return `${provider.provider} CLI`;
+}
+
 /** Read a CLI credential only for safe bootstrap of an unusable local profile. */
 export function readExternalCliBootstrapCredential(params: {
   profileId: string;
@@ -224,6 +261,169 @@ export function readExternalCliBootstrapCredential(params: {
 }
 
 export const readManagedExternalCliCredential = readExternalCliBootstrapCredential;
+
+/** Explain how an external CLI credential would be used for a stored profile. */
+export function diagnoseExternalCliAuthProfileSync(params: {
+  profileId: string;
+  credential: OAuthCredential;
+  allowKeychainPrompt?: boolean;
+}): ExternalCliAuthSyncDiagnostic | null {
+  const providerConfig = resolveExternalCliSyncProvider(params);
+  if (!providerConfig) {
+    return null;
+  }
+
+  const label = externalCliLabel(providerConfig);
+  const action = buildAuthLoginAction(params.credential.provider);
+  if (
+    providerConfig.bootstrapOnly &&
+    hasInlineOAuthTokenMaterial(params.credential) &&
+    !hasUsableOAuthCredential(params.credential)
+  ) {
+    const external = normalizeExternalCliCredentialProvider(
+      providerConfig.readCredentials({ allowKeychainPrompt: params.allowKeychainPrompt }),
+      params.credential.provider,
+    );
+    if (!external) {
+      return {
+        profileId: params.profileId,
+        provider: params.credential.provider,
+        externalProvider: providerConfig.provider,
+        status: "local_stale",
+        persistence: "runtime-only",
+        localExpires: params.credential.expires,
+        message: `${label} sync skipped because the local OAuth profile owns stale token material.`,
+        action,
+      };
+    }
+    if (!hasUsableOAuthCredential(external)) {
+      return {
+        profileId: params.profileId,
+        provider: params.credential.provider,
+        externalProvider: providerConfig.provider,
+        status: "external_stale",
+        persistence: "runtime-only",
+        localExpires: params.credential.expires,
+        externalExpires: external.expires,
+        message: `${label} credentials are also stale or near expiry.`,
+        action,
+      };
+    }
+    if (!isSafeToUseExternalCliCredential(params.credential, external)) {
+      return {
+        profileId: params.profileId,
+        provider: params.credential.provider,
+        externalProvider: providerConfig.provider,
+        status: "account_mismatch",
+        persistence: "runtime-only",
+        localExpires: params.credential.expires,
+        externalExpires: external.expires,
+        message: `${label} account does not match the local OAuth profile.`,
+        action,
+      };
+    }
+    return {
+      profileId: params.profileId,
+      provider: params.credential.provider,
+      externalProvider: providerConfig.provider,
+      status: "local_stale",
+      persistence: "runtime-only",
+      localExpires: params.credential.expires,
+      externalExpires: external.expires,
+      message: `${label} has usable credentials, but this local profile must be refreshed directly.`,
+      action,
+    };
+  }
+
+  const external = normalizeExternalCliCredentialProvider(
+    providerConfig.readCredentials({ allowKeychainPrompt: params.allowKeychainPrompt }),
+    params.credential.provider,
+  );
+  if (!external) {
+    return null;
+  }
+  const persistence = providerConfig.bootstrapOnly ? "runtime-only" : "persisted";
+  if (!hasUsableOAuthCredential(external)) {
+    return {
+      profileId: params.profileId,
+      provider: params.credential.provider,
+      externalProvider: providerConfig.provider,
+      status: "external_stale",
+      persistence,
+      localExpires: params.credential.expires,
+      externalExpires: external.expires,
+      message: `${label} credentials are stale or near expiry.`,
+      action,
+    };
+  }
+  if (!isSafeToUseExternalCliCredential(params.credential, external)) {
+    return {
+      profileId: params.profileId,
+      provider: params.credential.provider,
+      externalProvider: providerConfig.provider,
+      status: "account_mismatch",
+      persistence,
+      localExpires: params.credential.expires,
+      externalExpires: external.expires,
+      message: `${label} account does not match the local OAuth profile.`,
+      action,
+    };
+  }
+  if (
+    !isSafeToAdoptBootstrapOAuthIdentity(params.credential, external) &&
+    !areOAuthCredentialsEquivalent(params.credential, external)
+  ) {
+    return {
+      profileId: params.profileId,
+      provider: params.credential.provider,
+      externalProvider: providerConfig.provider,
+      status: "missing_identity_binding",
+      persistence,
+      localExpires: params.credential.expires,
+      externalExpires: external.expires,
+      message: `${label} cannot be adopted because the local profile is missing a matching identity binding.`,
+      action,
+    };
+  }
+  if (
+    shouldBootstrapFromExternalCliCredential({
+      existing: params.credential,
+      imported: external,
+    })
+  ) {
+    return {
+      profileId: params.profileId,
+      provider: params.credential.provider,
+      externalProvider: providerConfig.provider,
+      status: "synced",
+      persistence,
+      localExpires: params.credential.expires,
+      externalExpires: external.expires,
+      message:
+        persistence === "runtime-only"
+          ? `${label} credentials are being used at runtime for this profile.`
+          : `${label} credentials are eligible to sync into this profile.`,
+      action:
+        persistence === "runtime-only"
+          ? `${action} This keeps future refreshes owned by OpenClaw.`
+          : "No action needed.",
+    };
+  }
+  if (hasUsableOAuthCredential(params.credential)) {
+    return {
+      profileId: params.profileId,
+      provider: params.credential.provider,
+      externalProvider: providerConfig.provider,
+      status: "local_kept",
+      persistence,
+      localExpires: params.credential.expires,
+      externalExpires: external.expires,
+      message: `Local OAuth profile is usable; ${label} credentials were not needed.`,
+      action: "No action needed.",
+    };
+  }
+  return null;
+}
 
 /** Read a CLI credential as a fallback for refresh/runtime auth recovery. */
 export function readExternalCliFallbackCredential(params: {

@@ -3,7 +3,7 @@
  * Covers cached credential readers, bootstrap/replace policy, and runtime-only
  * profile persistence decisions without touching real CLI credential stores.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore, OAuthCredential } from "./auth-profiles/types.js";
 import type { ClaudeCliCredential } from "./cli-credentials.js";
 
@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 let readManagedExternalCliCredential: typeof import("./auth-profiles/external-cli-sync.js").readManagedExternalCliCredential;
+let diagnoseExternalCliAuthProfileSync: typeof import("./auth-profiles/external-cli-sync.js").diagnoseExternalCliAuthProfileSync;
 let resolveExternalCliAuthProfiles: typeof import("./auth-profiles/external-cli-sync.js").resolveExternalCliAuthProfiles;
 let hasUsableOAuthCredential: typeof import("./auth-profiles/external-cli-sync.js").hasUsableOAuthCredential;
 let isSafeToUseExternalCliCredential: typeof import("./auth-profiles/external-cli-sync.js").isSafeToUseExternalCliCredential;
@@ -108,6 +109,10 @@ function expectReaderPolicyCall(mock: { mock: { calls: unknown[][] } }) {
 }
 
 describe("external cli oauth resolution", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(async () => {
     vi.resetModules();
     vi.doMock("./cli-credentials.js", () => ({
@@ -119,6 +124,7 @@ describe("external cli oauth resolution", () => {
     mocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
     mocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
     ({
+      diagnoseExternalCliAuthProfileSync,
       hasUsableOAuthCredential,
       isSafeToUseExternalCliCredential,
       readManagedExternalCliCredential,
@@ -331,6 +337,138 @@ describe("external cli oauth resolution", () => {
         accountId: "acct-codex",
       },
     );
+  });
+
+  it("diagnoses successful runtime Codex CLI sync", () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai",
+        access: "codex-cli-access",
+        refresh: "codex-cli-refresh",
+        expires: now + 5 * 24 * 60 * 60_000,
+        accountId: "acct-codex",
+      }),
+    );
+
+    const diagnostic = diagnoseExternalCliAuthProfileSync({
+      profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+      credential: {
+        type: "oauth",
+        provider: "openai",
+      } as OAuthCredential,
+      allowKeychainPrompt: false,
+    });
+
+    expect(diagnostic).toMatchObject({
+      profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+      provider: "openai",
+      externalProvider: "openai",
+      status: "synced",
+      persistence: "runtime-only",
+      externalExpires: now + 5 * 24 * 60 * 60_000,
+    });
+    expect(diagnostic?.message).toContain("being used at runtime");
+    expect(diagnostic?.action).toContain("openclaw models auth login --provider openai");
+  });
+
+  it("diagnoses stale local Codex OAuth that cannot be replaced by CLI sync", () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai",
+        access: "codex-cli-access",
+        refresh: "codex-cli-refresh",
+        expires: now + 5 * 24 * 60 * 60_000,
+        accountId: "acct-codex",
+      }),
+    );
+
+    const diagnostic = diagnoseExternalCliAuthProfileSync({
+      profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+      credential: makeOAuthCredential({
+        provider: "openai",
+        access: "local-stale-access",
+        refresh: "local-refresh",
+        expires: now - 5_000,
+        accountId: "acct-codex",
+      }),
+      allowKeychainPrompt: false,
+    });
+
+    expect(diagnostic).toMatchObject({
+      status: "local_stale",
+      persistence: "runtime-only",
+      localExpires: now - 5_000,
+      externalExpires: now + 5 * 24 * 60 * 60_000,
+    });
+    expect(diagnostic?.message).toContain("must be refreshed directly");
+  });
+
+  it("diagnoses stale external Codex CLI credentials", () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai",
+        access: "codex-cli-access",
+        refresh: "codex-cli-refresh",
+        expires: now - 5_000,
+        accountId: "acct-codex",
+      }),
+    );
+
+    const diagnostic = diagnoseExternalCliAuthProfileSync({
+      profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+      credential: {
+        type: "oauth",
+        provider: "openai",
+      } as OAuthCredential,
+      allowKeychainPrompt: false,
+    });
+
+    expect(diagnostic).toMatchObject({
+      status: "external_stale",
+      persistence: "runtime-only",
+      externalExpires: now - 5_000,
+    });
+    expect(diagnostic?.message).toContain("stale or near expiry");
+    expect(diagnostic?.action).toContain("openclaw models auth login --provider openai");
+  });
+
+  it("diagnoses account mismatches before external CLI adoption", () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    mocks.readMiniMaxCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "minimax-portal",
+        access: "external-access",
+        refresh: "external-refresh",
+        expires: now + 5 * 24 * 60 * 60_000,
+        email: "external@example.com",
+      }),
+    );
+
+    const diagnostic = diagnoseExternalCliAuthProfileSync({
+      profileId: MINIMAX_CLI_PROFILE_ID,
+      credential: makeOAuthCredential({
+        provider: "minimax-portal",
+        access: "local-stale-access",
+        refresh: "local-refresh",
+        expires: now - 5_000,
+        email: "local@example.com",
+      }),
+      allowKeychainPrompt: false,
+    });
+
+    expect(diagnostic).toMatchObject({
+      status: "account_mismatch",
+      persistence: "persisted",
+      externalProvider: "minimax-portal",
+    });
+    expect(diagnostic?.message).toContain("account does not match");
   });
 
   it("keeps any existing default codex oauth over Codex CLI bootstrap credentials", () => {

@@ -18,6 +18,10 @@ import {
 } from "./auth-profiles/credential-state.js";
 import { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
 import { resolveEffectiveOAuthCredential } from "./auth-profiles/effective-oauth.js";
+import {
+  diagnoseExternalCliAuthProfileSync,
+  type ExternalCliAuthSyncDiagnostic,
+} from "./auth-profiles/external-cli-sync.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
@@ -36,6 +40,7 @@ type AuthProfileHealth = {
   remainingMs?: number;
   source: AuthProfileSource;
   label: string;
+  externalCli?: ExternalCliAuthSyncDiagnostic;
 };
 
 export type AuthProviderHealthStatus = "ok" | "expiring" | "expired" | "missing" | "static";
@@ -247,6 +252,14 @@ function buildProfileHealth(params: {
     expiresAt,
     remainingMs,
   } = resolveOAuthStatus(effectiveCredential.expires, now, oauthWarnAfterMs);
+  const externalCli =
+    credential.type === "oauth"
+      ? diagnoseExternalCliAuthProfileSync({
+          profileId,
+          credential,
+          allowKeychainPrompt: allowKeychainPrompt ?? false,
+        })
+      : null;
   return {
     profileId,
     provider,
@@ -256,6 +269,7 @@ function buildProfileHealth(params: {
     remainingMs,
     source,
     label,
+    ...(externalCli ? { externalCli } : {}),
   };
 }
 
