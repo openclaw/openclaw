@@ -341,6 +341,12 @@ export function createMsteamsRealtimeCall(params: {
   const { session, deps } = params;
   const { logger } = deps;
   const callId = session.callId;
+  // Realtime subagent memory key honors the voice-call `sessionScope` (matching the streaming path):
+  // "per-phone" (default) keys by the caller's Teams AAD id so the same caller's memory carries across
+  // calls; "per-call" keys by callId. An anonymous caller (no aadId) falls back to per-call so distinct
+  // anonymous callers never collide into one session.
+  const sessionScopeId =
+    deps.voiceConfig?.sessionScope === "per-call" ? callId : (session.caller.aadId ?? callId);
 
   let outboundSeq = 0;
   let outboundTimestampMs = 0;
@@ -628,7 +634,7 @@ export function createMsteamsRealtimeCall(params: {
     }
 
     const agentId = voiceConfig.agentId ?? "main";
-    const sessionKey = `agent:${agentId}:subagent:msteams:${callId}`;
+    const sessionKey = `agent:${agentId}:subagent:msteams:${sessionScopeId}`;
     const toolPolicy = deps.toolPolicy ?? voiceConfig.realtime.toolPolicy;
 
     try {
@@ -723,7 +729,7 @@ export function createMsteamsRealtimeCall(params: {
     }
 
     const agentId = voiceConfig.agentId ?? "main";
-    const sessionKey = `agent:${agentId}:subagent:msteams:${callId}`;
+    const sessionKey = `agent:${agentId}:subagent:msteams:${sessionScopeId}`;
     const toolPolicy = deps.toolPolicy ?? voiceConfig.realtime.toolPolicy;
 
     try {
@@ -869,7 +875,7 @@ export function createMsteamsRealtimeCall(params: {
       return;
     }
     const agentId = voiceConfig.agentId ?? "main";
-    const sessionKey = `agent:${agentId}:subagent:msteams:${callId}`;
+    const sessionKey = `agent:${agentId}:subagent:msteams:${sessionScopeId}`;
     try {
       if (rtSession.bridge?.supportsToolResultContinuation) {
         rtSession.submitToolResult(
@@ -966,7 +972,7 @@ export function createMsteamsRealtimeCall(params: {
     const aadId = session.caller.aadId ?? undefined;
     const deliveryTarget = aadId ? `user:${aadId}` : undefined;
     const agentId = voiceConfig.agentId ?? "main";
-    const sessionKey = `agent:${agentId}:subagent:msteams:${callId}`;
+    const sessionKey = `agent:${agentId}:subagent:msteams:${sessionScopeId}`;
 
     const deliveryInstruction = !deliveryTarget
       ? "This task was delegated from a Microsoft Teams voice call and runs in the background; deliver the final result to the caller when complete."
