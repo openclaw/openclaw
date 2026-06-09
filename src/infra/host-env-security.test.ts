@@ -393,8 +393,8 @@ describe("sanitizeHostExecEnv", () => {
     });
   });
 
-  it("preserves inherited restrictive GIT_PROTOCOL_FROM_USER values", () => {
-    const restrictiveValues = ["", "0", "00", "+0", "-0", "false", "False", "no", "off"];
+  it("preserves inherited non-permissive GIT_PROTOCOL_FROM_USER values", () => {
+    const restrictiveValues = ["", "0", "00", "+0", "-0", "false", "False", "no", "off", "maybe"];
 
     for (const value of restrictiveValues) {
       const env = sanitizeHostExecEnv({
@@ -446,7 +446,7 @@ describe("sanitizeHostExecEnv", () => {
   });
 
   it("removes inherited permissive GIT_PROTOCOL_FROM_USER values", () => {
-    const permissiveValues = ["1", "true", "yes", "on", "maybe"];
+    const permissiveValues = ["1", "01", "+1", "-1", "2", "true", "yes", "on"];
 
     for (const value of permissiveValues) {
       const env = sanitizeHostExecEnv({

@@ -90,12 +90,14 @@ enum HostEnvSanitizer {
         Array(Set(values)).sorted()
     }
 
-    private static func isRestrictiveGitProtocolFromUserValue(_ value: String) -> Bool {
+    private static func isPermissiveGitProtocolFromUserValue(_ value: String) -> Bool {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normalized.isEmpty || normalized == "false" || normalized == "no" || normalized == "off" {
+        if normalized == "true" || normalized == "yes" || normalized == "on" {
             return true
         }
-        return normalized.range(of: #"^[+-]?0+$"#, options: .regularExpression) != nil
+        let isInteger = normalized.range(of: #"^[+-]?[0-9]+$"#, options: .regularExpression) != nil
+        let isZero = normalized.range(of: #"^[+-]?0+$"#, options: .regularExpression) != nil
+        return isInteger && !isZero
     }
 
     private static func sanitizeInheritedGitAllowProtocolValue(_ value: String) -> String {
@@ -151,12 +153,12 @@ enum HostEnvSanitizer {
                 merged[key] = self.sanitizeInheritedGitAllowProtocolValue(value)
                 continue
             }
-            // Preserve Git's restrictive mode when already inherited from the trusted host.
-            // Dropping it would make Git fall back to the more permissive unset default.
-            if upper == self.gitProtocolFromUserKey,
-               self.isRestrictiveGitProtocolFromUserValue(value)
-            {
-                merged[key] = value
+            // Preserve non-permissive Git boolean values. Invalid values make Git fail closed;
+            // dropping them would make Git fall back to the more permissive unset default.
+            if upper == self.gitProtocolFromUserKey {
+                if !self.isPermissiveGitProtocolFromUserValue(value) {
+                    merged[key] = value
+                }
                 continue
             }
             if self.isBlockedInherited(upper) { continue }

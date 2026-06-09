@@ -118,6 +118,10 @@ describe("host env reported baseline coverage", () => {
         expect(inheritedSanitized[key]).toBe("");
         continue;
       }
+      if (key === "GIT_PROTOCOL_FROM_USER") {
+        expect(inheritedSanitized[key]).toBe(`${key.toLowerCase()}-from-inherited`);
+        continue;
+      }
       expect(inheritedSanitized[key]).toBeUndefined();
     }
 

@@ -151,15 +151,15 @@ function listNormalizedEnvEntries(
   return entries;
 }
 
-function isRestrictiveGitProtocolFromUserValue(value: string): boolean {
+function isPermissiveGitProtocolFromUserValue(value: string): boolean {
   const normalized = value.trim().toLowerCase();
-  if (!normalized || normalized === "false" || normalized === "no") {
+  if (normalized === "true" || normalized === "yes" || normalized === "on") {
     return true;
   }
-  if (normalized === "off") {
+  if (/^[+-]?\d+$/.test(normalized) && !/^[+-]?0+$/.test(normalized)) {
     return true;
   }
-  return /^[+-]?0+$/.test(normalized);
+  return false;
 }
 
 function sanitizeInheritedGitAllowProtocolValue(value: string): string {
@@ -241,13 +241,12 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
       merged[key] = sanitizeInheritedGitAllowProtocolValue(value);
       continue;
     }
-    // Preserve Git's restrictive mode when already inherited from the trusted host.
-    // Dropping it would make Git fall back to the more permissive unset default.
-    if (
-      key.toUpperCase() === GIT_PROTOCOL_FROM_USER_ENV_KEY &&
-      isRestrictiveGitProtocolFromUserValue(value)
-    ) {
-      merged[key] = value;
+    // Preserve non-permissive Git boolean values. Invalid values make Git fail closed;
+    // dropping them would make Git fall back to the more permissive unset default.
+    if (key.toUpperCase() === GIT_PROTOCOL_FROM_USER_ENV_KEY) {
+      if (!isPermissiveGitProtocolFromUserValue(value)) {
+        merged[key] = value;
+      }
       continue;
     }
     if (isDangerousHostInheritedEnvVarName(key)) {
