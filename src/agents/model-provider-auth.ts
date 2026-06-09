@@ -451,9 +451,18 @@ function createProviderAuthWarmPresenceStore(store: AuthProfileStore): AuthProfi
       provider: credential.provider,
     };
   }
+  const usageStats: AuthProfileStore["usageStats"] = {};
+  if (store.usageStats) {
+    for (const [id, stats] of Object.entries(store.usageStats)) {
+      if (id.startsWith("inline-api-key:")) {
+        usageStats[id] = stats;
+      }
+    }
+  }
   return {
     version: store.version,
     profiles,
+    usageStats,
   };
 }
 
