@@ -1218,6 +1218,62 @@ describe("chat loading skeleton", () => {
       nowSpy.mockRestore();
     }
   });
+
+  it("keeps stale abortable session rows from forcing idle composer busy UI", () => {
+    const container = renderChatView({
+      canAbort: true,
+      messages: [
+        {
+          role: "assistant",
+          content: "Finished answer",
+          timestamp: 1,
+        },
+      ],
+      queue: [{ id: "queued-1", text: "follow up", createdAt: 2 }],
+      sessions: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: 200_000 },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: null,
+            hasActiveRun: true,
+            status: "running",
+            totalTokens: 190_000,
+            contextTokens: 200_000,
+          },
+        ],
+      },
+      onCompact: () => undefined,
+      onQueueSteer: () => undefined,
+    });
+
+    expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
+    expect(container.querySelector(".chat-reading-indicator")).toBeNull();
+    expect(container.querySelector(".chat-send-btn--stop")).toBeNull();
+    expect(container.querySelector(".chat-queue__steer")).toBeNull();
+    const sendButton = container.querySelector<HTMLButtonElement>(".chat-send-btn");
+    expect(sendButton?.getAttribute("aria-label")).toBe("Send message");
+    expect(sendButton?.textContent?.trim()).toBe("Send");
+  });
+
+  it("keeps abort controls visible while a local stream is active", () => {
+    const container = renderChatView({
+      canAbort: true,
+      stream: "",
+      queue: [{ id: "queued-1", text: "follow up", createdAt: 2 }],
+      onQueueSteer: () => undefined,
+    });
+
+    expect(container.querySelector(".agent-chat__run-status--in-progress")?.textContent).toContain(
+      "In progress",
+    );
+    expect(container.querySelector(".chat-send-btn--stop")?.textContent?.trim()).toBe("Stop");
+    expect(container.querySelector(".chat-queue__steer")?.textContent?.trim()).toBe("Steer");
+  });
 });
 
 describe("chat voice controls", () => {

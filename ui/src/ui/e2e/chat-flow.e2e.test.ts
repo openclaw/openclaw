@@ -32,6 +32,17 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
+async function waitForUiFrame(page: Page): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => resolve());
+        });
+      }),
+  );
+}
+
 async function waitForRequests(
   gateway: Awaited<ReturnType<typeof installMockGateway>>,
   method: string,
@@ -851,6 +862,67 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await page.getByText("Recovered from refreshed history.").waitFor({ timeout: 15_000 });
       expect(await page.locator(".chat-queue").count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("returns to idle when stale active session state arrives after completion", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ text: "Ready for stale-state proof.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("Ready for stale-state proof.").waitFor({ timeout: 10_000 });
+      await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 10_000 });
+
+      const prompt = "complete and stay idle";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(sendRequest.params);
+      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+      await gateway.emitChatFinal({ runId, text: "Completed without a stuck composer." });
+
+      await page.getByText("Completed without a stuck composer.").waitFor({ timeout: 10_000 });
+      await page.locator(".agent-chat__run-status--done").waitFor({ timeout: 10_000 });
+      await page
+        .locator(".agent-chat__run-status--done")
+        .waitFor({ state: "hidden", timeout: 7_000 });
+
+      await gateway.emitGatewayEvent("sessions.changed", {
+        hasActiveRun: true,
+        key: "main",
+        kind: "direct",
+        sessionKey: "main",
+        status: "running",
+        updatedAt: Date.now(),
+      });
+      await waitForUiFrame(page);
+
+      await page
+        .locator(".agent-chat__run-status--in-progress")
+        .waitFor({ state: "hidden", timeout: 2_000 });
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({
+        state: "hidden",
+        timeout: 2_000,
+      });
+      await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 2_000 });
+      expect(await page.getByRole("button", { name: "Queue message" }).count()).toBe(0);
     } finally {
       await context.close();
     }
