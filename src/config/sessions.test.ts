@@ -689,6 +689,38 @@ describe("sessions", () => {
     expect(store[sessionKey]?.modelProvider).toBeUndefined();
   });
 
+  it("patchSessionEntry replaceEntry remains the intentional human title clear path", async () => {
+    const sessionKey = "agent:main:main";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "patchSessionEntry-title-clear",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 100,
+          label: "Pinned Lane",
+          displayName: "Pinned Lane",
+        },
+      },
+    });
+
+    await patchSessionEntry({
+      storePath,
+      sessionKey,
+      replaceEntry: true,
+      update: (entry) => {
+        const next = { ...entry, updatedAt: 200 };
+        delete next.label;
+        delete next.displayName;
+        return next;
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.updatedAt).toBe(200);
+    expect(store[sessionKey]?.label).toBeUndefined();
+    expect(store[sessionKey]?.displayName).toBeUndefined();
+  });
+
   it("upsertSessionEntry drops legacy embedded ACP metadata", async () => {
     const sessionKey = "agent:main:main";
     const acp = {
@@ -722,6 +754,106 @@ describe("sessions", () => {
     const store = loadSessionStore(storePath);
     expect(store[sessionKey]?.sessionId).toBe("sess-2");
     expect(store[sessionKey]?.acp).toBeUndefined();
+  });
+
+  it("upsertSessionEntry preserves the default lane title when runtime metadata omits it", async () => {
+    const sessionKey = "agent:main:main";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "upsertSessionEntry-main-title-preserve",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 100,
+          label: "Stable Default Lane",
+          displayName: "Stable Default Lane",
+          origin: {
+            provider: "webchat",
+            surface: "webchat",
+            chatType: "direct",
+          },
+        },
+      },
+    });
+
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess-2",
+        updatedAt: 200,
+        origin: {
+          provider: "webchat",
+          surface: "webchat",
+          chatType: "direct",
+        },
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.sessionId).toBe("sess-2");
+    expect(store[sessionKey]?.label).toBe("Stable Default Lane");
+    expect(store[sessionKey]?.displayName).toBe("Stable Default Lane");
+  });
+
+  it("upsertSessionEntry allows explicit empty replacement title metadata", async () => {
+    const sessionKey = "agent:main:direct:opaque-user";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "upsertSessionEntry-title-empty-replace",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 100,
+          label: "Channel Lane",
+          displayName: "Channel Lane",
+        },
+      },
+    });
+
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess-2",
+        updatedAt: 200,
+        label: null as unknown as string,
+        displayName: "",
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.sessionId).toBe("sess-2");
+    expect(store[sessionKey]?.label).toBeNull();
+    expect(store[sessionKey]?.displayName).toBe("");
+  });
+
+  it("upsertSessionEntry accepts non-empty replacement human titles", async () => {
+    const sessionKey = "agent:main:ops-lane";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "upsertSessionEntry-title-replace",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 100,
+          label: "Old Lane",
+          displayName: "Old Lane",
+        },
+      },
+    });
+
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess-2",
+        updatedAt: 200,
+        label: "Ops Lane",
+        displayName: "Ops Lane",
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.label).toBe("Ops Lane");
+    expect(store[sessionKey]?.displayName).toBe("Ops Lane");
   });
 
   it("updateSessionStore preserves concurrent additions", async () => {
