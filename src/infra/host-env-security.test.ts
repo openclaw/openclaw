@@ -229,6 +229,14 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("AWS_CONFIG_FILE")).toBe(false);
     expect(isDangerousHostEnvVarName("aws_config_file")).toBe(false);
     expect(isDangerousHostEnvVarName("yarn_rc_filename")).toBe(false);
+    expect(isDangerousHostEnvVarName("BASHOPTS")).toBe(true);
+    expect(isDangerousHostEnvVarName("bashopts")).toBe(true);
+    expect(isDangerousHostEnvVarName("FPATH")).toBe(true);
+    expect(isDangerousHostEnvVarName("fpath")).toBe(true);
+    expect(isDangerousHostEnvVarName("KSH_ENV")).toBe(true);
+    expect(isDangerousHostEnvVarName("ksh_env")).toBe(true);
+    expect(isDangerousHostEnvVarName("TCLLIBPATH")).toBe(true);
+    expect(isDangerousHostEnvVarName("tcllibpath")).toBe(true);
     expect(isDangerousHostEnvVarName("PATH")).toBe(false);
     expect(isDangerousHostEnvVarName("FOO")).toBe(false);
     expect(isDangerousHostEnvVarName("GRADLE_USER_HOME")).toBe(false);
@@ -337,6 +345,10 @@ describe("sanitizeHostExecEnv", () => {
         DOCKER_CONTEXT: "trusted-remote",
         DOCKER_HOST: "tcp://docker.example.test:2376",
         LD_PRELOAD: "/tmp/pwn.so",
+        BASHOPTS: "xtrace",
+        FPATH: "/tmp/evil-fpath",
+        KSH_ENV: "/tmp/evil-ksh-env",
+        TCLLIBPATH: "/tmp/evil-tcllibpath",
         NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
         NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
         NODE_REPL_HISTORY: "/tmp/node-repl-history",
@@ -431,6 +443,10 @@ describe("sanitizeHostExecEnv", () => {
         CPLUS_INCLUDE_PATH: "/tmp/evil-cpp-headers",
         OBJC_INCLUDE_PATH: "/tmp/evil-objc-headers",
         HELM_HOME: "/tmp/override-helm",
+        BASHOPTS: "xtrace",
+        FPATH: "/tmp/evil-fpath",
+        KSH_ENV: "/tmp/evil-ksh-env",
+        TCLLIBPATH: "/tmp/evil-tcllibpath",
         NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
         NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
         NODE_REPL_HISTORY: "/tmp/node-repl-history",
@@ -580,6 +596,10 @@ describe("sanitizeHostExecEnv", () => {
         EXINIT: "silent !touch /tmp/pwned",
         LUA_INIT_5_4: "os.execute('touch /tmp/pwned')",
         HOSTALIASES: "/tmp/evil-hostaliases",
+        BASHOPTS: "xtrace",
+        FPATH: "/tmp/evil-fpath",
+        KSH_ENV: "/tmp/evil-ksh-env",
+        TCLLIBPATH: "/tmp/evil-tcllibpath",
         AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://169.254.170.2/credentials",
         AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/v2/credentials/abcd",
         CONFIG_SITE: "/tmp/evil-config-site",
@@ -598,6 +618,10 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.EXINIT).toBeUndefined();
     expect(env.LUA_INIT_5_4).toBeUndefined();
     expect(env.HOSTALIASES).toBeUndefined();
+    expect(env.BASHOPTS).toBeUndefined();
+    expect(env.FPATH).toBeUndefined();
+    expect(env.KSH_ENV).toBeUndefined();
+    expect(env.TCLLIBPATH).toBeUndefined();
     expect(env.HTTPS_PROXY).toBe("http://trusted-proxy.example.test:8443");
     expect(env.KUBECONFIG).toBe("/tmp/trusted-kubeconfig");
     expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBe("/tmp/trusted-gcp.json");
@@ -633,6 +657,10 @@ describe("sanitizeHostExecEnv", () => {
       overrides: {
         VIMINIT: ":!touch /tmp/pwned",
         HOSTALIASES: "/tmp/evil-hostaliases",
+        BASHOPTS: "xtrace",
+        FPATH: "/tmp/evil-fpath",
+        KSH_ENV: "/tmp/evil-ksh-env",
+        TCLLIBPATH: "/tmp/evil-tcllibpath",
         AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://attacker/credentials",
         AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/attacker-credentials",
         ANSIBLE_CONFIG: "/tmp/override-ansible.cfg",
@@ -662,6 +690,10 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(env.VIMINIT).toBeUndefined();
     expect(env.HOSTALIASES).toBeUndefined();
+    expect(env.BASHOPTS).toBeUndefined();
+    expect(env.FPATH).toBeUndefined();
+    expect(env.KSH_ENV).toBeUndefined();
+    expect(env.TCLLIBPATH).toBeUndefined();
     expect(env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBeUndefined();
     expect(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI).toBeUndefined();
     expect(env.ANSIBLE_CONFIG).toBeUndefined();
@@ -1178,6 +1210,10 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         VIMINIT: ":!touch /tmp/pwned",
         LUA_INIT_5_4: "os.execute('touch /tmp/pwned')",
         HOSTALIASES: "/tmp/evil-hostaliases",
+        BASHOPTS: "xtrace",
+        FPATH: "/tmp/evil-fpath",
+        KSH_ENV: "/tmp/evil-ksh-env",
+        TCLLIBPATH: "/tmp/evil-tcllibpath",
         ANSIBLE_CONFIG: "/tmp/evil-ansible.cfg",
         ANSIBLE_REMOTE_TEMP: "/tmp/evil-ansible-remote",
         R_LIBS_USER: "/tmp/evil-r-libs-user",
@@ -1205,12 +1241,16 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "ANSIBLE_REMOTE_TEMP",
       "AWS_CONTAINER_CREDENTIALS_FULL_URI",
       "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+      "BASHOPTS",
       "DATABASE_URL",
+      "FPATH",
       "GITHUB_TOKEN",
       "HOSTALIASES",
+      "KSH_ENV",
       "LUA_INIT_5_4",
       "R_LIBS_USER",
       "R_PROFILE_USER",
+      "TCLLIBPATH",
       "TF_CLI_CONFIG_FILE",
       "TF_PLUGIN_CACHE_DIR",
       "TF_VAR_ADMIN_CIDR",
@@ -1228,6 +1268,10 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.VIMINIT).toBeUndefined();
     expect(result.env.LUA_INIT_5_4).toBeUndefined();
     expect(result.env.HOSTALIASES).toBeUndefined();
+    expect(result.env.BASHOPTS).toBeUndefined();
+    expect(result.env.FPATH).toBeUndefined();
+    expect(result.env.KSH_ENV).toBeUndefined();
+    expect(result.env.TCLLIBPATH).toBeUndefined();
     expect(result.env.ANSIBLE_CONFIG).toBeUndefined();
     expect(result.env.ANSIBLE_REMOTE_TEMP).toBeUndefined();
     expect(result.env.R_LIBS_USER).toBeUndefined();
