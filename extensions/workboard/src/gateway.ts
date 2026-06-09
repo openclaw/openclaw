@@ -385,11 +385,15 @@ export function registerWorkboardGatewayMethods(params: {
     "workboard.cards.dispatch",
     async ({ params: requestParams, respond }) => {
       try {
+        const boardId =
+          requestParams && typeof requestParams === "object" && "boardId" in requestParams
+            ? requestParams.boardId
+            : undefined;
         const result = await dispatchAndStartWorkboardCards({
           store,
           subagent: api.runtime.subagent,
           options: {
-            boardId: typeof requestParams.boardId === "string" ? requestParams.boardId : undefined,
+            boardId: typeof boardId === "string" ? boardId : undefined,
           },
         });
         respond(true, {
