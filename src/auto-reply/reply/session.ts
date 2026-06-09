@@ -805,12 +805,21 @@ export async function initSessionState(params: {
     sessionEntry.status = undefined;
     // Clear stale token metrics from previous session so /status doesn't
     // display the old session's context usage after /new or /reset.
+    sessionEntry.modelProvider = undefined;
+    sessionEntry.model = undefined;
+    sessionEntry.agentHarnessId = undefined;
     sessionEntry.totalTokens = undefined;
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;
+    sessionEntry.cacheRead = undefined;
+    sessionEntry.cacheWrite = undefined;
     sessionEntry.contextTokens = undefined;
     sessionEntry.contextBudgetStatus = undefined;
+    sessionEntry.liveModelSwitchPending = undefined;
+    sessionEntry.fallbackNoticeSelectedModel = undefined;
+    sessionEntry.fallbackNoticeActiveModel = undefined;
+    sessionEntry.fallbackNoticeReason = undefined;
     sessionEntry.goal = undefined;
     // Skills snapshots are prompt/runtime caches. Do not preserve a stale
     // snapshot through /new; the next turn must rebuild the visible skill list.

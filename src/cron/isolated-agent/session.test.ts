@@ -406,6 +406,65 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.authProfileOverrideCompactionCount).toBe(3);
     });
 
+    it("drops source-less fallback-active model overrides for fresh cron sessions", () => {
+      const result = resolveWithStoredEntry({
+        sessionKey: "session:agent:main:discord:channel:1488013357016420522",
+        entry: {
+          sessionId: "existing-session-id-789",
+          updatedAt: NOW_MS - 1000,
+          modelOverride: "gpt-5.4",
+          providerOverride: "codex",
+          modelProvider: "codex",
+          model: "gpt-5.4",
+          contextTokens: 200_000,
+          fallbackNoticeSelectedModel: "codex/gpt-5.5",
+          fallbackNoticeActiveModel: "codex/gpt-5.4",
+          fallbackNoticeReason: "selected model unavailable",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.modelOverride).toBeUndefined();
+      expect(result.sessionEntry.providerOverride).toBeUndefined();
+      expect(result.sessionEntry.modelOverrideSource).toBeUndefined();
+      expect(result.sessionEntry.model).toBeUndefined();
+      expect(result.sessionEntry.modelProvider).toBeUndefined();
+      expect(result.sessionEntry.contextTokens).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeReason).toBeUndefined();
+    });
+
+    it("preserves source-less legacy user model overrides for fresh cron sessions", () => {
+      const result = resolveWithStoredEntry({
+        sessionKey: "session:agent:main:discord:channel:1488013357016420522",
+        entry: {
+          sessionId: "existing-session-id-987",
+          updatedAt: NOW_MS - 1000,
+          modelOverride: "gpt-5.5",
+          providerOverride: "codex",
+          modelProvider: "codex",
+          model: "gpt-5.4",
+          contextTokens: 200_000,
+          fallbackNoticeSelectedModel: "codex/gpt-5.5",
+          fallbackNoticeActiveModel: "codex/gpt-5.4",
+          fallbackNoticeReason: "selected model unavailable",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.modelOverride).toBe("gpt-5.5");
+      expect(result.sessionEntry.providerOverride).toBe("codex");
+      expect(result.sessionEntry.modelOverrideSource).toBeUndefined();
+      expect(result.sessionEntry.model).toBeUndefined();
+      expect(result.sessionEntry.modelProvider).toBeUndefined();
+      expect(result.sessionEntry.contextTokens).toBeUndefined();
+    });
+
     it("preserves ambient session context for non-isolated expiration rollovers", () => {
       const result = resolveWithStoredEntry({
         entry: {

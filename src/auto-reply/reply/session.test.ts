@@ -2732,6 +2732,125 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("clears source-less fallback-active model overrides on /new and /reset", async () => {
+    const storePath = await createStorePath("openclaw-reset-fallback-notice-auto-model-");
+    const sessionKey = "agent:main:discord:channel:1488013357016420522";
+    const existingSessionId = "existing-session-fallback-notice-auto-model";
+    const autoOverrides = {
+      providerOverride: "codex",
+      modelOverride: "gpt-5.4",
+      modelProvider: "codex",
+      model: "gpt-5.4",
+      contextTokens: 200_000,
+      fallbackNoticeSelectedModel: "codex/gpt-5.5",
+      fallbackNoticeActiveModel: "codex/gpt-5.4",
+      fallbackNoticeReason: "selected model unavailable",
+      verboseLevel: "on",
+    } as const;
+    const cases = [
+      { name: "new clears fallback-active override", body: "/new" },
+      { name: "reset clears fallback-active override", body: "/reset" },
+    ] as const;
+
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: { ...autoOverrides },
+      });
+
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "discord:channel:1488013357016420522",
+          To: "discord:bot",
+          ChatType: "channel",
+          SessionKey: sessionKey,
+          Provider: "discord",
+          Surface: "discord",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession, testCase.name).toBe(true);
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionEntry.modelOverride, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.providerOverride, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.modelOverrideSource, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.model, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.modelProvider, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.contextTokens, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeSelectedModel, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeActiveModel, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeReason, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.verboseLevel, testCase.name).toBe(autoOverrides.verboseLevel);
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].modelOverride, testCase.name).toBeUndefined();
+      expect(stored[sessionKey].providerOverride, testCase.name).toBeUndefined();
+      expect(stored[sessionKey].model, testCase.name).toBeUndefined();
+      expect(stored[sessionKey].modelProvider, testCase.name).toBeUndefined();
+    }
+  });
+
+  it("preserves source-less legacy user overrides even when runtime fallback notice exists", async () => {
+    const storePath = await createStorePath("openclaw-reset-legacy-user-fallback-notice-");
+    const sessionKey = "agent:main:discord:channel:1488013357016420522";
+    const existingSessionId = "existing-session-legacy-user-fallback-notice";
+    const legacyUserOverride = {
+      providerOverride: "codex",
+      modelOverride: "gpt-5.5",
+      modelProvider: "codex",
+      model: "gpt-5.4",
+      contextTokens: 200_000,
+      fallbackNoticeSelectedModel: "codex/gpt-5.5",
+      fallbackNoticeActiveModel: "codex/gpt-5.4",
+      fallbackNoticeReason: "selected model unavailable",
+    } as const;
+
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: { ...legacyUserOverride },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "discord:channel:1488013357016420522",
+        To: "discord:bot",
+        ChatType: "channel",
+        SessionKey: sessionKey,
+        Provider: "discord",
+        Surface: "discord",
+      },
+      cfg: {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.providerOverride).toBe(legacyUserOverride.providerOverride);
+    expect(result.sessionEntry.modelOverride).toBe(legacyUserOverride.modelOverride);
+    expect(result.sessionEntry.modelOverrideSource).toBe("user");
+    expect(result.sessionEntry.model).toBeUndefined();
+    expect(result.sessionEntry.modelProvider).toBeUndefined();
+    expect(result.sessionEntry.contextTokens).toBeUndefined();
+  });
+
   it("preserves spawned session ownership metadata across /new and /reset", async () => {
     const storePath = await createStorePath("openclaw-reset-spawned-metadata-");
     const sessionKey = "subagent:owned-child";
