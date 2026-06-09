@@ -202,7 +202,15 @@ export type RealtimeVoiceBridge = {
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   setMediaTimestamp(ts: number): void;
+  /**
+   * Sends normal provider input text. Relay code uses this as a compatibility
+   * fallback for providers that cannot schedule exact assistant speech.
+   */
   sendUserMessage?(text: string): void;
+  /**
+   * Speaks provider-owned text without treating it as user input.
+   * Use `mode: "exact"` when OpenClaw has already produced the final wording.
+   */
   speakText?(text: string, options?: RealtimeVoiceSpeakTextOptions): void;
   triggerGreeting?(instructions?: string): void;
   handleBargeIn?(options?: RealtimeVoiceBargeInOptions): void;

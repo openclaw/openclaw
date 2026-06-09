@@ -483,13 +483,19 @@ function deliverRelayFinalSpeech(
     const previousAllowedUntilMs = session.finalSpeechOutputAllowedUntilMs;
     allowFinalProviderSpeech(session);
     try {
-      session.bridge.speakText(text, {
-        source: params.source,
-        mode: "exact",
-        idempotencyKey: [session.id, params.source, params.runId, params.callId]
-          .filter(Boolean)
-          .join(":"),
-      });
+      if (typeof session.bridge.bridge.speakText === "function") {
+        session.bridge.speakText(text, {
+          source: params.source,
+          mode: "exact",
+          idempotencyKey: [session.id, params.source, params.runId, params.callId]
+            .filter(Boolean)
+            .join(":"),
+        });
+      } else if (typeof session.bridge.bridge.sendUserMessage === "function") {
+        session.bridge.sendUserMessage(text);
+      } else {
+        throw new Error("Realtime voice provider does not support text speech");
+      }
     } catch (error) {
       session.finalSpeechOutputAllowedUntilMs = previousAllowedUntilMs;
       throw error;
@@ -497,7 +503,10 @@ function deliverRelayFinalSpeech(
     reportFinalSpeechStatus(session, {
       text,
       status: "speaking",
-      detail: "Scheduled through realtime voice provider.",
+      detail:
+        typeof session.bridge.bridge.speakText === "function"
+          ? "Scheduled through realtime voice provider."
+          : "Scheduled through realtime voice provider fallback.",
       source: params.source,
       callId: params.callId,
       runId: params.runId,

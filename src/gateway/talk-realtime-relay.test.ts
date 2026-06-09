@@ -1106,6 +1106,82 @@ describe("talk realtime gateway relay", () => {
     stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
   });
 
+  it("falls back to provider message delivery when exact final speech is unsupported", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      supportsToolResultContinuation: true,
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      sendUserMessage: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+    expect(bridgeRequest).toBeDefined();
+    registerTalkRealtimeRelayAgentRun({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      sessionKey: "main",
+      runId: "run-1",
+      callId: "call-1",
+    });
+
+    submitTalkRealtimeRelayToolResult({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { result: "Here is the final relay answer." },
+    });
+
+    expect(bridge.submitToolResult).toHaveBeenLastCalledWith(
+      "call-1",
+      {
+        status: "already_delivered",
+        message: "OpenClaw already delivered this consult result internally. Do not repeat it.",
+      },
+      { suppressResponse: true },
+    );
+    expect(bridge.sendUserMessage).toHaveBeenCalledWith("Here is the final relay answer.");
+    expectRecordFields(
+      findEventPayload(
+        events,
+        (payload) => payload.type === "finalSpeech" && payload.status === "speaking",
+      ),
+      {
+        relaySessionId: session.relaySessionId,
+        type: "finalSpeech",
+        detail: "Scheduled through realtime voice provider fallback.",
+      },
+    );
+  });
+
   it("debounces incremental final transcript fragments before forcing a consult", async () => {
     vi.useFakeTimers();
 
