@@ -1791,6 +1791,59 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("retires the shared Codex app-server client after one-shot cleanup turns", async () => {
+    const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
+    retireSpy.mockReturnValue({ activeLeases: 0, closed: true });
+    const closeAndWait = vi.fn(async () => true);
+    let startedClient: unknown;
+    let notify: ((notification: CodexServerNotification) => Promise<void>) | undefined;
+    setCodexAppServerClientFactoryForTest(async () => {
+      const client = {
+        request: vi.fn(async (method: string) => {
+          if (method === "thread/start") {
+            return threadStartResult();
+          }
+          if (method === "turn/start") {
+            return turnStartResult();
+          }
+          return {};
+        }),
+        addNotificationHandler: vi.fn((handler) => {
+          notify = handler;
+          return () => undefined;
+        }),
+        addRequestHandler: vi.fn(() => () => undefined),
+        closeAndWait,
+      };
+      startedClient = client;
+      return client as never;
+    });
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.cleanupBundleMcpOnRunEnd = true;
+
+    const run = runCodexAppServerAttempt(params);
+    await vi.waitFor(() => expect(notify).toBeDefined(), fastWait);
+    if (!notify) {
+      throw new Error("expected turn notification handler");
+    }
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+    await run;
+
+    expect(retireSpy).toHaveBeenCalledWith(startedClient);
+    expect(closeAndWait).toHaveBeenCalledWith({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+    retireSpy.mockRestore();
+  });
+
   it("projects bounded continuity when starting Codex without a native thread binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -1871,6 +1924,9 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error("expected valid Codex binding timestamp");
     }
     const sessionManager = SessionManager.open(sessionFile);
+    if (!sessionManager.appendMessage) {
+      throw new Error("expected session manager to support appendMessage");
+    }
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt - 2_000),
     );

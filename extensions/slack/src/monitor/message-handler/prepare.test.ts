@@ -3176,7 +3176,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       });
       const slackCtx = createInboundSlackCtx({
         cfg,
-        appClient: { conversations: { history } } as App["client"],
+        appClient: { conversations: { history } } as unknown as App["client"],
       });
       slackCtx.resolveUserName = async (id: string) => ({
         name: id === "U1" ? "Alice" : "Jarvis",

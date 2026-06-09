@@ -768,7 +768,7 @@ export async function resolveSlackConversationHistory(params: {
         }
         retained.push(msg);
         if (retained.length >= maxMessages) {
-          return retained.reverse().map((entry) => normalizeSlackHistoryMessage(entry));
+          return retained.toReversed().map((entry) => normalizeSlackHistoryMessage(entry));
         }
       }
 
@@ -776,7 +776,7 @@ export async function resolveSlackConversationHistory(params: {
       cursor = typeof next === "string" && next.trim().length > 0 ? next.trim() : undefined;
     } while (cursor);
 
-    return retained.reverse().map((entry) => normalizeSlackHistoryMessage(entry));
+    return retained.toReversed().map((entry) => normalizeSlackHistoryMessage(entry));
   } catch {
     return [];
   }

@@ -212,6 +212,7 @@ import {
   writeCodexAppServerBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
+import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import {
   buildDeveloperInstructions,
@@ -993,6 +994,7 @@ export async function runCodexAppServerAttempt(
   };
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
   let releaseSharedClientLease: (() => void) | undefined;
+  let sharedCodexClientRetiredForOneShotCleanup = false;
   const releaseSharedClientLeaseOnce = () => {
     const release = releaseSharedClientLease;
     if (!release) {
@@ -1000,6 +1002,27 @@ export async function runCodexAppServerAttempt(
     }
     releaseSharedClientLease = undefined;
     release();
+  };
+  const retireSharedCodexClientForOneShotCleanup = async () => {
+    if (params.cleanupBundleMcpOnRunEnd !== true || !client) {
+      return;
+    }
+    if (sharedCodexClientRetiredForOneShotCleanup) {
+      return;
+    }
+    sharedCodexClientRetiredForOneShotCleanup = true;
+    const retired = retireSharedCodexAppServerClientIfCurrent(client);
+    embeddedAgentLog.info("codex app-server one-shot cleanup retired shared client", {
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      activeLeases: retired?.activeLeases ?? null,
+      closed: retired?.closed ?? false,
+      matchedSharedClient: Boolean(retired),
+    });
+    if (retired?.closed) {
+      await client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+    }
   };
   let sandboxExecEnvironmentAcquired = false;
   const releaseSandboxExecEnvironment = async () => {
@@ -2506,6 +2529,8 @@ export async function runCodexAppServerAttempt(
       phase: "error",
       error: "codex app-server run completed without lifecycle terminal event",
     });
+    releaseSharedClientLeaseOnce();
+    await retireSharedCodexClientForOneShotCleanup();
     if (trajectoryRecorder && !trajectoryEndRecorded) {
       trajectoryRecorder.recordEvent("session.ended", {
         status:
@@ -2541,7 +2566,6 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     closeCleanup?.();
-    releaseSharedClientLeaseOnce();
     if (nativeHookRelay) {
       if (shouldDelayNativeHookRelayUnregister) {
         // Codex hook subprocesses can outlive a completed app-server turn by a

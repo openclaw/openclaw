@@ -1,5 +1,6 @@
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -65,15 +66,15 @@ function resolveMcpGatewayBaseUrl(): string {
   return (process.env.MCP_GATEWAY_BASE_URL ?? "http://127.0.0.1:9090/mcp").replace(/\/$/, "");
 }
 
-function parseMaybeJson<T>(value: unknown): T | null {
+function parseMaybeJson(value: unknown): AgentHubSlackHistoryPayload | null {
   if (value == null) {
     return null;
   }
   if (typeof value !== "string") {
-    return value as T;
+    return value as AgentHubSlackHistoryPayload;
   }
   try {
-    return JSON.parse(value) as T;
+    return JSON.parse(value) as AgentHubSlackHistoryPayload;
   } catch {
     return null;
   }
@@ -100,7 +101,9 @@ function normalizeAgentHubMessages(messages: AgentHubSlackHistoryMessage[]): Sla
   const normalized: SlackThreadMessage[] = [];
   for (const message of messages) {
     const body = trimOrUndefined(message.text);
-    if (!body) continue;
+    if (!body) {
+      continue;
+    }
     normalized.push({
       text: body,
       ts: trimOrUndefined(message.ts),
@@ -108,7 +111,7 @@ function normalizeAgentHubMessages(messages: AgentHubSlackHistoryMessage[]): Sla
       botId: trimOrUndefined(message.bot_id),
     });
   }
-  return normalized.sort((left, right) => Number(left.ts ?? 0) - Number(right.ts ?? 0));
+  return normalized.toSorted((left, right) => Number(left.ts ?? 0) - Number(right.ts ?? 0));
 }
 
 async function resolveSlackDirectHistoryUserMap(params: {
@@ -165,56 +168,63 @@ async function loadAgentHubDirectHistory(params: {
   dagNodeCount: number;
 } | null> {
   try {
-    const response = await fetch(`${resolveMcpGatewayBaseUrl()}/agent-hub`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: `slack-direct-context-${Date.now()}`,
-        method: "tools/call",
-        params: {
-          name: "slack_messages_history",
-          arguments: {
-            channel: params.channelId,
-            count: Math.max(params.historyLimit * 3, params.historyLimit),
-            latest: params.currentMessageTs,
-            inclusive: false,
-            retrieval_level: "linked",
-            source: "hybrid",
-          },
+    const { response, release } = await fetchWithSsrFGuard({
+      url: `${resolveMcpGatewayBaseUrl()}/agent-hub`,
+      init: {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
         },
-      }),
-      signal: AbortSignal.timeout(5_000),
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: `slack-direct-context-${Date.now()}`,
+          method: "tools/call",
+          params: {
+            name: "slack_messages_history",
+            arguments: {
+              channel: params.channelId,
+              count: Math.max(params.historyLimit * 3, params.historyLimit),
+              latest: params.currentMessageTs,
+              inclusive: false,
+              retrieval_level: "linked",
+              source: "hybrid",
+            },
+          },
+        }),
+        signal: AbortSignal.timeout(5_000),
+      },
+      policy: { allowPrivateNetwork: true },
+      auditContext: "slack-direct-context-agent-hub",
     });
-    if (!response.ok) {
-      return null;
-    }
+    try {
+      if (!response.ok) {
+        return null;
+      }
 
-    const payload = (await response.json()) as AgentHubJsonRpcResponse;
-    if (payload.error || payload.result?.isError) {
-      return null;
-    }
+      const payload = (await response.json()) as AgentHubJsonRpcResponse;
+      if (payload.error || payload.result?.isError) {
+        return null;
+      }
 
-    const structured = payload.result?.structuredContent;
-    const fallbackText = payload.result?.content
-      ?.map((entry) => entry.text ?? "")
-      .join("\n")
-      .trim();
-    const historyPayload =
-      parseMaybeJson<AgentHubSlackHistoryPayload>(structured) ??
-      parseMaybeJson<AgentHubSlackHistoryPayload>(fallbackText);
-    if (!historyPayload) {
-      return null;
-    }
+      const structured = payload.result?.structuredContent;
+      const fallbackText = payload.result?.content
+        ?.map((entry) => entry.text ?? "")
+        .join("\n")
+        .trim();
+      const historyPayload = parseMaybeJson(structured) ?? parseMaybeJson(fallbackText);
+      if (!historyPayload) {
+        return null;
+      }
 
-    return {
-      messages: normalizeAgentHubMessages(historyPayload.messages ?? []),
-      dagArchiveCount: historyPayload.dag_context?.archive_context?.length ?? 0,
-      dagNodeCount: historyPayload.dag_context?.related_nodes?.length ?? 0,
-    };
+      return {
+        messages: normalizeAgentHubMessages(historyPayload.messages ?? []),
+        dagArchiveCount: historyPayload.dag_context?.archive_context?.length ?? 0,
+        dagNodeCount: historyPayload.dag_context?.related_nodes?.length ?? 0,
+      };
+    } finally {
+      await release();
+    }
   } catch {
     return null;
   }
