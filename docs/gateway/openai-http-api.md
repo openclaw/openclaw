@@ -19,6 +19,12 @@ Once enabled, it serves all of these on the same port as the Gateway (WS + HTTP 
 
 Requests run as a normal Gateway agent run (same codepath as `openclaw agent`), so routing, permissions, and config match your Gateway.
 
+A separate, also disabled-by-default endpoint exposes OpenAI-compatible text-to-speech:
+
+- `POST /v1/audio/speech` (enabled via `gateway.http.endpoints.audioSpeech.enabled`)
+
+Under the hood, audio speech requests are executed against the configured TTS provider directly (not an agent run).
+
 ## Enabling the endpoint
 
 ```json5
@@ -155,6 +161,42 @@ Defaults when omitted:
 HEIC/HEIF `image_url` sources are accepted and normalized to JPEG before provider delivery through the shared OpenClaw image processor (Rastermill), which falls back to a system converter (`sips`, ImageMagick, GraphicsMagick, or ffmpeg) for formats needing external codec support.
 
 Security note: allowlisting a hostname does not bypass private/internal IP blocking. For internet-exposed gateways, apply network egress controls in addition to app-level guards. See [Security](/gateway/security).
+
+## Enabling audio speech
+
+`POST /v1/audio/speech` is gated by its own flag so you can expose TTS without
+opening the chat surface. Set `gateway.http.endpoints.audioSpeech.enabled` to
+`true`:
+
+```json5
+{
+  gateway: {
+    http: {
+      endpoints: {
+        audioSpeech: { enabled: true },
+      },
+    },
+  },
+}
+```
+
+When enabled, the Gateway synthesizes speech through your configured TTS
+providers (`messages.tts`) and `GET /v1/models` additionally lists each
+configured-and-available provider as `tts/<provider>`.
+
+Request fields follow the OpenAI shape:
+
+- `model` (optional): `tts/<provider>` selects a provider; a bare provider name
+  is also accepted. When omitted, the configured default TTS provider is used.
+- `input` (required): the text to synthesize (max 4096 characters).
+- `voice` (optional): provider voice id.
+- `response_format` (optional): one of `mp3`, `opus`, `wav`. Other values are
+  rejected with `400`. The response `Content-Type` always matches the produced
+  audio bytes.
+- `speed` (optional): clamped to the OpenAI range `0.25`-`4.0`.
+
+The response body is the raw audio payload (not JSON), with `Content-Type` set
+from the produced format (for example `audio/mpeg` for `mp3`).
 
 ## Chat tool contract
 
@@ -308,6 +350,24 @@ curl -sS http://127.0.0.1:18789/v1/embeddings \
 ```
 
 `/v1/embeddings` supports `input` as a string or array of strings.
+
+Synthesize speech (requires `gateway.http.endpoints.audioSpeech.enabled`):
+
+```bash
+curl -sS http://127.0.0.1:18789/v1/audio/speech \
+  -H 'Authorization: Bearer YOUR_TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "tts/openai",
+    "input": "Hello from OpenClaw.",
+    "voice": "alloy",
+    "response_format": "mp3"
+  }' \
+  --output speech.mp3
+```
+
+`/v1/audio/speech` returns raw audio bytes; only configured TTS providers are
+listed in `/v1/models` as `tts/<provider>`.
 
 ## Related
 

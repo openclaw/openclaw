@@ -475,6 +475,48 @@ describe("buildOpenAISpeechProvider", () => {
     expect(result.voiceCompatible).toBe(false);
   });
 
+  it("honors a per-request response_format override", async () => {
+    const provider = buildOpenAISpeechProvider();
+    mockSpeechFetchExpectingFormat("opus");
+
+    const result = await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "sk-test",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+      },
+      providerOverrides: { responseFormat: "opus" },
+      target: "audio-file",
+      timeoutMs: 1_000,
+    });
+
+    expect(result.outputFormat).toBe("opus");
+    expect(result.fileExtension).toBe(".opus");
+  });
+
+  it("ignores an unsupported response_format override", async () => {
+    const provider = buildOpenAISpeechProvider();
+    // Falls back to the audio-file default (mp3) when the override is unsupported.
+    mockSpeechFetchExpectingFormat("mp3");
+
+    const result = await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "sk-test",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+      },
+      providerOverrides: { responseFormat: "aac" },
+      target: "audio-file",
+      timeoutMs: 1_000,
+    });
+
+    expect(result.outputFormat).toBe("mp3");
+  });
+
   it("applies the configured media byte cap to synthesized audio", async () => {
     const provider = buildOpenAISpeechProvider();
     globalThis.fetch = vi.fn(

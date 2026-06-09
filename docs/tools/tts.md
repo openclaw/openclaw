@@ -975,6 +975,17 @@ provider default.
 | `tts.setPersona`  | Set local persona preference.                |
 | `tts.providers`   | List configured providers and status.        |
 
+## OpenAI-compatible HTTP endpoint
+
+When `gateway.http.endpoints.audioSpeech.enabled` is `true`, the Gateway also
+serves `POST /v1/audio/speech`, an OpenAI-compatible text-to-speech endpoint
+backed by these same configured providers. Each configured-and-available
+provider is listed by `GET /v1/models` as `tts/<provider>`, and requests accept
+the OpenAI `model` / `input` / `voice` / `response_format` / `speed` fields.
+
+See [OpenAI-compatible HTTP API](/gateway/openai-http-api#enabling-audio-speech)
+for request and configuration details.
+
 ## Service links
 
 - [OpenAI text-to-speech guide](https://platform.openai.com/docs/guides/text-to-speech)
@@ -996,6 +1007,7 @@ provider default.
 
 - [Media overview](/tools/media-overview)
 - [Music generation](/tools/music-generation)
+- [OpenAI-compatible HTTP API](/gateway/openai-http-api)
 - [Video generation](/tools/video-generation)
 - [Slash commands](/tools/slash-commands)
 - [Voice call plugin](/plugins/voice-call)

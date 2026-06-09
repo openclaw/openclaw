@@ -33,6 +33,8 @@ type GatewayRuntimeConfig = {
   openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
+  audioSpeechEnabled: boolean;
+  audioSpeechConfig?: import("../config/types.gateway.js").GatewayHttpAudioSpeechConfig;
   strictTransportSecurityHeader?: string;
   controlUiBasePath: string;
   controlUiRoot?: string;
@@ -52,6 +54,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   controlUiEnabled?: boolean;
   openAiChatCompletionsEnabled?: boolean;
   openResponsesEnabled?: boolean;
+  audioSpeechEnabled?: boolean;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
 }): Promise<GatewayRuntimeConfig> {
@@ -101,6 +104,8 @@ export async function resolveGatewayRuntimeConfig(params: {
     params.openAiChatCompletionsEnabled ?? openAiChatCompletionsConfig?.enabled ?? false;
   const openResponsesConfig = params.cfg.gateway?.http?.endpoints?.responses;
   const openResponsesEnabled = params.openResponsesEnabled ?? openResponsesConfig?.enabled ?? false;
+  const audioSpeechConfig = params.cfg.gateway?.http?.endpoints?.audioSpeech;
+  const audioSpeechEnabled = params.audioSpeechEnabled ?? audioSpeechConfig?.enabled ?? false;
   const strictTransportSecurityConfig =
     params.cfg.gateway?.http?.securityHeaders?.strictTransportSecurity;
   // HSTS is opt-in and must stay absent for blank strings; local HTTP and reverse-proxy
@@ -194,6 +199,10 @@ export async function resolveGatewayRuntimeConfig(params: {
     openResponsesEnabled,
     openResponsesConfig: openResponsesConfig
       ? { ...openResponsesConfig, enabled: openResponsesEnabled }
+      : undefined,
+    audioSpeechEnabled,
+    audioSpeechConfig: audioSpeechConfig
+      ? { ...audioSpeechConfig, enabled: audioSpeechEnabled }
       : undefined,
     strictTransportSecurityHeader,
     controlUiBasePath,

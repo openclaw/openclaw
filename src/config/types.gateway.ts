@@ -429,11 +429,26 @@ export type GatewayHttpResponsesImagesConfig = {
   timeoutMs?: number;
 };
 
+export type GatewayHttpAudioSpeechConfig = {
+  /**
+   * If false, the Gateway will not serve `POST /v1/audio/speech`
+   * (OpenAI-compatible text-to-speech). Default: false when absent.
+   */
+  enabled?: boolean;
+  /**
+   * Max request body size in bytes for `/v1/audio/speech`.
+   * Default: 1MB.
+   */
+  maxBodyBytes?: number;
+};
+
 export type GatewayHttpEndpointsConfig = {
   /** OpenAI-compatible chat completions endpoint controls. */
   chatCompletions?: GatewayHttpChatCompletionsConfig;
   /** OpenResponses-compatible responses endpoint controls. */
   responses?: GatewayHttpResponsesConfig;
+  /** OpenAI-compatible audio speech (text-to-speech) endpoint controls. */
+  audioSpeech?: GatewayHttpAudioSpeechConfig;
 };
 
 export type GatewayHttpSecurityHeadersConfig = {

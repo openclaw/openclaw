@@ -1284,6 +1284,13 @@ export const OpenClawSchema = z
                       .optional(),
                   })
                   .optional(),
+                audioSpeech: z
+                  .object({
+                    enabled: z.boolean().optional(),
+                    maxBodyBytes: z.number().int().positive().optional(),
+                  })
+                  .strict()
+                  .optional(),
               })
               .optional(),
             securityHeaders: z

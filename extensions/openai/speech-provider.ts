@@ -48,7 +48,22 @@ type OpenAITtsProviderOverrides = {
   model?: string;
   voice?: string;
   speed?: number;
+  responseFormat?: OpenAiSpeechResponseFormat;
 };
+
+/** Read a per-request `response_format` override, ignoring unsupported values. */
+function readOpenAISpeechResponseFormatOverride(
+  value: unknown,
+): OpenAiSpeechResponseFormat | undefined {
+  const next = normalizeOptionalLowercaseString(value);
+  if (
+    next &&
+    OPENAI_SPEECH_RESPONSE_FORMATS.includes(next as (typeof OPENAI_SPEECH_RESPONSE_FORMATS)[number])
+  ) {
+    return next as OpenAiSpeechResponseFormat;
+  }
+  return undefined;
+}
 
 function normalizeOpenAISpeechResponseFormat(
   value: unknown,
@@ -175,6 +190,9 @@ function readOpenAIOverrides(
     model: trimToUndefined(overrides.model),
     voice: trimToUndefined(overrides.voice),
     speed: normalizeOpenAISpeechSpeed(overrides.speed, baseUrl),
+    responseFormat: readOpenAISpeechResponseFormatOverride(
+      overrides.responseFormat ?? overrides.response_format,
+    ),
   };
 }
 
@@ -347,11 +365,11 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
       if (!apiKey) {
         throw new Error("OpenAI API key missing");
       }
-      const responseFormat = resolveSpeechResponseFormat(
-        config.baseUrl,
-        req.target,
-        config.responseFormat,
-      );
+      // A per-request `response_format` override wins over the configured/default
+      // format so OpenAI-compatible clients control the produced audio container.
+      const responseFormat =
+        overrides.responseFormat ??
+        resolveSpeechResponseFormat(config.baseUrl, req.target, config.responseFormat);
       const audioBuffer = await openaiTTS({
         text: req.text,
         apiKey,

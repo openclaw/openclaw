@@ -675,6 +675,7 @@ See [Inferred commitments](/concepts/commitments).
 - Admin HTTP RPC: off by default as the `admin-http-rpc` plugin. Enable the plugin to register `POST /api/v1/admin/rpc`. See [Admin HTTP RPC](/plugins/admin-http-rpc).
 - Chat Completions: disabled by default. Enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Responses API: `gateway.http.endpoints.responses.enabled`.
+- Audio Speech (text-to-speech): disabled by default. Enable with `gateway.http.endpoints.audioSpeech.enabled: true` to serve `POST /v1/audio/speech` and list configured TTS providers as `tts/<provider>` in `/v1/models`. Optional `gateway.http.endpoints.audioSpeech.maxBodyBytes` (default 1MB).
 - Responses URL-input hardening:
   - `gateway.http.endpoints.responses.maxUrlParts`
   - `gateway.http.endpoints.responses.files.urlAllowlist`
