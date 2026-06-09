@@ -4,7 +4,9 @@ import {
   QA_EVIDENCE_SUMMARY_KIND,
   QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   buildLiveTransportEvidenceSummary,
+  buildPlaywrightEvidenceSummary,
   buildQaSuiteEvidenceSummary,
+  buildVitestEvidenceSummary,
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 
@@ -156,6 +158,112 @@ describe("evidence summary", () => {
         },
       }),
     ]);
+  });
+
+  it("normalizes Vitest runner results onto the same evidence schema", () => {
+    const evidence = buildVitestEvidenceSummary({
+      artifactPaths: ["vitest-results/runtime-boundary.vitest.json"],
+      env: {
+        OPENCLAW_QA_REF: "abc123",
+      } as NodeJS.ProcessEnv,
+      generatedAt: "2026-06-07T12:06:00.000Z",
+      primaryModel: "mock-openai/gpt-5.5",
+      providerMode: "mock-openai",
+      targets: [
+        {
+          id: "runtime.agent-runner-boundary",
+          title: "Agent runner boundary integration tests",
+          sourcePath: "src/agents/agent-runner.e2e.test.ts",
+          coverageIds: ["runtime.agent-runner", "runtime.delivery"],
+          surfaceIds: ["agent-runtime-and-provider-execution"],
+          categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
+          codeRefs: ["src/agents/agent-runner.ts"],
+        },
+      ],
+      results: [
+        {
+          id: "runtime.agent-runner-boundary",
+          status: "pass",
+          durationMs: 1234,
+        },
+      ],
+    });
+
+    expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+    expect(evidence.entries).toEqual([
+      expect.objectContaining({
+        scenarioId: "runtime.agent-runner-boundary",
+        scenarioTitle: "Agent runner boundary integration tests",
+        coverageIds: ["runtime.agent-runner", "runtime.delivery"],
+        sourcePath: "src/agents/agent-runner.e2e.test.ts",
+        scorecard: {
+          surfaceIds: ["agent-runtime-and-provider-execution"],
+          categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
+        },
+        profile: "smoke-ci",
+        model_live: false,
+        provider_fixture: "mock-openai",
+        runner: "vitest",
+        artifactPaths: ["vitest-results/runtime-boundary.vitest.json"],
+        status: "pass",
+        timing: {
+          wallMs: 1234,
+        },
+      }),
+    ]);
+  });
+
+  it("normalizes Playwright runner results onto the same evidence schema", () => {
+    const evidence = buildPlaywrightEvidenceSummary({
+      artifactPaths: ["playwright-results/control-ui.json", "playwright-report/index.html"],
+      env: {
+        GITHUB_SHA: "def456",
+      } as NodeJS.ProcessEnv,
+      generatedAt: "2026-06-07T12:07:00.000Z",
+      primaryModel: "mock-openai/gpt-5.5",
+      providerMode: "mock-openai",
+      targets: [
+        {
+          id: "control-ui.browser-run",
+          title: "Control UI browser workflow",
+          sourcePath: "ui/control-ui.e2e.test.ts",
+          coverageIds: ["control-ui.browser"],
+          surfaceIds: ["browser-control-ui-and-webchat"],
+          categoryIds: ["browser-control-ui-and-webchat.browser-ui"],
+          docsRefs: ["docs/concepts/qa-e2e-automation.md"],
+          codeRefs: ["ui/"],
+        },
+      ],
+      results: [
+        {
+          id: "control-ui.browser-run",
+          status: "fail",
+          durationMs: 2300,
+          failureMessage: "locator timed out",
+        },
+      ],
+    });
+
+    expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+    expect(evidence.entries[0]).toMatchObject({
+      scenarioId: "control-ui.browser-run",
+      scenarioTitle: "Control UI browser workflow",
+      coverageIds: ["control-ui.browser"],
+      sourcePath: "ui/control-ui.e2e.test.ts",
+      scorecard: {
+        surfaceIds: ["browser-control-ui-and-webchat"],
+        categoryIds: ["browser-control-ui-and-webchat.browser-ui"],
+      },
+      runner: "playwright",
+      artifactPaths: ["playwright-results/control-ui.json", "playwright-report/index.html"],
+      status: "fail",
+      failure: {
+        reason: "locator timed out",
+      },
+      timing: {
+        wallMs: 2300,
+      },
+    });
   });
 
   it("normalizes old profile env aliases into the current evidence schema", () => {

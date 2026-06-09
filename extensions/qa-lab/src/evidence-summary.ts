@@ -160,6 +160,26 @@ type QaEvidenceScenarioResultInput = {
   };
 };
 
+type QaEvidenceTestTargetInput = {
+  id: string;
+  title: string;
+  sourcePath: string;
+  coverageIds: readonly string[];
+  surfaceIds: readonly string[];
+  categoryIds: readonly string[];
+  docsRefs?: readonly string[];
+  codeRefs?: readonly string[];
+};
+
+type QaEvidenceTestResultInput = {
+  id?: string;
+  title?: string;
+  sourcePath?: string;
+  status: QaEvidenceScenarioStatusInput;
+  durationMs?: number;
+  failureMessage?: string;
+};
+
 type QaEvidenceBuildBase = {
   artifactPaths: readonly string[];
   env?: NodeJS.ProcessEnv;
@@ -299,6 +319,23 @@ function timingForScenario(scenario: QaEvidenceScenarioResultInput) {
   return typeof rttMs === "number" && Number.isFinite(rttMs) && rttMs > 0 ? { rttMs } : undefined;
 }
 
+function failureForTestResult(result: QaEvidenceTestResultInput) {
+  if (result.status === "pass") {
+    return undefined;
+  }
+  return {
+    reason: result.failureMessage?.trim() || `${result.status} test`,
+  };
+}
+
+function timingForTestResult(result: QaEvidenceTestResultInput) {
+  return typeof result.durationMs === "number" &&
+    Number.isFinite(result.durationMs) &&
+    result.durationMs > 0
+    ? { wallMs: result.durationMs }
+    : undefined;
+}
+
 function buildQaEvidenceSummary(params: {
   entries: QaEvidenceSummaryEntry[];
   generatedAt: string;
@@ -375,6 +412,86 @@ export function buildQaSuiteEvidenceSummary(
     };
   });
   return buildQaEvidenceSummary({ generatedAt: params.generatedAt, entries });
+}
+
+function buildTestRunnerEvidenceSummary(
+  params: QaEvidenceBuildBase & {
+    defaultRunner: string;
+    targets: readonly QaEvidenceTestTargetInput[];
+    results: readonly QaEvidenceTestResultInput[];
+  },
+): QaEvidenceSummaryJson {
+  const provider = buildQaEvidenceProvider(params);
+  const environment = resolveQaEvidenceEnvironment(params.env);
+  const packageSource = resolveQaEvidencePackageSource(params.env);
+  const runner = resolveQaEvidenceRunner({
+    env: params.env,
+    fallback: params.runner ?? params.defaultRunner,
+  });
+  const profile = resolveQaEvidenceProfile({
+    env: params.env,
+    fallback: provider.model_live ? "release" : "smoke-ci",
+    explicit: params.profile,
+  });
+  const targetById = new Map(params.targets.map((target) => [target.id, target]));
+  const targetByPath = new Map(params.targets.map((target) => [target.sourcePath, target]));
+  const entries = params.results.map((result, index): QaEvidenceSummaryEntry => {
+    const target = result.id
+      ? targetById.get(result.id)
+      : result.sourcePath
+        ? targetByPath.get(result.sourcePath)
+        : undefined;
+    const fallbackId = result.id ?? result.sourcePath ?? `test-${index + 1}`;
+    const sourcePath = target?.sourcePath ?? result.sourcePath;
+    return {
+      scenarioId: target?.id ?? fallbackId,
+      scenarioTitle: target?.title ?? result.title ?? fallbackId,
+      coverageIds: uniqueSortedStrings(target?.coverageIds ?? []),
+      ...(sourcePath ? { sourcePath } : {}),
+      ...(target?.docsRefs ? { docsRefs: [...target.docsRefs] } : {}),
+      ...(target?.codeRefs ? { codeRefs: [...target.codeRefs] } : {}),
+      scorecard: {
+        surfaceIds: uniqueSortedStrings(target?.surfaceIds ?? []),
+        categoryIds: uniqueSortedStrings(target?.categoryIds ?? []),
+      },
+      profile,
+      ...provider,
+      runner,
+      packageSource,
+      environment,
+      artifactPaths: [...params.artifactPaths],
+      status: result.status,
+      ...(failureForTestResult(result) ? { failure: failureForTestResult(result) } : {}),
+      ...(timingForTestResult(result) ? { timing: timingForTestResult(result) } : {}),
+    };
+  });
+  return buildQaEvidenceSummary({ generatedAt: params.generatedAt, entries });
+}
+
+export function buildVitestEvidenceSummary(
+  params: QaEvidenceBuildBase & {
+    targets: readonly QaEvidenceTestTargetInput[];
+    results: readonly QaEvidenceTestResultInput[];
+  },
+): QaEvidenceSummaryJson {
+  return buildTestRunnerEvidenceSummary({
+    ...params,
+    defaultRunner: "vitest",
+    runner: params.runner ?? "vitest",
+  });
+}
+
+export function buildPlaywrightEvidenceSummary(
+  params: QaEvidenceBuildBase & {
+    targets: readonly QaEvidenceTestTargetInput[];
+    results: readonly QaEvidenceTestResultInput[];
+  },
+): QaEvidenceSummaryJson {
+  return buildTestRunnerEvidenceSummary({
+    ...params,
+    defaultRunner: "playwright",
+    runner: params.runner ?? "playwright",
+  });
 }
 
 export function buildLiveTransportEvidenceSummary(
