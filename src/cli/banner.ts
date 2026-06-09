@@ -198,3 +198,11 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
 export function hasEmittedCliBanner(): boolean {
   return bannerEmitted;
 }
+
+export const __testing = {
+  /** Resets the module-level banner guard so tests can verify
+   *  banner emission across scenarios within the same process. */
+  resetBannerEmittedForTests(): void {
+    bannerEmitted = false;
+  },
+};
