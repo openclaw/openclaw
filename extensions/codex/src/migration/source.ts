@@ -389,25 +389,21 @@ async function withPluginMigrationEligibility(params: {
     return evaluated;
   }
 
-  const snapshot = await refreshSourceAppInventory(params.requestOptions).catch(
-    (error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      for (const { plugin, apps } of pending) {
-        evaluated.push({
-          ...plugin,
-          migratable: false,
-          migrationBlock: {
-            code: "app_inventory_unavailable",
-            apps,
-            error: message,
-          },
-          message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but source app inventory could not be read: ${message}`,
-        });
-      }
-      return undefined;
-    },
-  );
-  if (!snapshot) {
+  const snapshot = await refreshSourceAppInventory(params.requestOptions);
+  if (snapshot.lastError) {
+    const message = snapshot.lastError.message;
+    for (const { plugin, apps } of pending) {
+      evaluated.push({
+        ...plugin,
+        migratable: false,
+        migrationBlock: {
+          code: "app_inventory_unavailable",
+          apps,
+          error: message,
+        },
+        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but source app inventory could not be read: ${message}`,
+      });
+    }
     return evaluated;
   }
 
