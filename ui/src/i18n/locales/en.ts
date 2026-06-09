@@ -1624,6 +1624,8 @@ export const en: TranslationMap = {
       command: "Command",
       cwd: "CWD",
       prompt: "Prompt",
+      command: "Command",
+      cwd: "CWD",
       delivery: "Delivery",
       agent: "Agent",
     },
