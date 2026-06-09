@@ -1638,7 +1638,7 @@ public struct SessionsListParams: Codable, Sendable {
         includelastmessage: Bool?,
         label: String?,
         spawnedby: String?,
-        hubdelegatedowner: String?,
+        hubdelegatedowner: String? = nil,
         agentid: String? = nil,
         search: String?)
     {
@@ -1768,7 +1768,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         label: String?,
         agentid: String? = nil,
         spawnedby: String?,
-        hubdelegatedowner: String?,
+        hubdelegatedowner: String? = nil,
         includeglobal: Bool?,
         includeunknown: Bool?)
     {

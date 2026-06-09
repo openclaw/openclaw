@@ -19,6 +19,8 @@ describe("shouldRepairMissingAcpSessionMetadata", () => {
   it("returns persistent mode for hub-delegated store rows missing sqlite metadata", async () => {
     await withTempDir({ prefix: "openclaw-acp-repair-" }, async (home) => {
       process.env.OPENCLAW_STATE_DIR = path.join(home, "state");
+      const workspace = path.join(home, "workspace");
+      fs.mkdirSync(workspace, { recursive: true });
       const storePath = path.join(home, "agents/claude/sessions/sessions.json");
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
       const sessionKey = "agent:claude:acp:54143f55-ea57-46be-9444-663f086780f1";
@@ -36,10 +38,75 @@ describe("shouldRepairMissingAcpSessionMetadata", () => {
 
       expect(
         shouldRepairMissingAcpSessionMetadata({
-          cfg: { session: { store: storePath } },
+          cfg: {
+            session: { store: storePath },
+            agents: {
+              defaults: { workspace },
+              list: [{ id: "claude", workspace }],
+            },
+          },
           sessionKey: "agent:main:main",
         }),
       ).toBeNull();
+
+      expect(
+        shouldRepairMissingAcpSessionMetadata({
+          cfg: {
+            session: { store: storePath },
+            agents: {
+              defaults: { workspace },
+              list: [{ id: "claude", workspace }],
+            },
+          },
+          sessionKey,
+        }),
+      ).toEqual({
+        sessionKey,
+        agent: "claude",
+        mode: "persistent",
+        backendId: undefined,
+        cwd: workspace,
+      });
+      expect(
+        hasPersistedAcpSessionMetadata({
+          cfg: { session: { store: storePath } },
+          sessionKey,
+        }),
+      ).toBe(false);
+    });
+  });
+
+  it("preserves legacy cwd and resume ids from json store rows missing sqlite metadata", async () => {
+    await withTempDir({ prefix: "openclaw-acp-repair-" }, async (home) => {
+      process.env.OPENCLAW_STATE_DIR = path.join(home, "state");
+      const storePath = path.join(home, "agents/codex/sessions/sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      const sessionKey = "agent:codex:acp:54143f55-ea57-46be-9444-663f086780f1";
+      const entry: SessionEntry = {
+        sessionId: "child-session-id",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+        parentSessionKey: "agent:main:main",
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-worker",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: Date.now(),
+          cwd: "/workspace/stale",
+          runtimeOptions: {
+            cwd: "/workspace/project",
+          },
+          identity: {
+            state: "resolved",
+            source: "status",
+            lastUpdatedAt: Date.now(),
+            agentSessionId: "codex-session-123",
+          },
+        },
+      };
+      writeSessionStoreForTest(storePath, { [sessionKey]: entry });
 
       expect(
         shouldRepairMissingAcpSessionMetadata({
@@ -48,16 +115,15 @@ describe("shouldRepairMissingAcpSessionMetadata", () => {
         }),
       ).toEqual({
         sessionKey,
-        agent: "claude",
+        agent: "codex",
         mode: "persistent",
         backendId: undefined,
+        cwd: "/workspace/project",
+        runtimeOptions: {
+          cwd: "/workspace/project",
+        },
+        resumeSessionId: "codex-session-123",
       });
-      expect(
-        hasPersistedAcpSessionMetadata({
-          cfg: { session: { store: storePath } },
-          sessionKey,
-        }),
-      ).toBe(false);
     });
   });
 

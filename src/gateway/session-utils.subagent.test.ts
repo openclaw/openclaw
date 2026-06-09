@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -117,6 +118,46 @@ describe("listSessionsFromStore subagent metadata", () => {
     });
 
     expect(result.sessions[0]?.acpLastActivityAt).toBe(lastActivityAt);
+  });
+
+  test("projects sqlite acp last activity on hub-delegated session rows", async () => {
+    await withStateDirEnv("openclaw-session-utils-acp-meta-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "agents/codex/sessions/sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      const ownerSessionKey = "agent:main:webchat:main";
+      const delegateKey = "agent:codex:acp:worker";
+      const createdAt = 1_000;
+      const lastActivityAt = 50_000;
+      writeSessionStoreForTest(storePath, {
+        [delegateKey]: {
+          sessionId: "sess-worker",
+          updatedAt: lastActivityAt,
+          label: "repo-fix",
+          hubDelegated: { ownerSessionKey, createdAt },
+        },
+      });
+      writeAcpSessionMetaForMigration({
+        sessionKey: delegateKey,
+        sessionId: "sess-worker",
+        meta: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-worker",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt,
+        },
+      });
+
+      const result = listSessionsFromStore({
+        cfg: { ...cfg, session: { store: storePath } },
+        storePath,
+        store: loadSessionStore(storePath),
+        opts: { hubDelegatedOwner: ownerSessionKey },
+      });
+
+      expect(result.sessions[0]?.acpLastActivityAt).toBe(lastActivityAt);
+    });
   });
 
   test("applies limit before transcript enrichment", () => {

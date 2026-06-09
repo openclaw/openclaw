@@ -2132,7 +2132,13 @@ export function buildGatewaySessionRow(params: {
     agentId: sessionAgentId,
     sessionKey: key,
   });
-  const acpMeta = readAcpSessionMeta({ sessionKey: acpSessionKey });
+  const acpMeta = readAcpSessionMeta({ sessionKey: acpSessionKey, cfg });
+  const acpLastActivityAt =
+    typeof acpMeta?.lastActivityAt === "number" && Number.isFinite(acpMeta.lastActivityAt)
+      ? acpMeta.lastActivityAt
+      : typeof entry?.acp?.lastActivityAt === "number" && Number.isFinite(entry.acp.lastActivityAt)
+        ? entry.acp.lastActivityAt
+        : undefined;
   const agentRuntime = resolveModelAgentRuntimeMetadata({
     cfg,
     agentId: sessionAgentId,
@@ -2252,9 +2258,7 @@ export function buildGatewaySessionRow(params: {
     endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
-    ...(typeof entry?.acp?.lastActivityAt === "number" && Number.isFinite(entry.acp.lastActivityAt)
-      ? { acpLastActivityAt: entry.acp.lastActivityAt }
-      : {}),
+    ...(acpLastActivityAt !== undefined ? { acpLastActivityAt } : {}),
     childSessions,
     responseUsage: entry?.responseUsage,
     modelProvider: rowModelProvider,
