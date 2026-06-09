@@ -99,12 +99,13 @@ export async function writeDailyDreamingPhaseBlock(params: {
       params.timezone,
     );
     await fs.mkdir(path.dirname(reportPath), { recursive: true });
-    const report = [
-      `# ${params.phase === "light" ? "Light Sleep" : "REM Sleep"}`,
-      "",
-      body,
-      "",
-    ].join("\n");
+    const reportHeading =
+      params.phase === "light"
+        ? "Light Sleep"
+        : params.phase === "deep"
+          ? "Deep Sleep"
+          : "REM Sleep";
+    const report = [`# ${reportHeading}`, "", body, ""].join("\n");
     await fs.writeFile(reportPath, report, "utf-8");
   }
 

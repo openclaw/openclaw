@@ -650,13 +650,16 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         timezone: params.config.timezone,
         storage: params.config.storage ?? { mode: "separate", separateReports: false },
       });
+      // Write Deep Sleep into the daily memory file (DREAMS.md) as a managed block.
+      // Use inline-only mode so we don't overwrite the separate deep report that
+      // writeDeepDreamingReport already wrote to memory/dreaming/deep/<date>.md.
       await writeDailyDreamingPhaseBlock({
         workspaceDir,
         phase: "deep",
         bodyLines: reportLines,
         nowMs: sweepNowMs,
         timezone: params.config.timezone,
-        storage: params.config.storage ?? { mode: "separate", separateReports: false },
+        storage: { mode: "inline" },
       });
       // Generate dream diary narrative from promoted memories.
       if (params.subagent && (candidates.length > 0 || applied.applied > 0)) {
