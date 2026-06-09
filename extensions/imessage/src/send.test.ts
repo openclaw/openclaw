@@ -121,6 +121,19 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
+  it("uses the dedicated send timeout (covers macOS 26 stalls), not the 10s probe default", async () => {
+    const client = createClient({ guid: "p:0/imsg-1" });
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith("send", expect.any(Object), {
+      timeoutMs: 150_000,
+    });
+  });
+
   it("sends explicit chat media-only payloads through send-attachment auto transport", async () => {
     const client = createClient({ message_id: 12345 });
     const runCliJson = vi
@@ -166,6 +179,74 @@ describe("sendMessageIMessage receipts", () => {
       },
     ]);
     expect(result.receipt.sentAt).toBeGreaterThan(0);
+  });
+
+  it("sends audioAsVoice media through send-attachment audio transport", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/voice-guid" });
+
+    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/voice.caf",
+      audioAsVoice: true,
+      resolveAttachmentImpl: async () => ({ path: "/tmp/voice.caf", contentType: "audio/x-caf" }),
+      runCliJson,
+    });
+
+    expect(result.messageId).toBe("p:0/voice-guid");
+    expect(runCliJson.mock.calls).toEqual([
+      [
+        [
+          "send-attachment",
+          "--chat",
+          "chat-1",
+          "--file",
+          "/tmp/voice.caf",
+          "--audio",
+          "--transport",
+          "auto",
+        ],
+      ],
+    ]);
+    expect(result.receipt.parts.map((part) => part.kind)).toEqual(["voice"]);
+    expect(client["request"]).not.toHaveBeenCalled();
+  });
+
+  it("preserves audioAsVoice media when replying to an iMessage thread", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/threaded-voice-guid" });
+
+    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/voice.caf",
+      audioAsVoice: true,
+      replyToId: "p:0/reply-guid",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/voice.caf", contentType: "audio/x-caf" }),
+      runCliJson,
+    });
+
+    expect(result.messageId).toBe("p:0/threaded-voice-guid");
+    expect(runCliJson.mock.calls).toEqual([
+      [
+        [
+          "send-attachment",
+          "--chat",
+          "chat-1",
+          "--file",
+          "/tmp/voice.caf",
+          "--audio",
+          "--reply-to",
+          "p:0/reply-guid",
+          "--transport",
+          "auto",
+        ],
+      ],
+    ]);
+    expect(result.receipt.replyToId).toBe("p:0/reply-guid");
+    expect(result.receipt.parts.map((part) => part.kind)).toEqual(["voice"]);
+    expect(client["request"]).not.toHaveBeenCalled();
   });
 
   it("resolves chat_id media-only payloads before using send-attachment", async () => {
@@ -586,6 +667,69 @@ describe("sendMessageIMessage receipts", () => {
 
     expect(result.messageId).toBe("ok");
     expect(result.receipt.platformMessageIds).toStrictEqual([]);
+  });
+
+  it("persists an echo marker before awaiting the bridge send result", async () => {
+    let resolveRequest!: (value: Record<string, unknown>) => void;
+    const client = {
+      request: vi.fn(
+        () =>
+          new Promise<Record<string, unknown>>((resolve) => {
+            resolveRequest = resolve;
+          }),
+      ),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    const send = sendMessageIMessage("+15551234567", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    });
+
+    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
+    expect(
+      hasPersistedIMessageEcho({
+        scope: "default:imessage:+15551234567",
+        text: "hello",
+        includePendingText: true,
+      }),
+    ).toBe(true);
+
+    resolveRequest({ guid: "p:0/imsg-1" });
+    await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-1" });
+  });
+
+  it("keeps the pending echo marker alive for slow default-timeout sends", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-04T00:00:00Z"));
+    let resolveRequest!: (value: Record<string, unknown>) => void;
+    const client = {
+      request: vi.fn(
+        () =>
+          new Promise<Record<string, unknown>>((resolve) => {
+            resolveRequest = resolve;
+          }),
+      ),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    const send = sendMessageIMessage("+15551234567", "slow hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    });
+    expect(getClientMocks(client).request).toHaveBeenCalled();
+
+    vi.advanceTimersByTime(61_000);
+    expect(
+      hasPersistedIMessageEcho({
+        scope: "default:imessage:+15551234567",
+        text: "slow hello",
+        includePendingText: true,
+      }),
+    ).toBe(true);
+
+    resolveRequest({ guid: "p:0/imsg-slow" });
+    await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-slow" });
   });
 
   it("resolves numeric chat.db ROWIDs to GUIDs for approval reaction binding", async () => {

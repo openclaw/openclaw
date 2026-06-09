@@ -14,9 +14,8 @@ reference for **what to import** and **what you can register**.
 <Note>
   This page is for plugin authors using `openclaw/plugin-sdk/*` inside
   OpenClaw. For external apps, scripts, dashboards, CI jobs, and IDE extensions
-  that want to run agents through the Gateway, use the
-  [OpenClaw App SDK](/concepts/openclaw-sdk) and the `@openclaw/sdk` package
-  instead.
+  that want to run agents through the Gateway, use
+  [Gateway integrations for external apps](/gateway/external-apps) instead.
 </Note>
 
 <Tip>

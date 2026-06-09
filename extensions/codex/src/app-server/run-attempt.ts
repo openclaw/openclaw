@@ -309,6 +309,43 @@ function emitCodexAppServerEvent(
   }
 }
 
+function toTranscriptToolResult(response: CodexDynamicToolCallResponse): Record<string, unknown> {
+  const sanitized = sanitizeCodexToolResponse(response);
+  const contentItems = Array.isArray(sanitized.contentItems) ? sanitized.contentItems : [];
+  const result: Record<string, unknown> = {
+    ...sanitized,
+    // Progress events are UI/transcript-facing; map only sanitized content so
+    // event redaction cannot be bypassed by raw dynamic tool output.
+    content: contentItems.map(toTranscriptToolResultContentItem),
+  };
+  delete result.contentItems;
+  delete result.success;
+  return result;
+}
+
+function toTranscriptToolResultContentItem(item: unknown): Record<string, unknown> {
+  if (!item || typeof item !== "object") {
+    return { type: "text", text: "" };
+  }
+  const record = item as Record<string, unknown>;
+  if (record.type === "inputText") {
+    return { type: "text", text: typeof record.text === "string" ? record.text : "" };
+  }
+  if (record.type === "inputImage") {
+    return typeof record.imageUrl === "string"
+      ? { type: "image", url: record.imageUrl }
+      : { type: "text", text: formatUnsupportedCodexDynamicToolOutput(record.type) };
+  }
+  return { type: "text", text: formatUnsupportedCodexDynamicToolOutput(record.type) };
+}
+
+function formatUnsupportedCodexDynamicToolOutput(type: unknown): string {
+  const rawType = typeof type === "string" ? type.replace(/\s+/g, " ").trim() : "";
+  const label = rawType ? rawType.slice(0, 80) : "unknown";
+  const suffix = rawType.length > 80 ? "..." : "";
+  return `[Unsupported Codex dynamic tool output: ${label}${suffix}]`;
+}
+
 type CodexAgentEndHookParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
 
 function shouldAwaitCodexAgentEndHook(params: EmbeddedRunAttemptParams): boolean {
@@ -1131,6 +1168,10 @@ export async function runCodexAppServerAttempt(
   let timedOut = false;
   let turnCompletionIdleTimedOut = false;
   let turnWatchTimeoutKind: CodexAttemptTurnWatchTimeoutKind | undefined;
+  let turnWatchTimeoutIdleMs: number | undefined;
+  let turnWatchTimeoutMs: number | undefined;
+  let turnWatchTimeoutLastActivityReason: string | undefined;
+  let turnWatchTimeoutDetails: Record<string, unknown> | undefined;
   let turnCompletionIdleTimeoutMessage: string | undefined;
   let clientClosedPromptError: string | undefined;
   let clientClosedAbort = false;
@@ -1221,6 +1262,10 @@ export async function runCodexAppServerAttempt(
       timedOut = true;
       turnCompletionIdleTimedOut = true;
       turnWatchTimeoutKind = timeout.kind;
+      turnWatchTimeoutIdleMs = timeout.idleMs;
+      turnWatchTimeoutMs = timeout.timeoutMs;
+      turnWatchTimeoutLastActivityReason = timeout.lastActivityReason;
+      turnWatchTimeoutDetails = timeout.details;
       turnCompletionIdleTimeoutMessage =
         "codex app-server turn idle timed out waiting for turn/completed";
     },
@@ -1709,7 +1754,7 @@ export async function runCodexAppServerAttempt(
               toolCallId: call.callId,
               ...(toolMeta ? { meta: toolMeta } : {}),
               isError: !protocolResponse.success,
-              result: sanitizeCodexToolResponse(progressResponse),
+              result: toTranscriptToolResult(progressResponse),
             },
           });
         }
@@ -2229,8 +2274,17 @@ export async function runCodexAppServerAttempt(
     const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
     const finalAborted =
       result.aborted || (runAbortController.signal.aborted && !clientClosedAbort);
+    const canUseCompletedAssistantTextAfterClientClose =
+      activeProjector.hasCompletedTerminalAssistantText() &&
+      activeAppServerTurnRequests === 0 &&
+      activeTurnItemIds.size === 0 &&
+      pendingOpenClawDynamicToolCompletionIds.size === 0;
+    const clientClosedPromptErrorForFinal =
+      clientClosedPromptError && canUseCompletedAssistantTextAfterClientClose
+        ? undefined
+        : clientClosedPromptError;
     let finalPromptError =
-      clientClosedPromptError ??
+      clientClosedPromptErrorForFinal ??
       (turnCompletionIdleTimedOut
         ? turnCompletionIdleTimeoutMessage
         : timedOut
@@ -2281,8 +2335,8 @@ export async function runCodexAppServerAttempt(
       finalPromptError = refreshedUsageLimitPromptError;
     }
     const finalPromptErrorSource =
-      timedOut || clientClosedPromptError ? "prompt" : result.promptErrorSource;
-    const codexAppServerFailureKind = clientClosedPromptError
+      timedOut || clientClosedPromptErrorForFinal ? "prompt" : result.promptErrorSource;
+    const codexAppServerFailureKind = clientClosedPromptErrorForFinal
       ? "client_closed_before_turn_completed"
       : turnCompletionIdleTimedOut
         ? "turn_completion_idle_timeout"
@@ -2293,7 +2347,18 @@ export async function runCodexAppServerAttempt(
     const promptTimeoutOutcome = buildCodexAppServerPromptTimeoutOutcome({
       result,
       turnCompletionIdleTimedOut,
+      turnWatchTimeoutKind,
     });
+    const codexAppServerFailureDiagnostics =
+      codexAppServerFailureKind === "turn_completion_idle_timeout" &&
+      turnWatchTimeoutKind === "completion"
+        ? buildCodexAppServerTimeoutDiagnostics({
+            idleMs: turnWatchTimeoutIdleMs,
+            timeoutMs: turnWatchTimeoutMs,
+            lastActivityReason: turnWatchTimeoutLastActivityReason,
+            details: turnWatchTimeoutDetails,
+          })
+        : undefined;
     const modelCallFailureKind =
       classifyCodexModelCallFailureKind({
         error: finalPromptError,
@@ -2460,6 +2525,9 @@ export async function runCodexAppServerAttempt(
               replaySafe: codexAppServerReplayBlockedReason === undefined,
               ...(codexAppServerReplayBlockedReason
                 ? { replayBlockedReason: codexAppServerReplayBlockedReason }
+                : {}),
+              ...(codexAppServerFailureDiagnostics
+                ? { diagnostics: codexAppServerFailureDiagnostics }
                 : {}),
             },
           }
@@ -2645,6 +2713,64 @@ function waitForCodexNotificationDispatchTurn(): Promise<void> {
   });
 }
 
+function buildCodexAppServerTimeoutDiagnostics(params: {
+  idleMs?: number;
+  timeoutMs?: number;
+  lastActivityReason?: string;
+  details?: Record<string, unknown>;
+}): NonNullable<EmbeddedRunAttemptResult["codexAppServerFailure"]>["diagnostics"] {
+  const readString = (key: string) => {
+    const value = params.details?.[key];
+    return typeof value === "string" && value.trim() ? value : undefined;
+  };
+  const readNumber = (key: string) => {
+    const value = params.details?.[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  };
+  const readBoolean = (key: string) => {
+    const value = params.details?.[key];
+    return typeof value === "boolean" ? value : undefined;
+  };
+  return {
+    ...(params.idleMs !== undefined ? { idleMs: params.idleMs } : {}),
+    ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+    ...(params.lastActivityReason ? { lastActivityReason: params.lastActivityReason } : {}),
+    ...(readString("lastNotificationMethod")
+      ? { lastNotificationMethod: readString("lastNotificationMethod") }
+      : {}),
+    ...(readString("lastNotificationItemId")
+      ? { lastNotificationItemId: readString("lastNotificationItemId") }
+      : {}),
+    ...(readString("lastNotificationItemType")
+      ? { lastNotificationItemType: readString("lastNotificationItemType") }
+      : {}),
+    ...(readString("lastNotificationItemRole")
+      ? { lastNotificationItemRole: readString("lastNotificationItemRole") }
+      : {}),
+    ...(readString("lastAssistantTextPreview")
+      ? { lastAssistantTextPreview: readString("lastAssistantTextPreview") }
+      : {}),
+    ...(readNumber("activeAppServerTurnRequests") !== undefined
+      ? { activeAppServerTurnRequests: readNumber("activeAppServerTurnRequests") }
+      : {}),
+    ...(readNumber("activeTurnItemCount") !== undefined
+      ? { activeTurnItemCount: readNumber("activeTurnItemCount") }
+      : {}),
+    ...(readBoolean("terminalTurnNotificationQueued") !== undefined
+      ? { terminalTurnNotificationQueued: readBoolean("terminalTurnNotificationQueued") }
+      : {}),
+    ...(readBoolean("completionIdleWatchArmed") !== undefined
+      ? { completionIdleWatchArmed: readBoolean("completionIdleWatchArmed") }
+      : {}),
+    ...(readBoolean("assistantCompletionIdleWatchArmed") !== undefined
+      ? { assistantCompletionIdleWatchArmed: readBoolean("assistantCompletionIdleWatchArmed") }
+      : {}),
+    ...(readBoolean("terminalIdleWatchArmed") !== undefined
+      ? { terminalIdleWatchArmed: readBoolean("terminalIdleWatchArmed") }
+      : {}),
+  };
+}
+
 function handleApprovalRequest(params: {
   method: string;
   params: JsonValue | undefined;
@@ -2681,6 +2807,7 @@ export const testing = {
   shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
   hasPendingDynamicToolTerminalDiagnostic,
+  toTranscriptToolResultForTests: toTranscriptToolResult,
   withCodexStartupTimeout,
   setOpenClawCodingToolsFactoryForTests,
   resetOpenClawCodingToolsFactoryForTests,
