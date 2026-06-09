@@ -115,7 +115,7 @@ describe("pw-session termination CDP SSRF guard", () => {
       });
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(fetchSpy.mock.calls[0]?.[0]?.toString()).toBe("http://127.0.0.1:18792/json/list");
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("http://127.0.0.1:18792/json/list");
       expect(wsMockState.constructorUrls).toEqual([]);
       expect(browserClose).toHaveBeenCalledTimes(1);
     } finally {
