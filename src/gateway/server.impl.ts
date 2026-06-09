@@ -510,6 +510,11 @@ export type GatewayServerOptions = {
    */
   openResponsesEnabled?: boolean;
   /**
+   * If false, do not serve `POST /v1/audio/speech` (OpenAI-compatible TTS).
+   * Default: config `gateway.http.endpoints.audioSpeech.enabled` (or false when absent).
+   */
+  audioSpeechEnabled?: boolean;
+  /**
    * Override gateway auth configuration (merges with config).
    */
   auth?: import("../config/config.js").GatewayAuthConfig;
@@ -777,6 +782,7 @@ export async function startGatewayServer(
       controlUiEnabled: opts.controlUiEnabled,
       openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
       openResponsesEnabled: opts.openResponsesEnabled,
+      audioSpeechEnabled: opts.audioSpeechEnabled,
       auth: opts.auth,
       tailscale: opts.tailscale,
     });
@@ -788,6 +794,8 @@ export async function startGatewayServer(
     openAiChatCompletionsConfig,
     openResponsesEnabled,
     openResponsesConfig,
+    audioSpeechEnabled,
+    audioSpeechConfig,
     strictTransportSecurityHeader,
     controlUiBasePath,
     controlUiRoot: controlUiRootOverride,
@@ -936,6 +944,8 @@ export async function startGatewayServer(
       openAiChatCompletionsConfig,
       openResponsesEnabled,
       openResponsesConfig,
+      audioSpeechEnabled,
+      audioSpeechConfig,
       strictTransportSecurityHeader,
       resolvedAuth,
       rateLimiter: authRateLimiter,

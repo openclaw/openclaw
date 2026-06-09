@@ -83,6 +83,8 @@ export async function createGatewayRuntimeState(params: {
   openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
+  audioSpeechEnabled?: boolean;
+  audioSpeechConfig?: import("../config/types.gateway.js").GatewayHttpAudioSpeechConfig;
   strictTransportSecurityHeader?: string;
   resolvedAuth: ResolvedGatewayAuth;
   getResolvedAuth: () => ResolvedGatewayAuth;
@@ -258,6 +260,8 @@ export async function createGatewayRuntimeState(params: {
         openAiChatCompletionsConfig: params.openAiChatCompletionsConfig,
         openResponsesEnabled: params.openResponsesEnabled,
         openResponsesConfig: params.openResponsesConfig,
+        audioSpeechEnabled: params.audioSpeechEnabled,
+        audioSpeechConfig: params.audioSpeechConfig,
         strictTransportSecurityHeader: params.strictTransportSecurityHeader,
         handleHooksRequest,
         handlePluginRequest,
