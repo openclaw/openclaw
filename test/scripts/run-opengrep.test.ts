@@ -121,4 +121,50 @@ describe("run-opengrep.sh", () => {
     expect(args).toContain("src/pr.ts");
     expect(args).not.toContain("src/main-only.ts");
   });
+
+  it("does not pass changed files ignored by semgrepignore as explicit scan paths", () => {
+    const repo = createTempDir("openclaw-run-opengrep-ignore-");
+    git(repo, "init", "-q", "--initial-branch=main");
+    git(repo, "config", "user.email", "test@example.com");
+    git(repo, "config", "user.name", "Test User");
+
+    copyRunOpengrepFiles(repo);
+    writeFile(path.join(repo, ".semgrepignore"), "*.test.*\n");
+    writeFile(path.join(repo, "security/opengrep/precise.yml"), "rules: []\n");
+    writeFile(path.join(repo, "src/prod.ts"), "export const prod = 1;\n");
+    writeFile(path.join(repo, "src/prod.test.ts"), "export const test = 1;\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-qm", "base");
+
+    writeFile(path.join(repo, "src/prod.ts"), "export const prod = 2;\n");
+    writeFile(path.join(repo, "src/prod.test.ts"), "export const test = 2;\n");
+
+    const argsPath = path.join(repo, "opengrep-args.txt");
+    const binDir = path.join(repo, "bin");
+    fs.mkdirSync(binDir);
+    writeFile(
+      path.join(binDir, "opengrep"),
+      [
+        "#!/usr/bin/env bash",
+        `printf '%s\\n' "$@" > ${JSON.stringify(argsPath)}`,
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    fs.chmodSync(path.join(binDir, "opengrep"), 0o755);
+
+    execFileSync("bash", ["scripts/run-opengrep.sh", "--changed"], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        OPENCLAW_OPENGREP_BASE_REF: "HEAD",
+      },
+      encoding: "utf8",
+    });
+
+    const args = fs.readFileSync(argsPath, "utf8");
+    expect(args).toContain("src/prod.ts");
+    expect(args).not.toContain("src/prod.test.ts");
+  });
 });
