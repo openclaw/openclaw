@@ -951,6 +951,7 @@ function readAcpMetaForDeletedAgentCheck(params: {
 
   repairAcpSessionMetaKeyForMigration({
     sessionKey: params.sessionKey,
+    candidateSessionKeys: directKeys,
     entry: params.entry ?? undefined,
   });
   return readAcpSessionMetaForEntry({

@@ -253,6 +253,7 @@ export function writeAcpSessionMetaForMigration(params: {
 
 export function repairAcpSessionMetaKeyForMigration(params: {
   sessionKey: string;
+  candidateSessionKeys?: Iterable<string | null | undefined>;
   entry?: Pick<SessionEntry, "sessionId">;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
@@ -272,17 +273,38 @@ export function repairAcpSessionMetaKeyForMigration(params: {
       }
 
       const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
-      const row = executeSqliteQuerySync(
+      const candidateKeys = new Set<string>();
+      candidateKeys.add(normalizedSessionKey);
+      for (const candidate of params.candidateSessionKeys ?? []) {
+        const trimmed = typeof candidate === "string" ? candidate.trim() : "";
+        if (
+          trimmed &&
+          trimmed !== sessionKey &&
+          normalizeLowercaseStringOrEmpty(trimmed) === normalizedSessionKey
+        ) {
+          candidateKeys.add(trimmed);
+        }
+      }
+
+      let row: AcpSessionRow | undefined;
+      for (const candidateKey of candidateKeys) {
+        const candidateRow = selectAcpSessionRow(database.db, candidateKey);
+        if (candidateRow && acpSessionRowMatchesEntry(candidateRow, params.entry)) {
+          row = candidateRow;
+          break;
+        }
+      }
+      row ??= executeSqliteQuerySync(
         database.db,
         getAcpSessionKysely(database.db)
           .selectFrom("acp_sessions")
           .selectAll()
+          .where((eb) => eb.fn<string>("lower", ["session_key"]), "=", normalizedSessionKey)
           .orderBy("last_activity_at", "desc")
           .orderBy("session_key", "asc"),
       ).rows.find(
         (candidate) =>
           candidate.session_key !== sessionKey &&
-          normalizeLowercaseStringOrEmpty(candidate.session_key) === normalizedSessionKey &&
           acpSessionRowMatchesEntry(candidate, params.entry),
       );
       if (!row) {
