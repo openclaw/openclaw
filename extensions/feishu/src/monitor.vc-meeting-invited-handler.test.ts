@@ -311,6 +311,15 @@ describe("resolveVcMeetingInvitedTurn", () => {
       null,
     );
     expect(resolveVcMeetingInvitedTurn({ ...vcEvent, inviter: { id: {} } })).toBe(null);
+    expect(
+      resolveVcMeetingInvitedTurn({
+        ...vcEvent,
+        inviter: {
+          id: { union_id: "on_inviter_1" },
+          user_name: "Alice",
+        },
+      }),
+    ).toBe(null);
   });
 });
 

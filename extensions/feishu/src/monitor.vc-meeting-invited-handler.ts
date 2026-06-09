@@ -68,7 +68,7 @@ function resolveVcInviter(event: FeishuVcMeetingInvitedEvent): ResolvedVcInviter
   const openId = pickString(id?.open_id);
   const userId = pickString(id?.user_id);
   const unionId = pickString(id?.union_id);
-  const senderId = openId ?? userId ?? unionId;
+  const senderId = openId ?? userId;
   if (!senderId) {
     return null;
   }
@@ -287,8 +287,7 @@ async function dispatchVcMeetingInvitedTurn(params: {
 
   const bodyForAgent = `[message_id: ${params.turn.turnId}]\n${params.turn.inviter.name ?? params.turn.inviter.senderId}: ${params.turn.prompt}`;
   const timestamp = parseInviteTimestamp(params.turn.inviteTime);
-  const target = params.turn.inviter.openId ?? params.turn.inviter.senderId;
-  const replyTarget = `user:${target}`;
+  const replyTarget = `user:${params.turn.inviter.senderId}`;
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: bodyForAgent,
     BodyForAgent: bodyForAgent,
