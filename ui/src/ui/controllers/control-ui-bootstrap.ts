@@ -63,6 +63,8 @@ const SEAM_COLOR_CSS_VARS = [
   "--accent-subtle",
   "--accent-glow",
   "--ring",
+  "--primary",
+  "--focus",
 ];
 
 function normalizeHexColor(hex: string): string {
@@ -71,9 +73,9 @@ function normalizeHexColor(hex: string): string {
 
 function hexToRgba(hex: string, alpha: number): string {
   const normalized = normalizeHexColor(hex);
-  const r = parseInt(normalized.slice(1, 3), 16);
-  const g = parseInt(normalized.slice(3, 5), 16);
-  const b = parseInt(normalized.slice(5, 7), 16);
+  const r = Number.parseInt(normalized.slice(1, 3), 16);
+  const g = Number.parseInt(normalized.slice(3, 5), 16);
+  const b = Number.parseInt(normalized.slice(5, 7), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
@@ -92,6 +94,8 @@ function applySeamColor(seamColor: string | null | undefined) {
   root.setProperty("--accent-subtle", hexToRgba(normalized, 0.1));
   root.setProperty("--accent-glow", hexToRgba(normalized, 0.2));
   root.setProperty("--ring", normalized);
+  root.setProperty("--primary", normalized);
+  root.setProperty("--focus", normalized);
 }
 
 export async function loadControlUiBootstrapConfig(

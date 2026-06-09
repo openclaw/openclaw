@@ -106,6 +106,8 @@ describe("loadControlUiBootstrapConfig", () => {
     expect(root.getPropertyValue("--accent-subtle")).toBe("rgba(0, 170, 255, 0.1)");
     expect(root.getPropertyValue("--accent-glow")).toBe("rgba(0, 170, 255, 0.2)");
     expect(root.getPropertyValue("--ring")).toBe("#00aaff");
+    expect(root.getPropertyValue("--primary")).toBe("#00aaff");
+    expect(root.getPropertyValue("--focus")).toBe("#00aaff");
 
     vi.unstubAllGlobals();
   });
@@ -129,6 +131,8 @@ describe("loadControlUiBootstrapConfig", () => {
     // Pre-seed a prior seamColor so we can verify removal
     document.documentElement.style.setProperty("--accent", "#00aaff");
     document.documentElement.style.setProperty("--ring", "#00aaff");
+    document.documentElement.style.setProperty("--primary", "#00aaff");
+    document.documentElement.style.setProperty("--focus", "#00aaff");
 
     const state = {
       basePath: "",
@@ -148,6 +152,8 @@ describe("loadControlUiBootstrapConfig", () => {
     const root = document.documentElement.style;
     expect(root.getPropertyValue("--accent")).toBe("");
     expect(root.getPropertyValue("--ring")).toBe("");
+    expect(root.getPropertyValue("--primary")).toBe("");
+    expect(root.getPropertyValue("--focus")).toBe("");
 
     vi.unstubAllGlobals();
   });
@@ -190,6 +196,8 @@ describe("loadControlUiBootstrapConfig", () => {
     expect(root.getPropertyValue("--accent-subtle")).toBe("rgba(0, 170, 255, 0.1)");
     expect(root.getPropertyValue("--accent-glow")).toBe("rgba(0, 170, 255, 0.2)");
     expect(root.getPropertyValue("--ring")).toBe("#00aaff");
+    expect(root.getPropertyValue("--primary")).toBe("#00aaff");
+    expect(root.getPropertyValue("--focus")).toBe("#00aaff");
 
     vi.unstubAllGlobals();
   });
