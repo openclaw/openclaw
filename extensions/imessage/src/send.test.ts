@@ -698,6 +698,38 @@ describe("sendMessageIMessage receipts", () => {
     await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-1" });
   });
 
+  it("keeps the pending echo marker alive for slow default-timeout sends", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-04T00:00:00Z"));
+    let resolveRequest!: (value: Record<string, unknown>) => void;
+    const client = {
+      request: vi.fn(
+        () =>
+          new Promise<Record<string, unknown>>((resolve) => {
+            resolveRequest = resolve;
+          }),
+      ),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    const send = sendMessageIMessage("+15551234567", "slow hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    });
+    expect(getClientMocks(client).request).toHaveBeenCalled();
+
+    vi.advanceTimersByTime(61_000);
+    expect(
+      hasPersistedIMessageEcho({
+        scope: "default:imessage:+15551234567",
+        text: "slow hello",
+      }),
+    ).toBe(true);
+
+    resolveRequest({ guid: "p:0/imsg-slow" });
+    await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-slow" });
+  });
+
   it("resolves numeric chat.db ROWIDs to GUIDs for approval reaction binding", async () => {
     const client = createClient({ message_id: 12345 });
     const resolveMessageGuidImpl = vi.fn(async () => "p:0/resolved-guid");

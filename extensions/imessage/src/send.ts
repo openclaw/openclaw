@@ -41,7 +41,8 @@ import {
 
 const require = createRequire(import.meta.url);
 type ParsedIMessageTarget = ReturnType<typeof parseIMessageTarget>;
-const PENDING_PERSISTED_ECHO_TTL_MS = 60_000;
+const MIN_PENDING_PERSISTED_ECHO_TTL_MS = 60_000;
+const PENDING_PERSISTED_ECHO_GRACE_MS = 5_000;
 
 type IMessageSendOpts = {
   cliPath?: string;
@@ -691,6 +692,13 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function resolvePendingPersistedEchoTtlMs(timeoutMs: number): number {
+  return Math.max(
+    MIN_PENDING_PERSISTED_ECHO_TTL_MS,
+    Math.max(0, timeoutMs) + PENDING_PERSISTED_ECHO_GRACE_MS,
+  );
+}
+
 function isAttachmentCommandFallbackError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /(?:unknown|unrecognized|invalid|unsupported)\s+(?:command|subcommand)|not a recognized command|send-attachment.*(?:not found|unsupported|unavailable)|private api bridge.*unavailable|requires the imsg private api bridge|run imsg launch/iu.test(
@@ -739,6 +747,7 @@ async function trySendAttachmentForTarget(params: {
   audioAsVoice?: boolean;
   replyToId?: string;
   echoText?: string;
+  pendingEchoTtlMs: number;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
 }): Promise<IMessageSendResult | null> {
@@ -770,7 +779,7 @@ async function trySendAttachmentForTarget(params: {
       pendingEchoKey = rememberPersistedIMessageEcho({
         scope: echoScope,
         text: params.echoText,
-        ttlMs: PENDING_PERSISTED_ECHO_TTL_MS,
+        ttlMs: params.pendingEchoTtlMs,
       });
     }
     result = await params.runCliJson([
@@ -878,6 +887,7 @@ export async function sendMessageIMessage(
   // for callers that tuned them. See DEFAULT_IMESSAGE_SEND_TIMEOUT_MS.
   const timeoutMs =
     opts.timeoutMs ?? account.config.probeTimeoutMs ?? DEFAULT_IMESSAGE_SEND_TIMEOUT_MS;
+  const pendingEchoTtlMs = resolvePendingPersistedEchoTtlMs(timeoutMs);
   const region = opts.region?.trim() || account.config.region?.trim() || "US";
   const maxBytes =
     typeof opts.maxBytes === "number"
@@ -944,6 +954,7 @@ export async function sendMessageIMessage(
       audioAsVoice: opts.audioAsVoice,
       ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
       echoText: attachmentEchoText,
+      pendingEchoTtlMs,
       runCliJson,
       resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
     });
@@ -1017,7 +1028,7 @@ export async function sendMessageIMessage(
         pendingEchoKey = rememberPersistedIMessageEcho({
           scope: echoScope,
           text: echoText,
-          ttlMs: PENDING_PERSISTED_ECHO_TTL_MS,
+          ttlMs: pendingEchoTtlMs,
         });
       }
       if (echoText) {
