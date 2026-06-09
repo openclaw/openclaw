@@ -194,7 +194,7 @@ struct RootTabsPhoneControlHub: View {
     @ViewBuilder
     private func detail(for destination: RootTabs.SidebarDestination) -> some View {
         switch destination {
-        case .chat, .agents, .gateway:
+        case .chat, .talk, .agents, .gateway:
             EmptyView()
         case .overview:
             CommandCenterTab(
@@ -345,7 +345,7 @@ struct RootTabsPhoneControlHub: View {
 
     private func color(for destination: RootTabs.SidebarDestination) -> Color {
         switch destination {
-        case .chat, .overview, .gateway:
+        case .chat, .talk, .overview, .gateway:
             OpenClawBrand.accent
         case .instances:
             Color.secondary

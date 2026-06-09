@@ -24,6 +24,7 @@ extension RootTabs {
 
     enum SidebarDestination: String, CaseIterable, Hashable, Identifiable {
         case chat
+        case talk
         case overview
         case activity
         case agents
@@ -45,6 +46,7 @@ extension RootTabs {
         var title: String {
             switch self {
             case .chat: "Chat"
+            case .talk: "Talk"
             case .overview: "Overview"
             case .activity: "Activity"
             case .agents: "Agents"
@@ -71,6 +73,7 @@ extension RootTabs {
         var subtitle: String {
             switch self {
             case .chat: "Agent chat and recent work."
+            case .talk: "Realtime voice and fallback controls."
             case .overview: "Status, entry points, health."
             case .activity: "Gateway, session, and device activity."
             case .agents: "Agent roster and readiness."
@@ -90,6 +93,7 @@ extension RootTabs {
         var systemImage: String {
             switch self {
             case .chat: "bubble.left"
+            case .talk: "waveform.circle"
             case .overview: "chart.bar"
             case .activity: "waveform.path.ecg"
             case .agents: "person.2"
@@ -110,6 +114,8 @@ extension RootTabs {
             switch self {
             case .chat:
                 .chat
+            case .talk:
+                .talk
             case .agents:
                 .agent
             case .settings, .gateway:
@@ -125,7 +131,7 @@ extension RootTabs {
             switch self {
             case .gateway:
                 .gateway
-            case .chat, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
+            case .chat, .talk, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
                  .dreaming,
                  .usage, .cron, .settings, .docs:
                 nil
@@ -194,7 +200,7 @@ extension RootTabs {
 
     static func shouldOpenRootTabFromPhoneHub(_ destination: SidebarDestination) -> Bool {
         switch destination {
-        case .chat, .agents, .gateway, .settings:
+        case .chat, .talk, .agents, .gateway, .settings:
             true
         case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .dreaming,
              .usage,
@@ -210,7 +216,7 @@ extension RootTabs {
         case .chat:
             .chat
         case .talk:
-            .chat
+            .talk
         case .agent:
             .agents
         case .settings:
@@ -269,7 +275,7 @@ extension RootTabs {
     }
 
     static let sidebarGroups: [SidebarGroup] = [
-        SidebarGroup(title: "CHAT", destinations: [.chat]),
+        SidebarGroup(title: "CHAT", destinations: [.chat, .talk]),
         SidebarGroup(
             title: "CONTROL",
             destinations: [

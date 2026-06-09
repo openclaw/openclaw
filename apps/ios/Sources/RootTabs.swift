@@ -380,6 +380,10 @@ struct RootTabs: View {
                 headerSubtitle: "Agent conversation",
                 showsAgentBadge: false,
                 openSettings: { self.selectSidebarDestination(.gateway) })
+        case .talk:
+            TalkProTab(
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                openSettings: { self.selectSidebarDestination(.gateway) })
         case .overview:
             CommandCenterTab(
                 headerTitle: "Overview",

@@ -67,7 +67,7 @@ import UIKit
         let destinationIDs = RootTabs.SidebarDestination.allCases.map(\.rawValue)
 
         #expect(groups.map(\.title) == ["CHAT", "CONTROL", "SETTINGS", "REFERENCE"])
-        #expect(groups[0].destinations.map(\.rawValue) == ["chat"])
+        #expect(groups[0].destinations.map(\.rawValue) == ["chat", "talk"])
         #expect(groups[1].destinations == [
             .overview,
             .activity,
@@ -84,6 +84,7 @@ import UIKit
         #expect(groups[3].destinations == [.docs])
         #expect(destinationIDs == [
             "chat",
+            "talk",
             "overview",
             "activity",
             "agents",
@@ -98,7 +99,6 @@ import UIKit
             "settings",
             "gateway",
         ])
-        #expect(!destinationIDs.contains("talk"))
         #expect(!destinationIDs.contains("agent"))
         #expect(!RootTabs.sidebarGroups.flatMap(\.destinations).contains(.gateway))
     }
@@ -122,12 +122,13 @@ import UIKit
 
     @Test func phoneHubUsesRootTabsOnlyForNativeChatAgentAndGateway() {
         #expect(RootTabs.shouldOpenRootTabFromPhoneHub(.chat))
+        #expect(RootTabs.shouldOpenRootTabFromPhoneHub(.talk))
         #expect(RootTabs.shouldOpenRootTabFromPhoneHub(.agents))
         #expect(RootTabs.shouldOpenRootTabFromPhoneHub(.gateway))
         #expect(RootTabs.shouldOpenRootTabFromPhoneHub(.settings))
 
         for destination in RootTabs.SidebarDestination.allCases
-            where destination != .chat && destination != .agents && destination != .gateway && destination != .settings
+            where destination != .chat && destination != .talk && destination != .agents && destination != .gateway && destination != .settings
         {
             #expect(!RootTabs.shouldOpenRootTabFromPhoneHub(destination))
         }
@@ -136,7 +137,7 @@ import UIKit
     @Test func legacyInitialTabsMapToMatchingSidebarDestinations() {
         #expect(RootTabs.defaultSidebarDestination(for: .control) == .overview)
         #expect(RootTabs.defaultSidebarDestination(for: .chat) == .chat)
-        #expect(RootTabs.defaultSidebarDestination(for: .talk) == .chat)
+        #expect(RootTabs.defaultSidebarDestination(for: .talk) == .talk)
         #expect(RootTabs.defaultSidebarDestination(for: .agent) == .agents)
         #expect(RootTabs.defaultSidebarDestination(for: .settings) == .settings)
     }
