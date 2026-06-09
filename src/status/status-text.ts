@@ -12,6 +12,7 @@ import {
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import { CODEX_APP_SERVER_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
@@ -148,14 +149,10 @@ function resolveUsageCredentialType(authLabel?: string): "oauth" | "token" | "ap
 function shouldUseCodexSyntheticUsage(params: {
   provider?: string;
   effectiveHarness?: string;
-  authLabel?: string;
 }): boolean {
   const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
   const provider = normalizeOptionalLowercaseString(params.provider);
-  const auth = normalizeOptionalLowercaseString(params.authLabel);
-  return (
-    harness === "codex" && (provider === "openai" || provider === "codex") && auth === "unknown"
-  );
+  return harness === "codex" && (provider === "openai" || provider === "codex");
 }
 
 function formatSessionTaskLine(sessionKey: string): string | undefined {
@@ -342,15 +339,13 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     selectedModelAuth = activeModelAuth;
   }
   const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
-  const usageCredentialType =
-    resolveUsageCredentialType(usageAuthLabel) ??
-    (shouldUseCodexSyntheticUsage({
-      provider: activeStatusProvider,
-      effectiveHarness,
-      authLabel: usageAuthLabel,
-    })
-      ? "token"
-      : undefined);
+  const useCodexSyntheticUsage = shouldUseCodexSyntheticUsage({
+    provider: activeStatusProvider,
+    effectiveHarness,
+  });
+  const usageCredentialType = useCodexSyntheticUsage
+    ? "token"
+    : resolveUsageCredentialType(usageAuthLabel);
   const currentUsageProvider =
     resolveUsageProviderId(activeStatusProvider, { credentialType: usageCredentialType }) ??
     resolveUsageProviderId(activeProvider, { credentialType: usageCredentialType });
@@ -366,7 +361,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     try {
       // Usage summary is optional operator context. Bound it tightly so a slow
       // provider usage probe cannot delay the status command.
-      const usageSummaryTimeoutMs = 3500;
+      const usageSummaryTimeoutMs = useCodexSyntheticUsage ? 8000 : 3500;
       let usageTimeout: NodeJS.Timeout | undefined;
       const usageSummary = await Promise.race([
         loadProviderUsageSummary({
@@ -375,6 +370,15 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           agentDir: statusAgentDir,
           workspaceDir: statusWorkspaceDir,
           config: cfg,
+          auth: useCodexSyntheticUsage
+            ? [
+                {
+                  provider: "openai",
+                  token: CODEX_APP_SERVER_AUTH_MARKER,
+                  hookProvider: "codex",
+                },
+              ]
+            : undefined,
         }),
         new Promise<never>((_, reject) => {
           usageTimeout = setTimeout(

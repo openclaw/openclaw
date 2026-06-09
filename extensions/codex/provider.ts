@@ -240,7 +240,6 @@ async function requestCodexAppServerRateLimitsLazy(options: {
   return await requestCodexAppServerJson({
     method: "account/rateLimits/read",
     timeoutMs: options.timeoutMs,
-    authProfileId: null,
     agentDir: options.agentDir,
     config: options.config,
     isolated: true,

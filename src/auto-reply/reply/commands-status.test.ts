@@ -59,6 +59,13 @@ vi.mock("../../agents/harness/builtin-openclaw.js", () => ({
 }));
 
 const baseCfg = baseCommandTestConfig;
+const expectedCodexRuntimeUsageAuth = [
+  {
+    provider: "openai",
+    token: "codex-app-server",
+    hookProvider: "codex",
+  },
+];
 const codexStatusModel: ModelDefinitionConfig = {
   id: "gpt-5.5",
   name: "GPT-5.5",
@@ -724,6 +731,7 @@ describe("buildStatusReply subagent summary", () => {
           throw new Error("expected provider usage summary call for openai");
         }
         expect(providerUsageCall[0]?.providers).toEqual(["openai"]);
+        expect(providerUsageCall[0]?.auth).toEqual(expectedCodexRuntimeUsageAuth);
       },
       {
         env: {
@@ -808,6 +816,7 @@ describe("buildStatusReply subagent summary", () => {
           throw new Error("expected provider usage summary call for openai");
         }
         expect(providerUsageCall[0]?.providers).toEqual(["openai"]);
+        expect(providerUsageCall[0]?.auth).toEqual(expectedCodexRuntimeUsageAuth);
       },
       {
         env: {
@@ -877,7 +886,9 @@ describe("buildStatusReply subagent summary", () => {
       throw new Error("expected provider usage summary call for synthetic Codex auth");
     }
     expect(providerUsageCall[0]).toMatchObject({
+      timeoutMs: 8000,
       providers: ["openai"],
+      auth: expectedCodexRuntimeUsageAuth,
       config: expect.objectContaining({
         agents: expect.objectContaining({
           defaults: expect.objectContaining({ agentRuntime: { id: "codex" } }),
