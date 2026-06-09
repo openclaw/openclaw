@@ -210,9 +210,7 @@ describe("color allocation", () => {
   it("handles case-insensitive color matching", () => {
     const usedColors = new Set(["#ff4500"]); // lowercase
     // Should still skip this color (case-insensitive)
-    // Note: allocateColor compares against uppercase, so lowercase won't match
-    // This tests the current behavior
-    expect(allocateColor(usedColors)).toBe(PROFILE_COLORS[0]); // returns first since lowercase doesn't match
+    expect(allocateColor(usedColors)).toBe(PROFILE_COLORS[1]);
   });
 
   it("cycles when all colors are used", () => {
