@@ -10,10 +10,7 @@ import {
   resolveAuthProfileOrder,
 } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
-import {
-  CODEX_APP_SERVER_AUTH_MARKER,
-  isNonSecretApiKeyMarker,
-} from "../agents/model-auth-markers.js";
+import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
@@ -24,10 +21,7 @@ import {
   passesManifestOwnerBasePolicy,
 } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import {
-  resolveProviderSyntheticAuthWithPlugin,
-  resolveProviderUsageAuthWithPlugin,
-} from "../plugins/provider-runtime.js";
+import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveProviderAuthEnvVarCandidates } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { isOAuthOnlyUsageProvider } from "./provider-usage.shared.js";
@@ -343,44 +337,6 @@ async function resolveProviderUsageAuthFallback(params: {
   return null;
 }
 
-function resolveCodexProviderConfig(state: UsageAuthState) {
-  const providers = state.cfg.models?.providers ?? {};
-  return (
-    providers.codex ??
-    Object.entries(providers).find(([provider]) => normalizeProviderId(provider) === "codex")?.[1]
-  );
-}
-
-function resolveOpenAICodexSyntheticUsageAuth(params: {
-  state: UsageAuthState;
-  provider: UsageProviderId;
-}): ProviderAuth | null {
-  if (params.provider !== "openai") {
-    return null;
-  }
-  const synthetic = resolveProviderSyntheticAuthWithPlugin({
-    provider: "codex",
-    config: params.state.cfg,
-    env: params.state.env,
-    context: {
-      config: params.state.cfg,
-      provider: "codex",
-      providerConfig: resolveCodexProviderConfig(params.state),
-    },
-  });
-  if (
-    synthetic?.mode !== "token" ||
-    normalizeSecretInput(synthetic.apiKey) !== CODEX_APP_SERVER_AUTH_MARKER
-  ) {
-    return null;
-  }
-  return {
-    provider: "openai",
-    token: CODEX_APP_SERVER_AUTH_MARKER,
-    hookProvider: "codex",
-  };
-}
-
 function hasAuthProfileCredentialSource(params: {
   state: UsageAuthState;
   providerIds: string[];
@@ -457,14 +413,6 @@ export async function resolveProviderAuths(params: {
       });
       if (fallbackAuth) {
         auths.push(fallbackAuth);
-        continue;
-      }
-      const syntheticAuth = resolveOpenAICodexSyntheticUsageAuth({
-        state: authProfileSourceState,
-        provider,
-      });
-      if (syntheticAuth) {
-        auths.push(syntheticAuth);
       }
       continue;
     }

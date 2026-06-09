@@ -3,13 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderSyntheticAuthResult } from "../plugins/provider-external-auth.types.js";
 
 const resolveProviderUsageAuthWithPluginMock = vi.fn(
   async (..._args: unknown[]): Promise<unknown> => null,
-);
-const resolveProviderSyntheticAuthWithPluginMock = vi.fn(
-  (_params: unknown): ProviderSyntheticAuthResult | null | undefined => undefined,
 );
 const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);
 const ensureAuthProfileStoreMock = vi.fn(() => ({
@@ -37,7 +33,6 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   );
   return {
     ...actual,
-    resolveProviderSyntheticAuthWithPlugin: resolveProviderSyntheticAuthWithPluginMock,
     resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
   };
 });
@@ -118,8 +113,6 @@ describe("resolveProviderAuths plugin boundary", () => {
     resolveAuthProfileOrderMock.mockReturnValue([]);
     resolveProviderUsageAuthWithPluginMock.mockReset();
     resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
-    resolveProviderSyntheticAuthWithPluginMock.mockReset();
-    resolveProviderSyntheticAuthWithPluginMock.mockReturnValue(undefined);
   });
 
   it("prefers plugin-owned usage auth when available", async () => {
@@ -140,33 +133,13 @@ describe("resolveProviderAuths plugin boundary", () => {
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
   });
 
-  it("uses Codex synthetic app-server auth for OpenAI usage when OAuth is absent", async () => {
-    resolveProviderSyntheticAuthWithPluginMock.mockReturnValueOnce({
-      apiKey: "codex-app-server",
-      source: "codex-app-server",
-      mode: "token",
-    });
-
+  it("does not synthesize Codex app-server auth for generic OpenAI usage", async () => {
     await expect(
       resolveProviderAuthsForTest({
         providers: ["openai"],
       }),
-    ).resolves.toEqual([
-      {
-        provider: "openai",
-        token: "codex-app-server",
-        hookProvider: "codex",
-      },
-    ]);
-
-    expect(resolveProviderSyntheticAuthWithPluginMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "codex",
-        context: expect.objectContaining({
-          provider: "codex",
-        }),
-      }),
-    );
+    ).resolves.toEqual([]);
+    expect(providerCalls(resolveProviderUsageAuthWithPluginMock)).toEqual(["openai"]);
   });
 
   it("skips plugin usage auth when requested and no direct credential source exists", async () => {
