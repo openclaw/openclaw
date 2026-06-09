@@ -839,13 +839,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           }
           state.pendingOptimisticUserMessage = false;
           state.pendingChatRunId = null;
-          if (normalizedChatSendAckStatus(sendResult.status) === "error") {
+          await loadHistory();
+          if (terminalAckFailure) {
             chatLog.addSystem(`send failed: ${TERMINAL_CHAT_SEND_FAILURE_MESSAGE}`);
             setActivityStatus("error");
           } else {
             setActivityStatus("idle");
           }
-          await loadHistory();
           tui.requestRender();
           return;
         }

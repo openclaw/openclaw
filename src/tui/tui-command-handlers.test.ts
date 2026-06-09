@@ -653,11 +653,15 @@ describe("tui command handlers", () => {
       runId: opts.runId,
       status: "timeout",
     }));
-    const loadHistory = vi.fn().mockResolvedValue(undefined) as LoadHistoryMock;
-    const { handleCommand, state, dropPendingUser, setActivityStatus } = createHarness({
+    const historyReload = { clearSystemMessages: undefined as (() => void) | undefined };
+    const loadHistory = vi.fn().mockImplementation(async () => {
+      historyReload.clearSystemMessages?.();
+    }) as LoadHistoryMock;
+    const { handleCommand, state, dropPendingUser, addSystem, setActivityStatus } = createHarness({
       sendChat,
       loadHistory,
     });
+    historyReload.clearSystemMessages = () => addSystem.mockClear();
 
     await handleCommand("hello");
 
@@ -666,7 +670,10 @@ describe("tui command handlers", () => {
     expect(state.pendingSubmitDraft).toBeNull();
     expect(state.pendingChatRunId).toBeNull();
     expect(state.pendingOptimisticUserMessage).toBe(false);
-    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(addSystem).toHaveBeenCalledWith(
+      "send failed: Chat failed before the run started; try again.",
+    );
+    expect(setActivityStatus).toHaveBeenLastCalledWith("error");
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 
