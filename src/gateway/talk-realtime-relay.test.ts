@@ -1255,6 +1255,86 @@ describe("talk realtime gateway relay", () => {
     stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
   });
 
+  it("drops duplicate final user transcripts before broadcasting or forcing another consult", async () => {
+    vi.useFakeTimers();
+
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      supportsToolResultContinuation: true,
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      sendUserMessage: vi.fn(),
+      triggerGreeting: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "be brief",
+      tools: [],
+      forceAgentConsultOnFinalTranscript: true,
+    });
+    await Promise.resolve();
+
+    bridgeRequest?.onTranscript?.("user", "Hey Sam.", true);
+    await vi.advanceTimersByTimeAsync(3_400);
+    bridgeRequest?.onTranscript?.("user", "Hey Sam", true);
+    await vi.advanceTimersByTimeAsync(3_100);
+
+    const finalUserTranscripts = events
+      .map((entry) => entry.payload)
+      .filter(
+        (payload) =>
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as Record<string, unknown>).type === "transcript" &&
+          (payload as Record<string, unknown>).role === "user" &&
+          (payload as Record<string, unknown>).final === true,
+      );
+    expect(finalUserTranscripts).toHaveLength(1);
+    expectRecordFields(finalUserTranscripts[0], { text: "Hey Sam." });
+
+    const forcedToolCalls = events
+      .map((entry) => entry.payload)
+      .filter(
+        (payload) =>
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as Record<string, unknown>).type === "toolCall" &&
+          (payload as Record<string, unknown>).forced === true,
+      );
+    expect(forcedToolCalls).toHaveLength(1);
+    expectRecordFields((forcedToolCalls[0] as Record<string, unknown>).args, {
+      question: "Hey Sam.",
+    });
+    expect(bridge.handleBargeIn).toHaveBeenCalledTimes(1);
+
+    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+  });
+
   it("suppresses a started forced consult when a later transcript extends the same utterance", async () => {
     vi.useFakeTimers();
 

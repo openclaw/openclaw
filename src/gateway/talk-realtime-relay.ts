@@ -60,6 +60,7 @@ const MAX_RELAY_SESSIONS_GLOBAL = 64;
 const RELAY_EVENT = "talk.event";
 const RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS = 12_000;
 const FORCED_CONSULT_TRANSCRIPT_DEBOUNCE_MS = 3_000;
+const FINAL_USER_TRANSCRIPT_DEDUPE_MS = 5_000;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1_800;
 const FINAL_SPEECH_OUTPUT_ALLOW_MS = 30_000;
 
@@ -138,6 +139,7 @@ type RelaySession = {
   finalSpeechOutputStarted: boolean;
   finalSpeechOutputItemId?: string;
   finalSpeechOutputResponseId?: string;
+  lastFinalUserTranscript?: { text: string; atMs: number };
   transcript: RealtimeVoiceTranscriptEntry[];
 };
 
@@ -848,6 +850,9 @@ export function createTalkRealtimeRelaySession(
       ) {
         return;
       }
+      if (role === "user" && final && relay && shouldDropDuplicateFinalUserTranscript(relay, text)) {
+        return;
+      }
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
       if (final && relay) {
         recordRealtimeVoiceTranscript(relay.transcript, role, text);
@@ -1101,6 +1106,26 @@ function scheduleForcedAgentConsult(session: RelaySession | undefined, question:
       }),
     });
   });
+}
+
+function shouldDropDuplicateFinalUserTranscript(session: RelaySession, text: string): boolean {
+  const normalized = normalizeFinalUserTranscriptForDedupe(text);
+  if (!normalized) {
+    return false;
+  }
+  const nowMs = Date.now();
+  const previous = session.lastFinalUserTranscript;
+  session.lastFinalUserTranscript = { text: normalized, atMs: nowMs };
+  return (
+    Boolean(previous) &&
+    previous?.text === normalized &&
+    nowMs - previous.atMs >= 0 &&
+    nowMs - previous.atMs <= FINAL_USER_TRANSCRIPT_DEDUPE_MS
+  );
+}
+
+function normalizeFinalUserTranscriptForDedupe(text: string): string {
+  return text.trim().replace(/\s+/g, " ").replace(/[.!?]+$/g, "").toLowerCase();
 }
 
 function submitAlreadyDeliveredToolResult(
