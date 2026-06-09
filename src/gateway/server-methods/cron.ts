@@ -229,6 +229,7 @@ function isCronInvalidRequestError(err: unknown): boolean {
     message.includes("invalid cron sessionTarget session id") ||
     message.includes('main cron jobs require payload.kind="systemEvent"') ||
     message.includes('isolated/current/session cron jobs require payload.kind="agentTurn"') ||
+    message.includes("has no upcoming run time and would never fire") ||
     message.includes('sessionTarget "main" is only valid for the default agent') ||
     message.includes('cron.update payload.kind="systemEvent" requires text') ||
     message.includes('cron.update payload.kind="agentTurn" requires message') ||

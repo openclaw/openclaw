@@ -642,4 +642,107 @@ describe("cron service ops seam coverage", () => {
       await manualRun;
     });
   });
+
+  it("rejects add of a structurally valid cron expression that never matches", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+
+    await expect(
+      add(state, {
+        name: "feb 30 cleanup",
+        enabled: true,
+        schedule: { kind: "cron", expr: "0 0 30 2 *" },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "do work" },
+      }),
+    ).rejects.toThrow(/has no upcoming run time and would never fire/);
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+
+    const loaded = await loadCronStore(storePath);
+    expect(loaded.jobs).toEqual([]);
+  });
+
+  it("accepts add of a satisfiable cron expression and arms a next run", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+
+    const job = await add(state, {
+      name: "daily cleanup",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 0 * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "do work" },
+    });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+
+    expect(typeof job.state.nextRunAtMs).toBe("number");
+    expect(job.state.nextRunAtMs).toBeGreaterThan(now);
+  });
+
+  it("rejects update that changes a job to a never-matching cron expression", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+
+    const job = await add(state, {
+      name: "daily cleanup",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 0 * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "do work" },
+    });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+
+    await expect(
+      update(state, job.id, { schedule: { kind: "cron", expr: "0 0 30 2 *" } }),
+    ).rejects.toThrow(/has no upcoming run time and would never fire/);
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+
+    const loaded = await loadCronStore(storePath);
+    const stored = loaded.jobs.find((entry) => entry.id === job.id);
+    expect(stored?.schedule).toMatchObject({ kind: "cron", expr: "0 0 * * *" });
+  });
+
+  it("allows non-schedule updates on a pre-existing never-matching job", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [
+        {
+          id: "legacy-unsatisfiable",
+          name: "legacy unsatisfiable",
+          enabled: true,
+          createdAtMs: now - 60_000,
+          updatedAtMs: now - 60_000,
+          schedule: { kind: "cron", expr: "0 0 30 2 *" },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "do work" },
+          state: {},
+        },
+      ],
+    });
+    const state = createOkIsolatedCronState({ storePath, now });
+
+    const updated = await update(state, "legacy-unsatisfiable", { enabled: false });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+
+    expect(updated.enabled).toBe(false);
+  });
 });

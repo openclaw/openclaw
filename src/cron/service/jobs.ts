@@ -293,6 +293,18 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
 }
 
+function assertCronExpressionSatisfiable(job: Pick<CronJob, "schedule">, nowMs: number) {
+  if (job.schedule.kind !== "cron") {
+    return;
+  }
+  if (computeNextRunAtMs(job.schedule, nowMs) !== undefined) {
+    return;
+  }
+  throw new Error(
+    `cron expression "${job.schedule.expr}" has no upcoming run time and would never fire`,
+  );
+}
+
 function assertMainSessionAgentId(
   job: Pick<CronJob, "sessionTarget" | "agentId">,
   defaultAgentId: string | undefined,
@@ -781,6 +793,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
+  assertCronExpressionSatisfiable(job, now);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
 }
@@ -869,6 +882,9 @@ export function applyJobPatch(
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
+  if (patch.schedule !== undefined) {
+    assertCronExpressionSatisfiable(job, Date.now());
+  }
 }
 
 function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
