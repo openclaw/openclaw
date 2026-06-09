@@ -1,3 +1,4 @@
+// Test project script tests cover fixture project discovery and validation.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -489,10 +490,10 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes reset-heavy acp targets to the acp config", () => {
+  it("routes session metadata acp targets to the unit-fast config", () => {
     expect(buildVitestRunPlans(["src/acp/runtime/session-meta.test.ts"])).toEqual([
       {
-        config: "test/vitest/vitest.acp.config.ts",
+        config: "test/vitest/vitest.unit-fast.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/acp/runtime/session-meta.test.ts"],
         watchMode: false,

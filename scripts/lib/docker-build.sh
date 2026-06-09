@@ -51,7 +51,7 @@ docker_build_args_need_buildx() {
 docker_build_transient_failure() {
   local log_file="$1"
   grep -Eqi \
-    'frontend grpc server closed unexpectedly|failed to dial gRPC|no active session|buildkit.*connection.*closed|rpc error: code = Unavailable' \
+    'frontend grpc server closed unexpectedly|failed to dial gRPC|no active session|buildkit.*connection.*closed|rpc error: code = Unavailable|failed to fetch oauth token:.*(5[0-9][0-9]|Gateway Timeout)|unexpected status from .*: 5[0-9][0-9]|TLS handshake timeout|net/http: TLS handshake timeout|i/o timeout|connection reset by peer' \
     "$log_file"
 }
 
@@ -235,7 +235,7 @@ docker_build_with_retries() {
       return 1
     fi
 
-    echo "Docker build failed with a transient BuildKit transport error; retrying ($attempt/$retries)..." >&2
+    echo "Docker build failed with a transient Docker/registry error; retrying ($attempt/$retries)..." >&2
     docker_e2e_print_log "$log_file"
     rm -f "$log_file"
     attempt=$((attempt + 1))

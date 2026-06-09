@@ -1,3 +1,4 @@
+// Anthropic provider adapts Anthropic streams and tool calls for the runtime.
 import Anthropic from "@anthropic-ai/sdk";
 import type {
   CacheControlEphemeral,
@@ -514,7 +515,6 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         { status: response.status, headers: headersToRecord(response.headers) },
         model,
       );
-      stream.push({ type: "start", partial: output });
 
       type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & {
         index: number;
@@ -524,19 +524,21 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       for await (const event of iterateAnthropicEvents(response, options?.signal)) {
         if (event.type === "message_start") {
           output.responseId = event.message.id;
-          // Capture initial token usage from message_start event
-          // This ensures we have input token counts even if the stream is aborted early
           output.usage.input = event.message.usage.input_tokens || 0;
           output.usage.output = event.message.usage.output_tokens || 0;
           output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
           output.usage.cacheWrite = event.message.usage.cache_creation_input_tokens || 0;
-          // Anthropic doesn't provide total_tokens, compute from components
           output.usage.totalTokens =
             output.usage.input +
             output.usage.output +
             output.usage.cacheRead +
             output.usage.cacheWrite;
           calculateCost(model, output.usage);
+          // Defer start until after message_start so that pre-stream SSE errors
+          // (e.g. invalid thinking signatures) arrive before any non-error event
+          // is yielded, keeping yieldedOutput=false in pumpStreamWithRecovery
+          // and allowing the thinking-block recovery retry to fire.
+          stream.push({ type: "start", partial: output });
         } else if (event.type === "content_block_start") {
           if (event.content_block.type === "text") {
             const block: Block = {
@@ -1130,13 +1132,14 @@ function convertMessages(
               text: sanitizeSurrogates(block.thinking),
             });
           } else {
-            const thinking =
-              block.thinkingSignature === "reasoning_content"
-                ? sanitizeSurrogates(block.thinking)
-                : block.thinking;
+            // OpenAI-compatible reasoning markers are field names, not native
+            // Anthropic replay signatures; sending them bricks persisted replays.
+            if (block.thinkingSignature === "reasoning_content") {
+              continue;
+            }
             blocks.push({
               type: "thinking",
-              thinking,
+              thinking: block.thinking,
               signature: block.thinkingSignature,
             });
           }

@@ -1,3 +1,5 @@
+// Config gateway methods expose config get/set/patch/apply/schema operations
+// with validation, redaction restoration, secret prep, and reload planning.
 import { execFile } from "node:child_process";
 import {
   asDateTimestampMs,
@@ -181,7 +183,7 @@ export function resolveConfigOpenCommand(
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        `Start-Process -LiteralPath '${escapePowerShellSingleQuotedString(configPath)}'`,
+        `Start-Process -FilePath '${escapePowerShellSingleQuotedString(configPath)}'`,
       ],
     };
   }

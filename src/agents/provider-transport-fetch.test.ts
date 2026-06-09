@@ -1,3 +1,4 @@
+// Verifies guarded provider fetch wiring, stream cleanup, proxy, and local service behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
@@ -22,6 +23,7 @@ const {
   withTrustedEnvProxyGuardedFetchModeMock,
   managedStreamCleanupRegistrations,
 } = vi.hoisted(() => {
+  // Mock FinalizationRegistry so stream cleanup registrations are directly assertable.
   const managedStreamCleanupRegistrationsLocal: Array<{
     callback: (held: { finalize: () => Promise<void> }) => void;
     held: { finalize: () => Promise<void> };
@@ -96,6 +98,7 @@ vi.mock("./provider-request-config.js", () => ({
 }));
 
 function latestGuardedFetchParams(): Record<string, unknown> {
+  // All transport calls should pass through the SSRF-guarded fetch seam.
   const calls = fetchWithSsrFGuardMock.mock.calls;
   const params = calls[calls.length - 1]?.[0];
   if (!params || typeof params !== "object") {
@@ -133,6 +136,7 @@ function openResponseStreamText(text: string): {
   close: () => void;
   stream: ReadableStream<Uint8Array>;
 } {
+  // Leaves the stream open so cleanup/finalization paths can be exercised.
   const encoder = new TextEncoder();
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
   return {

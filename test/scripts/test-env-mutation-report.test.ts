@@ -1,3 +1,4 @@
+// Test Env Mutation Report tests cover test env mutation report script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -139,5 +140,25 @@ describe("collectTestEnvMutationReport", () => {
     const report = JSON.parse(result.stdout) as TestEnvMutationReport;
     expect(report.summary.activeFindingCount).toBe(9);
     expect(report.summary.allowedFindingCount).toBe(2);
+  });
+
+  it("rejects missing CLI repo roots instead of scanning zero files", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        path.join(process.cwd(), "scripts/test-env-mutation-report.ts"),
+        "--",
+        "--repo-root",
+        "--json",
+      ],
+      {
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("--repo-root expects a path");
   });
 });

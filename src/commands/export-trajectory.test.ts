@@ -1,3 +1,4 @@
+// Export trajectory tests cover trajectory export command output and file selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { exportTrajectoryCommand } from "./export-trajectory.js";
@@ -18,6 +19,14 @@ vi.mock("../config/sessions/paths.js", async (importOriginal) => {
     resolveDefaultSessionStorePath: mocks.resolveDefaultSessionStorePath,
   };
 });
+
+vi.mock("./session-state-migration.js", async () => ({
+  ...(await vi.importActual<typeof import("./session-state-migration.js")>(
+    "./session-state-migration.js",
+  )),
+  ensureExplicitSessionStoreMigratedForCommand: vi.fn(async () => {}),
+  ensureSessionStateMigratedForCommand: vi.fn(async () => {}),
+}));
 
 function createRuntime(): RuntimeEnv {
   return {

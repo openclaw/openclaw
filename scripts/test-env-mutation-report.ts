@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Test Env Mutation Report script supports OpenClaw repository automation.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -400,7 +401,7 @@ function parseArgs(argv: string[]): {
     }
     if (arg === "--repo-root") {
       const value = argv[index + 1];
-      if (!value) {
+      if (!value || value.startsWith("--")) {
         throw new Error("--repo-root expects a path");
       }
       repoRoot = value;

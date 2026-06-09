@@ -1,3 +1,4 @@
+// Control UI tests cover chat flow behavior.
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -340,7 +341,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       defaultAgentId: "ops",
-      deferredMethods: ["chat.metadata", "chat.startup"],
+      deferredMethods: ["chat.startup"],
       historyMessages: [],
       sessionKey: "global",
     });
@@ -348,8 +349,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-      await gateway.waitForRequest("chat.metadata");
       expect(await gateway.getRequests("agents.list")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
       expect(await gateway.getRequests("commands.list")).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
@@ -456,15 +457,17 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           scope: "agent",
         },
         messages: [],
+        metadata: {
+          models: [],
+        },
         sessionId: "control-ui-e2e-session",
         thinkingLevel: null,
       });
-      await gateway.resolveDeferred("chat.metadata", {
-        commands: [],
-        models: [],
-      });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
       await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      await gateway.waitForRequest("commands.list");
       await gateway.emitChatFinal({ runId, text: "History race stayed visible." });
       await page.getByText("History race stayed visible.").waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("agents.list")).toHaveLength(0);

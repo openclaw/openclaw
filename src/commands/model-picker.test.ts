@@ -1,3 +1,4 @@
+// Model picker tests cover catalog rows, provider metadata, backend defaults, and prompt choices.
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
