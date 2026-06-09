@@ -1028,7 +1028,7 @@ export async function markInlineProviderApiKeyFailure(params: {
       });
     }
     try {
-      onAuthProfileFailureHook?.();
+      notifyAuthProfileFailureHook();
     } catch (err) {
       // Hook errors must not break failure recording; log and continue.
       authProfileUsageLog.warn("auth profile failure hook threw", {
@@ -1061,7 +1061,7 @@ export async function markInlineProviderApiKeyFailure(params: {
     now,
   });
   try {
-    onAuthProfileFailureHook?.();
+    notifyAuthProfileFailureHook();
   } catch (err) {
     // Hook errors must not break failure recording; log and continue.
     authProfileUsageLog.warn("auth profile failure hook threw", {
