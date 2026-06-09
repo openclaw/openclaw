@@ -224,6 +224,8 @@
     "REQUESTS_CA_BUNDLE",
     "RUSTC_WRAPPER",
     "RUSTFLAGS",
+    "RUSTUP_HOME",
+    "RUSTUP_TOOLCHAIN",
     "R_LIBS_USER",
     "SSH_ASKPASS",
     "SSH_AUTH_SOCK",
@@ -252,5 +254,5 @@
     "YARN_RC_FILENAME",
     "ZDOTDIR"
   ],
-  "expectedTotalReportedEntries": 247
+  "expectedTotalReportedEntries": 249
 }

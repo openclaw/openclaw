@@ -160,6 +160,8 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC_WRAPPER")).toBe(true);
     expect(isDangerousHostEnvVarName("cargo_build_rustc_wrapper")).toBe(true);
     expect(isDangerousHostEnvVarName("cargo_home")).toBe(false);
+    expect(isDangerousHostEnvVarName("RUSTUP_HOME")).toBe(false);
+    expect(isDangerousHostEnvVarName("rustup_toolchain")).toBe(false);
     expect(isDangerousHostEnvVarName("CMAKE_C_COMPILER")).toBe(true);
     expect(isDangerousHostEnvVarName("cmake_c_compiler")).toBe(true);
     expect(isDangerousHostEnvVarName("CMAKE_CXX_COMPILER")).toBe(true);
@@ -902,6 +904,8 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("rustc_wrapper")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("RUSTFLAGS")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("rustflags")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("RUSTUP_HOME")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("rustup_toolchain")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CARGO_BUILD_RUSTC_WRAPPER")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("cargo_build_rustc_wrapper")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CARGO_HOME")).toBe(true);
@@ -1042,6 +1046,8 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       PYTHONUSERBASE: "/tmp/evil-python-userbase",
       RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
       RUSTFLAGS: "-C link-args=-l/tmp/evil.so",
+      RUSTUP_HOME: "/tmp/evil-rustup-home",
+      RUSTUP_TOOLCHAIN: "/tmp/evil-toolchain",
       VIRTUAL_ENV: "/tmp/evil-venv",
       JAVA_OPTS: "-javaagent:/tmp/evil.jar",
       YARN_RC_FILENAME: ".evil-yarnrc.yml",
@@ -1117,6 +1123,8 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "REQUESTS_CA_BUNDLE",
       "RUSTC_WRAPPER",
       "RUSTFLAGS",
+      "RUSTUP_HOME",
+      "RUSTUP_TOOLCHAIN",
       "SSL_CERT_DIR",
       "SSL_CERT_FILE",
       "UV_DEFAULT_INDEX",
@@ -1197,6 +1205,8 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.PYTHONUSERBASE).toBeUndefined();
     expect(result.env.RUSTC_WRAPPER).toBeUndefined();
     expect(result.env.RUSTFLAGS).toBeUndefined();
+    expect(result.env.RUSTUP_HOME).toBeUndefined();
+    expect(result.env.RUSTUP_TOOLCHAIN).toBeUndefined();
     expect(result.env.VIRTUAL_ENV).toBeUndefined();
     expect(result.env.YARN_RC_FILENAME).toBeUndefined();
   });
