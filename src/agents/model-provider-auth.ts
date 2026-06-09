@@ -176,19 +176,6 @@ export async function hasAuthForModelProvider(params: {
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
-  if (
-    hasRuntimeAvailableProviderAuth({
-      provider,
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
-      runtimeLookup: params.runtimeAuthLookup ?? params.resolveRuntimeAuthLookup?.(),
-      modelApi: params.modelApi,
-    })
-  ) {
-    return true;
-  }
   const slowPathAgentDir =
     params.agentDir ??
     (params.agentId && params.cfg
@@ -203,6 +190,21 @@ export async function hasAuthForModelProvider(params: {
       : ensureAuthProfileStore(slowPathAgentDir, {
           externalCli: externalCliDiscoveryForProviderAuth({ cfg: params.cfg, provider }),
         }));
+
+  if (
+    hasRuntimeAvailableProviderAuth({
+      provider,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
+      runtimeLookup: params.runtimeAuthLookup ?? params.resolveRuntimeAuthLookup?.(),
+      modelApi: params.modelApi,
+      store,
+    })
+  ) {
+    return true;
+  }
   if (listProfilesForProvider(store, provider).length > 0) {
     return params.modelApi === undefined
       ? true
