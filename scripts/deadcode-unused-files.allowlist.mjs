@@ -11,15 +11,6 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
   // releaseQueuedCompactionCompletion implementation. TODO: refactor call-site
   // to use this helper (bigger refactor, not block-CI).
   "src/auto-reply/continuation/post-compaction-release.ts",
-  // Continuation-rail back-pressure cap-on-enqueue (producer-side); declarative
-  // state landed before producer wire. Matches agent-cache-store family.
-  "src/infra/chain-budget.ts",
-  // Substrate-capability registry query-API; scaffold landed before consumers
-  // wired to the routing system.
-  "src/infra/substrate-capability-registry.ts",
-  "src/state/openclaw-agent-db.paths.ts",
-  "src/state/openclaw-agent-db.ts",
-  "src/state/openclaw-agent-schema.generated.ts",
 ];
 
 // Knip can disagree across supported local/CI platforms for files that are
