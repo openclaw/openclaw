@@ -152,6 +152,48 @@ describe("loadControlUiBootstrapConfig", () => {
     vi.unstubAllGlobals();
   });
 
+  it("normalizes hashless hex seamColor to #RRGGBB form", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Main",
+        assistantAvatar: "M",
+        assistantAgentId: "main",
+        serverVersion: "2026.4.27",
+        localMediaPreviewRoots: [],
+        embedSandbox: "scripts",
+        allowExternalEmbedUrls: false,
+        seamColor: "00aaff",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(state.seamColor).toBe("00aaff");
+    const root = document.documentElement.style;
+    expect(root.getPropertyValue("--accent")).toBe("#00aaff");
+    expect(root.getPropertyValue("--accent-hover")).toBe("color-mix(in srgb, #00aaff, white 15%)");
+    expect(root.getPropertyValue("--accent-muted")).toBe("#00aaff");
+    expect(root.getPropertyValue("--accent-subtle")).toBe("rgba(0, 170, 255, 0.1)");
+    expect(root.getPropertyValue("--accent-glow")).toBe("rgba(0, 170, 255, 0.2)");
+    expect(root.getPropertyValue("--ring")).toBe("#00aaff");
+
+    vi.unstubAllGlobals();
+  });
+
   it("can refresh runtime bootstrap settings without clobbering session identity", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

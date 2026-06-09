@@ -65,10 +65,15 @@ const SEAM_COLOR_CSS_VARS = [
   "--ring",
 ];
 
+function normalizeHexColor(hex: string): string {
+  return hex.startsWith("#") ? hex : `#${hex}`;
+}
+
 function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
+  const normalized = normalizeHexColor(hex);
+  const r = parseInt(normalized.slice(1, 3), 16);
+  const g = parseInt(normalized.slice(3, 5), 16);
+  const b = parseInt(normalized.slice(5, 7), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
@@ -80,12 +85,13 @@ function applySeamColor(seamColor: string | null | undefined) {
     }
     return;
   }
-  root.setProperty("--accent", seamColor);
-  root.setProperty("--accent-hover", `color-mix(in srgb, ${seamColor}, white 15%)`);
-  root.setProperty("--accent-muted", seamColor);
-  root.setProperty("--accent-subtle", hexToRgba(seamColor, 0.1));
-  root.setProperty("--accent-glow", hexToRgba(seamColor, 0.2));
-  root.setProperty("--ring", seamColor);
+  const normalized = normalizeHexColor(seamColor);
+  root.setProperty("--accent", normalized);
+  root.setProperty("--accent-hover", `color-mix(in srgb, ${normalized}, white 15%)`);
+  root.setProperty("--accent-muted", normalized);
+  root.setProperty("--accent-subtle", hexToRgba(normalized, 0.1));
+  root.setProperty("--accent-glow", hexToRgba(normalized, 0.2));
+  root.setProperty("--ring", normalized);
 }
 
 export async function loadControlUiBootstrapConfig(
