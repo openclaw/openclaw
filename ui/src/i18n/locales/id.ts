@@ -1560,6 +1560,7 @@ export const id: TranslationMap = {
       nextHeartbeat: "Heartbeat berikutnya",
       wakeModeHelp: "Now memicu segera. Next heartbeat menunggu siklus berikutnya.",
       payloadKind: "Apa yang harus dijalankan?",
+      command: "Command",
       systemEvent: "Posting pesan ke linimasa utama",
       agentTurn: "Jalankan tugas asisten (terisolasi)",
       systemEventHelp:

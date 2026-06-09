@@ -1569,6 +1569,7 @@ export const tr: TranslationMap = {
       nextHeartbeat: "Sonraki heartbeat",
       wakeModeHelp: "Şimdi hemen tetikler. Sonraki heartbeat, bir sonraki döngüyü bekler.",
       payloadKind: "Ne çalıştırılsın?",
+      command: "Command",
       systemEvent: "Ana zaman çizelgesine mesaj gönder",
       agentTurn: "Asistan görevini çalıştır (yalıtılmış)",
       systemEventHelp:

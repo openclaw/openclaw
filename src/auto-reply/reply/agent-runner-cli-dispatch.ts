@@ -316,7 +316,7 @@ function createToolBoundaryBridge(params: {
       if (evt.stream !== "tool") {
         return undefined;
       }
-      const phase = String(evt.data.phase ?? "");
+      const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
       return ["completed", "end", "error", "result"].includes(phase) ? true : undefined;
     },
   });

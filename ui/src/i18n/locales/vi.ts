@@ -1554,6 +1554,7 @@ export const vi: TranslationMap = {
       nextHeartbeat: "Nhịp tiếp theo",
       wakeModeHelp: "Ngay sẽ kích hoạt lập tức. Nhịp tiếp theo đợi đến chu kỳ tiếp theo.",
       payloadKind: "Cần chạy gì?",
+      command: "Command",
       systemEvent: "Đăng tin nhắn lên dòng thời gian chính",
       agentTurn: "Chạy tác vụ trợ lý (tách biệt)",
       systemEventHelp:

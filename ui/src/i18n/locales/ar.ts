@@ -1545,6 +1545,7 @@ export const ar: TranslationMap = {
       nextHeartbeat: "النبضة التالية",
       wakeModeHelp: "الآن يشغّل فورًا. النبضة التالية تنتظر الدورة التالية.",
       payloadKind: "ما الذي يجب تشغيله؟",
+      command: "Command",
       systemEvent: "نشر رسالة إلى المخطط الزمني الرئيسي",
       agentTurn: "تشغيل مهمة المساعد (معزولة)",
       systemEventHelp: "يرسل نصك إلى المخطط الزمني الرئيسي لـ Gateway (مفيد للتذكيرات/المشغلات).",

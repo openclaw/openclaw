@@ -1566,6 +1566,7 @@ export const uk: TranslationMap = {
       nextHeartbeat: "Наступний heartbeat",
       wakeModeHelp: "Зараз спрацьовує негайно. Наступний heartbeat чекає наступного циклу.",
       payloadKind: "Що слід запустити?",
+      command: "Command",
       systemEvent: "Опублікувати повідомлення в основній часовій шкалі",
       agentTurn: "Запустити завдання асистента (ізольовано)",
       systemEventHelp:

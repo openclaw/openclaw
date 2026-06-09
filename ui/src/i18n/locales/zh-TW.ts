@@ -1527,6 +1527,7 @@ export const zh_TW: TranslationMap = {
       nextHeartbeat: "下一次心跳",
       wakeModeHelp: "現在會立即觸發。下一次心跳會等待到下一個週期。",
       payloadKind: "要執行什麼？",
+      command: "Command",
       systemEvent: "將訊息發佈到主要時間軸",
       agentTurn: "執行助理任務（獨立）",
       systemEventHelp: "將你的文字傳送到 Gateway 主要時間軸（適合提醒／觸發器）。",

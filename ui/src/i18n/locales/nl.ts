@@ -1566,6 +1566,7 @@ export const nl: TranslationMap = {
       nextHeartbeat: "Volgende heartbeat",
       wakeModeHelp: "Nu triggert onmiddellijk. Volgende heartbeat wacht op de volgende cyclus.",
       payloadKind: "Wat moet er worden uitgevoerd?",
+      command: "Command",
       systemEvent: "Bericht plaatsen op main-tijdlijn",
       agentTurn: "Assistenttaak uitvoeren (geïsoleerd)",
       systemEventHelp:
