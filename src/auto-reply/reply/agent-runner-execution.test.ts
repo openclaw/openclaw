@@ -190,6 +190,12 @@ vi.mock("./agent-runner-utils.js", () => ({
       agentDir: run.agentDir,
     }),
   ),
+  resolveRunFastModeForFallbackCandidate: (params: {
+    run: { fastMode?: unknown; fastModeAutoOnSeconds?: unknown };
+  }) => ({
+    fastMode: params.run.fastMode,
+    fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
+  }),
 }));
 
 vi.mock("./reply-delivery.js", () => ({
