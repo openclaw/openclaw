@@ -122,3 +122,19 @@ test("materialize_secret remains local after platform catalog refresh", async ()
   assert.deepEqual(materialize.inputSchema.required, ["name"]);
   assert.ok(tools.find((tool) => tool.name === "inference_job_123"));
 });
+
+test("platform refresh identifies first-party runtime to Cloudflare", async () => {
+  const hooks = __rockieMcpTestHooks();
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url, init });
+    return response({ tools: [] });
+  };
+
+  await hooks.refreshCatalog();
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://api.rockielab.test/api/agent-tools");
+  assert.match(calls[0].init.headers["User-Agent"], /^rockie-runtime\//);
+  assert.doesNotMatch(calls[0].init.headers["User-Agent"], /node|undici/i);
+});

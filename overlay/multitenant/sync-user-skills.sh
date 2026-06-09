@@ -46,6 +46,7 @@ API_BASE="${ROCKIELAB_API_BASE:-https://api.rockielab.com}"
 API_BASE="${API_BASE%/}"
 TENANT_ID="${ROCKIELAB_TENANT_ID:-}"
 TENANT_TOKEN="${ROCKIELAB_TENANT_TOKEN:-${ROCKIELAB_TENANT_DEV_TOKEN:-}}"
+RUNTIME_USER_AGENT="rockie-runtime/1.0 (+https://api.rockielab.com)"
 HOME_DIR="${HOME:-/home/runtime}"
 CLAUDE_SKILLS="${OPENCLAW_SKILLS_DIR:-$HOME_DIR/.claude/skills}"
 CLAUDE_COMMANDS="$(dirname "$CLAUDE_SKILLS")/commands"
@@ -72,6 +73,7 @@ mkdir -p "$STATE_DIR"
 
 # Fetch only the private (scope=user) skills.
 RESP="$(curl -fsS --max-time 15 \
+  -H "User-Agent: ${RUNTIME_USER_AGENT}" \
   -H "X-Tenant-Token: ${TENANT_TOKEN}" \
   -H "X-Tenant-Id: ${TENANT_ID}" \
   "${API_BASE}/api/skills?scope=user" 2>/dev/null)" || {

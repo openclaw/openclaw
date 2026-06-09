@@ -51,6 +51,7 @@ done
 # these for any shell mcp-rockie spawns; running `git` from a free shell
 # without them is allowed but unauthed.
 tenant_token="${ROCKIELAB_TENANT_TOKEN:-${ROCKIELAB_TENANT_DEV_TOKEN:-}}"
+runtime_user_agent="rockie-runtime/1.0 (+https://api.rockielab.com)"
 if [ -z "${ROCKIELAB_API_URL:-}" ] \
    || [ -z "${tenant_token}" ] \
    || [ -z "${ROCKIELAB_TENANT_ID:-}" ] \
@@ -62,6 +63,7 @@ fi
 # falls back to its own credential UI. `-f` makes curl exit non-zero
 # on HTTP 4xx/5xx so we can suppress noisy responses.
 token=$(curl -fsSL \
+  -H "User-Agent: ${runtime_user_agent}" \
   -H "X-Tenant-Token: ${tenant_token}" \
   -H "X-Tenant-Id: ${ROCKIELAB_TENANT_ID}" \
   "${ROCKIELAB_API_URL%/}/api/internal/git-token?source_id=${ROCKIELAB_SOURCE_ID}" \

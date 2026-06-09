@@ -47,6 +47,7 @@ from typing import Any, Optional
 DEFAULT_API_BASE = os.environ.get(
     "ROCKIELAB_API_BASE", "https://api.rockielab.com"
 )
+ROCKIE_RUNTIME_USER_AGENT = "rockie-runtime/1.0 (+https://api.rockielab.com)"
 TENANT_TOKEN = (
     os.environ.get("ROCKIELAB_TENANT_TOKEN")
     or os.environ.get("ROCKIELAB_TENANT_DEV_TOKEN")
@@ -73,7 +74,10 @@ def _build_request(
         )
     if not TENANT_ID:
         raise CLIError("ROCKIELAB_TENANT_ID is required", exit_code=2)
-    headers = {"Accept": "application/json"}
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": ROCKIE_RUNTIME_USER_AGENT,
+    }
     headers["X-Tenant-Token"] = TENANT_TOKEN
     headers["X-Tenant-Id"] = TENANT_ID
     # #1218 — operator attestation. Always sent when configured; the
