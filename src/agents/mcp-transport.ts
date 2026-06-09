@@ -78,9 +78,16 @@ function buildSseEventSourceFetch(
         Object.assign(sdkHeaders, init.headers);
       }
     }
+    // Header names are case-insensitive, but object spreads preserve case
+    // variants and can duplicate Authorization on the wire. Normalize before
+    // merging so operator headers override SDK headers as a single entry.
+    const mergedHeaders: Record<string, string> = {};
+    for (const [key, value] of [...Object.entries(sdkHeaders), ...Object.entries(headers)]) {
+      mergedHeaders[key.toLowerCase()] = value;
+    }
     return baseFetch(url, {
       ...(init as RequestInit),
-      headers: { ...sdkHeaders, ...headers },
+      headers: mergedHeaders,
     }) as ReturnType<SseEventSourceFetch>;
   };
 }
