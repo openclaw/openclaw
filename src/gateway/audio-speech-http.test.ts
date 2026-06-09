@@ -54,7 +54,7 @@ function createResponse(): { res: ServerResponse; captured: CapturedResponse } {
     end(chunk?: string | Buffer) {
       captured.statusCode = res.statusCode;
       if (chunk !== undefined) {
-        captured.body = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+        captured.body = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       }
     },
   };
@@ -189,6 +189,24 @@ describe("handleOpenAiAudioSpeechHttpRequest", () => {
     expect(captured.statusCode).toBe(400);
     expect(jsonBody(captured).error?.message).toMatch(/not available/);
     expect(synthesizeSpeech).not.toHaveBeenCalled();
+  });
+
+  it("rejects when the provider ignored the requested response_format", async () => {
+    // Provider honored its own default (mp3) instead of the requested opus.
+    synthesizeSpeech.mockResolvedValue({
+      success: true,
+      audioBuffer: Buffer.from("AUDIO"),
+      outputFormat: "mp3",
+      fileExtension: ".mp3",
+    });
+    const captured = await callEndpoint({
+      model: "tts/elevenlabs",
+      input: "hi",
+      response_format: "opus",
+    });
+    expect(captured.statusCode).toBe(400);
+    expect(jsonBody(captured).error?.message).toMatch(/does not support response_format 'opus'/);
+    expect(synthesizeSpeech).toHaveBeenCalled();
   });
 
   it("maps synthesis failure to a 502 api_error", async () => {
