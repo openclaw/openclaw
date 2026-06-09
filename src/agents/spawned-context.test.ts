@@ -71,6 +71,16 @@ describe("resolveSpawnedWorkspaceInheritance", () => {
     expect(resolved).toBe("/tmp/workspace-main");
   });
 
+  it("prefers the target agent workspace over the requester when preferTargetAgentWorkspace is set", () => {
+    const resolved = resolveSpawnedWorkspaceInheritance({
+      config,
+      targetAgentId: "ops",
+      requesterSessionKey: "agent:main:main",
+      preferTargetAgentWorkspace: true,
+    });
+    expect(resolved).toBe("/tmp/workspace-ops");
+  });
+
   it("falls back to requester session agent when targetAgentId is missing", () => {
     const resolved = resolveSpawnedWorkspaceInheritance({
       config,

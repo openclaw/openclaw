@@ -66,6 +66,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - ACP/sessions: killing a subagent session now tears down its ACP runtime (cancel + close, discarding persisted state and clearing `.acp` metadata) instead of only marking the run aborted, so a stopped ACP one-shot no longer lingers as `closed:false`/`state:"running"` after the kill reports success; the teardown is timeout-guarded so a wedged ACP backend cannot make the kill itself hang.
+- ACP/sessions: cross-agent ACP spawns (e.g. spawning `claude-code` from `main`) again run in the target agent's own workspace instead of inheriting the requester agent's workspace — a regression from the subagent-parity workspace-inheritance change — and still fall back to the backend default cwd when the target workspace does not exist.
 - Memory/Qdrant: embed workspace reconcile chunks in one FastEmbed spawn, version managed payloads so schema migrations trigger one-time re-upserts, and explicitly preserve non-reconciler points in the shared `agent-memory` collection.
 - Infra/Windows: skip the POSIX `/tmp/openclaw` preferred path on Windows in `resolvePreferredOpenClawTmpDir` so log files, TTS temp files, and other writes land in `%TEMP%\openclaw-<uid>` instead of `C:\tmp\openclaw`. Fixes #60713. Thanks @juan-flores077.
 - Media/Windows: open saved attachment temp files read/write before fsync so Windows WebChat and `chat.send` media offloads no longer fail with EPERM during durability flush. (#76593) Thanks @qq230849622-a11y.

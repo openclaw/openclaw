@@ -56,6 +56,13 @@ export function resolveSpawnedWorkspaceInheritance(params: {
   requesterSessionKey?: string;
   requesterWorkspaceDir?: string | null;
   explicitWorkspaceDir?: string | null;
+  /**
+   * Prefer the target agent's own workspace over the requester's agent
+   * workspace. Cross-agent ACP spawns set this so the target agent runs in its
+   * own configured workspace; subagent spawns leave it unset to keep inheriting
+   * the requester's workspace (subagent parity).
+   */
+  preferTargetAgentWorkspace?: boolean;
 }): string | undefined {
   const explicit = normalizeOptionalString(params.explicitWorkspaceDir);
   if (explicit) {
@@ -66,6 +73,11 @@ export function resolveSpawnedWorkspaceInheritance(params: {
     return requesterWorkspaceDir;
   }
 
+  const targetAgentId = normalizeOptionalString(params.targetAgentId);
+  if (params.preferTargetAgentWorkspace && targetAgentId) {
+    return resolveAgentWorkspaceDir(params.config, normalizeAgentId(targetAgentId));
+  }
+
   const requesterAgentId = params.requesterSessionKey
     ? parseAgentSessionKey(params.requesterSessionKey)?.agentId
     : undefined;
@@ -73,7 +85,6 @@ export function resolveSpawnedWorkspaceInheritance(params: {
     return resolveAgentWorkspaceDir(params.config, normalizeAgentId(requesterAgentId));
   }
 
-  const targetAgentId = normalizeOptionalString(params.targetAgentId);
   return targetAgentId
     ? resolveAgentWorkspaceDir(params.config, normalizeAgentId(targetAgentId))
     : undefined;

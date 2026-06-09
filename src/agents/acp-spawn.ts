@@ -1251,6 +1251,7 @@ export async function spawnAcpDirect(
     targetAgentId,
     requesterSessionKey: ctx.agentSessionKey,
     explicitWorkspaceDir: params.cwd,
+    preferTargetAgentWorkspace: true,
   });
   let runtimeCwd: string | undefined;
   try {
