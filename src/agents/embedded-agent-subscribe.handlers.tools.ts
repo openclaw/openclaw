@@ -1284,6 +1284,17 @@ export async function handleToolExecutionEnd(
     if (committedMediaUrls.length > 0) {
       ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
       ctx.trimMessagingToolSent();
+      // Drop pending tool media already delivered via the messaging tool, else
+      // automatic source-reply delivery sends generated media a second time.
+      // Host vs sandbox-container paths differ, so match by basename.
+      if (ctx.state.pendingToolMediaUrls.length > 0) {
+        const sentBasenames = new Set(
+          committedMediaUrls.map((u) => u.slice(u.lastIndexOf("/") + 1)),
+        );
+        ctx.state.pendingToolMediaUrls = ctx.state.pendingToolMediaUrls.filter(
+          (u) => !sentBasenames.has(u.slice(u.lastIndexOf("/") + 1)),
+        );
+      }
     }
     if (
       isDeliveredMessageToolOnlySourceReplyResult({

@@ -709,3 +709,96 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
   });
 });
+
+describe("handleToolExecutionEnd messaging-tool media dedup", () => {
+  // Regression: in automatic visible-reply mode the model may both queue
+  // generated media for automatic delivery AND deliver it via the message
+  // tool, which sent the image twice. The message tool sees the sandbox
+  // container path while the queued copy is a host path, so dedup is by basename.
+  it("drops queued tool media already delivered via the message tool across host/container paths", async () => {
+    const ctx = createMockContext();
+    ctx.state.pendingToolMediaUrls = [
+      "/data/media/tool-image-generation/gen-019eacf1---0e9fdb2e.jpg",
+    ];
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "msg-1",
+      args: {
+        action: "send",
+        to: "135170423",
+        text: "Готово",
+        media: "/workspace/media/tool-image-generation/gen-019eacf1---0e9fdb2e.jpg",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "msg-1",
+      isError: false,
+      result: { content: [{ type: "text", text: "sent" }] },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
+    expect(ctx.state.messagingToolSentMediaUrls).toContain(
+      "/workspace/media/tool-image-generation/gen-019eacf1---0e9fdb2e.jpg",
+    );
+  });
+
+  it("keeps queued tool media the message tool did not deliver", async () => {
+    const ctx = createMockContext();
+    ctx.state.pendingToolMediaUrls = ["/data/media/tool-image-generation/gen-other.jpg"];
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "msg-1",
+      args: {
+        action: "send",
+        to: "135170423",
+        media: "/workspace/media/tool-image-generation/gen-sent.jpg",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "msg-1",
+      isError: false,
+      result: { content: [{ type: "text", text: "sent" }] },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([
+      "/data/media/tool-image-generation/gen-other.jpg",
+    ]);
+  });
+
+  it("does not drop queued media on a failed message tool send", async () => {
+    const ctx = createMockContext();
+    ctx.state.pendingToolMediaUrls = [
+      "/data/media/tool-image-generation/gen-019eacf1---0e9fdb2e.jpg",
+    ];
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "msg-1",
+      args: {
+        action: "send",
+        to: "135170423",
+        media: "/workspace/media/tool-image-generation/gen-019eacf1---0e9fdb2e.jpg",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "msg-1",
+      isError: true,
+      result: { content: [{ type: "text", text: "failed" }] },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([
+      "/data/media/tool-image-generation/gen-019eacf1---0e9fdb2e.jpg",
+    ]);
+  });
+});
