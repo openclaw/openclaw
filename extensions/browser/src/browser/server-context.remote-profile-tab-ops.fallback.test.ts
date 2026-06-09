@@ -133,6 +133,35 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     await expect(remote.listTabs()).rejects.toBeInstanceOf(deps.BrowserCdpEndpointBlockedError);
   });
 
+  it("rejects policy-blocked discovered CDP websocket URLs from raw tab creation", async () => {
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    vi.spyOn(deps.cdpModule, "createTargetViaCdp").mockRejectedValue(
+      new Error("Target.createTarget unavailable"),
+    );
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (!u.includes("/json/new")) {
+        throw new Error(`unexpected fetch: ${u}`);
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          id: "T_BLOCKED",
+          title: "Blocked",
+          url: "about:blank",
+          webSocketDebuggerUrl: "ws://169.254.169.254/devtools/page/T_BLOCKED",
+          type: "page",
+        }),
+      } as unknown as Response;
+    });
+    const { state, remote } = deps.createRemoteRouteHarness(fetchMock);
+    state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
+
+    await expect(remote.openTab("about:blank")).rejects.toBeInstanceOf(
+      deps.BrowserCdpEndpointBlockedError,
+    );
+  });
+
   it("fails closed for remote tab opens in strict mode without Playwright", async () => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     const { state, remote, fetchMock } = deps.createRemoteRouteHarness();

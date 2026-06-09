@@ -410,6 +410,10 @@ export function createProfileTabOps({
     profileState.lastTargetId = created.id;
     const resolvedUrl = created.url ?? url;
     await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
+    const wsUrl = normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl);
+    if (wsUrl) {
+      await assertCdpEndpointAllowed(wsUrl, getCdpControlPolicy());
+    }
     triggerManagedTabLimit(created.id);
     return assignTabAlias({
       profileState,
@@ -418,7 +422,7 @@ export function createProfileTabOps({
         targetId: created.id,
         title: created.title ?? "",
         url: resolvedUrl,
-        wsUrl: normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl),
+        wsUrl,
         type: created.type,
       },
     });
