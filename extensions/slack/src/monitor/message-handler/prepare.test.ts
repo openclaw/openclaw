@@ -2076,7 +2076,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       {
         "agent:main:main": { updatedAt: Date.now() },
         "agent:main:main:thread:650.000": { updatedAt: Date.now() },
-      } as Record<string, SessionEntry>,
+      } as unknown as Record<string, SessionEntry>,
       { skipMaintenance: true },
     );
     const replies = vi
