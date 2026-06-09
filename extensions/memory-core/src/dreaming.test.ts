@@ -2237,6 +2237,10 @@ describe("short-term dreaming trigger", () => {
     expect(result?.handled).toBe(true);
     const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
     expect(memoryText).toContain("Move backups to S3 Glacier.");
+    const dreamsText = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(dreamsText).toContain("## Deep Sleep");
+    expect(dreamsText).toContain("- Ranked 1 candidate(s) for durable promotion.");
+    expect(dreamsText).toContain("- Promoted 1 candidate(s) into MEMORY.md.");
   });
 
   it("applies promotions when the managed dreaming token is embedded in a reminder body", async () => {

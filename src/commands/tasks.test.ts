@@ -25,7 +25,20 @@ import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resetSessionStateMigratedForCommandForTest } from "./session-state-migration.js";
-import { tasksAuditCommand, tasksMaintenanceCommand, tasksShowCommand } from "./tasks.js";
+import {
+  tasksAuditCommand,
+  tasksCancelCommand,
+  tasksMaintenanceCommand,
+  tasksShowCommand,
+} from "./tasks.js";
+
+const mocks = vi.hoisted(() => ({
+  callGateway: vi.fn(),
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
+}));
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -134,6 +147,7 @@ describe("tasks commands", () => {
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     closeOpenClawAgentDatabasesForTest();
+    mocks.callGateway.mockReset();
   });
 
   it("keeps audit JSON stable and sorts combined findings before limiting", async () => {
@@ -203,6 +217,47 @@ describe("tasks commands", () => {
       });
       expect(limitedFinding?.ageMs).toBeGreaterThanOrEqual(45 * 60_000);
       expect(limitedFinding?.ageMs).toBeLessThan(45 * 60_000 + 1_000);
+    });
+  });
+
+  it("routes cron task cancellation through the live gateway before local fallback", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cron",
+        sourceId: "nightly-gmail-sync",
+        ownerKey: "",
+        scopeKind: "system",
+        runId: "cron:nightly-gmail-sync:123",
+        task: "Nightly Gmail sync",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+      mocks.callGateway.mockResolvedValueOnce({
+        found: true,
+        cancelled: true,
+        task: {
+          taskId: task.taskId,
+          runtime: "cron",
+          runId: task.runId,
+        },
+      });
+      const runtime = createRuntime();
+
+      await tasksCancelCommand({ lookup: task.taskId }, runtime);
+
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "tasks.cancel",
+          params: { taskId: task.taskId },
+          timeoutMs: 5_000,
+        }),
+      );
+      expect(runtime.log).toHaveBeenCalledWith(
+        `Cancelled ${task.taskId} (cron) run cron:nightly-gmail-sync:123.`,
+      );
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
     });
   });
 

@@ -55,6 +55,12 @@ export type RunIMessageCatchupParams = {
    * (including non-error drops, which mirrors the live pipeline).
    */
   dispatchPayload: (message: IMessagePayload) => Promise<void>;
+  /**
+   * Called for `is_from_me=true` rows that catchup intentionally does not
+   * dispatch. The live inbound path still needs to observe those rows so
+   * self-chat reflected companion rows can be deduped.
+   */
+  observeSkippedFromMePayload?: (message: IMessagePayload) => Promise<void> | void;
   runtime?: RuntimeLogger;
   /** Override clock for tests. */
   now?: () => number;
@@ -277,6 +283,14 @@ export async function runIMessageCatchup(
     config,
     fetch: fetchFn,
     dispatch: dispatchFn,
+    observeSkippedFromMe: async (row) => {
+      const payload = payloadByGuid.get(row.guid);
+      if (!payload) {
+        warnLog(`imessage catchup: missing skipped from-me payload for guid=${row.guid}`);
+        return;
+      }
+      await params.observeSkippedFromMePayload?.(payload);
+    },
     log,
     warn: warnLog,
     ...(params.now ? { now: params.now() } : {}),

@@ -98,7 +98,7 @@ export function classifyCompactionReason(reason?: string): CompactionReasonCode 
   if (text.includes("below threshold") || text.includes("already under target")) {
     return "below_threshold";
   }
-  if (text.includes("already compacted")) {
+  if (text.includes("already compacted") || text.includes("already_compacted")) {
     return "already_compacted_recently";
   }
   if (text.includes("deferred to background")) {
