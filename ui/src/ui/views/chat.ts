@@ -190,6 +190,8 @@ export type ChatProps = {
     loading: boolean;
     error: string | null;
     activeName: string | null;
+    collapsed: boolean;
+    onToggleCollapsed: () => void;
     onRefresh: () => void;
     onOpenFile: (name: string) => void;
   };
@@ -1014,66 +1016,92 @@ function renderWorkspaceFileRail(
   }
   const files = workspaceFiles.list?.files ?? [];
   return html`
-    <aside class="chat-workspace-rail" aria-label="Workspace files">
+    <aside
+      class="chat-workspace-rail ${workspaceFiles.collapsed ? "chat-workspace-rail--collapsed" : ""}"
+      aria-label="Workspace files"
+    >
       <div class="chat-workspace-rail__header">
-        <div class="chat-workspace-rail__title">
-          <span class="chat-workspace-rail__eyebrow">Workspace</span>
-          <strong>Files</strong>
-        </div>
-        <button
-          class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
-          type="button"
-          title="Refresh files"
-          aria-label="Refresh files"
-          ?disabled=${workspaceFiles.loading}
-          @click=${workspaceFiles.onRefresh}
-        >
-          ${icons.refresh}
-        </button>
-      </div>
-      ${workspaceFiles.list?.workspace
-        ? html`<div class="chat-workspace-rail__path" title=${workspaceFiles.list.workspace}>
-            ${workspaceFiles.list.workspace}
-          </div>`
-        : nothing}
-      ${workspaceFiles.error
-        ? html`<div class="chat-workspace-rail__state chat-workspace-rail__state--error">
-            ${workspaceFiles.error}
-          </div>`
-        : workspaceFiles.loading && files.length === 0
-          ? html`<div class="chat-workspace-rail__state">Loading files...</div>`
-          : files.length === 0
-            ? html`<div class="chat-workspace-rail__state">No workspace files</div>`
+        ${workspaceFiles.collapsed
+          ? nothing
+          : html`
+              <div class="chat-workspace-rail__title">
+                <span class="chat-workspace-rail__eyebrow">Workspace</span>
+                <strong>Files</strong>
+              </div>
+            `}
+        <div class="chat-workspace-rail__controls">
+          <button
+            class="btn btn--ghost btn--sm chat-workspace-rail__toggle"
+            type="button"
+            title=${workspaceFiles.collapsed ? "Expand workspace files" : "Collapse workspace files"}
+            aria-label=${workspaceFiles.collapsed ? "Expand workspace files" : "Collapse workspace files"}
+            @click=${workspaceFiles.onToggleCollapsed}
+          >
+            ${workspaceFiles.collapsed ? icons.panelLeftOpen : icons.panelLeftClose}
+          </button>
+          ${workspaceFiles.collapsed
+            ? nothing
             : html`
-                <div class="chat-workspace-rail__list" role="list">
-                  ${files.map((file) => {
-                    const size = formatWorkspaceFileSize(file);
-                    const isActive = file.name === workspaceFiles.activeName;
-                    return html`
-                      <button
-                        class="chat-workspace-rail__file ${isActive
-                          ? "chat-workspace-rail__file--active"
-                          : ""}"
-                        type="button"
-                        role="listitem"
-                        title=${file.path || file.name}
-                        @click=${() => workspaceFiles.onOpenFile(file.name)}
-                      >
-                        <span class="chat-workspace-rail__file-icon">${icons.fileText}</span>
-                        <span class="chat-workspace-rail__file-main">
-                          <span class="chat-workspace-rail__file-name">${file.name}</span>
-                          ${size
-                            ? html`<span class="chat-workspace-rail__file-meta">${size}</span>`
-                            : nothing}
-                        </span>
-                        ${file.missing
-                          ? html`<span class="chat-workspace-rail__file-badge">Missing</span>`
-                          : nothing}
-                      </button>
-                    `;
-                  })}
-                </div>
+                <button
+                  class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
+                  type="button"
+                  title="Refresh files"
+                  aria-label="Refresh files"
+                  ?disabled=${workspaceFiles.loading}
+                  @click=${workspaceFiles.onRefresh}
+                >
+                  ${icons.refresh}
+                </button>
               `}
+        </div>
+      </div>
+      ${workspaceFiles.collapsed
+        ? nothing
+        : html`
+            ${workspaceFiles.list?.workspace
+              ? html`<div class="chat-workspace-rail__path" title=${workspaceFiles.list.workspace}>
+                  ${workspaceFiles.list.workspace}
+                </div>`
+              : nothing}
+            ${workspaceFiles.error
+              ? html`<div class="chat-workspace-rail__state chat-workspace-rail__state--error">
+                  ${workspaceFiles.error}
+                </div>`
+              : workspaceFiles.loading && files.length === 0
+                ? html`<div class="chat-workspace-rail__state">Loading files...</div>`
+                : files.length === 0
+                  ? html`<div class="chat-workspace-rail__state">No workspace files</div>`
+                  : html`
+                      <div class="chat-workspace-rail__list" role="list">
+                        ${files.map((file) => {
+                          const size = formatWorkspaceFileSize(file);
+                          const isActive = file.name === workspaceFiles.activeName;
+                          return html`
+                            <button
+                              class="chat-workspace-rail__file ${isActive
+                                ? "chat-workspace-rail__file--active"
+                                : ""}"
+                              type="button"
+                              role="listitem"
+                              title=${file.path || file.name}
+                              @click=${() => workspaceFiles.onOpenFile(file.name)}
+                            >
+                              <span class="chat-workspace-rail__file-icon">${icons.fileText}</span>
+                              <span class="chat-workspace-rail__file-main">
+                                <span class="chat-workspace-rail__file-name">${file.name}</span>
+                                ${size
+                                  ? html`<span class="chat-workspace-rail__file-meta">${size}</span>`
+                                  : nothing}
+                              </span>
+                              ${file.missing
+                                ? html`<span class="chat-workspace-rail__file-badge">Missing</span>`
+                                : nothing}
+                            </button>
+                          `;
+                        })}
+                      </div>
+                    `}
+          `}
     </aside>
   `;
 }

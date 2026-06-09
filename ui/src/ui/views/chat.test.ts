@@ -569,6 +569,17 @@ function createChatProps(
     onSplitRatioChange: () => undefined,
     onChatScroll: () => undefined,
     basePath: "",
+    workspaceFiles: {
+      agentId: "main",
+      list: null,
+      loading: false,
+      error: null,
+      activeName: null,
+      collapsed: false,
+      onToggleCollapsed: () => undefined,
+      onRefresh: () => undefined,
+      onOpenFile: () => undefined,
+    },
     ...overrides,
   };
 }
@@ -887,6 +898,8 @@ describe("chat composer workbench", () => {
         loading: false,
         error: null,
         activeName: "AGENTS.md",
+        collapsed: false,
+        onToggleCollapsed: vi.fn(),
         onRefresh,
         onOpenFile,
       },
@@ -905,6 +918,58 @@ describe("chat composer workbench", () => {
     file?.click();
 
     expect(onOpenFile).toHaveBeenCalledWith("AGENTS.md");
+  });
+
+  it("toggles the workspace files rail collapse state", () => {
+    const onToggleCollapsed = vi.fn();
+    const container = renderChatView({
+      workspaceFiles: {
+        agentId: "main",
+        list: {
+          agentId: "main",
+          workspace: "/workspace",
+          files: [{ name: "test.ts", path: "/workspace/test.ts", missing: false, size: 100 }],
+        },
+        loading: false,
+        error: null,
+        activeName: null,
+        collapsed: false,
+        onToggleCollapsed,
+        onRefresh: () => undefined,
+        onOpenFile: () => undefined,
+      },
+    });
+
+    const toggleButton = container.querySelector<HTMLButtonElement>(".chat-workspace-rail__toggle");
+    expect(toggleButton).not.toBeNull();
+
+    toggleButton?.click();
+    expect(onToggleCollapsed).toHaveBeenCalledOnce();
+  });
+
+  it("hides workspace files rail content when collapsed", () => {
+    const container = renderChatView({
+      workspaceFiles: {
+        agentId: "main",
+        list: {
+          agentId: "main",
+          workspace: "/workspace",
+          files: [{ name: "test.ts", path: "/workspace/test.ts", missing: false, size: 100 }],
+        },
+        loading: false,
+        error: null,
+        activeName: null,
+        collapsed: true,
+        onToggleCollapsed: vi.fn(),
+        onRefresh: () => undefined,
+        onOpenFile: () => undefined,
+      },
+    });
+
+    expect(container.querySelector(".chat-workspace-rail__list")).toBeNull();
+    expect(container.querySelector(".chat-workspace-rail__path")).toBeNull();
+    expect(container.querySelector(".chat-workspace-rail__toggle")).not.toBeNull();
+    expect(container.querySelector(".chat-workspace-rail--collapsed")).not.toBeNull();
   });
 
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {

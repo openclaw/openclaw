@@ -3533,6 +3533,12 @@ export function renderApp(state: AppViewState) {
                     loading: chatWorkspaceFiles.loading,
                     error: chatWorkspaceFiles.error,
                     activeName: chatWorkspaceFiles.activeName,
+                    collapsed: state.settings.workspaceFilesCollapsed,
+                    onToggleCollapsed: () =>
+                      state.applySettings({
+                        ...state.settings,
+                        workspaceFilesCollapsed: !state.settings.workspaceFilesCollapsed,
+                      }),
                     onRefresh: refreshChatWorkspaceFiles,
                     onOpenFile: openChatWorkspaceFile,
                   },

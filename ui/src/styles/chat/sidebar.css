@@ -1,7 +1,7 @@
 /* Split View Layout */
 .chat-workbench {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 0;
   flex: 1;
   min-height: 0;
@@ -39,10 +39,24 @@
 .chat-workspace-rail {
   display: flex;
   flex-direction: column;
+  width: 250px;
   min-width: 0;
   min-height: 0;
   border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 84%, transparent);
+}
+
+.chat-workspace-rail--collapsed {
+  width: 48px;
+}
+
+.chat-workspace-rail--collapsed .chat-workspace-rail__header {
+  padding: 12px 0;
+  justify-content: center;
+}
+
+.chat-workspace-rail--collapsed .chat-workspace-rail__controls {
+  justify-content: center;
 }
 
 .chat-workspace-rail__header {
@@ -59,6 +73,11 @@
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+.chat-workspace-rail__controls {
+  display: flex;
+  gap: 4px;
 }
 
 .chat-workspace-rail__eyebrow {

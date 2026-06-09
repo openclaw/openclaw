@@ -94,6 +94,7 @@ export type UiSettings = {
   navWidth: number; // Sidebar width when expanded (240–400px)
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
   recentSessionsCollapsed?: boolean; // Collapse recent sessions list in sidebar
+  workspaceFilesCollapsed: boolean; // Collapse workspace files rail in chat
   borderRadius: number; // Corner roundness (0–100, default 50)
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
@@ -237,6 +238,7 @@ export function loadSettings(): UiSettings {
     navWidth: 220,
     navGroupsCollapsed: {},
     recentSessionsCollapsed: false,
+    workspaceFilesCollapsed: false,
     borderRadius: 50,
     textScale: 100,
   };
@@ -297,6 +299,10 @@ export function loadSettings(): UiSettings {
         typeof parsed.recentSessionsCollapsed === "boolean"
           ? parsed.recentSessionsCollapsed
           : defaults.recentSessionsCollapsed,
+      workspaceFilesCollapsed:
+        typeof parsed.workspaceFilesCollapsed === "boolean"
+          ? parsed.workspaceFilesCollapsed
+          : defaults.workspaceFilesCollapsed,
       borderRadius:
         typeof parsed.borderRadius === "number" &&
         parsed.borderRadius >= 0 &&
@@ -423,6 +429,7 @@ function persistSettings(next: UiSettings) {
     navWidth: next.navWidth,
     navGroupsCollapsed: next.navGroupsCollapsed,
     recentSessionsCollapsed: next.recentSessionsCollapsed ?? false,
+    workspaceFilesCollapsed: next.workspaceFilesCollapsed,
     borderRadius: next.borderRadius,
     textScale: normalizeTextScale(next.textScale),
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
