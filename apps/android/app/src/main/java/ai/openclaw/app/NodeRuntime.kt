@@ -72,8 +72,51 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.util.ArrayDeque
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
+
+private const val NOTIFICATIONS_CHANGED_EVENT = "notifications.changed"
+private const val MAX_PENDING_NOTIFICATION_EVENTS = 128
+
+internal data class PendingNotificationEvent(
+  val event: String,
+  val payloadJson: String?,
+)
+
+internal class PendingNotificationEventQueue(
+  private val maxSize: Int = MAX_PENDING_NOTIFICATION_EVENTS,
+) {
+  private val lock = Any()
+  private val pending = ArrayDeque<PendingNotificationEvent>()
+
+  fun add(event: PendingNotificationEvent) {
+    synchronized(lock) {
+      while (pending.size >= maxSize) {
+        pending.removeFirst()
+      }
+      pending.addLast(event)
+    }
+  }
+
+  fun drain(): List<PendingNotificationEvent> =
+    synchronized(lock) {
+      val drained = pending.toList()
+      pending.clear()
+      drained
+    }
+
+  fun prepend(events: List<PendingNotificationEvent>) {
+    synchronized(lock) {
+      for (event in events.asReversed()) {
+        while (pending.size >= maxSize) {
+          pending.removeLast()
+        }
+        pending.addFirst(event)
+      }
+    }
+  }
+}
 
 /**
  * Process runtime that owns gateway sessions, node command handlers, capture managers, and UI-facing state.
@@ -421,6 +464,7 @@ class NodeRuntime(
   private val canvasRehydrateSeq = AtomicLong(0)
 
   @Volatile private var nodePresenceAliveLastSuccessAtMs: Long? = null
+  private val pendingNotificationEvents = PendingNotificationEventQueue()
   private var operatorConnected = false
   private var operatorStatusText: String = "Offline"
   private var nodeStatusText: String = "Offline"
@@ -501,6 +545,8 @@ class NodeRuntime(
         updateStatus()
         showLocalCanvasOnConnect()
         publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Connect)
+        flushQueuedNotificationEvents()
+        DeviceNotificationListenerService.reconcileActiveNotifications()
         val endpoint = connectedEndpoint
         val auth = activeGatewayAuth
         if (endpoint != null && auth != null) {
@@ -530,7 +576,32 @@ class NodeRuntime(
   init {
     DeviceNotificationListenerService.setNodeEventSink { event, payloadJson ->
       scope.launch {
-        nodeSession.sendNodeEvent(event = event, payloadJson = payloadJson)
+        sendNotificationEventOrQueue(event = event, payloadJson = payloadJson)
+      }
+    }
+  }
+
+  private suspend fun sendNotificationEventOrQueue(
+    event: String,
+    payloadJson: String?,
+  ) {
+    val sent = nodeSession.sendNodeEvent(event = event, payloadJson = payloadJson)
+    if (!sent && event == NOTIFICATIONS_CHANGED_EVENT) {
+      pendingNotificationEvents.add(
+        PendingNotificationEvent(event = event, payloadJson = payloadJson),
+      )
+    }
+  }
+
+  private fun flushQueuedNotificationEvents() {
+    scope.launch {
+      val drained = pendingNotificationEvents.drain()
+      for ((index, pending) in drained.withIndex()) {
+        val sent = nodeSession.sendNodeEvent(event = pending.event, payloadJson = pending.payloadJson)
+        if (!sent) {
+          pendingNotificationEvents.prepend(drained.drop(index))
+          return@launch
+        }
       }
     }
   }

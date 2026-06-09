@@ -3,6 +3,8 @@ package ai.openclaw.app.node
 import ai.openclaw.app.NotificationBurstLimiter
 import ai.openclaw.app.NotificationForwardingPolicy
 import ai.openclaw.app.NotificationPackageFilterMode
+import ai.openclaw.app.PendingNotificationEvent
+import ai.openclaw.app.PendingNotificationEventQueue
 import ai.openclaw.app.isWithinQuietHours
 import android.content.Context
 import org.junit.Assert.assertEquals
@@ -128,4 +130,108 @@ class DeviceNotificationListenerServiceTest {
     assertTrue(limiter.allow(nowEpochMs = nowEpochMs, maxEventsPerMinute = 2))
     assertFalse(limiter.allow(nowEpochMs = nowEpochMs, maxEventsPerMinute = 2))
   }
+
+  @Test
+  fun reconcileActiveNotificationEntries_replaysMissedPostsWithoutDuplicatingDeliveredKeys() {
+    val first = sampleNotificationEntry(key = "first", postTimeMs = 100L)
+    val second = sampleNotificationEntry(key = "second", postTimeMs = 200L)
+    val third = sampleNotificationEntry(key = "third", postTimeMs = 300L)
+    val emitted = mutableListOf<String>()
+
+    try {
+      replayMissedActiveNotificationEntries(emptyList()) { false }
+
+      assertEquals(
+        2,
+        replayMissedActiveNotificationEntries(listOf(first, second)) { entry ->
+          emitted += entry.key
+          true
+        },
+      )
+      assertEquals(listOf("second", "first"), emitted)
+
+      assertEquals(
+        0,
+        replayMissedActiveNotificationEntries(listOf(first, second)) { entry ->
+          emitted += entry.key
+          true
+        },
+      )
+
+      assertEquals(
+        1,
+        replayMissedActiveNotificationEntries(listOf(first, second, third)) { entry ->
+          emitted += entry.key
+          true
+        },
+      )
+      assertEquals(listOf("second", "first", "third"), emitted)
+    } finally {
+      replayMissedActiveNotificationEntries(emptyList()) { false }
+    }
+  }
+
+  @Test
+  fun reconcileActiveNotificationEntries_retriesWhenSinkIsUnavailable() {
+    val entry = sampleNotificationEntry(key = "retry", postTimeMs = 100L)
+    val emitted = mutableListOf<String>()
+
+    try {
+      replayMissedActiveNotificationEntries(emptyList()) { false }
+
+      assertEquals(
+        0,
+        replayMissedActiveNotificationEntries(listOf(entry)) {
+          false
+        },
+      )
+      assertEquals(
+        1,
+        replayMissedActiveNotificationEntries(listOf(entry)) { candidate ->
+          emitted += candidate.key
+          true
+        },
+      )
+      assertEquals(listOf("retry"), emitted)
+    } finally {
+      replayMissedActiveNotificationEntries(emptyList()) { false }
+    }
+  }
+
+  @Test
+  fun pendingNotificationQueue_isBoundedAndPrependsFailedFlushRemainder() {
+    val queue = PendingNotificationEventQueue(maxSize = 2)
+    queue.add(PendingNotificationEvent(event = "notifications.changed", payloadJson = "first"))
+    queue.add(PendingNotificationEvent(event = "notifications.changed", payloadJson = "second"))
+    queue.add(PendingNotificationEvent(event = "notifications.changed", payloadJson = "third"))
+
+    assertEquals(listOf("second", "third"), queue.drain().map { it.payloadJson })
+
+    queue.add(PendingNotificationEvent(event = "notifications.changed", payloadJson = "new"))
+    queue.prepend(
+      listOf(
+        PendingNotificationEvent(event = "notifications.changed", payloadJson = "failed"),
+        PendingNotificationEvent(event = "notifications.changed", payloadJson = "remaining"),
+      ),
+    )
+
+    assertEquals(listOf("failed", "remaining"), queue.drain().map { it.payloadJson })
+  }
+
+  private fun sampleNotificationEntry(
+    key: String,
+    postTimeMs: Long,
+  ): DeviceNotificationEntry =
+    DeviceNotificationEntry(
+      key = key,
+      packageName = "com.example.app",
+      title = "Title $key",
+      text = "Body $key",
+      subText = null,
+      category = null,
+      channelId = null,
+      postTimeMs = postTimeMs,
+      isOngoing = false,
+      isClearable = true,
+    )
 }

@@ -199,6 +199,8 @@ class GatewaySession(
 
   @Volatile private var currentConnection: Connection? = null
 
+  @Volatile private var connectingConnection: Connection? = null
+
   // One reconnect can retry a shared-token mismatch by pairing the shared token with the stored device token.
   @Volatile private var pendingDeviceTokenRetry = false
 
@@ -216,34 +218,34 @@ class GatewaySession(
     options: GatewayConnectOptions,
     tls: GatewayTlsParams? = null,
   ) {
-    val connectionToClose: Connection?
+    val connectionsToClose: List<Connection>
     synchronized(lifecycleLock) {
       desired = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls)
       pendingDeviceTokenRetry = false
       deviceTokenRetryBudgetUsed = false
       reconnectPausedForAuthFailure = false
-      connectionToClose = currentConnection
+      connectionsToClose = listOfNotNull(currentConnection, connectingConnection).distinct()
       if (job?.isActive != true) {
         job = scope.launch(Dispatchers.IO) { runLoop() }
       }
     }
-    connectionToClose?.closeQuietly()
+    connectionsToClose.forEach { it.closeQuietly() }
   }
 
   /** Clears desired connection state, closes the socket, and stops reconnect attempts. */
   fun disconnect() {
     val jobToCancel: Job?
-    val connectionToClose: Connection?
+    val connectionsToClose: List<Connection>
     synchronized(lifecycleLock) {
       desired = null
       pendingDeviceTokenRetry = false
       deviceTokenRetryBudgetUsed = false
       reconnectPausedForAuthFailure = false
-      connectionToClose = currentConnection
+      connectionsToClose = listOfNotNull(currentConnection, connectingConnection).distinct()
       jobToCancel = job
       job = null
     }
-    connectionToClose?.closeQuietly()
+    connectionsToClose.forEach { it.closeQuietly() }
     scope.launch(Dispatchers.IO) {
       jobToCancel?.cancelAndJoin()
       if (desired == null) {
@@ -257,7 +259,7 @@ class GatewaySession(
   /** Forces the current socket closed so the loop reconnects to the current desired endpoint. */
   fun reconnect() {
     reconnectPausedForAuthFailure = false
-    currentConnection?.closeQuietly()
+    listOfNotNull(currentConnection, connectingConnection).distinct().forEach { it.closeQuietly() }
   }
 
   fun currentCanvasHostUrl(): String? = pluginSurfaceUrls["canvas"]
@@ -409,7 +411,16 @@ class GatewaySession(
     val error: ErrorShape?,
   )
 
+  private fun promoteConnectedConnection(conn: Connection): Boolean =
+    synchronized(lifecycleLock) {
+      if (desired != conn.desiredTarget || connectingConnection !== conn) return@synchronized false
+      currentConnection = conn
+      connectingConnection = null
+      true
+    }
+
   private inner class Connection(
+    val desiredTarget: DesiredConnection,
     val endpoint: GatewayEndpoint,
     private val token: String?,
     private val bootstrapToken: String?,
@@ -662,6 +673,9 @@ class GatewaySession(
           deviceAuthStore.clearToken(identity.deviceId, options.role)
         }
         throw GatewayConnectFailure(error)
+      }
+      if (!promoteConnectedConnection(this)) {
+        throw IllegalStateException("connection no longer desired")
       }
       handleConnectSuccess(res, identity.deviceId, selectedAuth.authSource)
       connectDeferred.complete(Unit)
@@ -1093,18 +1107,34 @@ class GatewaySession(
     withContext(Dispatchers.IO) {
       val conn =
         Connection(
-          target.endpoint,
-          target.token,
-          target.bootstrapToken,
-          target.password,
-          target.options,
-          target.tls,
+          desiredTarget = target,
+          endpoint = target.endpoint,
+          token = target.token,
+          bootstrapToken = target.bootstrapToken,
+          password = target.password,
+          options = target.options,
+          tls = target.tls,
         )
-      currentConnection = conn
+      val shouldConnect =
+        synchronized(lifecycleLock) {
+          if (desired == target) {
+            connectingConnection = conn
+            true
+          } else {
+            false
+          }
+        }
+      if (!shouldConnect) {
+        conn.closeQuietly()
+        return@withContext
+      }
       try {
         conn.connect()
         conn.awaitClose()
       } finally {
+        if (connectingConnection === conn) {
+          connectingConnection = null
+        }
         if (currentConnection === conn) {
           currentConnection = null
           pluginSurfaceUrls = emptyMap()

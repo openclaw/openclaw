@@ -22,6 +22,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -793,6 +794,113 @@ class GatewaySessionInvokeTest {
 
         assertEquals(true, sent)
         assertEquals("agent.request", params["event"]?.jsonPrimitive?.content)
+      } finally {
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun sendNodeEvent_returnsFalseWhileConnectResponseIsPending() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val connectStarted = CompletableDeferred<Unit>()
+      val nodeEventSeen = CompletableDeferred<Unit>()
+      val lastDisconnect = AtomicReference("")
+      val methods = CopyOnWriteArrayList<String>()
+      val connectSocket = AtomicReference<WebSocket?>()
+      val server =
+        startGatewayServer(json) { webSocket, _, method, _ ->
+          methods += method
+          when (method) {
+            "connect" -> {
+              connectSocket.set(webSocket)
+              connectStarted.complete(Unit)
+            }
+            "node.event" -> nodeEventSeen.complete(Unit)
+          }
+        }
+
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        withTimeout(TEST_TIMEOUT_MS) { connectStarted.await() }
+
+        val sent =
+          withTimeout(500) {
+            harness.session.sendNodeEvent(
+              event = "notifications.changed",
+              payloadJson = """{"key":"pending-connect"}""",
+            )
+          }
+
+        assertFalse(sent)
+        assertNull(withTimeoutOrNull(300) { nodeEventSeen.await() })
+        assertEquals(listOf("connect"), methods.toList())
+      } finally {
+        connectSocket.get()?.close(1000, "done")
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun onConnectedCallbackCanSendNodeEventAfterConnectSuccess() =
+    runBlocking {
+      val json = testJson()
+      val nodeEventParams = CompletableDeferred<JsonObject>()
+      val callbackSent = CompletableDeferred<Boolean>()
+      val lastDisconnect = AtomicReference("")
+      val sessionJob = SupervisorJob()
+      lateinit var session: GatewaySession
+      val server =
+        startGatewayServer(json) { webSocket, id, method, frame ->
+          when (method) {
+            "connect" -> webSocket.send(connectResponseFrame(id))
+            "node.event" -> {
+              if (!nodeEventParams.isCompleted) {
+                nodeEventParams.complete(frame["params"]?.jsonObject ?: JsonObject(emptyMap()))
+              }
+              webSocket.send(
+                """{"type":"res","id":"$id","ok":true,"payload":{"handled":true}}""",
+              )
+              webSocket.close(1000, "done")
+            }
+          }
+        }
+      val app = RuntimeEnvironment.getApplication()
+      val deviceAuthStore = InMemoryDeviceAuthStore()
+      session =
+        GatewaySession(
+          scope = CoroutineScope(sessionJob + Dispatchers.Default),
+          identityStore = DeviceIdentityStore(app),
+          deviceAuthStore = deviceAuthStore,
+          onConnected = {
+            runBlocking {
+              callbackSent.complete(
+                session.sendNodeEvent(
+                  event = "notifications.changed",
+                  payloadJson = """{"key":"after-connect"}""",
+                ),
+              )
+            }
+          },
+          onDisconnected = { message -> lastDisconnect.set(message) },
+          onEvent = { _, _ -> },
+          onInvoke = { GatewaySession.InvokeResult.ok("""{"handled":true}""") },
+        )
+      val harness = NodeHarness(session = session, sessionJob = sessionJob, deviceAuthStore = deviceAuthStore)
+
+      try {
+        connectNodeSession(harness.session, server.port)
+
+        assertEquals(true, withTimeout(TEST_TIMEOUT_MS) { callbackSent.await() })
+        val params = withTimeout(TEST_TIMEOUT_MS) { nodeEventParams.await() }
+        assertEquals("notifications.changed", params["event"]?.jsonPrimitive?.content)
       } finally {
         shutdownHarness(harness, server)
       }

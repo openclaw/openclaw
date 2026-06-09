@@ -105,13 +105,17 @@ private object DeviceNotificationStore {
   private val lock = Any()
   private var connected = false
   private val byKey = LinkedHashMap<String, DeviceNotificationEntry>()
+  private val postedEventKeys = LinkedHashSet<String>()
 
   fun replace(entries: List<DeviceNotificationEntry>) {
     synchronized(lock) {
       byKey.clear()
+      val activeKeys = LinkedHashSet<String>()
       for (entry in entries) {
         byKey[entry.key] = entry
+        activeKeys += entry.key
       }
+      postedEventKeys.retainAll(activeKeys)
     }
   }
 
@@ -124,8 +128,22 @@ private object DeviceNotificationStore {
   fun remove(key: String) {
     synchronized(lock) {
       byKey.remove(key)
+      postedEventKeys.remove(key)
     }
   }
+
+  fun notePostedEvent(key: String) {
+    synchronized(lock) {
+      postedEventKeys += key
+    }
+  }
+
+  fun entriesMissingPostedEvents(): List<DeviceNotificationEntry> =
+    synchronized(lock) {
+      byKey.values
+        .filter { !postedEventKeys.contains(it.key) }
+        .sortedByDescending { it.postTimeMs }
+    }
 
   fun setConnected(value: Boolean) {
     synchronized(lock) {
@@ -133,6 +151,7 @@ private object DeviceNotificationStore {
       if (!value) {
         // Android invalidates activeNotifications when the listener disconnects.
         byKey.clear()
+        postedEventKeys.clear()
       }
     }
   }
@@ -150,6 +169,21 @@ private object DeviceNotificationStore {
   }
 }
 
+internal fun replayMissedActiveNotificationEntries(
+  entries: List<DeviceNotificationEntry>,
+  emitPosted: (DeviceNotificationEntry) -> Boolean,
+): Int {
+  DeviceNotificationStore.replace(entries)
+  var replayed = 0
+  for (entry in DeviceNotificationStore.entriesMissingPostedEvents()) {
+    if (emitPosted(entry)) {
+      DeviceNotificationStore.notePostedEvent(entry.key)
+      replayed += 1
+    }
+  }
+  return replayed
+}
+
 /**
  * Android notification listener that mirrors notification state and executes gateway actions.
  */
@@ -161,7 +195,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     super.onListenerConnected()
     activeService = this
     DeviceNotificationStore.setConnected(true)
-    refreshActiveNotifications()
+    reconcileActiveNotifications()
   }
 
   override fun onListenerDisconnected() {
@@ -187,8 +221,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     if (entry.packageName == packageName) {
       return
     }
-    val payload = notificationChangedPayload(entry) ?: return
-    emitNotificationsChanged(payload)
+    emitPostedNotification(entry)
   }
 
   override fun onNotificationRemoved(sbn: StatusBarNotification?) {
@@ -215,6 +248,13 @@ class DeviceNotificationListenerService : NotificationListenerService() {
         isClearable = removed.isClearable,
       ) ?: return
     emitNotificationsChanged(payload)
+  }
+
+  private fun emitPostedNotification(entry: DeviceNotificationEntry): Boolean {
+    val payload = notificationChangedPayload(entry) ?: return false
+    if (!emitNotificationsChanged(payload)) return false
+    DeviceNotificationStore.notePostedEvent(entry.key)
+    return true
   }
 
   private fun notificationChangedPayload(entry: DeviceNotificationEntry): String? =
@@ -272,14 +312,14 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     }.toString()
   }
 
-  private fun refreshActiveNotifications() {
+  private fun reconcileActiveNotifications() {
     val entries =
       runCatching {
         activeNotifications
           ?.mapNotNull { it.toEntry() }
           ?: emptyList()
       }.getOrElse { emptyList() }
-    DeviceNotificationStore.replace(entries)
+    replayMissedActiveNotificationEntries(entries, ::emitPostedNotification)
   }
 
   private fun StatusBarNotification.toEntry(): DeviceNotificationEntry {
@@ -361,6 +401,11 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       enabled: Boolean = isAccessEnabled(context),
     ): DeviceNotificationSnapshot = DeviceNotificationStore.snapshot(enabled = enabled)
 
+    /** Replays active posted notifications that were not emitted before the gateway became ready. */
+    fun reconcileActiveNotifications() {
+      activeService?.reconcileActiveNotifications()
+    }
+
     /** Asks Android to rebind the listener after settings grant access but callbacks have not arrived. */
     fun requestServiceRebind(context: Context) {
       runCatching {
@@ -390,11 +435,12 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       return service.executeActionInternal(request)
     }
 
-    private fun emitNotificationsChanged(payloadJson: String) {
+    private fun emitNotificationsChanged(payloadJson: String): Boolean =
       runCatching {
-        nodeEventSink?.invoke(NOTIFICATIONS_CHANGED_EVENT, payloadJson)
-      }
-    }
+        val sink = nodeEventSink ?: return false
+        sink.invoke(NOTIFICATIONS_CHANGED_EVENT, payloadJson)
+        true
+      }.getOrDefault(false)
 
     private fun rememberRecentPackage(packageName: String?) {
       val service = activeService ?: return
