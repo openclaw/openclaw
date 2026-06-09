@@ -1074,6 +1074,54 @@ describe("refreshChat", () => {
     }
   });
 
+  it("uses startup metadata without scheduling a chat.metadata follow-up", async () => {
+    const { resetSlashCommandsForTest } = await import("./chat/slash-commands.ts");
+    resetSlashCommandsForTest();
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false }) as never;
+    try {
+      const request = vi.fn((method: string) => {
+        if (method === "chat.startup") {
+          return Promise.resolve({
+            messages: [],
+            metadata: {
+              models: [{ id: "gpt-fast", name: "GPT Fast", provider: "openai" }],
+            },
+          });
+        }
+        return pendingPromise();
+      });
+      const host = makeHost({
+        client: { request } as unknown as ChatHost["client"],
+        sessionKey: "main",
+      });
+
+      await refreshChat(host, { startup: true });
+
+      await vi.waitFor(() => expect(host.chatModelCatalog).toHaveLength(1));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 75);
+      });
+      expect(request).toHaveBeenCalledWith("chat.startup", {
+        sessionKey: "main",
+        limit: 100,
+      });
+      expect(request).not.toHaveBeenCalledWith("chat.metadata", expect.anything());
+      expect(request).not.toHaveBeenCalledWith("models.list", expect.anything());
+      expect(request).toHaveBeenCalledWith("commands.list", {
+        agentId: "main",
+        includeArgs: true,
+        scope: "text",
+      });
+      expect(host.chatModelCatalog).toEqual([
+        { id: "gpt-fast", name: "GPT Fast", provider: "openai" },
+      ]);
+    } finally {
+      resetSlashCommandsForTest();
+      globalThis.fetch = previousFetch;
+    }
+  });
+
   it("falls back to separate metadata RPCs when chat.metadata is not advertised", async () => {
     const request = vi.fn(() => pendingPromise());
     const host = makeHost({

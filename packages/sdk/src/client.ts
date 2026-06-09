@@ -445,7 +445,6 @@ export class OpenClaw {
     const matches = (event: OpenClawEvent) => event.runId === runId;
     const liveSource = this.normalizedEvents.stream(matches, { replay: true });
     const live = liveSource[Symbol.asyncIterator]();
-    let nextLive = live.next();
     const seen = new Set<string>();
     try {
       for (const event of replayEvents) {
@@ -460,11 +459,10 @@ export class OpenClaw {
         yield runEvent;
       }
       while (true) {
-        const next = await nextLive;
+        const next = await live.next();
         if (next.done) {
           break;
         }
-        nextLive = live.next();
         if (seen.has(next.value.id)) {
           continue;
         }
@@ -496,8 +494,11 @@ export class OpenClaw {
       };
     });
     this.eventPumpPromise = (async () => {
-      const iterator = this.transport.events()[Symbol.asyncIterator]();
+      let iterator: AsyncIterator<GatewayEvent> | undefined;
+      let pumpError: unknown;
+      let hasPumpError = false;
       try {
+        iterator = this.transport.events()[Symbol.asyncIterator]();
         while (true) {
           const next = iterator.next();
           await Promise.resolve();
@@ -510,14 +511,28 @@ export class OpenClaw {
           this.recordReplayEvent(normalized);
           this.normalizedEvents.publish(normalized);
         }
+      } catch (error) {
+        pumpError = error;
+        hasPumpError = true;
       } finally {
         markReady();
-        await iterator.return?.();
-        this.normalizedEvents.close();
+        try {
+          await iterator?.return?.();
+        } catch (error) {
+          if (!hasPumpError) {
+            pumpError = error;
+            hasPumpError = true;
+          }
+        }
       }
-    })().catch(() => {
-      markReady();
+      if (hasPumpError) {
+        this.normalizedEvents.close(pumpError);
+        return;
+      }
       this.normalizedEvents.close();
+    })().catch((error: unknown) => {
+      markReady();
+      this.normalizedEvents.close(error);
     });
     return this.eventPumpReady;
   }
