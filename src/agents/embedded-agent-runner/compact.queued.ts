@@ -58,6 +58,8 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { readAgentModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
+import type { EmbeddedAgentQueueHandle } from "./run-state.js";
+import { clearActiveEmbeddedRun, isEmbeddedAgentRunActive, setActiveEmbeddedRun } from "./runs.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 import { normalizeContextTokenBudget } from "./utils.js";
 
@@ -87,6 +89,49 @@ function shouldDeferOwningContextEngineBudgetCompaction(params: {
     params.contextEngine.info.turnMaintenanceMode === "background" &&
     typeof params.contextEngine.maintain === "function"
   );
+}
+
+function createQueuedCompactionAbort(params: {
+  sessionId: string;
+  sessionKey?: string;
+  sessionFile?: string;
+  abortSignal?: AbortSignal;
+  registerActiveRun?: boolean;
+}): {
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  const forwardAbort = () => controller.abort(params.abortSignal?.reason);
+  if (params.abortSignal) {
+    if (params.abortSignal.aborted) {
+      forwardAbort();
+    } else {
+      params.abortSignal.addEventListener("abort", forwardAbort, { once: true });
+    }
+  }
+  const handle: EmbeddedAgentQueueHandle = {
+    kind: "embedded",
+    queueMessage: async () => {},
+    isStreaming: () => true,
+    isCompacting: () => true,
+    abort: () => controller.abort("user_abort"),
+    cancel: (reason) => controller.abort(reason),
+  };
+  const registered =
+    params.registerActiveRun === true && !isEmbeddedAgentRunActive(params.sessionId);
+  if (registered) {
+    setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+  }
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      params.abortSignal?.removeEventListener("abort", forwardAbort);
+      if (registered) {
+        clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+      }
+    },
+  };
 }
 
 async function disposeContextEngine(contextEngine: ContextEngine): Promise<void> {
@@ -345,6 +390,13 @@ export async function compactEmbeddedAgentSession(
     enqueueGlobal(async () => {
       let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null | undefined;
       let checkpointSnapshotRetained = false;
+      const queuedCompactionAbort = createQueuedCompactionAbort({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
+        abortSignal: params.abortSignal,
+        registerActiveRun: params.trigger === "manual",
+      });
       try {
         // When the context engine owns compaction, its compact() implementation
         // bypasses compactEmbeddedAgentSessionDirect (which fires the hooks internally).
@@ -429,7 +481,7 @@ export async function compactEmbeddedAgentSession(
               runtimeSettings: contextEngineRuntimeSettings,
             },
             resolveCompactionTimeoutMs(params.config),
-            params.abortSignal,
+            queuedCompactionAbort.signal,
           );
         } catch (compactErr) {
           log.warn("context-engine compaction failed", {
@@ -619,6 +671,7 @@ export async function compactEmbeddedAgentSession(
             : undefined,
         };
       } finally {
+        queuedCompactionAbort.dispose();
         if (!checkpointSnapshotRetained) {
           await compactionCheckpointStore.cleanupSnapshot(checkpointSnapshot);
         }
