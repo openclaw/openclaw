@@ -54,6 +54,7 @@ vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => 
     nextStreamFn = actual.createCodexNativeWebSearchWrapper(nextStreamFn, {
       config: ctx.config,
       agentDir: ctx.agentDir,
+      agentId: ctx.agentId,
     });
     return actual.createOpenAIResponsesContextManagementWrapper(
       actual.createOpenAIReasoningCompatibilityWrapper(nextStreamFn),
@@ -80,6 +81,8 @@ function runWrappedPayloadCase(params: {
     | Model<"azure-openai-responses">;
   extraParams?: Record<string, unknown>;
   cfg?: Record<string, unknown>;
+  agentId?: string;
+  nativeWebSearchAllowedByToolPolicy?: boolean;
   payload?: Record<string, unknown>;
 }) {
   const payload = params.payload ?? { store: false };
@@ -96,6 +99,8 @@ function runWrappedPayloadCase(params: {
     extraParams: params.extraParams,
     config: params.cfg as never,
     agentDir: "/tmp/openai-provider-test",
+    agentId: params.agentId,
+    nativeWebSearchAllowedByToolPolicy: params.nativeWebSearchAllowedByToolPolicy,
     streamFn: baseStreamFn,
   } as never);
 
@@ -1215,6 +1220,50 @@ describe("buildOpenAIProvider", () => {
     expect(result.payload.tools).toEqual([
       { type: "function", name: "read" },
       { type: "web_search" },
+    ]);
+  });
+
+  it("keeps managed OpenAI web_search when agent policy denies native web search", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentId: "main",
+      nativeWebSearchAllowedByToolPolicy: false,
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "main",
+              tools: { deny: ["web_search"] },
+            },
+          ],
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        tools: [
+          { type: "function", name: "read" },
+          { type: "function", name: "web_search" },
+        ],
+      },
+    });
+
+    expect(result.payload.tools).toEqual([
+      { type: "function", name: "read" },
+      { type: "function", name: "web_search" },
     ]);
   });
 

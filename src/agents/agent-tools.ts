@@ -285,6 +285,9 @@ function applyModelProviderToolPolicy(
       config: params?.config,
       modelProvider: params?.modelProvider,
       modelApi: params?.modelApi,
+      modelId: params?.modelId,
+      agentId: params?.agentId,
+      sessionKey: params?.sessionKey,
       agentDir: params?.agentDir,
     })
   ) {
