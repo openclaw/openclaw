@@ -6,11 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import {
-  formatFastModeSourceSuffix,
-  formatFastModeStatusValue,
-  resolveFastModeState,
-} from "../../agents/fast-mode.js";
+import { formatFastModeCurrentStatus, resolveFastModeState } from "../../agents/fast-mode.js";
 import {
   setChannelConversationBindingIdleTimeoutBySessionKey,
   setChannelConversationBindingMaxAgeBySessionKey,
@@ -415,14 +411,15 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
       agentId: sessionAgentId,
       sessionEntry: targetSessionEntry,
     });
-    const suffix = formatFastModeSourceSuffix(state.source);
     return {
       shouldContinue: false,
       reply: {
-        text: `⚙️ Current fast mode: ${formatFastModeStatusValue({
+        text: formatFastModeCurrentStatus({
           mode: state.mode,
+          source: state.source,
           fastAutoOnSeconds: state.fastAutoOnSeconds,
-        })}${suffix}.`,
+          label: "⚙️ Current fast mode",
+        }),
       },
     };
   }

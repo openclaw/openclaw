@@ -62,28 +62,15 @@ vi.mock("../../infra/session-cost-usage.js", () => ({
   loadCostUsageSummary: loadCostUsageSummaryMock,
 }));
 
-vi.mock("../../agents/fast-mode.js", () => ({
-  formatFastModeSourceSuffix: (source: FastModeStateMockResult["source"] | undefined) =>
-    source === "session"
-      ? " (session)"
-      : source === "agent"
-        ? " (default: agent)"
-        : source === "config"
-          ? " (default: model)"
-          : source === "default"
-            ? " (default)"
-            : "",
-  formatFastModeStatusValue: ({
-    mode,
-    fastAutoOnSeconds,
-  }: {
-    mode: boolean | "auto" | undefined;
-    fastAutoOnSeconds?: number;
-  }) => (mode === "auto" ? `auto (${fastAutoOnSeconds ?? 60} sec)` : mode === true ? "on" : "off"),
-  formatFastModeValue: (mode: boolean | "auto" | undefined) =>
-    mode === "auto" ? "auto" : mode === true ? "on" : "off",
-  resolveFastModeState: resolveFastModeStateMock,
-}));
+vi.mock("../../agents/fast-mode.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/fast-mode.js")>(
+    "../../agents/fast-mode.js",
+  );
+  return {
+    ...actual,
+    resolveFastModeState: resolveFastModeStateMock,
+  };
+});
 
 function buildUsageParams(): HandleCommandsParams {
   return {

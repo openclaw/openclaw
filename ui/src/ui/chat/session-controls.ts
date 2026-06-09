@@ -959,7 +959,7 @@ function resolveChatFastModeSelectState(
       { value: "", label: "Default" },
       { value: "on", label: "Fast" },
       { value: "off", label: "Standard" },
-      { value: "auto", label: t("common.auto") },
+      { value: "auto", label: "Auto" },
     ],
     supported,
   };

@@ -24,6 +24,7 @@ import {
   readSessionTitleFieldsFromTranscriptAsync,
 } from "../../gateway/session-utils.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { normalizeFastModeAutoOnSeconds, normalizeFastModeSource } from "../../shared/fast-mode.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   optionalNonNegativeIntegerSchema,
@@ -266,6 +267,9 @@ export function createSessionsListTool(opts?: {
           }
         }
 
+        const effectiveFastMode = normalizeFastMode(entry.effectiveFastMode);
+        const effectiveFastModeSource = normalizeFastModeSource(entry.effectiveFastModeSource);
+        const fastAutoOnSeconds = normalizeFastModeAutoOnSeconds(entry.fastAutoOnSeconds);
         const row: SessionListRow = {
           key: displayKey,
           agentId: resolvedAgentId,
@@ -332,6 +336,9 @@ export function createSessionsListTool(opts?: {
             : undefined,
           thinkingLevel: readStringValue(entry.thinkingLevel),
           fastMode: normalizeFastMode(entry.fastMode),
+          ...(effectiveFastMode !== undefined ? { effectiveFastMode } : {}),
+          ...(effectiveFastModeSource !== undefined ? { effectiveFastModeSource } : {}),
+          ...(fastAutoOnSeconds !== undefined ? { fastAutoOnSeconds } : {}),
           verboseLevel: readStringValue(entry.verboseLevel),
           reasoningLevel: readStringValue(entry.reasoningLevel),
           elevatedLevel: readStringValue(entry.elevatedLevel),

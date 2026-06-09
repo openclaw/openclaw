@@ -4,6 +4,10 @@
  */
 
 import {
+  formatFastModeCommandOptions,
+  formatFastModeCurrentStatus,
+} from "../../../../src/shared/fast-mode.js";
+import {
   createChatModelOverride,
   resolvePreferredServerChatModelValue,
 } from "../chat-model-ref.ts";
@@ -376,8 +380,10 @@ async function executeFast(
       const session = await loadCurrentSession(client, sessionKey);
       return {
         content: formatDirectiveOptions(
-          `Current fast mode: ${resolveCurrentFastMode(session)}.`,
-          "on, off, auto, default, status",
+          resolveCurrentFastModeStatus(session),
+          formatFastModeCommandOptions({
+            fastAutoOnSeconds: session?.fastAutoOnSeconds,
+          }),
         ),
       };
     } catch (err) {
@@ -720,8 +726,13 @@ function resolveCurrentThinkingLevel(
   });
 }
 
-function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "auto" | "on" | "off" {
-  return session?.fastMode === "auto" ? "auto" : session?.fastMode === true ? "on" : "off";
+function resolveCurrentFastModeStatus(session: GatewaySessionRow | undefined): string {
+  const mode = session?.effectiveFastMode ?? session?.fastMode;
+  return formatFastModeCurrentStatus({
+    mode,
+    source: session?.effectiveFastModeSource,
+    fastAutoOnSeconds: session?.fastAutoOnSeconds,
+  });
 }
 
 async function resolveSteerTarget(

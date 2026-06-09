@@ -13,8 +13,7 @@ import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
-  formatFastModeSourceSuffix,
-  formatFastModeStatusValue,
+  formatFastModeCurrentStatus,
   formatCommandArgMenuTitle,
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
@@ -450,11 +449,11 @@ function formatTelegramCommandArgMenuTitle(params: {
 }
 
 function resolveTelegramFastMenuCurrentStatus(params: { state: FastModeState }): string {
-  const suffix = formatFastModeSourceSuffix(params.state.source);
-  return `Current fast mode: ${formatFastModeStatusValue({
+  return formatFastModeCurrentStatus({
     mode: params.state.mode,
+    source: params.state.source,
     fastAutoOnSeconds: params.state.fastAutoOnSeconds,
-  })}${suffix}.`;
+  });
 }
 
 function resolveTelegramNativeReplyChannelData(
