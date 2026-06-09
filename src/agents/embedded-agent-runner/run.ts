@@ -2092,9 +2092,12 @@ export async function runEmbeddedAgent(
                 postCompactionGuard.armPostCompaction();
                 continue;
               } else {
-                compactionFailureContext = true;
+                compactionFailureContext =
+                  timeoutCompactionAttempts >= MAX_TIMEOUT_COMPACTION_ATTEMPTS;
                 log.warn(
-                  `[timeout-compaction] compaction did not reduce context for ${provider}/${modelId}; falling through to normal handling`,
+                  compactionFailureContext
+                    ? `[timeout-compaction] compaction did not reduce context for ${provider}/${modelId}; timeout compaction attempts exhausted, falling through to normal handling`
+                    : `[timeout-compaction] compaction did not reduce context for ${provider}/${modelId}; falling through to failover rotation`,
                 );
               }
             }
