@@ -3,11 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderSyntheticAuthResult } from "../plugins/provider-external-auth.types.js";
 
 const resolveProviderUsageAuthWithPluginMock = vi.fn(
   async (..._args: unknown[]): Promise<unknown> => null,
 );
-const resolveProviderSyntheticAuthWithPluginMock = vi.fn(() => undefined);
+const resolveProviderSyntheticAuthWithPluginMock = vi.fn(
+  (_params: unknown): ProviderSyntheticAuthResult | null | undefined => undefined,
+);
 const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);
 const ensureAuthProfileStoreMock = vi.fn(() => ({
   profiles: {},

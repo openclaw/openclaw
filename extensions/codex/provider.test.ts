@@ -400,7 +400,7 @@ describe("codex provider", () => {
   });
 
   it("keeps synthetic usage rate-limit reads on the default Codex auth bridge", async () => {
-    const requestCodexAppServerJson = vi.fn(async () => ({
+    const requestCodexAppServerJson = vi.fn(async (_params: unknown) => ({
       rateLimitsByLimitId: {},
     }));
     vi.doMock("./src/app-server/request.js", () => ({
