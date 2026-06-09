@@ -17,7 +17,7 @@ import {
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
   type MemorySearchManager,
-  type MemorySearchRuntimeDebug,
+  type MemorySearchOptions,
   type MemorySearchResult,
   type MemorySource,
   type MemorySyncProgressUpdate,
@@ -582,20 +582,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return state;
   }
 
-  async search(
-    query: string,
-    opts?: {
-      maxResults?: number;
-      minScore?: number;
-      sessionKey?: string;
-      qmdSearchModeOverride?: "query" | "search" | "vsearch";
-      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
-      /** When set, only these chunk sources are considered (must be enabled for this manager). */
-      sources?: MemorySource[];
-      /** Caller-owned cancellation; aborts in-flight embedding work when the caller stops waiting. */
-      signal?: AbortSignal;
-    },
-  ): Promise<MemorySearchResult[]> {
+  async search(query: string, opts?: MemorySearchOptions): Promise<MemorySearchResult[]> {
     opts?.onDebug?.({ backend: "builtin" });
     if (this.providerRequirement.mode === "required") {
       await this.ensureProviderInitialized();

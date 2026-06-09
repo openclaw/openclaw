@@ -192,12 +192,18 @@ describe("memory_search unavailable payloads", () => {
   it("keeps the timeout result when an abort-aware search rejects on abort", async () => {
     vi.useFakeTimers();
     try {
+      let signalSeen: AbortSignal | undefined;
+      let aborted = false;
       setMemorySearchImpl(
         async (opts) =>
           await new Promise((_resolve, reject) => {
+            signalSeen = opts?.signal;
             opts?.signal?.addEventListener(
               "abort",
-              () => reject(new Error("openai-compatible embeddings query failed: aborted")),
+              () => {
+                aborted = true;
+                reject(new Error("openai-compatible embeddings query failed: aborted"));
+              },
               { once: true },
             );
           }),
@@ -213,6 +219,9 @@ describe("memory_search unavailable payloads", () => {
         warning: "Memory search is unavailable due to an embedding/provider error.",
         action: "Check embedding provider configuration and retry memory_search.",
       });
+      expect(signalSeen).toBeInstanceOf(AbortSignal);
+      expect(signalSeen?.aborted).toBe(true);
+      expect(aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }

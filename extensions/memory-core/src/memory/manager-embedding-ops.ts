@@ -160,6 +160,16 @@ export function resolveMemoryIndexConcurrency(params: {
   return params.providerId === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
 }
 
+function createAbortReasonError(reason: unknown, fallbackMessage: string): Error {
+  if (reason instanceof Error) {
+    return reason;
+  }
+  if (typeof reason === "string" && reason.trim()) {
+    return new Error(reason);
+  }
+  return new Error(fallbackMessage);
+}
+
 export async function runEmbeddingOperationWithTimeout<T>(params: {
   timeoutMs: number;
   message: string;
@@ -168,11 +178,34 @@ export async function runEmbeddingOperationWithTimeout<T>(params: {
   run: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
   const controller = new AbortController();
-  const signal = params.signal
-    ? AbortSignal.any([params.signal, controller.signal])
-    : controller.signal;
+  let rejectParentAbort: ((error: Error) => void) | undefined;
+  const parentAbortPromise = params.signal
+    ? new Promise<never>((_, reject) => {
+        rejectParentAbort = reject;
+      })
+    : undefined;
+  const abortFromParent = () => {
+    const error = createAbortReasonError(
+      params.signal?.reason,
+      "memory embedding operation aborted",
+    );
+    controller.abort(error);
+    rejectParentAbort?.(error);
+  };
+  if (params.signal?.aborted) {
+    abortFromParent();
+  } else {
+    params.signal?.addEventListener("abort", abortFromParent, { once: true });
+  }
   if (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0) {
-    return await params.run(signal);
+    try {
+      const operation = params.run(controller.signal);
+      return parentAbortPromise
+        ? ((await Promise.race([operation, parentAbortPromise])) as T)
+        : await operation;
+    } finally {
+      params.signal?.removeEventListener("abort", abortFromParent);
+    }
   }
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   let timer: NodeJS.Timeout | null = null;
@@ -184,9 +217,14 @@ export async function runEmbeddingOperationWithTimeout<T>(params: {
     }, timeoutMs);
   });
   try {
-    const operation = params.run(signal);
-    return (await Promise.race([operation, timeoutPromise])) as T;
+    const operation = params.run(controller.signal);
+    return (await Promise.race(
+      parentAbortPromise
+        ? [operation, timeoutPromise, parentAbortPromise]
+        : [operation, timeoutPromise],
+    )) as T;
   } finally {
+    params.signal?.removeEventListener("abort", abortFromParent);
     if (timer) {
       clearTimeout(timer);
     }
@@ -513,11 +551,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             timeoutMs,
             message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
             signal,
-            run: async (opSignal) => await provider.embedQuery(text, { signal: opSignal }),
+            run: async (operationSignal) =>
+              await provider.embedQuery(text, { signal: operationSignal }),
           });
         },
-        signal,
-        isRetryable: isRetryableMemoryEmbeddingError,
+        isRetryable: (err) => !signal?.aborted && isRetryableMemoryEmbeddingError(err),
         waitForRetry: async (delayMs) => {
           await this.waitForEmbeddingRetry(delayMs, "retrying query");
         },

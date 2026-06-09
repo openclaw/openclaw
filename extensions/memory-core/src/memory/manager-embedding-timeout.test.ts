@@ -180,6 +180,50 @@ describe("memory embedding timeout abort", () => {
     await rejection;
   });
 
+  it("aborts the provider operation when the caller signal aborts", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    let signalSeen: AbortSignal | undefined;
+
+    const resultPromise = runEmbeddingOperationWithTimeout({
+      timeoutMs: 60_000,
+      message: "memory embeddings query timed out after 60s",
+      signal: controller.signal,
+      run: async (signal) => {
+        signalSeen = signal;
+        return await new Promise<number[]>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+            { once: true },
+          );
+        });
+      },
+    });
+
+    controller.abort(new Error("memory_search timed out after 15s"));
+
+    await expect(resultPromise).rejects.toThrow("memory_search timed out after 15s");
+    expect(signalSeen?.aborted).toBe(true);
+    expect(signalSeen?.reason).toBe(controller.signal.reason);
+  });
+
+  it("does not wait for the operation timeout when a caller aborts and the provider ignores the signal", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+
+    const resultPromise = runEmbeddingOperationWithTimeout({
+      timeoutMs: 60_000,
+      message: "memory embeddings query timed out after 60s",
+      signal: controller.signal,
+      run: async () => await new Promise<number[]>(() => {}),
+    });
+
+    controller.abort(new Error("memory_search timed out after 15s"));
+
+    await expect(resultPromise).rejects.toThrow("memory_search timed out after 15s");
+  });
+
   it("caps operation watchdog timers before scheduling", async () => {
     const timeoutSpy = vi
       .spyOn(globalThis, "setTimeout")
