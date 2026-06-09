@@ -24,6 +24,7 @@ type HubDelegatedSessionEntry = {
   spawnedBy?: string;
   parentSessionKey?: string;
   label?: string;
+  updatedAt?: number;
   acp?: {
     lastActivityAt?: number;
     mode?: "persistent" | "oneshot";
@@ -149,11 +150,16 @@ export function resolveHubDelegatedLabelLookup(params: {
 export function resolveHubDelegatedLastActivityAt(
   entry: HubDelegatedSessionEntry & { hubDelegated: HubDelegatedSessionMeta },
 ): number {
+  const createdAt = entry.hubDelegated.createdAt;
   const acpActivity = entry.acp?.lastActivityAt;
   if (typeof acpActivity === "number" && Number.isFinite(acpActivity)) {
-    return Math.max(entry.hubDelegated.createdAt, acpActivity);
+    return Math.max(createdAt, acpActivity);
   }
-  return entry.hubDelegated.createdAt;
+  const updatedAt = entry.updatedAt;
+  if (typeof updatedAt === "number" && Number.isFinite(updatedAt)) {
+    return Math.max(createdAt, updatedAt);
+  }
+  return createdAt;
 }
 
 export type HubDelegatedExpiryReason = "delegate-idle-expired" | "delegate-max-age-expired";

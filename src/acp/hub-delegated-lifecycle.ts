@@ -138,36 +138,44 @@ export async function closeHubDelegatedAcpWorker(params: {
     storePath: params.storePath,
     storeSessionKey: params.storeSessionKey,
   });
-  if (closeSnapshot) {
-    // Drop the delegate marker before runtime close so missing-metadata repair cannot
-    // resurrect a worker whose sqlite metadata was already cleared.
-    await clearHubDelegatedSessionMarker({
-      storePath: params.storePath,
-      storeSessionKey: params.storeSessionKey,
-    });
-  }
-  try {
-    await params.closeRuntime({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      reason: params.reason,
-    });
-  } catch (err) {
+  const closeDelegateRuntime = async (): Promise<void> => {
     if (closeSnapshot) {
-      try {
-        await restoreHubDelegatedSessionMarker({
-          storePath: params.storePath,
-          storeSessionKey: params.storeSessionKey,
-          marker: closeSnapshot.marker,
-          label: closeSnapshot.label,
-          spawnedBy: closeSnapshot.spawnedBy,
-          parentSessionKey: closeSnapshot.parentSessionKey,
-        });
-      } catch {
-        // Best-effort restore keeps maintenance/operator paths able to retry close.
-      }
+      // Drop the delegate marker before runtime close so missing-metadata repair cannot
+      // resurrect a worker whose sqlite metadata was already cleared.
+      await clearHubDelegatedSessionMarker({
+        storePath: params.storePath,
+        storeSessionKey: params.storeSessionKey,
+      });
     }
-    throw err;
+    try {
+      await params.closeRuntime({
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        reason: params.reason,
+      });
+    } catch (err) {
+      if (closeSnapshot) {
+        try {
+          await restoreHubDelegatedSessionMarker({
+            storePath: params.storePath,
+            storeSessionKey: params.storeSessionKey,
+            marker: closeSnapshot.marker,
+            label: closeSnapshot.label,
+            spawnedBy: closeSnapshot.spawnedBy,
+            parentSessionKey: closeSnapshot.parentSessionKey,
+          });
+        } catch {
+          // Best-effort restore keeps maintenance/operator paths able to retry close.
+        }
+      }
+      throw err;
+    }
+  };
+  if (closeSnapshot) {
+    const { withHubDelegatedLabelPatchLock } = await import("../gateway/sessions-patch.js");
+    await withHubDelegatedLabelPatchLock(closeDelegateRuntime);
+  } else {
+    await closeDelegateRuntime();
   }
   try {
     await params.unbind?.({
@@ -254,6 +262,7 @@ export function resolveExpiredHubDelegatedCandidates(params: {
       entry: {
         hubDelegated: entry.entry.hubDelegated,
         acp: entry.acp,
+        updatedAt: entry.entry.updatedAt,
       },
       policy,
       now: params.now,

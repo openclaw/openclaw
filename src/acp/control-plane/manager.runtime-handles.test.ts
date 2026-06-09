@@ -148,7 +148,7 @@ describe("AcpSessionManager runtime handles", () => {
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
 
-  it("re-ensures cached runtime handles when getStatus returns an empty status payload", async () => {
+  it("reuses cached runtime handles when getStatus returns an empty status payload", async () => {
     const runtimeState = createRuntime();
     runtimeState.getStatus
       .mockResolvedValueOnce({
@@ -186,7 +186,7 @@ describe("AcpSessionManager runtime handles", () => {
       requestId: "r2",
     });
 
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
     expect(runtimeState.getStatus).toHaveBeenCalledTimes(3);
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });

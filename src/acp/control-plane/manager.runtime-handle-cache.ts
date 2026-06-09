@@ -212,13 +212,10 @@ function isRuntimeStatusUnavailable(status: AcpRuntimeStatus | undefined): boole
     return true;
   }
   const detailsStatus = normalizeLowercaseStringOrEmpty(status.details?.status);
-  const summary = status.summary?.trim() ?? "";
-  if (!detailsStatus && !summary) {
-    return true;
-  }
   if (detailsStatus === "dead" || detailsStatus === "no-session") {
     return true;
   }
+  const summary = status.summary?.trim() ?? "";
   const summaryMatch = summary.match(/\bstatus=([^\s]+)/i);
   const summaryStatus = normalizeLowercaseStringOrEmpty(summaryMatch?.[1]);
   return summaryStatus === "dead" || summaryStatus === "no-session";

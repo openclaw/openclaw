@@ -7,6 +7,7 @@ import {
   writeSessionStoreForTest,
 } from "../config/sessions/test-helpers.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { withHubDelegatedLabelPatchLock } from "../gateway/sessions-patch.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -256,6 +257,91 @@ describe("hub-delegated lifecycle", () => {
       ],
     });
     expect(expired).toHaveLength(1);
+  });
+
+  it("resolveExpiredHubDelegatedCandidates skips idle expiry when JSON updatedAt is recent", () => {
+    const createdAt = Date.now() - 8 * 24 * 60 * 60 * 1000;
+    const recentActivity = Date.now() - 60 * 60 * 1000;
+    const expired = resolveExpiredHubDelegatedCandidates({
+      cfg: {
+        acp: { delegate: { idleHours: 72, maxAgeHours: 0 } },
+      },
+      entries: [
+        {
+          cfg: {},
+          storePath: "/tmp/store.json",
+          sessionKey: "agent:codex:acp:active",
+          storeSessionKey: "agent:codex:acp:active",
+          entry: {
+            sessionId: "sess-active",
+            updatedAt: recentActivity,
+            hubDelegated: {
+              ownerSessionKey: "agent:main:main",
+              createdAt,
+            },
+          },
+          acp: undefined,
+        },
+      ],
+    });
+    expect(expired).toHaveLength(0);
+  });
+
+  it("holds the hub-delegated label lock while clearing and restoring on close failure", async () => {
+    await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const sessionKey = "agent:codex:acp:close-lock";
+      const marker = {
+        ownerSessionKey: "agent:main:main",
+        createdAt: Date.now(),
+      };
+      writeSessionStoreForTest(storePath, {
+        [sessionKey]: {
+          sessionId: "sess-close-lock",
+          updatedAt: Date.now(),
+          label: "refactor",
+          spawnedBy: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          hubDelegated: marker,
+        },
+      });
+      let unblockClose!: () => void;
+      const closeBlocked = new Promise<void>((resolve) => {
+        unblockClose = resolve;
+      });
+      let closeRuntimeEntered!: () => void;
+      const closeRuntimeEnteredPromise = new Promise<void>((resolve) => {
+        closeRuntimeEntered = resolve;
+      });
+      let concurrentFinished = false;
+      const closePromise = closeHubDelegatedAcpWorker({
+        cfg: { session: { store: storePath } },
+        sessionKey,
+        storePath,
+        storeSessionKey: sessionKey,
+        reason: "manual-delegate-close",
+        closeRuntime: async () => {
+          closeRuntimeEntered();
+          await closeBlocked;
+          throw new Error("close failed");
+        },
+      });
+      await closeRuntimeEnteredPromise;
+      const concurrent = withHubDelegatedLabelPatchLock(async () => {
+        concurrentFinished = true;
+      });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
+      });
+      expect(concurrentFinished).toBe(false);
+      unblockClose();
+      await expect(closePromise).rejects.toThrow("close failed");
+      await concurrent;
+      expect(concurrentFinished).toBe(true);
+      const persisted = readSessionStoreForTest(storePath);
+      expect(persisted[sessionKey]?.hubDelegated).toEqual(marker);
+      expect(persisted[sessionKey]?.label).toBe("refactor");
+    });
   });
 
   it("clearHubDelegatedSessionMarker removes delegate routing fields from the store row", async () => {

@@ -92,6 +92,20 @@ describe("resolveHubDelegatedExpiry", () => {
       expect(result.reason).toBe("delegate-max-age-expired");
     }
   });
+
+  it("uses JSON updatedAt when sqlite lastActivityAt is missing", () => {
+    const createdAt = 1_000_000;
+    const recentActivity = createdAt + 50_000;
+    const result = resolveHubDelegatedExpiry({
+      entry: {
+        hubDelegated: { ownerSessionKey: "agent:main:main", createdAt },
+        updatedAt: recentActivity,
+      },
+      policy: { idleMs: 60_000, maxAgeMs: 0 },
+      now: recentActivity + 30_000,
+    });
+    expect(result.expired).toBe(false);
+  });
 });
 
 describe("isHubDelegatedAcpSessionEntry", () => {
