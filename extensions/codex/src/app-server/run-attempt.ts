@@ -212,7 +212,10 @@ import {
   writeCodexAppServerBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
-import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
+import {
+  listCodexAppServerRolloutFilesForThread,
+  rotateOversizedCodexAppServerStartupBinding,
+} from "./startup-binding.js";
 import {
   buildDeveloperInstructions,
   buildContextEngineBinding,
@@ -240,6 +243,7 @@ import {
   mirrorPromptAtTurnStartBestEffort,
   mirrorTranscriptBestEffort,
 } from "./transcript-mirror.js";
+import { repairCodexRolloutMissingCustomToolOutputs } from "./transcript-repair.js";
 import {
   formatCodexTurnStartUsageLimitError,
   markCodexAuthProfileBlockedFromRateLimits,
@@ -502,6 +506,31 @@ export async function runCodexAppServerAttempt(
   const initialInactiveThreadBootstrapBindingForcedFreshStart =
     initialStartupBindingHadInactiveThreadBootstrap && !startupBinding?.threadId;
   preDynamicStartupStages.mark("rotate-binding");
+  if (startupBinding?.threadId) {
+    try {
+      const rolloutFiles = await listCodexAppServerRolloutFilesForThread(
+        agentDir,
+        startupBinding.threadId,
+        appServer.start.env?.CODEX_HOME,
+      );
+      const repair = await repairCodexRolloutMissingCustomToolOutputs(
+        rolloutFiles.map((file) => file.path),
+      );
+      if (repair.insertedOutputs > 0) {
+        embeddedAgentLog.warn("repaired codex app-server native transcript tool outputs", {
+          threadId: startupBinding.threadId,
+          scannedFiles: repair.scannedFiles,
+          repairedFiles: repair.repairedFiles,
+          insertedOutputs: repair.insertedOutputs,
+        });
+      }
+    } catch (error) {
+      embeddedAgentLog.warn("failed to repair codex app-server native transcript", {
+        threadId: startupBinding.threadId,
+        error,
+      });
+    }
+  }
   const startupAuthProfileCandidate =
     params.runtimePlan?.auth.forwardedAuthProfileId ??
     params.authProfileId ??
