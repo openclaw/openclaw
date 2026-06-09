@@ -80,6 +80,103 @@ const RATE_LIMIT_SPECIFIC_HINT_RE =
 const MODEL_CAPACITY_ERROR_RE = /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i;
 const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
+const ESCAPE_CHAR_CODE = 27;
+const BELL_CHAR_CODE = 7;
+const BACKSLASH_CHAR_CODE = 92;
+const RIGHT_BRACKET_CHAR_CODE = 93;
+const DELETE_CHAR_CODE = 127;
+const MAX_ASCII_CONTROL_CHAR_CODE = 31;
+export type TransientErrorContextOpts = {
+  provider?: string;
+  model?: string;
+  profileId?: string;
+  trigger?: string;
+  sessionKey?: string;
+};
+
+function extractRequestId(raw: string): string | undefined {
+  return raw.match(/"request_id"\s*:\s*"([^"]+)"/)?.[1];
+}
+
+function stripTerminalOscSequences(value: string): string {
+  let result = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const charCode = value.charCodeAt(index);
+    const nextCharCode = index + 1 < value.length ? value.charCodeAt(index + 1) : undefined;
+    if (charCode === ESCAPE_CHAR_CODE && nextCharCode === RIGHT_BRACKET_CHAR_CODE) {
+      index += 2;
+      while (index < value.length) {
+        const sequenceCharCode = value.charCodeAt(index);
+        if (sequenceCharCode === BELL_CHAR_CODE) {
+          break;
+        }
+        if (
+          sequenceCharCode === ESCAPE_CHAR_CODE &&
+          index + 1 < value.length &&
+          value.charCodeAt(index + 1) === BACKSLASH_CHAR_CODE
+        ) {
+          index += 1;
+          break;
+        }
+        index += 1;
+      }
+      continue;
+    }
+    result += value[index] ?? "";
+  }
+  return result;
+}
+
+function replaceAsciiControlCharacters(value: string): string {
+  let result = "";
+  for (const char of value) {
+    const charCode = char.charCodeAt(0);
+    result += charCode <= MAX_ASCII_CONTROL_CHAR_CODE || charCode === DELETE_CHAR_CODE ? " " : char;
+  }
+  return result;
+}
+
+function sanitizeContextValue(value: string): string {
+  return replaceAsciiControlCharacters(stripTerminalOscSequences(value))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function buildTransientErrorContext(raw: string, opts?: TransientErrorContextOpts): string {
+  const parts: string[] = [];
+  const provider = opts?.provider ? sanitizeContextValue(opts.provider) : "";
+  const model = opts?.model ? sanitizeContextValue(opts.model) : "";
+  const providerModel = [provider, model].filter(Boolean).join("/");
+  if (providerModel) {
+    parts.push(providerModel);
+  }
+  if (opts?.profileId) {
+    const profileId = sanitizeContextValue(opts.profileId);
+    if (profileId) {
+      parts.push(`profile=${profileId}`);
+    }
+  }
+  if (opts?.trigger) {
+    const trigger = sanitizeContextValue(opts.trigger);
+    if (trigger) {
+      parts.push(`trigger=${trigger}`);
+    }
+  }
+  if (opts?.sessionKey) {
+    const sessionKey = sanitizeContextValue(opts.sessionKey);
+    if (sessionKey) {
+      parts.push(`session=${sessionKey}`);
+    }
+  }
+  const requestId = extractRequestId(raw);
+  if (requestId) {
+    const sanitizedRequestId = sanitizeContextValue(requestId);
+    if (sanitizedRequestId) {
+      parts.push(`req=${sanitizedRequestId}`);
+    }
+  }
+  return parts.length > 0 ? ` [${parts.join(", ")}]` : "";
+}
 
 function extractProviderRateLimitMessage(raw: string): string | undefined {
   const withoutPrefix = raw.replace(ERROR_PREFIX_RE, "").trim();
@@ -107,15 +204,19 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
   return `⚠️ ${trimmed}`;
 }
 
-export function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
+export function formatRateLimitOrOverloadedErrorCopy(
+  raw: string,
+  opts?: TransientErrorContextOpts,
+): string | undefined {
+  const context = buildTransientErrorContext(raw, opts);
   if (isRateLimitErrorMessage(raw)) {
-    return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
+    return `${extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE}${context}`;
   }
   if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
     return MODEL_CAPACITY_ERROR_USER_MESSAGE;
   }
   if (isOverloadedErrorMessage(raw)) {
-    return OVERLOADED_ERROR_USER_MESSAGE;
+    return `${OVERLOADED_ERROR_USER_MESSAGE}${context}`;
   }
   return undefined;
 }

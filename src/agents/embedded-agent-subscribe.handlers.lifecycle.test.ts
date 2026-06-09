@@ -274,13 +274,13 @@ describe("handleAgentEnd", () => {
     expect(warnMeta.event).toBe("embedded_run_agent_end");
     expect(warnMeta.runId).toBe("run-1");
     expect(warnMeta.error).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
+      "The AI service is temporarily overloaded. Please try again in a moment. [anthropic/claude-test, session=agent:main:main]",
     );
     expect(warnMeta.failoverReason).toBe("overloaded");
     expect(warnMeta.providerRuntimeFailureKind).toBe("timeout");
     expect(warnMeta.providerErrorType).toBe("overloaded_error");
     expect(warnMeta.consoleMessage).toBe(
-      'embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment. rawError={"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      'embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment. [anthropic/claude-test, session=agent:main:main] rawError={"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
     );
   });
 

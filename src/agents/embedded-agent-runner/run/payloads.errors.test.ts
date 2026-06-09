@@ -12,8 +12,9 @@ import {
 } from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads", () => {
-  const OVERLOADED_FALLBACK_TEXT =
+  const OVERLOADED_FALLBACK_BASE =
     "The AI service is temporarily overloaded. Please try again in a moment.";
+  const OVERLOADED_FALLBACK_TEXT = `${OVERLOADED_FALLBACK_BASE} [test-model, session=session:telegram, req=req_011CX7DwS7tSvggaNHmefwWg]`;
   const errorJson =
     '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
   const errorJsonPretty = `{
@@ -40,11 +41,14 @@ describe("buildEmbeddedRunPayloads", () => {
       content: [],
     });
 
-  const expectOverloadedFallback = (payloads: ReturnType<typeof buildPayloads>) => {
+  const expectOverloadedFallback = (
+    payloads: ReturnType<typeof buildPayloads>,
+    expectedText = OVERLOADED_FALLBACK_TEXT,
+  ) => {
     // Overloaded JSON is normalized into stable copy rather than replayed as a
     // raw provider object.
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe(OVERLOADED_FALLBACK_TEXT);
+    expect(payloads[0]?.text).toBe(expectedText);
   };
 
   const expectNoPayloadTextContaining = (
@@ -102,7 +106,10 @@ describe("buildEmbeddedRunPayloads", () => {
       sessionKey: "agent:main:telegram:direct:u123",
     });
 
-    expectOverloadedFallback(payloads);
+    expectOverloadedFallback(
+      payloads,
+      `${OVERLOADED_FALLBACK_BASE} [test-model, session=agent:main:telegram:direct:u123, req=req_011CX7DwS7tSvggaNHmefwWg]`,
+    );
     expect(payloads[0]?.isError).toBe(true);
     expectNoPayloadTextContaining(payloads, "Edit");
     expectNoPayloadTextContaining(payloads, "missing");
@@ -341,6 +348,26 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectSinglePayloadSummary(payloads, {
       text: formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"),
+      isError: true,
+    });
+  });
+
+  it("includes provider, model, profile, trigger, and session context for transient errors", () => {
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        model: "gpt-5.4",
+        errorMessage: "429 Too Many Requests",
+        content: [{ type: "text", text: "429 Too Many Requests" }],
+      }),
+      provider: "openai",
+      model: "gpt-5.4",
+      profileId: "openai:primary",
+      trigger: "heartbeat",
+      sessionKey: "agent:main:telegram:group:g1",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "⚠️ API rate limit reached. Please try again later. [openai/gpt-5.4, profile=openai:primary, trigger=heartbeat, session=agent:main:telegram:group:g1]",
       isError: true,
     });
   });
