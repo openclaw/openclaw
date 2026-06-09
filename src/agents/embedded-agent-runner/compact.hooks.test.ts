@@ -2213,6 +2213,57 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it("keeps context-engine compaction successful when the secondary Codex bridge gets a provider 4xx", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({
+      runtime: "codex",
+      runtimeSource: "model",
+    } as never);
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "provider_error_4xx",
+      failure: {
+        reason: "provider_error_4xx",
+        status: 400,
+        rawError: "provider_error_4xx",
+      },
+    });
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "codex",
+        model: "gpt-5.4",
+        agentHarnessId: "codex",
+        trigger: "budget",
+        currentTokenCount: 333,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(result.result?.summary).toBe("engine-summary");
+    expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "budget",
+        nativeCompactionRequest: "after_context_engine",
+      }),
+    );
+    const details = result.result?.details as
+      | { codexNativeCompaction?: Record<string, unknown> }
+      | undefined;
+    expect(details?.codexNativeCompaction).toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: "provider_error_4xx",
+      failure: {
+        reason: "provider_error_4xx",
+        status: 400,
+      },
+    });
+  });
+
   it("does not fire after_compaction when compaction fails", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     const sync = vi.fn(async () => {});
