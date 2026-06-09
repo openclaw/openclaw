@@ -369,6 +369,36 @@ describe("sanitizeHostExecEnv", () => {
     });
   });
 
+  it("preserves inherited restrictive GIT_PROTOCOL_FROM_USER values", () => {
+    const restrictiveValues = ["", "0", "false", "False", "no", "off"];
+
+    for (const value of restrictiveValues) {
+      const env = sanitizeHostExecEnv({
+        baseEnv: {
+          PATH: "/usr/bin:/bin",
+          GIT_PROTOCOL_FROM_USER: value,
+        },
+      });
+
+      expect(env.GIT_PROTOCOL_FROM_USER).toBe(value);
+    }
+  });
+
+  it("removes inherited permissive GIT_PROTOCOL_FROM_USER values", () => {
+    const permissiveValues = ["1", "true", "yes", "on", "maybe"];
+
+    for (const value of permissiveValues) {
+      const env = sanitizeHostExecEnv({
+        baseEnv: {
+          PATH: "/usr/bin:/bin",
+          GIT_PROTOCOL_FROM_USER: value,
+        },
+      });
+
+      expect(env.GIT_PROTOCOL_FROM_USER).toBeUndefined();
+    }
+  });
+
   it("blocks PATH and dangerous override values", () => {
     const env = sanitizeHostExecEnv({
       baseEnv: {

@@ -24,6 +24,7 @@ enum HostEnvSanitizer {
         "NO_COLOR",
         "FORCE_COLOR",
     ]
+    private static let gitProtocolFromUserKey = "GIT_PROTOCOL_FROM_USER"
 
     private static func isBlocked(_ upperKey: String) -> Bool {
         if self.blockedKeys.contains(upperKey) { return true }
@@ -82,6 +83,15 @@ enum HostEnvSanitizer {
         Array(Set(values)).sorted()
     }
 
+    private static func isRestrictiveGitProtocolFromUserValue(_ value: String) -> Bool {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.isEmpty
+            || normalized == "0"
+            || normalized == "false"
+            || normalized == "no"
+            || normalized == "off"
+    }
+
     static func inspectOverrides(
         overrides: [String: String]?,
         blockPathOverrides: Bool = true) -> HostEnvOverrideDiagnostics
@@ -120,6 +130,14 @@ enum HostEnvSanitizer {
             let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty else { continue }
             let upper = key.uppercased()
+            // Preserve Git's restrictive mode when already inherited from the trusted host.
+            // Dropping it would make Git fall back to the more permissive unset default.
+            if upper == self.gitProtocolFromUserKey,
+               self.isRestrictiveGitProtocolFromUserValue(value)
+            {
+                merged[key] = value
+                continue
+            }
             if self.isBlockedInherited(upper) { continue }
             merged[key] = value
         }

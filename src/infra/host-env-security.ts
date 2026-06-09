@@ -43,6 +43,7 @@ const HOST_DANGEROUS_OVERRIDE_ENV_KEYS = new Set<string>(HOST_DANGEROUS_OVERRIDE
 const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS = new Set<string>(
   HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES,
 );
+const GIT_PROTOCOL_FROM_USER_ENV_KEY = "GIT_PROTOCOL_FROM_USER";
 
 function isShellWrapperAllowedOverrideEnvVarName(rawKey: string): boolean {
   const key = normalizeEnvVarKey(rawKey, { portable: true });
@@ -148,6 +149,17 @@ function listNormalizedEnvEntries(
   return entries;
 }
 
+function isRestrictiveGitProtocolFromUserValue(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || normalized === "0" || normalized === "false" || normalized === "no") {
+    return true;
+  }
+  if (normalized === "off") {
+    return true;
+  }
+  return false;
+}
+
 function sanitizeHostEnvOverridesWithDiagnostics(params?: {
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
@@ -210,6 +222,15 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
 
   const merged: Record<string, string> = {};
   for (const [key, value] of listNormalizedEnvEntries(baseEnv)) {
+    // Preserve Git's restrictive mode when already inherited from the trusted host.
+    // Dropping it would make Git fall back to the more permissive unset default.
+    if (
+      key.toUpperCase() === GIT_PROTOCOL_FROM_USER_ENV_KEY &&
+      isRestrictiveGitProtocolFromUserValue(value)
+    ) {
+      merged[key] = value;
+      continue;
+    }
     if (isDangerousHostInheritedEnvVarName(key)) {
       continue;
     }
