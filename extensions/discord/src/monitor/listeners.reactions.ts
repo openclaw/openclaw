@@ -21,13 +21,14 @@ import {
 } from "./allow-list.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
+import { captureDiscordReactionFeedback } from "./reaction-feedback.js";
 import { runDiscordListenerWithSlowLog, type DiscordListenerLogger } from "./listeners.queue.js";
 import { resolveFetchedDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
 
 type LoadedConfig = OpenClawConfig;
 type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 
-type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
+export type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
 type DiscordReactionListenerParams = {
   cfg: LoadedConfig;
@@ -222,6 +223,7 @@ async function authorizeDiscordReactionIngress(
 async function handleDiscordThreadReactionNotification(params: {
   reactionMode: DiscordReactionMode;
   message: DiscordReactionEvent["message"];
+  fetchedMessage?: DiscordFetchedReactionMessage;
   parentId?: string;
   resolveThreadChannelAccess: () => Promise<{
     access: DiscordReactionIngressAccess;
@@ -254,7 +256,7 @@ async function handleDiscordThreadReactionNotification(params: {
     return;
   }
 
-  const message = await params.message.fetch().catch(() => null);
+  const message = params.fetchedMessage ?? (await params.message.fetch().catch(() => null));
   const { access, channelConfig } = await params.resolveThreadChannelAccess();
   const messageAuthorId = message?.author?.id ?? undefined;
   if (
@@ -275,6 +277,7 @@ async function handleDiscordChannelReactionNotification(params: {
   isGuildMessage: boolean;
   reactionMode: DiscordReactionMode;
   message: DiscordReactionEvent["message"];
+  fetchedMessage?: DiscordFetchedReactionMessage;
   channelConfig: DiscordReactionChannelConfig;
   parentId?: string;
   authorizeReactionIngressForChannel: (
@@ -315,7 +318,7 @@ async function handleDiscordChannelReactionNotification(params: {
     return;
   }
 
-  const message = await params.message.fetch().catch(() => null);
+  const message = params.fetchedMessage ?? (await params.message.fetch().catch(() => null));
   const messageAuthorId = message?.author?.id ?? undefined;
   if (
     !params.shouldNotifyReaction({
@@ -433,6 +436,7 @@ async function handleDiscordReactionEvent(
     const isDirectMessage = channelType === ChannelType.DM;
     const isGroupDm = channelType === ChannelType.GroupDM;
     const isThreadChannel = channelContext.isThreadChannel;
+    const fetchedMessage = await data.message.fetch().catch(() => null);
     const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
       cfg: params.cfg,
       accountId: params.accountId,
@@ -463,6 +467,20 @@ async function handleDiscordReactionEvent(
     const parentId = isThreadChannel ? channelContext.threadParentId : channelContext.parentId;
     const parentName = isThreadChannel ? channelContext.threadParentName : undefined;
     const parentSlug = isThreadChannel ? channelContext.threadParentSlug : "";
+    try {
+      await captureDiscordReactionFeedback({
+        cfg: params.cfg,
+        accountId: params.accountId,
+        action,
+        data,
+        botUserId: params.botUserId,
+        fetchedMessage,
+        threadId: isThreadChannel ? channelContext.threadParentId : undefined,
+        logger: params.logger,
+      });
+    } catch (err) {
+      params.logger.error(danger(`discord reaction capture failed: ${String(err)}`));
+    }
     let reactionBase: { baseText: string; contextKey: string } | null = null;
     const resolveReactionBase = () => {
       if (reactionBase) {
@@ -555,6 +573,7 @@ async function handleDiscordReactionEvent(
       await handleDiscordThreadReactionNotification({
         reactionMode,
         message: data.message,
+        fetchedMessage,
         parentId,
         resolveThreadChannelAccess,
         shouldNotifyReaction,
@@ -579,6 +598,7 @@ async function handleDiscordReactionEvent(
       isGuildMessage,
       reactionMode,
       message: data.message,
+      fetchedMessage,
       channelConfig,
       parentId,
       authorizeReactionIngressForChannel,
