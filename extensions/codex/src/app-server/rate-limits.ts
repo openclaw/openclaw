@@ -12,7 +12,7 @@ import {
   type ProviderUsageSnapshot,
   type UsageWindow,
 } from "openclaw/plugin-sdk/provider-usage";
-import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumber, parseStrictFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
 const CODEX_LIMIT_ID = "codex";
@@ -509,12 +509,33 @@ function formatProviderUsageWindowLabel(
 function resolveCodexProviderUsagePlan(snapshot: JsonObject): string | undefined {
   const plan = readString(snapshot, "planType") ?? readString(snapshot, "plan_type");
   const credits = isJsonObject(snapshot.credits) ? snapshot.credits : undefined;
-  const rawBalance = credits?.balance;
-  if (rawBalance === undefined || rawBalance === null) {
+  const creditSummary = formatCodexCreditSummary(credits);
+  if (!creditSummary) {
     return plan;
   }
-  const balance = asFiniteNumber(rawBalance) ?? 0;
-  return plan ? `${plan} ($${balance.toFixed(2)})` : `$${balance.toFixed(2)}`;
+  return plan ? `${plan} (${creditSummary})` : creditSummary;
+}
+
+function formatCodexCreditSummary(credits: JsonObject | undefined): string | undefined {
+  if (!credits) {
+    return undefined;
+  }
+  const hasCredits = readBoolean(credits, "hasCredits") ?? readBoolean(credits, "has_credits");
+  if (hasCredits === false) {
+    return undefined;
+  }
+  if (readBoolean(credits, "unlimited")) {
+    return "Unlimited credits";
+  }
+  const balance =
+    typeof credits.balance === "string"
+      ? parseStrictFiniteNumber(credits.balance)
+      : asFiniteNumber(credits.balance);
+  if (balance === undefined || balance <= 0) {
+    return undefined;
+  }
+  const roundedBalance = Math.round(balance);
+  return roundedBalance > 0 ? `${roundedBalance} credits` : undefined;
 }
 
 function selectSnapshotBlockingReset(
@@ -739,6 +760,11 @@ function readNullableString(record: JsonObject, key: string): string | undefined
 
 function readNumber(record: JsonObject, key: string): number | undefined {
   return asFiniteNumber(record[key]);
+}
+
+function readBoolean(record: JsonObject, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function normalizeText(value: string | null | undefined): string | undefined {

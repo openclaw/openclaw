@@ -143,6 +143,7 @@ describe("buildCodexAppServerUsageSnapshot", () => {
         codex: {
           limitId: "codex",
           planType: "plus",
+          credits: { hasCredits: true, balance: "12.5" },
           primary: {
             usedPercent: 9,
             windowDurationMins: 300,
@@ -160,7 +161,7 @@ describe("buildCodexAppServerUsageSnapshot", () => {
     expect(result).toEqual({
       provider: "openai",
       displayName: "OpenAI",
-      plan: "plus",
+      plan: "plus (13 credits)",
       windows: [
         { label: "5h", usedPercent: 9, resetAt: 1_700_003_600_000 },
         { label: "Week", usedPercent: 30, resetAt: 1_700_604_800_000 },
@@ -198,6 +199,20 @@ describe("buildCodexAppServerUsageSnapshot", () => {
     expect(summarizeCodexAccountUsage(payload, nowMs)?.usageLine).toBe(
       "weekly 30% \u00b7 short-term 9%",
     );
+  });
+
+  it("formats unlimited Codex credits without currency wording", () => {
+    const result = buildCodexAppServerUsageSnapshot({
+      rate_limits: {
+        limit_id: "codex",
+        plan_type: "plus",
+        credits: { has_credits: true, unlimited: true, balance: null },
+        primary: null,
+        secondary: null,
+      },
+    });
+
+    expect(result.plan).toBe("plus (Unlimited credits)");
   });
 
   it("accepts snake_case Codex core payload fields", () => {
