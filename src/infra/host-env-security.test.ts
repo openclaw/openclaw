@@ -229,6 +229,14 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("AWS_CONFIG_FILE")).toBe(false);
     expect(isDangerousHostEnvVarName("aws_config_file")).toBe(false);
     expect(isDangerousHostEnvVarName("yarn_rc_filename")).toBe(false);
+    expect(isDangerousHostEnvVarName("BASHOPTS")).toBe(true);
+    expect(isDangerousHostEnvVarName("bashopts")).toBe(true);
+    expect(isDangerousHostEnvVarName("FPATH")).toBe(true);
+    expect(isDangerousHostEnvVarName("fpath")).toBe(true);
+    expect(isDangerousHostEnvVarName("KSH_ENV")).toBe(true);
+    expect(isDangerousHostEnvVarName("ksh_env")).toBe(true);
+    expect(isDangerousHostEnvVarName("TCLLIBPATH")).toBe(true);
+    expect(isDangerousHostEnvVarName("tcllibpath")).toBe(true);
     expect(isDangerousHostEnvVarName("PATH")).toBe(false);
     expect(isDangerousHostEnvVarName("FOO")).toBe(false);
     expect(isDangerousHostEnvVarName("GRADLE_USER_HOME")).toBe(false);
@@ -337,6 +345,10 @@ describe("sanitizeHostExecEnv", () => {
         DOCKER_CONTEXT: "trusted-remote",
         DOCKER_HOST: "tcp://docker.example.test:2376",
         LD_PRELOAD: "/tmp/pwn.so",
+        BASHOPTS: "xtrace",
+        FPATH: "/tmp/evil-fpath",
+        KSH_ENV: "/tmp/evil-ksh-env",
+        TCLLIBPATH: "/tmp/evil-tcllibpath",
         NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
         NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
         NODE_REPL_HISTORY: "/tmp/node-repl-history",
@@ -366,105 +378,109 @@ describe("sanitizeHostExecEnv", () => {
   });
 
   it("blocks PATH and dangerous override values", () => {
-    const env = sanitizeHostExecEnv({
-      baseEnv: {
-        PATH: "/usr/bin:/bin",
-        HOME: "/tmp/trusted-home",
-        ZDOTDIR: "/tmp/trusted-zdotdir",
-        CARGO_REGISTRIES_CRATES_IO_INDEX: "https://trusted.example/crates.io-index",
-        YARN_RC_FILENAME: ".trusted-yarnrc.yml",
-      },
-      overrides: {
-        PATH: "/tmp/evil",
-        HOME: "/tmp/evil-home",
-        ZDOTDIR: "/tmp/evil-zdotdir",
-        BASH_ENV: "/tmp/pwn.sh",
-        BROWSER: "/tmp/browser",
-        CC: "/tmp/evil-cc",
-        CXX: "/tmp/evil-cxx",
-        CARGO_BUILD_RUSTC: "/tmp/evil-rustc",
-        CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
-        CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
-        CMAKE_CXX_COMPILER: "/tmp/evil-cxx-compiler",
-        RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
-        HGRCPATH: "/tmp/evil-hgrc",
-        GIT_SSH_COMMAND: "touch /tmp/pwned",
-        GIT_EDITOR: "/tmp/git-editor",
-        GIT_DIR: "/tmp/evil-git-dir",
-        GIT_WORK_TREE: "/tmp/evil-work-tree",
-        GIT_COMMON_DIR: "/tmp/evil-common-dir",
-        GIT_EXEC_PATH: "/tmp/git-exec-path",
-        GIT_INDEX_FILE: "/tmp/evil-git-index",
-        GIT_OBJECT_DIRECTORY: "/tmp/evil-git-objects",
-        GIT_ALTERNATE_OBJECT_DIRECTORIES: "/tmp/evil-git-alt-objects",
-        GIT_NAMESPACE: "evil-namespace",
-        GIT_SEQUENCE_EDITOR: "/tmp/git-sequence-editor",
-        EDITOR: "/tmp/editor",
-        NPM_CONFIG_USERCONFIG: "/tmp/npmrc",
-        GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
-        CARGO_REGISTRIES_CRATES_IO_INDEX: "https://example.invalid/crates.io-index",
-        AWS_CONFIG_FILE: "/tmp/override-aws-config",
-        YARN_RC_FILENAME: ".evil-yarnrc.yml",
-        KUBECONFIG: "/tmp/override-kubeconfig",
-        GOOGLE_APPLICATION_CREDENTIALS: "/tmp/override-gcp.json",
-        AWS_SHARED_CREDENTIALS_FILE: "/tmp/override-aws-credentials",
-        AWS_WEB_IDENTITY_TOKEN_FILE: "/tmp/override-aws-web-token",
-        AZURE_AUTH_LOCATION: "/tmp/override-azure-auth.json",
-        PIP_INDEX_URL: "https://example.invalid/simple",
-        PIP_PYPI_URL: "https://example.invalid/simple",
-        PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
-        PIP_CONFIG_FILE: "/tmp/evil-pip.conf",
-        PIP_FIND_LINKS: "https://example.invalid/wheels",
-        PIP_TRUSTED_HOST: "example.invalid",
-        UV_INDEX: "https://example.invalid/simple",
-        UV_INDEX_URL: "https://example.invalid/simple",
-        UV_PYTHON: "/tmp/evil-uv-python",
-        UV_DEFAULT_INDEX: "https://example.invalid/simple",
-        UV_EXTRA_INDEX_URL: "https://example.invalid/simple",
-        DOCKER_HOST: "tcp://example.invalid:2376",
-        DOCKER_TLS_VERIFY: "1",
-        DOCKER_CERT_PATH: "/tmp/evil-docker-certs",
-        DOCKER_CONTEXT: "evil-remote",
-        LIBRARY_PATH: "/tmp/evil-lib",
-        CPATH: "/tmp/evil-headers",
-        C_INCLUDE_PATH: "/tmp/evil-c-headers",
-        CPLUS_INCLUDE_PATH: "/tmp/evil-cpp-headers",
-        OBJC_INCLUDE_PATH: "/tmp/evil-objc-headers",
-        HELM_HOME: "/tmp/override-helm",
-        NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
-        NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
-        NODE_REPL_HISTORY: "/tmp/node-repl-history",
-        NODE_V8_COVERAGE: "/tmp/coverage",
-        NODE_EXTRA_CA_CERTS: "/tmp/evil-ca.pem",
-        SSL_CERT_FILE: "/tmp/evil-cert.pem",
-        SSL_CERT_DIR: "/tmp/evil-cert-dir",
-        REQUESTS_CA_BUNDLE: "/tmp/evil-requests-ca.pem",
-        CURL_CA_BUNDLE: "/tmp/evil-curl-ca.pem",
-        GIT_SSL_NO_VERIFY: "1",
-        GIT_SSL_CAINFO: "/tmp/evil-git-ca.pem",
-        GIT_SSL_CAPATH: "/tmp/evil-git-ca-dir",
-        GOPROXY: "https://example.invalid/proxy",
-        GONOSUMCHECK: "example.invalid/*",
-        GONOSUMDB: "example.invalid/*",
-        GONOPROXY: "example.invalid/*",
-        GOPRIVATE: "example.invalid/*",
-        GOENV: "/tmp/evil-goenv",
-        GOPATH: "/tmp/evil-go",
-        PYTHONUSERBASE: "/tmp/evil-python-userbase",
-        VIRTUAL_ENV: "/tmp/evil-venv",
-        SHELLOPTS: "xtrace",
-        PS4: "$(touch /tmp/pwned)",
-        CLASSPATH: "/tmp/evil-classpath",
-        JAVA_OPTS: "-javaagent:/tmp/evil.jar",
-        GOFLAGS: "-mod=mod",
-        RUSTFLAGS: "-C link-args=-l/tmp/evil.so",
-        MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
-        MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
-        PHPRC: "/tmp/evil-php.ini",
-        XDG_CONFIG_HOME: "/tmp/evil-config",
-        SAFE: "ok",
-      },
-    });
+    // Regression fixture intentionally feeds blocked override pivots into the sanitizer.
+    const baseEnv = {
+      PATH: "/usr/bin:/bin",
+      HOME: "/tmp/trusted-home",
+      ZDOTDIR: "/tmp/trusted-zdotdir",
+      CARGO_REGISTRIES_CRATES_IO_INDEX: "https://trusted.example/crates.io-index",
+      YARN_RC_FILENAME: ".trusted-yarnrc.yml",
+    };
+    const overrides = {
+      PATH: "/tmp/evil",
+      HOME: "/tmp/evil-home",
+      ZDOTDIR: "/tmp/evil-zdotdir",
+      BASH_ENV: "/tmp/pwn.sh",
+      BROWSER: "/tmp/browser",
+      CC: "/tmp/evil-cc",
+      CXX: "/tmp/evil-cxx",
+      CARGO_BUILD_RUSTC: "/tmp/evil-rustc",
+      CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+      CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
+      CMAKE_CXX_COMPILER: "/tmp/evil-cxx-compiler",
+      RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+      HGRCPATH: "/tmp/evil-hgrc",
+      GIT_SSH_COMMAND: "touch /tmp/pwned",
+      GIT_EDITOR: "/tmp/git-editor",
+      GIT_DIR: "/tmp/evil-git-dir",
+      GIT_WORK_TREE: "/tmp/evil-work-tree",
+      GIT_COMMON_DIR: "/tmp/evil-common-dir",
+      GIT_EXEC_PATH: "/tmp/git-exec-path",
+      GIT_INDEX_FILE: "/tmp/evil-git-index",
+      GIT_OBJECT_DIRECTORY: "/tmp/evil-git-objects",
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: "/tmp/evil-git-alt-objects",
+      GIT_NAMESPACE: "evil-namespace",
+      GIT_SEQUENCE_EDITOR: "/tmp/git-sequence-editor",
+      EDITOR: "/tmp/editor",
+      NPM_CONFIG_USERCONFIG: "/tmp/npmrc",
+      GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
+      CARGO_REGISTRIES_CRATES_IO_INDEX: "https://example.invalid/crates.io-index",
+      AWS_CONFIG_FILE: "/tmp/override-aws-config",
+      YARN_RC_FILENAME: ".evil-yarnrc.yml",
+      KUBECONFIG: "/tmp/override-kubeconfig",
+      GOOGLE_APPLICATION_CREDENTIALS: "/tmp/override-gcp.json",
+      AWS_SHARED_CREDENTIALS_FILE: "/tmp/override-aws-credentials",
+      AWS_WEB_IDENTITY_TOKEN_FILE: "/tmp/override-aws-web-token",
+      AZURE_AUTH_LOCATION: "/tmp/override-azure-auth.json",
+      PIP_INDEX_URL: "https://example.invalid/simple",
+      PIP_PYPI_URL: "https://example.invalid/simple",
+      PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
+      PIP_CONFIG_FILE: "/tmp/evil-pip.conf",
+      PIP_FIND_LINKS: "https://example.invalid/wheels",
+      PIP_TRUSTED_HOST: "example.invalid",
+      UV_INDEX: "https://example.invalid/simple",
+      UV_INDEX_URL: "https://example.invalid/simple",
+      UV_PYTHON: "/tmp/evil-uv-python",
+      UV_DEFAULT_INDEX: "https://example.invalid/simple",
+      UV_EXTRA_INDEX_URL: "https://example.invalid/simple",
+      DOCKER_HOST: "tcp://example.invalid:2376",
+      DOCKER_TLS_VERIFY: "1",
+      DOCKER_CERT_PATH: "/tmp/evil-docker-certs",
+      DOCKER_CONTEXT: "evil-remote",
+      LIBRARY_PATH: "/tmp/evil-lib",
+      CPATH: "/tmp/evil-headers",
+      C_INCLUDE_PATH: "/tmp/evil-c-headers",
+      CPLUS_INCLUDE_PATH: "/tmp/evil-cpp-headers",
+      OBJC_INCLUDE_PATH: "/tmp/evil-objc-headers",
+      HELM_HOME: "/tmp/override-helm",
+      BASHOPTS: "xtrace",
+      FPATH: "/tmp/evil-fpath",
+      KSH_ENV: "/tmp/evil-ksh-env",
+      TCLLIBPATH: "/tmp/evil-tcllibpath",
+      NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
+      NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
+      NODE_REPL_HISTORY: "/tmp/node-repl-history",
+      NODE_V8_COVERAGE: "/tmp/coverage",
+      NODE_EXTRA_CA_CERTS: "/tmp/evil-ca.pem",
+      SSL_CERT_FILE: "/tmp/evil-cert.pem",
+      SSL_CERT_DIR: "/tmp/evil-cert-dir",
+      REQUESTS_CA_BUNDLE: "/tmp/evil-requests-ca.pem",
+      CURL_CA_BUNDLE: "/tmp/evil-curl-ca.pem",
+      GIT_SSL_NO_VERIFY: "1",
+      GIT_SSL_CAINFO: "/tmp/evil-git-ca.pem",
+      GIT_SSL_CAPATH: "/tmp/evil-git-ca-dir",
+      GOPROXY: "https://example.invalid/proxy",
+      GONOSUMCHECK: "example.invalid/*",
+      GONOSUMDB: "example.invalid/*",
+      GONOPROXY: "example.invalid/*",
+      GOPRIVATE: "example.invalid/*",
+      GOENV: "/tmp/evil-goenv",
+      GOPATH: "/tmp/evil-go",
+      PYTHONUSERBASE: "/tmp/evil-python-userbase",
+      VIRTUAL_ENV: "/tmp/evil-venv",
+      SHELLOPTS: "xtrace",
+      PS4: "$(touch /tmp/pwned)",
+      CLASSPATH: "/tmp/evil-classpath",
+      JAVA_OPTS: "-javaagent:/tmp/evil.jar",
+      GOFLAGS: "-mod=mod",
+      RUSTFLAGS: "-C link-args=-l/tmp/evil.so",
+      MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
+      MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
+      PHPRC: "/tmp/evil-php.ini",
+      XDG_CONFIG_HOME: "/tmp/evil-config",
+      SAFE: "ok",
+    };
+    const env = sanitizeHostExecEnv({ baseEnv, overrides });
 
     expect(env.PATH).toBe("/usr/bin:/bin");
     expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
@@ -580,6 +596,10 @@ describe("sanitizeHostExecEnv", () => {
         EXINIT: "silent !touch /tmp/pwned",
         LUA_INIT_5_4: "os.execute('touch /tmp/pwned')",
         HOSTALIASES: "/tmp/evil-hostaliases",
+        BASHOPTS: "xtrace",
+        FPATH: "/tmp/evil-fpath",
+        KSH_ENV: "/tmp/evil-ksh-env",
+        TCLLIBPATH: "/tmp/evil-tcllibpath",
         AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://169.254.170.2/credentials",
         AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/v2/credentials/abcd",
         CONFIG_SITE: "/tmp/evil-config-site",
@@ -598,6 +618,10 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.EXINIT).toBeUndefined();
     expect(env.LUA_INIT_5_4).toBeUndefined();
     expect(env.HOSTALIASES).toBeUndefined();
+    expect(env.BASHOPTS).toBeUndefined();
+    expect(env.FPATH).toBeUndefined();
+    expect(env.KSH_ENV).toBeUndefined();
+    expect(env.TCLLIBPATH).toBeUndefined();
     expect(env.HTTPS_PROXY).toBe("http://trusted-proxy.example.test:8443");
     expect(env.KUBECONFIG).toBe("/tmp/trusted-kubeconfig");
     expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBe("/tmp/trusted-gcp.json");
@@ -633,6 +657,10 @@ describe("sanitizeHostExecEnv", () => {
       overrides: {
         VIMINIT: ":!touch /tmp/pwned",
         HOSTALIASES: "/tmp/evil-hostaliases",
+        BASHOPTS: "xtrace",
+        FPATH: "/tmp/evil-fpath",
+        KSH_ENV: "/tmp/evil-ksh-env",
+        TCLLIBPATH: "/tmp/evil-tcllibpath",
         AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://attacker/credentials",
         AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/attacker-credentials",
         ANSIBLE_CONFIG: "/tmp/override-ansible.cfg",
@@ -662,6 +690,10 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(env.VIMINIT).toBeUndefined();
     expect(env.HOSTALIASES).toBeUndefined();
+    expect(env.BASHOPTS).toBeUndefined();
+    expect(env.FPATH).toBeUndefined();
+    expect(env.KSH_ENV).toBeUndefined();
+    expect(env.TCLLIBPATH).toBeUndefined();
     expect(env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBeUndefined();
     expect(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI).toBeUndefined();
     expect(env.ANSIBLE_CONFIG).toBeUndefined();
@@ -943,85 +975,85 @@ describe("isDangerousHostEnvOverrideVarName", () => {
 
 describe("sanitizeHostExecEnvWithDiagnostics", () => {
   it("reports blocked and invalid requested overrides", () => {
-    const result = sanitizeHostExecEnvWithDiagnostics({
-      baseEnv: {
-        PATH: "/usr/bin:/bin",
-      },
-      overrides: {
-        PATH: "/tmp/evil",
-        CXX: "/tmp/evil-cxx",
-        CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
-        CARGO_REGISTRIES_CRATES_IO_INDEX: "https://example.invalid/crates.io-index",
-        CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
-        KUBECONFIG: "/tmp/evil-kubeconfig",
-        GOOGLE_APPLICATION_CREDENTIALS: "/tmp/evil-gcp.json",
-        AWS_SHARED_CREDENTIALS_FILE: "/tmp/evil-aws-credentials",
-        AWS_WEB_IDENTITY_TOKEN_FILE: "/tmp/evil-aws-web-token",
-        AZURE_AUTH_LOCATION: "/tmp/evil-azure-auth.json",
-        CLASSPATH: "/tmp/evil-classpath",
-        PIP_INDEX_URL: "https://example.invalid/simple",
-        PIP_PYPI_URL: "https://example.invalid/simple",
-        PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
-        PIP_CONFIG_FILE: "/tmp/evil-pip.conf",
-        PIP_FIND_LINKS: "https://example.invalid/wheels",
-        PIP_TRUSTED_HOST: "example.invalid",
-        UV_INDEX: "https://example.invalid/simple",
-        UV_INDEX_URL: "https://example.invalid/simple",
-        UV_PYTHON: "/tmp/evil-uv-python",
-        UV_DEFAULT_INDEX: "https://example.invalid/simple",
-        UV_EXTRA_INDEX_URL: "https://example.invalid/simple",
-        DOCKER_HOST: "tcp://example.invalid:2376",
-        DOCKER_TLS_VERIFY: "1",
-        DOCKER_CERT_PATH: "/tmp/evil-docker-certs",
-        DOCKER_CONTEXT: "evil-remote",
-        LIBRARY_PATH: "/tmp/evil-lib",
-        CPATH: "/tmp/evil-headers",
-        C_INCLUDE_PATH: "/tmp/evil-c-headers",
-        CPLUS_INCLUDE_PATH: "/tmp/evil-cpp-headers",
-        OBJC_INCLUDE_PATH: "/tmp/evil-objc-headers",
-        NODE_EXTRA_CA_CERTS: "/tmp/evil-ca.pem",
-        SSL_CERT_FILE: "/tmp/evil-cert.pem",
-        SSL_CERT_DIR: "/tmp/evil-cert-dir",
-        REQUESTS_CA_BUNDLE: "/tmp/evil-requests-ca.pem",
-        CURL_CA_BUNDLE: "/tmp/evil-curl-ca.pem",
-        GIT_DIR: "/tmp/evil-git-dir",
-        GIT_WORK_TREE: "/tmp/evil-work-tree",
-        GIT_COMMON_DIR: "/tmp/evil-common-dir",
-        GIT_INDEX_FILE: "/tmp/evil-git-index",
-        GIT_OBJECT_DIRECTORY: "/tmp/evil-git-objects",
-        GIT_ALTERNATE_OBJECT_DIRECTORIES: "/tmp/evil-git-alt-objects",
-        GIT_NAMESPACE: "evil-namespace",
-        GOPROXY: "https://example.invalid/proxy",
-        GONOSUMCHECK: "example.invalid/*",
-        GONOSUMDB: "example.invalid/*",
-        GONOPROXY: "example.invalid/*",
-        GOPRIVATE: "example.invalid/*",
-        GOENV: "/tmp/evil-goenv",
-        GOPATH: "/tmp/evil-go",
-        CARGO_HOME: "/tmp/evil-cargo",
-        HGRCPATH: "/tmp/evil-hgrc",
-        MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
-        MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
-        HELM_HOME: "/tmp/evil-helm",
-        NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
-        NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
-        NODE_REPL_HISTORY: "/tmp/node-repl-history",
-        NODE_V8_COVERAGE: "/tmp/coverage",
-        PYTHONUSERBASE: "/tmp/evil-python-userbase",
-        RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
-        RUSTFLAGS: "-C link-args=-l/tmp/evil.so",
-        VIRTUAL_ENV: "/tmp/evil-venv",
-        JAVA_OPTS: "-javaagent:/tmp/evil.jar",
-        YARN_RC_FILENAME: ".evil-yarnrc.yml",
-        HTTPS_PROXY: "http://proxy.example.test:8080",
-        GIT_SSL_NO_VERIFY: "1",
-        GIT_SSL_CAINFO: "/tmp/evil-git-ca.pem",
-        GIT_SSL_CAPATH: "/tmp/evil-git-capath",
-        NODE_TLS_REJECT_UNAUTHORIZED: "0",
-        SAFE_KEY: "ok",
-        "BAD-KEY": "bad",
-      },
-    });
+    // Diagnostics coverage needs the denied keys present at the sanitizer boundary.
+    const baseEnv = {
+      PATH: "/usr/bin:/bin",
+    };
+    const overrides = {
+      PATH: "/tmp/evil",
+      CXX: "/tmp/evil-cxx",
+      CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+      CARGO_REGISTRIES_CRATES_IO_INDEX: "https://example.invalid/crates.io-index",
+      CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
+      KUBECONFIG: "/tmp/evil-kubeconfig",
+      GOOGLE_APPLICATION_CREDENTIALS: "/tmp/evil-gcp.json",
+      AWS_SHARED_CREDENTIALS_FILE: "/tmp/evil-aws-credentials",
+      AWS_WEB_IDENTITY_TOKEN_FILE: "/tmp/evil-aws-web-token",
+      AZURE_AUTH_LOCATION: "/tmp/evil-azure-auth.json",
+      CLASSPATH: "/tmp/evil-classpath",
+      PIP_INDEX_URL: "https://example.invalid/simple",
+      PIP_PYPI_URL: "https://example.invalid/simple",
+      PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
+      PIP_CONFIG_FILE: "/tmp/evil-pip.conf",
+      PIP_FIND_LINKS: "https://example.invalid/wheels",
+      PIP_TRUSTED_HOST: "example.invalid",
+      UV_INDEX: "https://example.invalid/simple",
+      UV_INDEX_URL: "https://example.invalid/simple",
+      UV_PYTHON: "/tmp/evil-uv-python",
+      UV_DEFAULT_INDEX: "https://example.invalid/simple",
+      UV_EXTRA_INDEX_URL: "https://example.invalid/simple",
+      DOCKER_HOST: "tcp://example.invalid:2376",
+      DOCKER_TLS_VERIFY: "1",
+      DOCKER_CERT_PATH: "/tmp/evil-docker-certs",
+      DOCKER_CONTEXT: "evil-remote",
+      LIBRARY_PATH: "/tmp/evil-lib",
+      CPATH: "/tmp/evil-headers",
+      C_INCLUDE_PATH: "/tmp/evil-c-headers",
+      CPLUS_INCLUDE_PATH: "/tmp/evil-cpp-headers",
+      OBJC_INCLUDE_PATH: "/tmp/evil-objc-headers",
+      NODE_EXTRA_CA_CERTS: "/tmp/evil-ca.pem",
+      SSL_CERT_FILE: "/tmp/evil-cert.pem",
+      SSL_CERT_DIR: "/tmp/evil-cert-dir",
+      REQUESTS_CA_BUNDLE: "/tmp/evil-requests-ca.pem",
+      CURL_CA_BUNDLE: "/tmp/evil-curl-ca.pem",
+      GIT_DIR: "/tmp/evil-git-dir",
+      GIT_WORK_TREE: "/tmp/evil-work-tree",
+      GIT_COMMON_DIR: "/tmp/evil-common-dir",
+      GIT_INDEX_FILE: "/tmp/evil-git-index",
+      GIT_OBJECT_DIRECTORY: "/tmp/evil-git-objects",
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: "/tmp/evil-git-alt-objects",
+      GIT_NAMESPACE: "evil-namespace",
+      GOPROXY: "https://example.invalid/proxy",
+      GONOSUMCHECK: "example.invalid/*",
+      GONOSUMDB: "example.invalid/*",
+      GONOPROXY: "example.invalid/*",
+      GOPRIVATE: "example.invalid/*",
+      GOENV: "/tmp/evil-goenv",
+      GOPATH: "/tmp/evil-go",
+      CARGO_HOME: "/tmp/evil-cargo",
+      HGRCPATH: "/tmp/evil-hgrc",
+      MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
+      MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
+      HELM_HOME: "/tmp/evil-helm",
+      NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
+      NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
+      NODE_REPL_HISTORY: "/tmp/node-repl-history",
+      NODE_V8_COVERAGE: "/tmp/coverage",
+      PYTHONUSERBASE: "/tmp/evil-python-userbase",
+      RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+      RUSTFLAGS: "-C link-args=-l/tmp/evil.so",
+      VIRTUAL_ENV: "/tmp/evil-venv",
+      JAVA_OPTS: "-javaagent:/tmp/evil.jar",
+      YARN_RC_FILENAME: ".evil-yarnrc.yml",
+      HTTPS_PROXY: "http://proxy.example.test:8080",
+      GIT_SSL_NO_VERIFY: "1",
+      GIT_SSL_CAINFO: "/tmp/evil-git-ca.pem",
+      GIT_SSL_CAPATH: "/tmp/evil-git-capath",
+      NODE_TLS_REJECT_UNAUTHORIZED: "0",
+      SAFE_KEY: "ok",
+      "BAD-KEY": "bad",
+    };
+    const result = sanitizeHostExecEnvWithDiagnostics({ baseEnv, overrides });
 
     expect(result.rejectedOverrideBlockedKeys).toEqual([
       "AWS_SHARED_CREDENTIALS_FILE",
@@ -1178,6 +1210,10 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         VIMINIT: ":!touch /tmp/pwned",
         LUA_INIT_5_4: "os.execute('touch /tmp/pwned')",
         HOSTALIASES: "/tmp/evil-hostaliases",
+        BASHOPTS: "xtrace",
+        FPATH: "/tmp/evil-fpath",
+        KSH_ENV: "/tmp/evil-ksh-env",
+        TCLLIBPATH: "/tmp/evil-tcllibpath",
         ANSIBLE_CONFIG: "/tmp/evil-ansible.cfg",
         ANSIBLE_REMOTE_TEMP: "/tmp/evil-ansible-remote",
         R_LIBS_USER: "/tmp/evil-r-libs-user",
@@ -1205,12 +1241,16 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "ANSIBLE_REMOTE_TEMP",
       "AWS_CONTAINER_CREDENTIALS_FULL_URI",
       "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+      "BASHOPTS",
       "DATABASE_URL",
+      "FPATH",
       "GITHUB_TOKEN",
       "HOSTALIASES",
+      "KSH_ENV",
       "LUA_INIT_5_4",
       "R_LIBS_USER",
       "R_PROFILE_USER",
+      "TCLLIBPATH",
       "TF_CLI_CONFIG_FILE",
       "TF_PLUGIN_CACHE_DIR",
       "TF_VAR_ADMIN_CIDR",
@@ -1228,6 +1268,10 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.VIMINIT).toBeUndefined();
     expect(result.env.LUA_INIT_5_4).toBeUndefined();
     expect(result.env.HOSTALIASES).toBeUndefined();
+    expect(result.env.BASHOPTS).toBeUndefined();
+    expect(result.env.FPATH).toBeUndefined();
+    expect(result.env.KSH_ENV).toBeUndefined();
+    expect(result.env.TCLLIBPATH).toBeUndefined();
     expect(result.env.ANSIBLE_CONFIG).toBeUndefined();
     expect(result.env.ANSIBLE_REMOTE_TEMP).toBeUndefined();
     expect(result.env.R_LIBS_USER).toBeUndefined();
@@ -1590,12 +1634,9 @@ describe("git env exploit regression", () => {
     expect(fs.existsSync(marker)).toBe(true);
     clearMarker(marker);
 
-    const safeEnv = sanitizeHostExecEnv({
-      baseEnv,
-      overrides: {
-        GIT_SSH_COMMAND: exploitValue,
-      },
-    });
+    // Exploit regression proves the sanitizer removes the Git command pivot before spawn.
+    const safeOverrides = { GIT_SSH_COMMAND: exploitValue };
+    const safeEnv = sanitizeHostExecEnv({ baseEnv, overrides: safeOverrides });
 
     await runGitLsRemote(gitPath, target, safeEnv);
 
@@ -1643,12 +1684,9 @@ describe("compiler override exploit regression", () => {
       expect(fs.existsSync(marker)).toBe(true);
       clearMarker(marker);
 
-      const safeEnv = sanitizeHostExecEnv({
-        baseEnv,
-        overrides: {
-          CC: exploitPath,
-        },
-      });
+      // Exploit regression proves compiler override pivots are blocked before make runs.
+      const safeOverrides = { CC: exploitPath };
+      const safeEnv = sanitizeHostExecEnv({ baseEnv, overrides: safeOverrides });
 
       await runMakeCommand(makePath, tempDir, safeEnv);
 
@@ -1692,12 +1730,9 @@ describe("make env exploit regression", () => {
       const baselineTriggered = fs.existsSync(marker);
       clearMarker(marker);
 
-      const safeEnv = sanitizeHostExecEnv({
-        baseEnv,
-        overrides: {
-          MAKEFLAGS: exploitValue,
-        },
-      });
+      // Exploit regression proves make flag pivots are blocked before child execution.
+      const safeOverrides = { MAKEFLAGS: exploitValue };
+      const safeEnv = sanitizeHostExecEnv({ baseEnv, overrides: safeOverrides });
       expect(safeEnv.MAKEFLAGS).toBeUndefined();
 
       await runMakeCommand(makePath, tempDir, safeEnv);

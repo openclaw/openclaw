@@ -430,7 +430,7 @@ jobs:
 
   approve_plugin_clawhub_release:
     needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts]
-    if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
     runs-on: ubuntu-latest
     environment: clawhub-plugin-release
     permissions: {}
@@ -440,7 +440,7 @@ jobs:
 
   publish_plugins_clawhub:
     needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts, approve_plugin_clawhub_release]
-    if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
+    if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugin_clawhub_release.result == 'success')
     permissions:
       actions: read
       contents: read

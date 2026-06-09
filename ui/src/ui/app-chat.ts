@@ -2060,10 +2060,9 @@ export async function refreshChat(
       .then((metadataApplied) => {
         const metadataRefresh =
           opts?.startup === true && (metadataApplied.commands || metadataApplied.models)
-            ? Promise.allSettled([
-                ...(metadataApplied.models ? [] : [refreshChatModels(host)]),
-                ...(metadataApplied.commands ? [] : [refreshChatCommands(host)]),
-              ])
+            ? metadataApplied.models
+              ? Promise.allSettled([])
+              : Promise.allSettled([refreshChatModels(host)])
             : Promise.allSettled([refreshChatMetadata(host)]);
         return Promise.allSettled([refreshChatAvatar(host), metadataRefresh]);
       })
@@ -2102,7 +2101,7 @@ async function refreshChatModels(host: ChatHost) {
   }
 }
 
-async function refreshChatCommands(host: ChatHost) {
+export async function refreshChatCommands(host: ChatHost) {
   await refreshSlashCommands({
     client: host.client,
     agentId: resolveAgentIdForSession(host),

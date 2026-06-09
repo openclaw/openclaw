@@ -3,6 +3,7 @@
   "generatedAt": "2026-04-10",
   "reportedDangerousEverywhereKeys": [
     "ANT_OPTS",
+    "BASHOPTS",
     "BASH_ENV",
     "BROWSER",
     "BZR_EDITOR",
@@ -28,6 +29,7 @@
     "ERL_FLAGS",
     "ERL_ZFLAGS",
     "EXINIT",
+    "FPATH",
     "GCONV_PATH",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_COMMON_DIR",
@@ -56,6 +58,7 @@
     "JAVA_TOOL_OPTIONS",
     "JDK_JAVA_OPTIONS",
     "JULIA_EDITOR",
+    "KSH_ENV",
     "LUA_INIT",
     "LUA_INIT_5_1",
     "LUA_INIT_5_2",
@@ -93,6 +96,7 @@
     "SUDO_ASKPASS",
     "SVN_EDITOR",
     "SVN_SSH",
+    "TCLLIBPATH",
     "VAGRANT_VAGRANTFILE",
     "VIMINIT",
     "_JAVA_OPTIONS"
@@ -248,5 +252,5 @@
     "YARN_RC_FILENAME",
     "ZDOTDIR"
   ],
-  "expectedTotalReportedEntries": 243
+  "expectedTotalReportedEntries": 247
 }

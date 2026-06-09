@@ -12,8 +12,10 @@
     "PERL5OPT",
     "RUBYLIB",
     "RUBYOPT",
+    "BASHOPTS",
     "BASH_ENV",
     "ENV",
+    "KSH_ENV",
     "BROWSER",
     "GIT_EDITOR",
     "GIT_EXTERNAL_DIFF",
@@ -50,6 +52,7 @@
     "PYTHONBREAKPOINT",
     "DOTNET_STARTUP_HOOKS",
     "DOTNET_ADDITIONAL_DEPS",
+    "FPATH",
     "GLIBC_TUNABLES",
     "MAVEN_OPTS",
     "MAKEFLAGS",
@@ -93,6 +96,7 @@
     "R_PROFILE",
     "R_ENVIRON_USER",
     "R_PROFILE_USER",
+    "TCLLIBPATH",
     "HOSTALIASES"
   ],
   "blockedOverrideOnlyKeys": [

@@ -1571,7 +1571,11 @@ describe("package artifact reuse", () => {
     expect(clawHubWorkflow).toContain("dry_run:");
     expect(clawHubWorkflow).toContain("default: false");
     expect(clawHubWorkflow).toContain("approve_plugin_clawhub_release:");
+    expect(clawHubWorkflow).toContain("inputs.dry_run != true");
     expect(clawHubWorkflow).toContain("Approve ClawHub package publish");
+    expect(clawHubWorkflow).toContain(
+      "always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugin_clawhub_release.result == 'success')",
+    );
     expect(clawHubWorkflow).toContain(
       "uses: openclaw/clawhub/.github/workflows/package-publish.yml@c9bb13023598dcc547fdf4a93b9d42512b8c8854",
     );
