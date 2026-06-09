@@ -45,7 +45,9 @@ describe("resolveGatewayService", () => {
     const service = resolveGatewayService();
 
     await expect(service.readCommand(process.env)).resolves.toBeNull();
-    await expect(service.isLoaded({ env: process.env })).resolves.toBe(false);
+    await expect(service.isLoaded({ env: process.env })).rejects.toThrow(
+      "Gateway service install not supported on aix",
+    );
     await expect(service.readRuntime(process.env)).resolves.toEqual({
       status: "unknown",
       detail: "Gateway service install not supported on aix",

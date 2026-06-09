@@ -282,7 +282,7 @@ function createUnsupportedGatewayService(): GatewayService {
     uninstall: rejectUnsupportedGatewayService,
     stop: rejectUnsupportedGatewayService,
     restart: rejectUnsupportedGatewayService,
-    isLoaded: async () => false,
+    isLoaded: rejectUnsupportedGatewayService,
     readCommand: async () => null,
     readRuntime: async () => ({
       status: "unknown",
