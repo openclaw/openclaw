@@ -381,12 +381,20 @@ export function isConfigBackedInlineProviderApiKey(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   source: string;
+  store?: AuthProfileStore;
 }): boolean {
   if (isInlineProviderApiKeySource(params.source)) {
     return true;
   }
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
-  return Boolean(providerConfig && hasExplicitProviderApiKeyConfig(providerConfig));
+  if (!providerConfig || !hasExplicitProviderApiKeyConfig(providerConfig)) {
+    return false;
+  }
+  if (coerceSecretRef(providerConfig.apiKey)) {
+    return true;
+  }
+  const perEntryRawKey = normalizeOptionalSecretInput(providerConfig.apiKey);
+  return Boolean(perEntryRawKey && !params.store?.profiles[perEntryRawKey]);
 }
 
 function assertInlineProviderApiKeyUsable(params: {
@@ -802,7 +810,12 @@ export function hasRuntimeAvailableProviderAuth(params: {
       modelApi: params.modelApi,
       mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
     }) &&
-    (!isConfigBackedInlineProviderApiKey({ cfg: params.cfg, provider, source: envAuth.source }) ||
+    (!isConfigBackedInlineProviderApiKey({
+      cfg: params.cfg,
+      provider,
+      source: envAuth.source,
+      store: params.store,
+    }) ||
       inlineProviderApiKeyUsable)
   ) {
     return true;
@@ -1114,17 +1127,26 @@ export async function resolveApiKeyForProvider(params: {
       const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
         ? "oauth"
         : "api-key";
-      if (
-        resolvedMode === "api-key" &&
-        isConfigBackedInlineProviderApiKey({ cfg, provider, source: envResolved.source })
-      ) {
-        scopedStore ??= resolveScopedAuthProfileStore({
-          agentDir,
-          cfg,
-          provider,
-          preferredProfile,
-        });
-        assertInlineProviderApiKeyUsable({ store: scopedStore, provider });
+      if (resolvedMode === "api-key") {
+        const inlineStore =
+          scopedStore ??
+          resolveScopedAuthProfileStore({
+            agentDir,
+            cfg,
+            provider,
+            preferredProfile,
+          });
+        if (
+          isConfigBackedInlineProviderApiKey({
+            cfg,
+            provider,
+            source: envResolved.source,
+            store: inlineStore,
+          })
+        ) {
+          scopedStore = inlineStore;
+          assertInlineProviderApiKeyUsable({ store: scopedStore, provider });
+        }
       }
       if (
         !isAuthModeAllowedForModel({
@@ -1299,10 +1321,7 @@ export async function resolveApiKeyForProvider(params: {
     const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
       ? "oauth"
       : "api-key";
-    if (
-      resolvedMode === "api-key" &&
-      isConfigBackedInlineProviderApiKey({ cfg, provider, source: envResolved.source })
-    ) {
+    if (resolvedMode === "api-key") {
       const inlineStore =
         params.store ??
         resolveScopedAuthProfileStore({
@@ -1311,7 +1330,16 @@ export async function resolveApiKeyForProvider(params: {
           provider,
           preferredProfile,
         });
-      assertInlineProviderApiKeyUsable({ store: inlineStore, provider });
+      if (
+        isConfigBackedInlineProviderApiKey({
+          cfg,
+          provider,
+          source: envResolved.source,
+          store: inlineStore,
+        })
+      ) {
+        assertInlineProviderApiKeyUsable({ store: inlineStore, provider });
+      }
     }
     if (
       isAuthModeAllowedForModel({
@@ -1496,7 +1524,12 @@ export async function hasAvailableAuthForProvider(params: {
         modelApi: params.modelApi,
         mode: resolvedMode,
       }) &&
-      (!isConfigBackedInlineProviderApiKey({ cfg, provider, source: envResolved.source }) ||
+      (!isConfigBackedInlineProviderApiKey({
+        cfg,
+        provider,
+        source: envResolved.source,
+        store,
+      }) ||
         inlineProviderApiKeyUsable)
     ) {
       return true;
