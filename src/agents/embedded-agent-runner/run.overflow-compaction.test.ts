@@ -1127,6 +1127,92 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
   });
 
+  it("bootstraps OpenClaw auth for codex harness when provider is codex and model uses responses API", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({ assistantTexts: ["ok"] }),
+    );
+    const codexAuthStorage = {
+      setRuntimeApiKey: vi.fn(),
+      getApiKey: vi.fn(async () => "stored-test-key"),
+    };
+    const runtimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "codex",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai",
+        authProfileProviderForAuth: "openai",
+        harnessAuthProvider: "openai",
+        forwardedAuthProfileId: "openai:work",
+      },
+    });
+    const codexAuthStore = {
+      version: 1 as const,
+      profiles: {
+        "openai:work": {
+          type: "oauth" as const,
+          provider: "openai",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: codexHarnessSupportsKnownProviders,
+      runAttempt: pluginRunAttempt,
+    });
+    mockedEnsureAuthProfileStore.mockReturnValueOnce(codexAuthStore);
+    mockedResolveModelAsync.mockResolvedValueOnce({
+      model: {
+        id: "gpt-5.5",
+        provider: "codex",
+        contextWindow: 200_000,
+        api: "openai-chatgpt-responses",
+      },
+      error: null,
+      authStorage: codexAuthStorage,
+      modelRegistry: {},
+    });
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
+
+    try {
+      await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "codex",
+        model: "gpt-5.5",
+        authProfileId: "openai:work",
+        authProfileIdSource: "user",
+        runId: "codex-provider-responses-api-auth-bootstrap",
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(mockedEnsureAuthProfileStore).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(mockedEnsureAuthProfileStore, 0, 1), {
+      externalCliProviderIds: ["openai"],
+      allowKeychainPrompt: false,
+    });
+    expect(mockedEnsureAuthProfileStoreWithoutExternalProfiles).not.toHaveBeenCalled();
+    expectMockCallFields(mockedGetApiKeyForModel, {
+      profileId: "openai:work",
+    });
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    expectMockCallFields(pluginRunAttempt, {
+      provider: "codex",
+      authProfileId: "openai:work",
+      authProfileIdSource: "user",
+      resolvedApiKey: "test-key",
+    });
+  });
+
   it("loads the external Codex auth overlay before auto-selecting forced Codex runtime profiles", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>

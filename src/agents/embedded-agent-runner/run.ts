@@ -823,7 +823,7 @@ export async function runEmbeddedAgent(
 
       const pluginHarnessNeedsOpenClawAuthBootstrap =
         pluginHarnessOwnsTransport &&
-        provider === OPENAI_PROVIDER_ID &&
+        (provider === OPENAI_PROVIDER_ID || provider === "codex") &&
         effectiveModel.api === "openai-chatgpt-responses";
       const openClawNativeCodexResponsesNeedsAuthBootstrap =
         !pluginHarnessOwnsTransport &&
