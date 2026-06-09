@@ -80,7 +80,7 @@ describe("buildToolSearchRunPlan", () => {
           },
         },
       ],
-      catalogRegistered: true,
+      clientToolsCataloged: true,
       catalogToolCount: 2,
       controlsEnabled: true,
       explicitAllowlistSources: [{ entries: ["missing_tool"] }],
@@ -109,7 +109,7 @@ describe("buildToolSearchRunPlan", () => {
           },
         },
       ],
-      catalogRegistered: true,
+      clientToolsCataloged: true,
       catalogToolCount: 0,
       controlsEnabled: true,
       explicitAllowlistSources: [{ entries: ["client_pick_file"] }],
@@ -123,7 +123,7 @@ describe("buildToolSearchRunPlan", () => {
       visibleTools: [{ name: "exec" }, { name: "wait" }] as never,
       uncompactedTools: [{ name: "fake_plugin_tool" }] as never,
       clientTools: [],
-      catalogRegistered: true,
+      clientToolsCataloged: true,
       catalogToolCount: 1,
       controlsEnabled: true,
       controlNames: ["exec", "wait"],
@@ -148,12 +148,40 @@ describe("buildToolSearchRunPlan", () => {
           },
         },
       ],
-      catalogRegistered: true,
+      clientToolsCataloged: true,
       catalogToolCount: 0,
       controlsEnabled: true,
       explicitAllowlistSources: [{ entries: ["missing_tool"] }],
     });
 
     expect(plan.emptyAllowlistCallableNames).toEqual([]);
+  });
+
+  it("keeps uncataloged directory-mode client tools visible", () => {
+    const plan = buildToolSearchRunPlan({
+      visibleTools: [{ name: "tool_describe" }, { name: "tool_call" }] as never,
+      uncompactedTools: [{ name: "fake_plugin_tool" }] as never,
+      clientTools: [
+        {
+          type: "function",
+          function: {
+            name: "client_pick_file",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+      clientToolsCataloged: false,
+      catalogToolCount: 1,
+      controlsEnabled: true,
+      controlNames: ["tool_describe", "tool_call"],
+      explicitAllowlistSources: [{ entries: ["missing_tool"] }],
+    });
+
+    expect([...plan.visibleAllowedToolNames]).toEqual([
+      "tool_describe",
+      "tool_call",
+      "client_pick_file",
+    ]);
+    expect(plan.emptyAllowlistCallableNames).toEqual(["client_pick_file", "tool-search:0"]);
   });
 });

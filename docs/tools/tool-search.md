@@ -16,9 +16,9 @@ search or dynamic-tools surface. Codex-native code mode, tool search, deferred
 dynamic tools, and nested tool calls are stable Codex harness surfaces and do
 not depend on `tools.toolSearch`.
 
-When enabled for OpenClaw runs, the model receives one `tool_search_code` tool by default.
-That tool runs a short JavaScript body in an isolated Node subprocess with an
-`openclaw.tools` bridge:
+When enabled for OpenClaw runs, the model receives one `tool_search_code` tool
+by default. That tool runs a short JavaScript body in an isolated Node
+subprocess with an `openclaw.tools` bridge:
 
 ```js
 const hits = await openclaw.tools.search("create a GitHub issue");
@@ -49,8 +49,8 @@ run:
 3. List eligible MCP tools through the session MCP runtime.
 4. Add eligible client tools supplied for the current run.
 5. Index compact descriptors for search.
-6. Expose either the OpenClaw code bridge or the structured fallback tools to the
-   model.
+6. Expose the OpenClaw code bridge, the structured fallback tools, or the
+   compact directory surface to the model.
 
 At execution time every real tool call returns to OpenClaw. The isolated Node
 runtime does not hold plugin implementations, MCP client objects, or secrets.
@@ -59,18 +59,23 @@ normal policy, approval, hook, logging, and result handling still apply.
 
 ## Modes
 
-`tools.toolSearch` has two model-facing modes:
+`tools.toolSearch` has three model-facing modes:
 
 - `code`: exposes `tool_search_code`, the default compact JavaScript bridge.
 - `tools`: exposes `tool_search`, `tool_describe`, and `tool_call` as plain
   structured tools for providers that should not receive code.
+- `directory`: exposes `tool_describe` and `tool_call` plus a compact prompt
+  directory of available tool names and descriptions for providers that should
+  see tool names without every full schema.
 
-Both modes use the same catalog and execution path. The only difference is the
+All modes use the same catalog and execution path. The only difference is the
 shape the model sees. If the current runtime cannot launch the isolated Node
 code-mode child process, the default `code` mode falls back to `tools` before
-catalog compaction.
+catalog compaction. In `directory` mode, client-provided tools stay directly
+visible for the current run while OpenClaw tools, plugin tools, and MCP tools
+can be compacted behind the directory catalog.
 
-Both modes are experimental. Prefer direct tool exposure for small OpenClaw tool
+All modes are experimental. Prefer direct tool exposure for small OpenClaw tool
 catalogs, and prefer the Codex-native stable surfaces for Codex harness runs.
 
 There is no separate source-selection config. When Tool Search is enabled, the
@@ -90,6 +95,8 @@ Tool Search changes the shape:
   contract
 - Tool Search tools mode: the model sees three compact structured fallback
   tools
+- Tool Search directory mode: the model sees a compact directory plus describe
+  and call controls
 - during the turn: the model loads only the tool schemas it actually needs
 
 Direct tool exposure is still the right default for small catalogs. Tool Search
@@ -129,6 +136,11 @@ await openclaw.tools.call(calendarCreate.id, {
 The structured fallback mode exposes the same operations as tools:
 
 - `tool_search`
+- `tool_describe`
+- `tool_call`
+
+Directory mode exposes:
+
 - `tool_describe`
 - `tool_call`
 
@@ -181,6 +193,18 @@ Use the structured fallback tools instead for OpenClaw runs:
   tools: {
     toolSearch: {
       mode: "tools",
+    },
+  },
+}
+```
+
+Use the compact directory surface instead for OpenClaw runs:
+
+```json5
+{
+  tools: {
+    toolSearch: {
+      mode: "directory",
     },
   },
 }

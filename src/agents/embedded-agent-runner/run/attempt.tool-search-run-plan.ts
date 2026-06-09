@@ -98,7 +98,7 @@ export function buildToolSearchRunPlan(params: {
   visibleTools: CollectAllowedToolNamesParams["tools"];
   uncompactedTools: CollectAllowedToolNamesParams["tools"];
   clientTools?: CollectAllowedToolNamesParams["clientTools"];
-  catalogRegistered: boolean;
+  clientToolsCataloged: boolean;
   catalogToolCount: number;
   controlsEnabled: boolean;
   controlNames?: readonly string[];
@@ -106,7 +106,7 @@ export function buildToolSearchRunPlan(params: {
 }): ToolSearchRunPlan {
   const visibleAllowedToolNames = collectAllowedToolNames({
     tools: params.visibleTools,
-    clientTools: params.catalogRegistered ? undefined : params.clientTools,
+    clientTools: params.clientToolsCataloged ? undefined : params.clientTools,
   });
   const replayAllowedToolNames = collectAllowedToolNames({
     tools: params.uncompactedTools,
@@ -126,7 +126,7 @@ export function buildToolSearchRunPlan(params: {
     explicitAllowlistSources: params.explicitAllowlistSources,
     controlNames: params.controlNames,
   });
-  const clientCatalogCallableNames = params.catalogRegistered
+  const clientCatalogCallableNames = params.clientToolsCataloged
     ? collectExplicitlyAllowedClientToolNames({
         clientTools: params.clientTools,
         explicitAllowlistSources: params.explicitAllowlistSources,
