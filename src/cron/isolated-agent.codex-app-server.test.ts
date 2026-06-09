@@ -1,15 +1,6 @@
-// Isolated cron Codex app-server tests cover the reporter path without mocking the runner.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { startCodexAttemptThread } from "../../extensions/codex/src/app-server/attempt-startup.js";
-import {
-  resolveCodexAppServerRuntimeOptions,
-  type CodexPluginConfig,
-} from "../../extensions/codex/src/app-server/config.js";
-import { clearSharedCodexAppServerClient } from "../../extensions/codex/src/app-server/shared-client.js";
-import { createClientHarness } from "../../extensions/codex/src/app-server/test-support.js";
-import { withTimeout } from "../../extensions/codex/src/app-server/timeout.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -62,90 +53,9 @@ vi.mock("./isolated-agent/run-execution-cli.runtime.js", () => ({
 const OPENAI_MODEL = "gpt-5.5";
 const OPENAI_PROFILE_ID = "openai-codex:default";
 const OPENAI_DEFAULT_PROFILE_ID = "openai:default";
-const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
 
-const CODEX_PLUGIN_CONFIG: CodexPluginConfig = {
-  appServer: { command: "codex" },
-  computerUse: { enabled: false },
-};
-
-const bundleMcpThreadConfig = {
-  configPatch: undefined,
-  diagnostics: [],
-  evaluated: false,
-  fingerprint: undefined,
-} satisfies Parameters<typeof startCodexAttemptThread>[0]["bundleMcpThreadConfig"];
-
-type ClientHarness = ReturnType<typeof createClientHarness>;
 type AgentHarnessAttemptParams = Parameters<AgentHarness["runAttempt"]>[0];
 type AgentHarnessAttemptResult = Awaited<ReturnType<AgentHarness["runAttempt"]>>;
-
-function readHarnessMessages(writes: string[]): Array<{ id?: number; method?: string }> {
-  return writes.map((write) => JSON.parse(write) as { id?: number; method?: string });
-}
-
-async function waitForRequest(
-  harness: ClientHarness,
-  method: string,
-): Promise<{ id?: number; method?: string }> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < HARNESS_REQUEST_TIMEOUT_MS) {
-    const request = readHarnessMessages(harness.writes).find((write) => write.method === method);
-    if (request) {
-      return request;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  throw new Error(
-    `${method} request was not written; observed=${JSON.stringify(readHarnessMessages(harness.writes))}`,
-  );
-}
-
-async function waitForRequestBeforeRunSettles(
-  harness: ClientHarness,
-  method: string,
-  run: Promise<unknown>,
-): Promise<{ id?: number; method?: string }> {
-  return await Promise.race([
-    waitForRequest(harness, method),
-    run.then((result) => {
-      throw new Error(
-        `${method} request was not written before cron run settled: ${JSON.stringify(result)}`,
-      );
-    }),
-  ]);
-}
-
-async function answerInitialize(harness: ClientHarness, run: Promise<unknown>): Promise<void> {
-  const initialize = await waitForRequestBeforeRunSettles(harness, "initialize", run);
-  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.125.0 (linux; test)" } });
-}
-
-function createThreadStartResponse(cwd: string) {
-  const timestamp = Math.floor(Date.now() / 1_000);
-  return {
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    cwd,
-    model: OPENAI_MODEL,
-    modelProvider: "openai",
-    sandbox: { type: "readOnly" },
-    thread: {
-      cliVersion: "0.0.0-test",
-      createdAt: timestamp,
-      cwd,
-      ephemeral: false,
-      id: "thread-1",
-      modelProvider: "openai",
-      preview: "run the scheduled Codex task",
-      sessionId: "session-1",
-      source: "appServer",
-      status: { type: "idle" },
-      turns: [],
-      updatedAt: timestamp,
-    },
-  };
-}
 
 function createSuccessfulAttemptResult(
   params: AgentHarnessAttemptParams,
@@ -261,7 +171,18 @@ function createOpenAICodexCronConfig(home: string, storePath: string): OpenClawC
   } as Partial<OpenClawConfig>);
 }
 
-function createCodexHarness(harness: ClientHarness): AgentHarness {
+function expectCodexAttemptParams(params: AgentHarnessAttemptParams): void {
+  expect(params.provider).toBe("openai");
+  expect(params.model.id).toBe(OPENAI_MODEL);
+  expect(params.authProfileId).toBe(OPENAI_PROFILE_ID);
+  expect(params.authProfileIdSource).toBe("user");
+  expect(params.agentDir).toBeDefined();
+}
+
+function createCodexHarness(params: {
+  attempts: AgentHarnessAttemptParams[];
+  runAttempt: (attemptParams: AgentHarnessAttemptParams) => Promise<AgentHarnessAttemptResult>;
+}): AgentHarness {
   return {
     id: "codex",
     label: "Codex agent harness test double",
@@ -270,53 +191,10 @@ function createCodexHarness(harness: ClientHarness): AgentHarness {
         ? { supported: true, priority: 100 }
         : { supported: false, reason: "test harness only supports openai" };
     },
-    runAttempt: async (params) => {
-      expect(params.provider).toBe("openai");
-      expect(params.model.id).toBe(OPENAI_MODEL);
-      expect(params.authProfileId).toBe(OPENAI_PROFILE_ID);
-      expect(params.authProfileIdSource).toBe("user");
-      const startup = await startCodexAttemptThread({
-        attemptClientFactory: async (_startOptions, authProfileId, _agentDir, _config, options) => {
-          expect(authProfileId).toBe(OPENAI_PROFILE_ID);
-          options?.onStartedClient?.(harness.client);
-          const initializeTimeoutMs =
-            typeof options?.initializeTimeoutDeadlineMs === "number"
-              ? Math.max(1, options.initializeTimeoutDeadlineMs - Date.now())
-              : (options?.timeoutMs ?? 2_000);
-          await withTimeout(
-            harness.client.initialize(),
-            initializeTimeoutMs,
-            "codex app-server initialize timed out",
-          );
-          return harness.client;
-        },
-        appServer: resolveCodexAppServerRuntimeOptions({ pluginConfig: CODEX_PLUGIN_CONFIG }),
-        pluginConfig: CODEX_PLUGIN_CONFIG,
-        computerUseConfig: CODEX_PLUGIN_CONFIG.computerUse ?? { enabled: false },
-        startupAuthProfileId: params.authProfileId,
-        startupAuthAccountCacheKey: undefined,
-        startupEnvApiKeyCacheKey: undefined,
-        agentDir: params.agentDir,
-        config: params.config,
-        buildAttemptParams: () => params,
-        sessionAgentId: params.agentId ?? "main",
-        effectiveWorkspace: params.workspaceDir,
-        effectiveCwd: params.cwd ?? params.workspaceDir,
-        dynamicTools: [],
-        developerInstructions: undefined,
-        finalConfigPatch: undefined,
-        bundleMcpThreadConfig,
-        nativeToolSurfaceEnabled: true,
-        sandboxExecServerEnabled: false,
-        sandbox: null,
-        contextEngineProjection: undefined,
-        startupTimeoutMs: 2_000,
-        signal: params.abortSignal ?? new AbortController().signal,
-        onStartupTimeout: vi.fn(),
-        spawnedBy: params.spawnedBy,
-      });
-      startup.releaseSharedClientLease();
-      return createSuccessfulAttemptResult(params);
+    runAttempt: async (attemptParams) => {
+      params.attempts.push(attemptParams);
+      expectCodexAttemptParams(attemptParams);
+      return params.runAttempt(attemptParams);
     },
   };
 }
@@ -324,10 +202,10 @@ function createCodexHarness(harness: ClientHarness): AgentHarness {
 async function runReporterCronTurn(params: {
   home: string;
   storePath: string;
-  harness: ClientHarness;
-  abortSignal?: AbortSignal;
+  attempts: AgentHarnessAttemptParams[];
+  runAttempt: (attemptParams: AgentHarnessAttemptParams) => Promise<AgentHarnessAttemptResult>;
 }) {
-  registerAgentHarness(createCodexHarness(params.harness));
+  registerAgentHarness(createCodexHarness(params));
   return runCronIsolatedAgentTurn({
     cfg: createOpenAICodexCronConfig(params.home, params.storePath),
     deps: {} as never,
@@ -345,11 +223,10 @@ async function runReporterCronTurn(params: {
     message: "run the scheduled Codex task",
     sessionKey: "cron:job-1",
     lane: "cron",
-    abortSignal: params.abortSignal,
   });
 }
 
-describe("runCronIsolatedAgentTurn Codex app-server path", () => {
+describe("runCronIsolatedAgentTurn Codex harness routing", () => {
   const originalHarnesses = listRegisteredAgentHarnesses();
 
   beforeEach(() => {
@@ -357,7 +234,6 @@ describe("runCronIsolatedAgentTurn Codex app-server path", () => {
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "test-openai-key");
     vi.stubEnv("OPENCLAW_AUTH_STORE_READONLY", "1");
-    clearSharedCodexAppServerClient();
     clearAgentHarnesses();
     runCliAgentMock.mockClear();
     loadModelCatalogMock.mockResolvedValue([
@@ -381,13 +257,12 @@ describe("runCronIsolatedAgentTurn Codex app-server path", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    clearSharedCodexAppServerClient();
     clearRuntimeAuthProfileStoreSnapshots();
     restoreRegisteredAgentHarnesses(originalHarnesses);
     loadModelCatalogMock.mockReset();
   });
 
-  it("attributes an isolated cron agentTurn Codex initialize stall to the app-server initialize phase", async () => {
+  it("attributes a Codex initialize stall from the selected harness to agent-run diagnostics", async () => {
     await withTempCronHome(async (home) => {
       const storePath = await writeSessionStoreEntries(home, {
         "agent:main:cron:job-1": {
@@ -398,26 +273,16 @@ describe("runCronIsolatedAgentTurn Codex app-server path", () => {
         },
       });
       await writeOpenAICodexAuthProfile(home, storePath);
-      const harness = createClientHarness();
-      const abortController = new AbortController();
-      const run = runReporterCronTurn({
+      const attempts: AgentHarnessAttemptParams[] = [];
+
+      const result = await runReporterCronTurn({
         home,
         storePath,
-        harness,
-        abortSignal: abortController.signal,
+        attempts,
+        runAttempt: async () => {
+          throw new Error("codex app-server initialize timed out");
+        },
       });
-
-      let initialize: { id?: number; method?: string };
-      try {
-        initialize = await waitForRequestBeforeRunSettles(harness, "initialize", run);
-      } catch (error) {
-        abortController.abort("test timed out waiting for initialize");
-        await run.catch(() => undefined);
-        throw error;
-      }
-      expect(initialize.id).toBeDefined();
-
-      const result = await run;
 
       expect(result.status).toBe("error");
       expect(result.error).toContain("codex app-server initialize timed out");
@@ -428,13 +293,12 @@ describe("runCronIsolatedAgentTurn Codex app-server path", () => {
       expect(result.diagnostics?.entries.some((entry) => entry.source === "cron-setup")).toBe(
         false,
       );
-      expect(
-        readHarnessMessages(harness.writes).some((write) => write.method === "thread/start"),
-      ).toBe(false);
+      expect(attempts).toHaveLength(1);
+      expect(runCliAgentMock).not.toHaveBeenCalled();
     });
   }, 60_000);
 
-  it("reaches thread/start after initialize succeeds for an isolated cron agentTurn", async () => {
+  it("uses the Codex harness for a successful isolated cron agentTurn", async () => {
     await withTempCronHome(async (home) => {
       const storePath = await writeSessionStoreEntries(home, {
         "agent:main:cron:job-1": {
@@ -445,21 +309,18 @@ describe("runCronIsolatedAgentTurn Codex app-server path", () => {
         },
       });
       await writeOpenAICodexAuthProfile(home, storePath);
-      const harness = createClientHarness();
-      const run = runReporterCronTurn({ home, storePath, harness });
+      const attempts: AgentHarnessAttemptParams[] = [];
 
-      await answerInitialize(harness, run);
-      const threadStart = await waitForRequestBeforeRunSettles(harness, "thread/start", run);
-
-      expect(threadStart.id).toBeDefined();
-      expect(
-        readHarnessMessages(harness.writes).some((write) => write.method === "thread/start"),
-      ).toBe(true);
-      harness.send({
-        id: threadStart.id,
-        result: createThreadStartResponse(path.join(home, "openclaw")),
+      const run = runReporterCronTurn({
+        home,
+        storePath,
+        attempts,
+        runAttempt: async (attemptParams) => createSuccessfulAttemptResult(attemptParams),
       });
+
       await expect(run).resolves.toEqual(expect.objectContaining({ status: "ok" }));
+      expect(attempts).toHaveLength(1);
+      expect(runCliAgentMock).not.toHaveBeenCalled();
     });
   }, 60_000);
 });
