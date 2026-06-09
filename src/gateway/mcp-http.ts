@@ -159,7 +159,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   };
 
   const closeActiveSseResponses = (): void => {
-    for (const res of [...activeSseResponses]) {
+    for (const res of activeSseResponses) {
       if (!res.destroyed && !res.writableEnded) {
         const socket = res.socket;
         res.end();
