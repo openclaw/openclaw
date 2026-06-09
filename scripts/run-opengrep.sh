@@ -142,41 +142,6 @@ resolve_changed_diff_ref() {
   printf '%s...%s\n' "$resolved_base" "$head_ref"
 }
 
-is_semgrepignored_path() {
-  local path="$1"
-  local ignore_file="$REPO_ROOT/.semgrepignore"
-  local pattern trimmed base dir_pattern
-  base="${path##*/}"
-
-  [[ -f "$ignore_file" ]] || return 1
-
-  while IFS= read -r pattern || [[ -n "$pattern" ]]; do
-    trimmed="${pattern#"${pattern%%[![:space:]]*}"}"
-    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
-    [[ -z "$trimmed" || "${trimmed:0:1}" == "#" ]] && continue
-
-    if [[ "$trimmed" == */ ]]; then
-      dir_pattern="${trimmed%/}"
-      if [[ "$dir_pattern" == */* ]]; then
-        [[ "$path" == $dir_pattern/* ]] && return 0
-        continue
-      fi
-      if [[ "$path" == $dir_pattern/* || "$path" == */$dir_pattern/* ]]; then
-        return 0
-      fi
-      continue
-    fi
-
-    if [[ "$trimmed" == */* ]]; then
-      [[ "$path" == $trimmed || "$path" == $trimmed/* ]] && return 0
-    else
-      [[ "$base" == $trimmed ]] && return 0
-    fi
-  done < "$ignore_file"
-
-  return 1
-}
-
 # Default scan paths match CI. Override by passing `-- <paths...>`.
 if (( PATHS_PASSED == 0 )); then
   if (( CHANGED_ONLY )); then
@@ -189,9 +154,6 @@ if (( PATHS_PASSED == 0 )); then
         continue
       fi
       if [[ ! -f "$path" && ! -d "$path" ]]; then
-        continue
-      fi
-      if is_semgrepignored_path "$path"; then
         continue
       fi
       SCAN_PATHS+=( "$path" )
