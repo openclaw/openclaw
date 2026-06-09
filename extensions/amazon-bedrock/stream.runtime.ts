@@ -16,6 +16,7 @@ import {
   ConverseStreamCommand,
   type ConverseStreamMetadataEvent,
   ImageFormat,
+  type InferenceConfiguration,
   type Message,
   StopReason as BedrockStopReason,
   type SystemContentBlock,
@@ -159,10 +160,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
         modelId: model.id,
         messages: convertMessages(context, model, cacheRetention),
         system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
-        inferenceConfig: {
-          ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
-          ...(options.temperature !== undefined && { temperature: options.temperature }),
-        },
+        inferenceConfig: buildInferenceConfig(options),
         toolConfig: convertToolConfig(context.tools, options.toolChoice),
         additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
         ...(options.requestMetadata !== undefined && { requestMetadata: options.requestMetadata }),
@@ -873,6 +871,19 @@ function isGovCloudBedrockTarget(
   return modelId.startsWith("us-gov.") || modelId.startsWith("arn:aws-us-gov:");
 }
 
+/**
+ * Build the Bedrock Converse `inferenceConfig`, forwarding the contract `stop`
+ * sequences to the native `stopSequences` field. Empty/undefined `stop` omits the
+ * field so unset requests stay byte-identical to before.
+ */
+function buildInferenceConfig(options: BedrockOptions): InferenceConfiguration {
+  return {
+    ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
+    ...(options.temperature !== undefined && { temperature: options.temperature }),
+    ...(options.stop !== undefined && options.stop.length > 0 && { stopSequences: options.stop }),
+  };
+}
+
 function buildAdditionalModelRequestFields(
   model: Model<"bedrock-converse-stream">,
   options: BedrockOptions,
@@ -956,6 +967,7 @@ function createImageBlock(mimeType: string, data: string) {
 
 /** Test-only hooks for Bedrock runtime conversion and endpoint policy. */
 export const testing = {
+  buildInferenceConfig,
   convertMessages,
   getConfiguredBedrockRegion,
   hasConfiguredBedrockProfile,

@@ -91,6 +91,34 @@ describe("Bedrock profile endpoint resolution", () => {
   });
 });
 
+describe("Bedrock inferenceConfig", () => {
+  it("forwards stop sequences to the native stopSequences field", () => {
+    expect(
+      testing.buildInferenceConfig({
+        maxTokens: 1024,
+        temperature: 0.4,
+        stop: ["</tool>", "\n\nObservation:"],
+      }),
+    ).toEqual({
+      maxTokens: 1024,
+      temperature: 0.4,
+      stopSequences: ["</tool>", "\n\nObservation:"],
+    });
+  });
+
+  it("omits stopSequences for an empty stop array", () => {
+    const config = testing.buildInferenceConfig({ maxTokens: 1024, stop: [] });
+    expect(config).toEqual({ maxTokens: 1024 });
+    expect(Object.hasOwn(config, "stopSequences")).toBe(false);
+  });
+
+  it("omits stopSequences when stop is undefined", () => {
+    const config = testing.buildInferenceConfig({ maxTokens: 1024, temperature: 0.7 });
+    expect(config).toEqual({ maxTokens: 1024, temperature: 0.7 });
+    expect(Object.hasOwn(config, "stopSequences")).toBe(false);
+  });
+});
+
 describe("Bedrock thinking effort mapping", () => {
   it("clamps max effort for Claude models without native max support", () => {
     expect(

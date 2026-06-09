@@ -48,6 +48,7 @@ function buildMantleAnthropicBaseOptions(
     temperature: requiresDefaultSampling(model.id) ? undefined : options?.temperature,
     maxTokens: options?.maxTokens || Math.min(model.maxTokens, 32_000),
     signal: options?.signal,
+    stop: options?.stop,
     apiKey,
     cacheRetention: options?.cacheRetention,
     sessionId: options?.sessionId,

@@ -112,6 +112,34 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(streamOptions.thinkingEnabled).toBe(false);
   });
 
+  it("forwards stop sequences to the shared Anthropic stream", () => {
+    const model = createTestModel();
+    const context = { messages: [] };
+    const deps = createTestDeps();
+    deps.stream.mockReturnValue({ kind: "anthropic-stream" } as never);
+
+    void createMantleAnthropicStreamFn(deps)(model, context, {
+      apiKey: "bedrock-bearer-token",
+      stop: ["</tool>", "\n\nObservation:"],
+    });
+
+    // The shared Anthropic provider maps this to `stop_sequences` (anthropic.ts:970).
+    expect(firstStreamOptions(deps).stop).toEqual(["</tool>", "\n\nObservation:"]);
+  });
+
+  it("omits stop sequences when none are requested", () => {
+    const model = createTestModel();
+    const context = { messages: [] };
+    const deps = createTestDeps();
+    deps.stream.mockReturnValue({ kind: "anthropic-stream" } as never);
+
+    void createMantleAnthropicStreamFn(deps)(model, context, {
+      apiKey: "bedrock-bearer-token",
+    });
+
+    expect(firstStreamOptions(deps).stop).toBeUndefined();
+  });
+
   it("normalizes Mantle provider URLs to the Anthropic endpoint", () => {
     expect(resolveMantleAnthropicBaseUrl("https://bedrock-mantle.us-east-1.api.aws/v1")).toBe(
       "https://bedrock-mantle.us-east-1.api.aws/anthropic",

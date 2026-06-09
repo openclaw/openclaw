@@ -302,6 +302,30 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(nextPayload).toEqual(buildExpectedCacheBoundaryPayload("Hello again"));
   });
 
+  it("forwards stop sequences to the shared Anthropic transport", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { stop: ["</tool>", "\n\nObservation:"] });
+
+    // The shared Anthropic provider maps this to `stop_sequences` (anthropic.ts:970).
+    expect(streamTransportOptions(streamAnthropicMock).stop).toEqual([
+      "</tool>",
+      "\n\nObservation:",
+    ]);
+  });
+
+  it("omits stop sequences when none are requested", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, {});
+
+    expect(streamTransportOptions(streamAnthropicMock).stop).toBeUndefined();
+  });
+
   it("omits maxTokens when neither the model nor request provide a finite limit", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
