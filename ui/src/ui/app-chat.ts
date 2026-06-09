@@ -611,6 +611,7 @@ type ChatSendTimingPhase =
   | "server-dispatch-started"
   | "server-model-selected"
   | "server-agent-run-started"
+  | "server-first-assistant-event"
   | "server-dispatch-completed"
   | "server-post-dispatch-completed"
   | "first-assistant-visible"
@@ -637,6 +638,7 @@ type ChatSendServerTimingPhase =
   | "dispatch-started"
   | "model-selected"
   | "agent-run-started"
+  | "first-assistant-event"
   | "dispatch-completed"
   | "post-dispatch-completed";
 
@@ -644,6 +646,7 @@ const CHAT_SEND_SERVER_TIMING_PHASES = new Set<ChatSendServerTimingPhase>([
   "dispatch-started",
   "model-selected",
   "agent-run-started",
+  "first-assistant-event",
   "dispatch-completed",
   "post-dispatch-completed",
 ]);

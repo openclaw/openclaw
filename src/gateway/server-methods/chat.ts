@@ -138,6 +138,7 @@ import {
   createManagedOutgoingImageBlocks,
 } from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
+import type { ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
@@ -237,6 +238,7 @@ type ChatSendServerTimingPhase =
   | "dispatch-started"
   | "model-selected"
   | "agent-run-started"
+  | "first-assistant-event"
   | "dispatch-completed"
   | "post-dispatch-completed";
 
@@ -967,6 +969,26 @@ function hasAssistantDisplayMediaContent(
   content: readonly AssistantDisplayContentBlock[] | undefined,
 ): boolean {
   return Boolean(content?.some((block) => block?.type !== "text"));
+}
+
+function hasVisibleAssistantFinalMessage(message: Record<string, unknown> | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  if (typeof message.text === "string" && message.text.trim()) {
+    return true;
+  }
+  const content = Array.isArray(message.content) ? message.content : [];
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const record = block as Record<string, unknown>;
+    if (record.type === "text") {
+      return typeof record.text === "string" && record.text.trim().length > 0;
+    }
+    return true;
+  });
 }
 
 function hasManagedOutgoingAssistantContent(
@@ -3352,11 +3374,6 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     try {
-      context.addChatRun(clientRunId, {
-        sessionKey,
-        agentId: selectedAgent.agentId,
-        clientRunId,
-      });
       const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
         ? {
             receivedToAckMs: roundedChatSendTimingMs(performance.now() - chatSendReceivedAtMs),
@@ -3364,6 +3381,20 @@ export const chatHandlers: GatewayRequestHandlers = {
             ...(prepareAttachmentsMs !== undefined ? { prepareAttachmentsMs } : {}),
           }
         : undefined;
+      const chatSendTiming: ChatRunTiming | undefined =
+        serverTiming && typeof client?.connId === "string" && client.connId.trim()
+          ? {
+              ackedAtMs: performance.now(),
+              connId: client.connId.trim(),
+              receivedAtMs: chatSendReceivedAtMs,
+            }
+          : undefined;
+      context.addChatRun(clientRunId, {
+        sessionKey,
+        agentId: selectedAgent.agentId,
+        clientRunId,
+        ...(chatSendTiming ? { chatSendTiming } : {}),
+      });
       const ackPayload = {
         runId: clientRunId,
         status: "started" as const,
@@ -3383,7 +3414,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         { config: cfg },
       );
       respond(true, ackPayload, undefined, { runId: clientRunId });
-      const chatSendAckedAtMs = performance.now();
+      const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
       const persistedImagesPromise = persistChatSendImages({
         images: parsedImages,
         imageOrder,
@@ -3707,7 +3738,21 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
       };
       const dispatchStartedAtMs = performance.now();
+      if (chatSendTiming) {
+        chatSendTiming.dispatchStartedAtMs = dispatchStartedAtMs;
+      }
       emitServerTiming("dispatch-started");
+      let firstAssistantServerTimingEmitted = false;
+      const emitFirstAssistantServerTiming = () => {
+        if (firstAssistantServerTimingEmitted || chatSendTiming?.firstAssistantEventSent) {
+          return;
+        }
+        firstAssistantServerTimingEmitted = true;
+        if (chatSendTiming) {
+          chatSendTiming.firstAssistantEventSent = true;
+        }
+        emitServerTiming("first-assistant-event", undefined, dispatchStartedAtMs);
+      };
       void measureDiagnosticsTimelineSpan(
         "gateway.chat_send.dispatch_inbound",
         async () => {
@@ -4038,6 +4083,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                       };
                     }
                   }
+                  if (hasVisibleAssistantFinalMessage(message)) {
+                    emitFirstAssistantServerTiming();
+                  }
                   broadcastChatFinal({
                     context,
                     runId: clientRunId,
@@ -4360,6 +4408,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                       stopReason: "stop",
                       usage: { input: 0, output: 0, totalTokens: 0 },
                     };
+                    if (hasVisibleAssistantFinalMessage(message)) {
+                      emitFirstAssistantServerTiming();
+                    }
                     broadcastChatFinal({
                       context,
                       runId: clientRunId,

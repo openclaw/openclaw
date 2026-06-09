@@ -386,6 +386,16 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         agentRunId: "agent-run-e2e",
       });
       await waitForControlUiChatSendPhases(page, runId, ["server-agent-run-started"]);
+      await gateway.emitGatewayEvent("chat.send_timing", {
+        phase: "first-assistant-event",
+        runId,
+        agentId: "ops",
+        sessionKey: "global",
+        ackToPhaseMs: 31,
+        receivedToPhaseMs: 40,
+        dispatchStartedToPhaseMs: 27,
+      });
+      await waitForControlUiChatSendPhases(page, runId, ["server-first-assistant-event"]);
       await gateway.emitGatewayEvent("chat", {
         deltaText: "First token visible.",
         message: {
@@ -404,6 +414,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         "request-start",
         "ack",
         "server-agent-run-started",
+        "server-first-assistant-event",
         "first-assistant-visible",
       ]);
       const sendTimingEvents = (await controlUiEventPayloads(page, "control-ui.chat.send")).filter(
@@ -417,6 +428,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           "pending-visible",
           "request-start",
           "ack",
+          "server-first-assistant-event",
           "first-assistant-visible",
         ]),
       );
@@ -436,6 +448,15 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         serverDispatchStartedToPhaseMs: 7,
         serverPhase: "agent-run-started",
         serverReceivedToPhaseMs: 20,
+        sessionKey: "global",
+      });
+      expect(sendTimingByPhase.get("server-first-assistant-event")).toMatchObject({
+        agentId: "ops",
+        runId,
+        serverAckToPhaseMs: 31,
+        serverDispatchStartedToPhaseMs: 27,
+        serverPhase: "first-assistant-event",
+        serverReceivedToPhaseMs: 40,
         sessionKey: "global",
       });
       const firstVisibleTiming = sendTimingByPhase.get("first-assistant-visible");
