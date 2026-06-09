@@ -90,6 +90,7 @@ export function recoveryOutcomeMutatesSessionState(
   return (
     outcome.status === "aborted" ||
     outcome.status === "released" ||
+    outcome.status === "failed" ||
     (outcome.status === "noop" && outcome.reason === "no_active_work")
   );
 }
