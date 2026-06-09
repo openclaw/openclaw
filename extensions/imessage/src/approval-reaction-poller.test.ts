@@ -150,6 +150,126 @@ describe("iMessage approval reaction poller", () => {
     );
   });
 
+  it("bounds no-target discovery after resolving an observed reaction", async () => {
+    const request = vi.fn(async (method: string, payload?: { chat_id?: number }) => {
+      if (method === "chats.list") {
+        return { chats: [{ id: 42 }, { id: 99 }] };
+      }
+      if (method === "messages.history" && payload?.chat_id === 42) {
+        return {
+          messages: [
+            {
+              guid: "msg-1",
+              chat_id: 42,
+              chat_guid: "SMS;-;+15551230000",
+              chat_identifier: "+15551230000",
+              is_from_me: true,
+              sender: "+15551230000",
+              text: [
+                "Exec approval required",
+                "ID: exec-1",
+                "",
+                "Reply with: /approve exec-1 allow-once|deny",
+              ].join("\n"),
+              reactions: [
+                {
+                  id: 7,
+                  sender: "+15551230000",
+                  is_from_me: true,
+                  type: "like",
+                  emoji: "👍",
+                  created_at: "2026-05-27T21:00:00.000Z",
+                },
+              ],
+            },
+          ],
+        };
+      }
+      if (method === "messages.history" && payload?.chat_id === 99) {
+        return { messages: [] };
+      }
+      throw new Error(`unexpected request ${method} ${JSON.stringify(payload)}`);
+    });
+
+    const pollParams = {
+      client: createClient(request),
+      cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+      accountId: "default",
+      allowRecentChatDiscovery: true,
+    };
+
+    await pollPendingIMessageApprovalReactions(pollParams);
+    await pollPendingIMessageApprovalReactions(pollParams);
+
+    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.filter(([method]) => method === "chats.list")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "messages.history")).toHaveLength(2);
+    expect(request).toHaveBeenCalledWith(
+      "messages.history",
+      { chat_id: 99, limit: 30 },
+      { timeoutMs: 10_000 },
+    );
+  });
+
+  it("retries no-target discovery after resolver failures expire observed targets", async () => {
+    resolverMocks.resolveIMessageApproval.mockRejectedValue(new Error("gateway down"));
+    const request = vi.fn(async (method: string) => {
+      if (method === "chats.list") {
+        return { chats: [{ id: 42 }] };
+      }
+      if (method === "messages.history") {
+        return {
+          messages: [
+            {
+              guid: "msg-1",
+              chat_id: 42,
+              chat_guid: "SMS;-;+15551230000",
+              chat_identifier: "+15551230000",
+              is_from_me: true,
+              sender: "+15551230000",
+              text: [
+                "Exec approval required",
+                "ID: exec-1",
+                "",
+                "Reply with: /approve exec-1 allow-once|deny",
+              ].join("\n"),
+              reactions: [
+                {
+                  id: 7,
+                  sender: "+15551230000",
+                  is_from_me: true,
+                  type: "like",
+                  emoji: "👍",
+                  created_at: "2026-05-27T21:00:00.000Z",
+                },
+              ],
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+
+    try {
+      const pollParams = {
+        client: createClient(request),
+        cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+        accountId: "default",
+        allowRecentChatDiscovery: true,
+      };
+
+      await pollPendingIMessageApprovalReactions(pollParams);
+      dateNow.mockReturnValue(1_800_000_301_000);
+      await pollPendingIMessageApprovalReactions(pollParams);
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.filter(([method]) => method === "chats.list")).toHaveLength(2);
+  });
+
   it("retries no-target recent-chat discovery after the first chat list fails", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chats.list") {

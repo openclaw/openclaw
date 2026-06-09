@@ -296,6 +296,9 @@ export async function pollPendingIMessageApprovalReactions(params: {
           logVerboseMessage: params.logVerboseMessage,
         });
         if (handled.stopPolling) {
+          if (shouldAttemptNoTargetDiscovery && handled.stopPollingReason !== "resolver-error") {
+            break;
+          }
           return;
         }
       }
