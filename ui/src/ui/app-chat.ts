@@ -650,6 +650,11 @@ const CHAT_SEND_SERVER_TIMING_PHASES = new Set<ChatSendServerTimingPhase>([
   "dispatch-completed",
   "post-dispatch-completed",
 ]);
+const CHAT_SEND_SLOW_FIRST_ASSISTANT_MS = 1_500;
+
+function chatSendTimingOptions(slow: boolean) {
+  return { console: slow, warn: slow, maxBufferedEventsForType: 40 };
+}
 
 function recordChatSendTiming(
   host: ChatHost,
@@ -715,6 +720,7 @@ export function recordChatSendServerTiming(host: ChatHost, payload: unknown) {
   if (durationMs === undefined) {
     return;
   }
+  const slow = phase === "first-assistant-event" && durationMs >= CHAT_SEND_SLOW_FIRST_ASSISTANT_MS;
   recordControlUiPerformanceEvent(
     host as Parameters<typeof recordControlUiPerformanceEvent>[0],
     "control-ui.chat.send",
@@ -749,8 +755,9 @@ export function recordChatSendServerTiming(host: ChatHost, payload: unknown) {
       ...(typeof record.agentRunId === "string" && record.agentRunId.trim()
         ? { agentRunId: record.agentRunId.trim() }
         : {}),
+      ...(slow ? { slow: true } : {}),
     },
-    { console: false, maxBufferedEventsForType: 40 },
+    chatSendTimingOptions(slow),
   );
 }
 
@@ -884,12 +891,14 @@ export function recordFirstAssistantChatTiming(
   entry.firstAssistantVisibleRecorded = true;
   scheduleControlUiAfterPaint(host, () => {
     const paintedAtMs = controlUiNowMs();
+    const durationMs = roundedControlUiDurationMs(paintedAtMs - entry.submittedAtMs);
+    const slow = durationMs >= CHAT_SEND_SLOW_FIRST_ASSISTANT_MS;
     recordControlUiPerformanceEvent(
       host as Parameters<typeof recordControlUiPerformanceEvent>[0],
       "control-ui.chat.send",
       {
         phase,
-        durationMs: roundedControlUiDurationMs(paintedAtMs - entry.submittedAtMs),
+        durationMs,
         runId,
         sessionKey: entry.sessionKey ?? payload.sessionKey,
         agentId: entry.agentId ?? payload.agentId,
@@ -910,8 +919,9 @@ export function recordFirstAssistantChatTiming(
               ackToFirstAssistantEventMs: roundedControlUiDurationMs(eventAtMs - entry.ackAtMs),
             }
           : {}),
+        ...(slow ? { slow: true } : {}),
       },
-      { console: false, maxBufferedEventsForType: 40 },
+      chatSendTimingOptions(slow),
     );
     if (phase === "terminal-before-delta") {
       host.chatSendTimingsByRun?.delete(runId);

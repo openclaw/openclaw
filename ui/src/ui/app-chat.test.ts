@@ -53,6 +53,7 @@ let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./app-chat.ts").markQueuedChatSendsWaitingForReconnect;
 let retryReconnectableQueuedChatSends: typeof import("./app-chat.ts").retryReconnectableQueuedChatSends;
 let recordChatSendServerTiming: typeof import("./app-chat.ts").recordChatSendServerTiming;
+let recordFirstAssistantChatTiming: typeof import("./app-chat.ts").recordFirstAssistantChatTiming;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -68,6 +69,7 @@ async function loadChatHelpers(): Promise<void> {
     markQueuedChatSendsWaitingForReconnect,
     retryReconnectableQueuedChatSends,
     recordChatSendServerTiming,
+    recordFirstAssistantChatTiming,
   } = await import("./app-chat.ts"));
 }
 
@@ -1472,6 +1474,83 @@ describe("handleSendChat", () => {
           agentRunId: "agent-run-1",
         }),
       ]),
+    );
+  });
+
+  it("warns when the first assistant reply paint is slow", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      queueMicrotask(() => callback(0));
+      return 1;
+    });
+    const runId = "run-slow-first-assistant";
+    const host = makeHost({
+      chatStream: "slow first token",
+      eventLogBuffer: [],
+      tab: "debug",
+    });
+    const timingHost = host as ChatHost & {
+      chatSendTimingsByRun: Map<
+        string,
+        {
+          runId: string;
+          submittedAtMs: number;
+          requestStartedAtMs: number;
+          ackAtMs: number;
+          ackStatus: "started";
+          sendAttempts: number;
+          sendState: "sending";
+          sessionKey: string;
+          agentId: string;
+        }
+      >;
+    };
+    timingHost.chatSendTimingsByRun = new Map([
+      [
+        runId,
+        {
+          runId,
+          submittedAtMs: performance.now() - 2_000,
+          requestStartedAtMs: performance.now() - 1_900,
+          ackAtMs: performance.now() - 1_800,
+          ackStatus: "started",
+          sendAttempts: 1,
+          sendState: "sending",
+          sessionKey: "agent:main",
+          agentId: "main",
+        },
+      ],
+    ]);
+
+    recordFirstAssistantChatTiming(
+      host,
+      {
+        agentId: "main",
+        runId,
+        sessionKey: "agent:main",
+        state: "delta",
+      },
+      "delta",
+    );
+
+    await vi.waitFor(() =>
+      expect(eventPayloads(host, "control-ui.chat.send")).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            phase: "first-assistant-visible",
+            runId,
+            slow: true,
+          }),
+        ]),
+      ),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "[openclaw] control-ui.chat.send",
+      expect.objectContaining({
+        phase: "first-assistant-visible",
+        runId,
+        slow: true,
+      }),
     );
   });
 
