@@ -277,6 +277,8 @@
     "NO_PROXY",
     "PAGER",
     "REQUESTS_CA_BUNDLE",
+    "RUSTUP_HOME",
+    "RUSTUP_TOOLCHAIN",
     "SSH_AUTH_SOCK",
     "SSL_CERT_DIR",
     "SSL_CERT_FILE",

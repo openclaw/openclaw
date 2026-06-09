@@ -377,6 +377,8 @@ describe("sanitizeHostExecEnv", () => {
       SSL_CERT_DIR: "/tmp/evil-cert-dir",
       DOCKER_CONTEXT: "trusted-remote",
       DOCKER_HOST: "tcp://docker.example.test:2376",
+      RUSTUP_HOME: "/tmp/rustup-home",
+      RUSTUP_TOOLCHAIN: "/tmp/rustup-toolchain",
       OK: "1",
     });
   });
@@ -564,8 +566,6 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.GOENV).toBeUndefined();
     expect(env.GOPATH).toBeUndefined();
     expect(env.CARGO_HOME).toBeUndefined();
-    expect(env.RUSTUP_HOME).toBeUndefined();
-    expect(env.RUSTUP_TOOLCHAIN).toBeUndefined();
     expect(env.HELM_HOME).toBeUndefined();
     expect(env.NODE_REDIRECT_WARNINGS).toBeUndefined();
     expect(env.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();

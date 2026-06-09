@@ -172,8 +172,6 @@ enum HostEnvSecurityPolicy {
         "RUBYSHELL",
         "RUSTC_WRAPPER",
         "RUSTFLAGS",
-        "RUSTUP_HOME",
-        "RUSTUP_TOOLCHAIN",
         "R_ENVIRON",
         "R_ENVIRON_USER",
         "R_LIBS_USER",

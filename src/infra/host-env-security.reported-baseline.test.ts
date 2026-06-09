@@ -46,6 +46,8 @@ const INHERITED_ALLOWLIST_RATIONALE: Record<string, string> = {
   NO_PROXY: "Trusted inherited proxy bypass list from operator runtime.",
   PAGER: "Trusted inherited default pager preference.",
   REQUESTS_CA_BUNDLE: "Trusted inherited Python requests CA bundle path.",
+  RUSTUP_HOME: "Trusted inherited Rust toolchain root selected by operator runtime.",
+  RUSTUP_TOOLCHAIN: "Trusted inherited Rust toolchain selector selected by operator.",
   SSH_AUTH_SOCK: "Trusted inherited SSH agent socket from operator runtime.",
   SSL_CERT_DIR: "Trusted inherited OpenSSL certificate directory path.",
   SSL_CERT_FILE: "Trusted inherited OpenSSL certificate file path.",
