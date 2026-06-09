@@ -174,6 +174,33 @@ function sanitizeInheritedGitAllowProtocolValue(value: string): string {
   return safeProtocols.join(":");
 }
 
+export function sanitizeHostInheritedEnvEntry(
+  rawKey: string,
+  value: string,
+): [string, string] | null {
+  const key = normalizeEnvVarKey(rawKey);
+  if (!key) {
+    return null;
+  }
+  // Preserve inherited Git allowlists without widening malformed or unsafe entries by deletion.
+  // Protocols outside Git's safe default set are removed instead of being passed through.
+  if (key.toUpperCase() === GIT_ALLOW_PROTOCOL_ENV_KEY) {
+    return [key, sanitizeInheritedGitAllowProtocolValue(value)];
+  }
+  // Preserve non-permissive Git boolean values. Permissive values must become explicit `0`
+  // because Git's unset default still permits protocols with policy `user`.
+  if (key.toUpperCase() === GIT_PROTOCOL_FROM_USER_ENV_KEY) {
+    return [
+      key,
+      isPermissiveGitProtocolFromUserValue(value) ? GIT_PROTOCOL_FROM_USER_DISABLED_VALUE : value,
+    ];
+  }
+  if (isDangerousHostInheritedEnvVarName(key)) {
+    return null;
+  }
+  return [key, value];
+}
+
 function sanitizeHostEnvOverridesWithDiagnostics(params?: {
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
@@ -236,26 +263,12 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
 
   const merged: Record<string, string> = {};
   for (const [key, value] of listNormalizedEnvEntries(baseEnv)) {
-    // Preserve inherited Git allowlists without widening malformed or unsafe entries by deletion.
-    // Protocols outside Git's safe default set are removed instead of being passed through.
-    if (key.toUpperCase() === GIT_ALLOW_PROTOCOL_ENV_KEY) {
-      merged[key] = sanitizeInheritedGitAllowProtocolValue(value);
+    const sanitizedEntry = sanitizeHostInheritedEnvEntry(key, value);
+    if (!sanitizedEntry) {
       continue;
     }
-    // Preserve non-permissive Git boolean values. Permissive values must become explicit `0`
-    // because Git's unset default still permits protocols with policy `user`.
-    if (key.toUpperCase() === GIT_PROTOCOL_FROM_USER_ENV_KEY) {
-      if (!isPermissiveGitProtocolFromUserValue(value)) {
-        merged[key] = value;
-      } else {
-        merged[key] = GIT_PROTOCOL_FROM_USER_DISABLED_VALUE;
-      }
-      continue;
-    }
-    if (isDangerousHostInheritedEnvVarName(key)) {
-      continue;
-    }
-    merged[key] = value;
+    const [sanitizedKey, sanitizedValue] = sanitizedEntry;
+    merged[sanitizedKey] = sanitizedValue;
   }
 
   const overrideResult = sanitizeHostEnvOverridesWithDiagnostics({
