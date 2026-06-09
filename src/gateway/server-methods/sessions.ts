@@ -123,7 +123,10 @@ import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
-import { emitSessionsChanged } from "./session-change-event.js";
+import {
+  emitSessionsChanged,
+  resolveSessionMessageSubscriptionKey,
+} from "./session-change-event.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -597,22 +600,6 @@ function resolveScopedAbortKey(params: {
     agentId: scopedAgentId,
     sessionKey: key,
   });
-}
-
-export function resolveSessionMessageSubscriptionKey(params: {
-  canonicalKey: string;
-  agentId?: string;
-  defaultAgentId?: string;
-}): string {
-  const agentId = params.agentId
-    ? normalizeAgentId(params.agentId)
-    : params.canonicalKey === "global" && params.defaultAgentId
-      ? normalizeAgentId(params.defaultAgentId)
-      : undefined;
-  // Global session message subscriptions need per-agent channels to avoid cross-agent fanout.
-  return params.canonicalKey === "global" && agentId
-    ? `agent:${agentId}:global`
-    : params.canonicalKey;
 }
 
 type RequestedGlobalAgentIdResolution =

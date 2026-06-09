@@ -1,8 +1,7 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { normalizeAgentId, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
-import { resolveSessionMessageSubscriptionKey } from "./sessions.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export type SessionChangedPayload = {
@@ -11,6 +10,22 @@ export type SessionChangedPayload = {
   reason: string;
   compacted?: boolean;
 };
+
+export function resolveSessionMessageSubscriptionKey(params: {
+  canonicalKey: string;
+  agentId?: string;
+  defaultAgentId?: string;
+}): string {
+  const agentId = params.agentId
+    ? normalizeAgentId(params.agentId)
+    : params.canonicalKey === "global" && params.defaultAgentId
+      ? normalizeAgentId(params.defaultAgentId)
+      : undefined;
+  // Global session message subscriptions need per-agent channels to avoid cross-agent fanout.
+  return params.canonicalKey === "global" && agentId
+    ? `agent:${agentId}:global`
+    : params.canonicalKey;
+}
 
 export function emitSessionsChanged(
   context: Pick<
