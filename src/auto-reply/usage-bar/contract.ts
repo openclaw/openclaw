@@ -22,8 +22,30 @@ export function buildUsageContract(
   const cacheHitPct =
     promptTotal > 0 ? Math.round(((cacheRead ?? 0) / promptTotal) * 100) : undefined;
 
+  // Last-call usage (final model call only) so templates can render the last
+  // exchange instead of the turn aggregate. Its cache_hit_pct is computed over
+  // the last call's prompt total, same formula as the turn-level one.
+  const last = state.lastUsage;
+  const lastPromptTotal = last
+    ? (last.cacheRead ?? 0) + (last.cacheWrite ?? 0) + (last.input ?? 0)
+    : 0;
+  const lastCacheHitPct =
+    last && lastPromptTotal > 0
+      ? Math.round(((last.cacheRead ?? 0) / lastPromptTotal) * 100)
+      : undefined;
+
   const maxTokens = state.contextTokenBudget;
-  const usedTokens = promptTotal > 0 ? promptTotal : undefined;
+  // Context occupancy is a point-in-time STATE, never an aggregate. Prefer the
+  // turn's real end-of-turn context size (final call's prompt tokens); fall back
+  // to the aggregate prompt total only for harnesses that don't report it
+  // (single-call turns, where the two coincide). The aggregate over a multi-call
+  // tool loop overstates occupancy — often past the window — pinning the gauge.
+  const usedTokens =
+    typeof state.contextUsedTokens === "number" && state.contextUsedTokens > 0
+      ? state.contextUsedTokens
+      : promptTotal > 0
+        ? promptTotal
+        : undefined;
   const pctUsed =
     maxTokens && usedTokens !== undefined ? Math.round((usedTokens / maxTokens) * 100) : undefined;
 
@@ -57,12 +79,25 @@ export function buildUsageContract(
       compactions: typeof state.compactionCount === "number" ? state.compactionCount : null,
     },
     usage: {
+      // Turn aggregate: summed across every model call in the turn's tool loop.
       input_tokens: input,
       output_tokens: output,
       cache_read_tokens: cacheRead,
       cache_write_tokens: cacheWrite,
       total_tokens: total,
       cache_hit_pct: cacheHitPct,
+      // Final model call only. Templates choose `{usage.input_tokens}` (turn)
+      // vs `{usage.last.input_tokens}` (last exchange). Absent → segment drops.
+      last: last
+        ? {
+            input_tokens: last.input,
+            output_tokens: last.output,
+            cache_read_tokens: last.cacheRead,
+            cache_write_tokens: last.cacheWrite,
+            total_tokens: last.total,
+            cache_hit_pct: lastCacheHitPct,
+          }
+        : undefined,
     },
     context: {
       used_tokens: usedTokens,
