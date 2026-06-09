@@ -384,6 +384,36 @@ describe("sanitizeHostExecEnv", () => {
     }
   });
 
+  it("preserves inherited restrictive GIT_ALLOW_PROTOCOL values", () => {
+    const restrictiveValues = ["", "git", "https:ssh", "git:http:https:ssh"];
+
+    for (const value of restrictiveValues) {
+      const env = sanitizeHostExecEnv({
+        baseEnv: {
+          PATH: "/usr/bin:/bin",
+          GIT_ALLOW_PROTOCOL: value,
+        },
+      });
+
+      expect(env.GIT_ALLOW_PROTOCOL).toBe(value);
+    }
+  });
+
+  it("removes inherited permissive GIT_ALLOW_PROTOCOL values", () => {
+    const permissiveValues = ["ext", "https:ext", "file", "https:file", "hg", "https::ssh"];
+
+    for (const value of permissiveValues) {
+      const env = sanitizeHostExecEnv({
+        baseEnv: {
+          PATH: "/usr/bin:/bin",
+          GIT_ALLOW_PROTOCOL: value,
+        },
+      });
+
+      expect(env.GIT_ALLOW_PROTOCOL).toBeUndefined();
+    }
+  });
+
   it("removes inherited permissive GIT_PROTOCOL_FROM_USER values", () => {
     const permissiveValues = ["1", "true", "yes", "on", "maybe"];
 

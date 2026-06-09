@@ -24,7 +24,14 @@ enum HostEnvSanitizer {
         "NO_COLOR",
         "FORCE_COLOR",
     ]
+    private static let gitAllowProtocolKey = "GIT_ALLOW_PROTOCOL"
     private static let gitProtocolFromUserKey = "GIT_PROTOCOL_FROM_USER"
+    private static let gitDefaultAlwaysAllowedProtocols: Set<String> = [
+        "git",
+        "http",
+        "https",
+        "ssh",
+    ]
 
     private static func isBlocked(_ upperKey: String) -> Bool {
         if self.blockedKeys.contains(upperKey) { return true }
@@ -92,6 +99,14 @@ enum HostEnvSanitizer {
             || normalized == "off"
     }
 
+    private static func isRestrictiveGitAllowProtocolValue(_ value: String) -> Bool {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.isEmpty { return true }
+        return normalized.split(separator: ":", omittingEmptySubsequences: false).allSatisfy {
+            self.gitDefaultAlwaysAllowedProtocols.contains(String($0))
+        }
+    }
+
     static func inspectOverrides(
         overrides: [String: String]?,
         blockPathOverrides: Bool = true) -> HostEnvOverrideDiagnostics
@@ -130,6 +145,14 @@ enum HostEnvSanitizer {
             let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty else { continue }
             let upper = key.uppercased()
+            // Preserve inherited allowlists that only narrow Git to protocols it already treats
+            // as safe. Values such as `ext`, `file`, or custom helpers are still dropped below.
+            if upper == self.gitAllowProtocolKey,
+               self.isRestrictiveGitAllowProtocolValue(value)
+            {
+                merged[key] = value
+                continue
+            }
             // Preserve Git's restrictive mode when already inherited from the trusted host.
             // Dropping it would make Git fall back to the more permissive unset default.
             if upper == self.gitProtocolFromUserKey,

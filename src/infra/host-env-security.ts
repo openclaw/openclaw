@@ -43,7 +43,9 @@ const HOST_DANGEROUS_OVERRIDE_ENV_KEYS = new Set<string>(HOST_DANGEROUS_OVERRIDE
 const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS = new Set<string>(
   HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES,
 );
+const GIT_ALLOW_PROTOCOL_ENV_KEY = "GIT_ALLOW_PROTOCOL";
 const GIT_PROTOCOL_FROM_USER_ENV_KEY = "GIT_PROTOCOL_FROM_USER";
+const GIT_DEFAULT_ALWAYS_ALLOWED_PROTOCOLS = new Set(["git", "http", "https", "ssh"]);
 
 function isShellWrapperAllowedOverrideEnvVarName(rawKey: string): boolean {
   const key = normalizeEnvVarKey(rawKey, { portable: true });
@@ -160,6 +162,15 @@ function isRestrictiveGitProtocolFromUserValue(value: string): boolean {
   return false;
 }
 
+function isRestrictiveGitAllowProtocolValue(value: string): boolean {
+  const normalized = value.trim();
+  if (!normalized) {
+    return true;
+  }
+  const protocols = normalized.split(":");
+  return protocols.every((protocol) => GIT_DEFAULT_ALWAYS_ALLOWED_PROTOCOLS.has(protocol));
+}
+
 function sanitizeHostEnvOverridesWithDiagnostics(params?: {
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
@@ -222,6 +233,15 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
 
   const merged: Record<string, string> = {};
   for (const [key, value] of listNormalizedEnvEntries(baseEnv)) {
+    // Preserve inherited allowlists that only narrow Git to protocols it already treats as safe.
+    // Values such as `ext`, `file`, or custom helpers are still dropped by the policy below.
+    if (
+      key.toUpperCase() === GIT_ALLOW_PROTOCOL_ENV_KEY &&
+      isRestrictiveGitAllowProtocolValue(value)
+    ) {
+      merged[key] = value;
+      continue;
+    }
     // Preserve Git's restrictive mode when already inherited from the trusted host.
     // Dropping it would make Git fall back to the more permissive unset default.
     if (
