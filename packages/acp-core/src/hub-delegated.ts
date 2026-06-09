@@ -129,7 +129,7 @@ export function resolveHubDelegatedLabelLookup(params: {
     }
   }
   if (exactIndexes.length === 1) {
-    return { status: "match", index: exactIndexes[0]! };
+    return { status: "match", index: exactIndexes[0] };
   }
   if (exactIndexes.length > 1) {
     const labels = exactIndexes
