@@ -221,9 +221,9 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     });
 
     expect(fetchSpy).toHaveBeenCalledOnce();
-    const fetchArg = fetchSpy.mock.calls[0][0] as RequestInfo | URL;
-    const urlStr = typeof fetchArg === "string" ? fetchArg : fetchArg.toString();
-    expect(urlStr).toMatch(/^https:\/\/docs\.example\.com\/page/);
+    const fetchArg = fetchSpy.mock.calls[0][0];
+    expect(typeof fetchArg).toBe("string");
+    expect(fetchArg).toMatch(/^https:\/\/docs\.example\.com\/page/);
     expect(result).toBeDefined();
   });
 });
