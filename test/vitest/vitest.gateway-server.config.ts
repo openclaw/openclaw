@@ -3,6 +3,7 @@ import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 const gatewayServerBackedHttpTests = [
   "src/gateway/embeddings-http.test.ts",
+  "src/gateway/mcp-reload-http.test.ts",
   "src/gateway/models-http.test.ts",
   "src/gateway/openai-http.test.ts",
   "src/gateway/openresponses-http.test.ts",
