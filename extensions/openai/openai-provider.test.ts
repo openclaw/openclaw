@@ -81,6 +81,8 @@ function runWrappedPayloadCase(params: {
     | Model<"azure-openai-responses">;
   extraParams?: Record<string, unknown>;
   cfg?: Record<string, unknown>;
+  agentId?: string;
+  nativeWebSearchPolicyContext?: unknown;
   payload?: Record<string, unknown>;
 }) {
   const payload = params.payload ?? { store: false };
@@ -97,6 +99,8 @@ function runWrappedPayloadCase(params: {
     extraParams: params.extraParams,
     config: params.cfg as never,
     agentDir: "/tmp/openai-provider-test",
+    agentId: params.agentId,
+    nativeWebSearchPolicyContext: params.nativeWebSearchPolicyContext,
     streamFn: baseStreamFn,
   } as never);
 
@@ -1216,6 +1220,49 @@ describe("buildOpenAIProvider", () => {
     expect(result.payload.tools).toEqual([
       { type: "function", name: "read" },
       { type: "web_search" },
+    ]);
+  });
+
+  it("keeps managed OpenAI web_search when agent policy denies native web search", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentId: "main",
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "main",
+              tools: { deny: ["web_search"] },
+            },
+          ],
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        tools: [
+          { type: "function", name: "read" },
+          { type: "function", name: "web_search" },
+        ],
+      },
+    });
+
+    expect(result.payload.tools).toEqual([
+      { type: "function", name: "read" },
+      { type: "function", name: "web_search" },
     ]);
   });
 

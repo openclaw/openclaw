@@ -1,4 +1,7 @@
 // Provider stream helpers expose shared wrapper families and payload transforms for provider plugins.
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { isNativeWebSearchAllowedByToolPolicy } from "../agents/codex-native-web-search-core.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
 import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
 import { resolveMoonshotThinkingKeep } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
@@ -21,7 +24,7 @@ import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "../llm/providers/stream-wrappers/proxy.js";
-import type { ProviderPlugin } from "../plugins/types.js";
+import type { ProviderNativeWebSearchPolicyContext, ProviderPlugin } from "../plugins/types.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 import {
   createMoonshotThinkingWrapper,
@@ -64,6 +67,21 @@ export type ProviderStreamFamily =
   | "tool-stream-default-on";
 
 type ProviderStreamFamilyHooks = Pick<ProviderPlugin, "wrapStreamFn">;
+
+export function isProviderNativeWebSearchAllowedByToolPolicy(params: {
+  config?: OpenClawConfig;
+  model?: { id?: unknown; provider?: unknown };
+  agentId?: string;
+  nativeWebSearchPolicyContext?: ProviderNativeWebSearchPolicyContext;
+}): boolean {
+  return isNativeWebSearchAllowedByToolPolicy({
+    config: params.config,
+    modelProvider: readStringValue(params.model?.provider),
+    modelId: readStringValue(params.model?.id),
+    agentId: params.agentId,
+    ...params.nativeWebSearchPolicyContext,
+  });
+}
 
 /** Builds provider hook objects for one supported stream-wrapper family. */
 export function buildProviderStreamFamilyHooks(

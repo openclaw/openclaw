@@ -45,6 +45,25 @@ type CodexNativeSearchPayloadPatchResult = {
   status: "payload_not_object" | "native_tool_already_present" | "injected";
 };
 
+export type NativeWebSearchToolPolicyParams = {
+  config?: OpenClawConfig;
+  modelProvider?: string;
+  modelId?: string;
+  agentId?: string;
+  sessionKey?: string;
+  sandboxToolPolicy?: SandboxToolPolicy;
+  messageProvider?: string;
+  agentAccountId?: string | null;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+};
+
 const OPENAI_AUTH_PROVIDER_IDS = ["openai"] as const;
 
 function isOpenAIAuthProviderId(provider: string | undefined): boolean {
@@ -182,6 +201,31 @@ export function resolveCodexNativeSearchActivation(params: {
     };
   }
 
+  if (!isNativeWebSearchAllowedByToolPolicy(params)) {
+    return {
+      globalWebSearchEnabled,
+      codexNativeEnabled: true,
+      codexMode: codexConfig.mode,
+      nativeEligible: true,
+      hasRequiredAuth: true,
+      state: "managed_only",
+      inactiveReason: "tool_policy_denied",
+    };
+  }
+
+  return {
+    globalWebSearchEnabled,
+    codexNativeEnabled: true,
+    codexMode: codexConfig.mode,
+    nativeEligible: true,
+    hasRequiredAuth: true,
+    state: "native_active",
+  };
+}
+
+export function isNativeWebSearchAllowedByToolPolicy(
+  params: NativeWebSearchToolPolicyParams,
+): boolean {
   const {
     agentId,
     globalPolicy,
@@ -247,7 +291,7 @@ export function resolveCodexNativeSearchActivation(params: {
       store: subagentStore,
     },
   );
-  const toolPolicyAllowsWebSearch = isToolAllowedByPolicies("web_search", [
+  return isToolAllowedByPolicies("web_search", [
     profilePolicy,
     providerProfilePolicy,
     globalPolicy,
@@ -260,27 +304,6 @@ export function resolveCodexNativeSearchActivation(params: {
     subagentPolicy,
     inheritedToolPolicy,
   ]);
-
-  if (!toolPolicyAllowsWebSearch) {
-    return {
-      globalWebSearchEnabled,
-      codexNativeEnabled: true,
-      codexMode: codexConfig.mode,
-      nativeEligible: true,
-      hasRequiredAuth: true,
-      state: "managed_only",
-      inactiveReason: "tool_policy_denied",
-    };
-  }
-
-  return {
-    globalWebSearchEnabled,
-    codexNativeEnabled: true,
-    codexMode: codexConfig.mode,
-    nativeEligible: true,
-    hasRequiredAuth: true,
-    state: "native_active",
-  };
 }
 
 /** Builds the OpenAI Responses `web_search` tool payload from config. */

@@ -394,7 +394,22 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       }),
       "/tmp/workspace",
       undefined,
-      undefined,
+      expectRecordFields(mockCallArg(applyExtraParamsToAgentMock, 0, 11), {
+        nativeWebSearchPolicyContext: {
+          sessionKey: undefined,
+          sandboxToolPolicy: undefined,
+          messageProvider: undefined,
+          agentAccountId: undefined,
+          groupId: undefined,
+          groupChannel: undefined,
+          groupSpace: undefined,
+          spawnedBy: undefined,
+          senderId: undefined,
+          senderName: undefined,
+          senderUsername: undefined,
+          senderE164: undefined,
+        },
+      }),
     );
   });
 
