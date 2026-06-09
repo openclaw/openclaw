@@ -133,6 +133,8 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("BROWSER")).toBe(true);
     expect(isDangerousHostEnvVarName("browser")).toBe(true);
     expect(isDangerousHostEnvVarName("SHELL")).toBe(true);
+    expect(isDangerousHostEnvVarName("GIT_ALLOW_PROTOCOL")).toBe(true);
+    expect(isDangerousHostEnvVarName("git_protocol_from_user")).toBe(true);
     expect(isDangerousHostEnvVarName("GIT_EDITOR")).toBe(true);
     expect(isDangerousHostEnvVarName("git_editor")).toBe(true);
     expect(isDangerousHostEnvVarName("GIT_EXTERNAL_DIFF")).toBe(true);
@@ -304,6 +306,7 @@ describe("sanitizeHostExecEnv", () => {
         PATH: "/usr/bin:/bin",
         BASH_ENV: "/tmp/pwn.sh",
         BROWSER: "/tmp/pwn-browser",
+        GIT_ALLOW_PROTOCOL: "ext",
         GIT_EDITOR: "/tmp/pwn-editor",
         GIT_EXTERNAL_DIFF: "/tmp/pwn.sh",
         GIT_DIR: "/tmp/evil-git-dir",
@@ -314,6 +317,7 @@ describe("sanitizeHostExecEnv", () => {
         GIT_OBJECT_DIRECTORY: "/tmp/evil-git-objects",
         GIT_ALTERNATE_OBJECT_DIRECTORIES: "/tmp/evil-git-alt-objects",
         GIT_NAMESPACE: "evil-namespace",
+        GIT_PROTOCOL_FROM_USER: "1",
         GIT_SEQUENCE_EDITOR: "/tmp/pwn-sequence-editor",
         HGRCPATH: "/tmp/evil-hgrc",
         CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
@@ -388,6 +392,8 @@ describe("sanitizeHostExecEnv", () => {
         CMAKE_CXX_COMPILER: "/tmp/evil-cxx-compiler",
         RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
         HGRCPATH: "/tmp/evil-hgrc",
+        GIT_ALLOW_PROTOCOL: "ext",
+        GIT_PROTOCOL_FROM_USER: "1",
         GIT_SSH_COMMAND: "touch /tmp/pwned",
         GIT_EDITOR: "/tmp/git-editor",
         GIT_DIR: "/tmp/evil-git-dir",
@@ -470,6 +476,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(env.BASH_ENV).toBeUndefined();
     expect(env.BROWSER).toBeUndefined();
+    expect(env.GIT_ALLOW_PROTOCOL).toBeUndefined();
     expect(env.GIT_EDITOR).toBeUndefined();
     expect(env.GIT_DIR).toBeUndefined();
     expect(env.GIT_WORK_TREE).toBeUndefined();
@@ -487,6 +494,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.GIT_OBJECT_DIRECTORY).toBeUndefined();
     expect(env.GIT_ALTERNATE_OBJECT_DIRECTORIES).toBeUndefined();
     expect(env.GIT_NAMESPACE).toBeUndefined();
+    expect(env.GIT_PROTOCOL_FROM_USER).toBeUndefined();
     expect(env.GIT_SEQUENCE_EDITOR).toBeUndefined();
     expect(env.AWS_CONFIG_FILE).toBeUndefined();
     expect(env.KUBECONFIG).toBeUndefined();
@@ -984,6 +992,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         SSL_CERT_DIR: "/tmp/evil-cert-dir",
         REQUESTS_CA_BUNDLE: "/tmp/evil-requests-ca.pem",
         CURL_CA_BUNDLE: "/tmp/evil-curl-ca.pem",
+        GIT_ALLOW_PROTOCOL: "ext",
         GIT_DIR: "/tmp/evil-git-dir",
         GIT_WORK_TREE: "/tmp/evil-work-tree",
         GIT_COMMON_DIR: "/tmp/evil-common-dir",
@@ -991,6 +1000,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         GIT_OBJECT_DIRECTORY: "/tmp/evil-git-objects",
         GIT_ALTERNATE_OBJECT_DIRECTORIES: "/tmp/evil-git-alt-objects",
         GIT_NAMESPACE: "evil-namespace",
+        GIT_PROTOCOL_FROM_USER: "1",
         GOPROXY: "https://example.invalid/proxy",
         GONOSUMCHECK: "example.invalid/*",
         GONOSUMDB: "example.invalid/*",
@@ -1041,12 +1051,14 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "DOCKER_CONTEXT",
       "DOCKER_HOST",
       "DOCKER_TLS_VERIFY",
+      "GIT_ALLOW_PROTOCOL",
       "GIT_ALTERNATE_OBJECT_DIRECTORIES",
       "GIT_COMMON_DIR",
       "GIT_DIR",
       "GIT_INDEX_FILE",
       "GIT_NAMESPACE",
       "GIT_OBJECT_DIRECTORY",
+      "GIT_PROTOCOL_FROM_USER",
       "GIT_SSL_CAINFO",
       "GIT_SSL_CAPATH",
       "GIT_SSL_NO_VERIFY",
@@ -1143,6 +1155,8 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.GIT_ALTERNATE_OBJECT_DIRECTORIES).toBeUndefined();
     expect(result.env.GIT_OBJECT_DIRECTORY).toBeUndefined();
     expect(result.env.GIT_NAMESPACE).toBeUndefined();
+    expect(result.env.GIT_ALLOW_PROTOCOL).toBeUndefined();
+    expect(result.env.GIT_PROTOCOL_FROM_USER).toBeUndefined();
     expect(result.env.GOPROXY).toBeUndefined();
     expect(result.env.GONOSUMCHECK).toBeUndefined();
     expect(result.env.GONOSUMDB).toBeUndefined();
@@ -1560,6 +1574,51 @@ describe("git env exploit regression", () => {
       fs.rmSync(cloneDir, { recursive: true, force: true });
       fs.rmSync(safeCloneDir, { recursive: true, force: true });
       fs.rmSync(templateDir, { recursive: true, force: true });
+      fs.rmSync(marker, { force: true });
+    }
+  });
+
+  it("blocks inherited GIT_ALLOW_PROTOCOL so git cannot enable ext transport helpers", async () => {
+    const gitPath = getSystemGitPath();
+    if (!gitPath) {
+      return;
+    }
+
+    const helperDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-git-allow-protocol-${process.pid}-${Date.now()}-`),
+    );
+    const helperPath = path.join(helperDir, "ext-helper.sh");
+    const marker = path.join(
+      os.tmpdir(),
+      `openclaw-git-allow-protocol-marker-${process.pid}-${Date.now()}`,
+    );
+
+    try {
+      clearMarker(marker);
+      fs.writeFileSync(helperPath, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`, "utf8");
+      fs.chmodSync(helperPath, 0o755);
+
+      const target = `ext::${helperPath}`;
+      const unsafeEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        GIT_ALLOW_PROTOCOL: "ext",
+        GIT_TERMINAL_PROMPT: "0",
+      };
+
+      await runGitLsRemote(gitPath, target, unsafeEnv);
+
+      expect(fs.existsSync(marker)).toBe(true);
+      clearMarker(marker);
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv: unsafeEnv,
+      });
+
+      await runGitLsRemote(gitPath, target, safeEnv);
+
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(helperDir, { recursive: true, force: true });
       fs.rmSync(marker, { force: true });
     }
   });

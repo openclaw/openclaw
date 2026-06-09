@@ -29,6 +29,7 @@
     "ERL_ZFLAGS",
     "EXINIT",
     "GCONV_PATH",
+    "GIT_ALLOW_PROTOCOL",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_COMMON_DIR",
     "GIT_DIR",
@@ -39,6 +40,7 @@
     "GIT_INDEX_FILE",
     "GIT_NAMESPACE",
     "GIT_OBJECT_DIRECTORY",
+    "GIT_PROTOCOL_FROM_USER",
     "GIT_SEQUENCE_EDITOR",
     "GIT_SSL_CAINFO",
     "GIT_SSL_CAPATH",
@@ -248,5 +250,5 @@
     "YARN_RC_FILENAME",
     "ZDOTDIR"
   ],
-  "expectedTotalReportedEntries": 243
+  "expectedTotalReportedEntries": 245
 }
