@@ -14,7 +14,7 @@ describe("evidence summary", () => {
   it("builds scorecard-ready QA suite evidence entries from catalog metadata", () => {
     const evidence = buildQaSuiteEvidenceSummary({
       artifactPaths: ["qa-suite-summary.json", "qa-suite-report.md"],
-      scenarioDefinitions: [
+      scenarioSpecs: [
         {
           id: "dm-chat-baseline",
           title: "DM baseline conversation",
@@ -93,7 +93,7 @@ describe("evidence summary", () => {
       generatedAt: "2026-06-07T12:05:00.000Z",
       primaryModel: "openai/gpt-5.5",
       providerMode: "live-frontier",
-      scenarioDefinitions: [
+      scenarioSpecs: [
         {
           id: "telegram-canary",
           standardId: "canary",
@@ -261,7 +261,7 @@ describe("evidence summary", () => {
     expect(() =>
       buildQaSuiteEvidenceSummary({
         artifactPaths: ["qa-suite-summary.json"],
-        scenarioDefinitions: [
+        scenarioSpecs: [
           {
             id: "dm-chat-baseline",
             title: "DM baseline conversation",
@@ -286,7 +286,7 @@ describe("evidence summary", () => {
   it("keeps mock non-OpenAI model refs attributed to their model provider", () => {
     const evidence = buildQaSuiteEvidenceSummary({
       artifactPaths: ["qa-suite-summary.json"],
-      scenarioDefinitions: [
+      scenarioSpecs: [
         {
           id: "anthropic-parity",
           title: "Anthropic parity",
@@ -323,7 +323,7 @@ describe("evidence summary", () => {
       generatedAt: "2026-06-07T12:15:00.000Z",
       primaryModel: "openai/gpt-5.5",
       providerMode: "live-frontier",
-      scenarioDefinitions: [
+      scenarioSpecs: [
         {
           id: "telegram-canary",
           standardId: "canary",
@@ -341,7 +341,7 @@ describe("evidence summary", () => {
       generatedAt: "2026-06-07T12:16:00.000Z",
       primaryModel: "openai/gpt-5.5",
       providerMode: "live-frontier",
-      scenarioDefinitions: [
+      scenarioSpecs: [
         {
           id: "telegram-canary",
           standardId: "canary",

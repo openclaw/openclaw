@@ -107,7 +107,7 @@ export type QaEvidenceSummaryJson = z.infer<typeof qaEvidenceSummarySchema>;
 
 type QaEvidenceScenarioStatusInput = "pass" | "fail" | "blocked";
 
-type QaEvidenceScenarioDefinitionInput = {
+type QaEvidenceScenarioSpecInput = {
   id: string;
   title: string;
   sourcePath?: string;
@@ -327,7 +327,7 @@ export function validateQaEvidenceSummaryJson(summary: unknown): QaEvidenceSumma
 export function buildQaSuiteEvidenceSummary(
   params: QaEvidenceBuildBase & {
     channelId: string;
-    scenarioDefinitions: readonly QaEvidenceScenarioDefinitionInput[];
+    scenarioSpecs: readonly QaEvidenceScenarioSpecInput[];
     scenarioResults: readonly QaEvidenceScenarioResultInput[];
   },
 ): QaEvidenceSummaryJson {
@@ -345,7 +345,7 @@ export function buildQaSuiteEvidenceSummary(
     fallback: params.channelDriver,
   });
   const entries = params.scenarioResults.map((result, index): QaEvidenceSummaryEntry => {
-    const scenario = params.scenarioDefinitions[index];
+    const scenario = params.scenarioSpecs[index];
     const primaryCoverageIds = uniqueSortedStrings(scenario?.coverage?.primary ?? []);
     const coverageIds = uniqueSortedStrings([
       ...(scenario?.coverage?.primary ?? []),
@@ -467,7 +467,7 @@ export function buildPlaywrightEvidenceSummary(
 
 export function buildLiveTransportEvidenceSummary(
   params: QaEvidenceBuildBase & {
-    scenarioDefinitions: readonly {
+    scenarioSpecs: readonly {
       id: string;
       standardId?: string;
       title: string;
@@ -490,7 +490,7 @@ export function buildLiveTransportEvidenceSummary(
     fallback: params.channelDriver ?? "native",
   }) ?? { id: "native" };
   const definitionsById = new Map(
-    params.scenarioDefinitions.map((definition) => [definition.id, definition]),
+    params.scenarioSpecs.map((definition) => [definition.id, definition]),
   );
   const entries = params.scenarioResults.map((result, index): QaEvidenceSummaryEntry => {
     const scenarioId = result.id ?? result.name ?? `scenario-${index + 1}`;
