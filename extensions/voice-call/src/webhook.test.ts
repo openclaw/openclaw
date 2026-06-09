@@ -834,6 +834,65 @@ describe("VoiceCallWebhookServer replay handling", () => {
     }
   });
 
+  it("does not route sibling realtime websocket paths to the realtime handler", async () => {
+    const calls = [createCall(Date.now())];
+    const { manager } = createManager(calls);
+    const realtimeHandler = {
+      getStreamPathPattern: vi.fn(() => "/voice/stream/realtime"),
+      handleWebSocketUpgrade: vi.fn((request, socket) => {
+        socket.destroy();
+      }),
+    } as unknown as RealtimeCallHandler;
+
+    const server = new VoiceCallWebhookServer(
+      createConfig({
+        serve: { path: "/voice/webhook" },
+        realtime: { enabled: true, streamPath: "/voice/stream/realtime" },
+      }),
+      manager,
+      provider,
+    );
+    server.setRealtimeHandler(realtimeHandler);
+
+    const baseUrl = await server.start();
+    const requestUrl = requireBoundRequestUrl(server, baseUrl);
+    requestUrl.pathname = "/voice/stream/realtime-evil";
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const req = request(
+          requestUrl,
+          {
+            method: "GET",
+            headers: {
+              Connection: "Upgrade",
+              Upgrade: "websocket",
+            },
+          },
+          () => {
+            resolve();
+          },
+        );
+
+        req.on("error", () => {
+          resolve();
+        });
+        req.on("upgrade", () => {
+          resolve();
+        });
+        req.setTimeout(1000, () => {
+          req.destroy();
+          reject(new Error("upgrade request timed out"));
+        });
+        req.end();
+      });
+
+      expect(realtimeHandler.handleWebSocketUpgrade).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
   it("does not return realtime TwiML for replayed inbound twilio webhooks", async () => {
     const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
     const buildTwiMLPayload = vi.fn(() => ({
