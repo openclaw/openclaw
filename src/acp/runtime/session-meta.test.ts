@@ -8,7 +8,9 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   listAcpSessionEntries,
+  moveAcpSessionMetaForMigration,
   readAcpSessionEntry,
+  readAcpSessionMetaForEntry,
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "./session-meta.js";
@@ -210,6 +212,57 @@ describe("ACP session metadata SQLite store", () => {
         "codex-current",
       );
       expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(1);
+    });
+  });
+
+  it("moves ACP metadata rows when session-store keys are canonicalized", async () => {
+    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const databasePath = path.join(dir, "state", "openclaw.sqlite");
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const legacyKey = "agent:CODEX:acp:legacy-runtime";
+      const canonicalKey = "agent:codex:acp:legacy-runtime";
+      await writeSessionStoreForTestAsync(storePath, {
+        [canonicalKey]: {
+          sessionId: "sess-acp",
+          updatedAt: 100,
+        },
+      });
+      writeAcpSessionMetaForMigration({
+        databasePath,
+        sessionKey: legacyKey,
+        sessionId: "sess-acp",
+        meta: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: legacyKey,
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 123,
+        },
+      });
+
+      expect(
+        moveAcpSessionMetaForMigration({
+          databasePath,
+          fromSessionKey: legacyKey,
+          toSessionKey: canonicalKey,
+          entry: { sessionId: "sess-acp" },
+          now: () => 200,
+        }),
+      ).toBe(true);
+
+      expect(
+        readAcpSessionMetaForEntry({
+          databasePath,
+          sessionKey: legacyKey,
+          entry: { sessionId: "sess-acp" },
+        }),
+      ).toBeUndefined();
+      expect(
+        readAcpSessionEntry({ cfg, databasePath, sessionKey: canonicalKey })?.acp
+          ?.runtimeSessionName,
+      ).toBe(legacyKey);
     });
   });
 

@@ -295,6 +295,13 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           p: { key: acpKey },
         }),
       ).resolves.toEqual({ ok: true, key: acpKey });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { key: acpKey },
+        }),
+      ).resolves.toEqual({ ok: true, key: acpKey });
     });
   });
 

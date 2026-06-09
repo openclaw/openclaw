@@ -157,7 +157,10 @@ function selectAcpSessionRow(db: DatabaseSync, sessionKey: string): AcpSessionRo
   );
 }
 
-function acpSessionRowMatchesEntry(row: AcpSessionRow, entry: SessionEntry | undefined): boolean {
+function acpSessionRowMatchesEntry(
+  row: AcpSessionRow,
+  entry: Pick<SessionEntry, "sessionId"> | undefined,
+): boolean {
   // Rows tied to a specific sessionId are stale after the JSON session entry rotates.
   return row.session_id == null || row.session_id === entry?.sessionId;
 }
@@ -191,7 +194,7 @@ export function readAcpSessionMeta(params: {
 
 export function readAcpSessionMetaForEntry(params: {
   sessionKey: string;
-  entry: SessionEntry | undefined;
+  entry: Pick<SessionEntry, "sessionId"> | undefined;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
 }): SessionAcpMeta | undefined {
@@ -246,6 +249,45 @@ export function writeAcpSessionMetaForMigration(params: {
     },
     { env: params.env, path: params.databasePath },
   );
+}
+
+export function moveAcpSessionMetaForMigration(params: {
+  fromSessionKey: string;
+  toSessionKey: string;
+  entry?: Pick<SessionEntry, "sessionId">;
+  env?: NodeJS.ProcessEnv;
+  databasePath?: string;
+  now?: () => number;
+}): boolean {
+  const fromSessionKey = params.fromSessionKey.trim();
+  const toSessionKey = params.toSessionKey.trim();
+  if (!fromSessionKey || !toSessionKey || fromSessionKey === toSessionKey) {
+    return false;
+  }
+
+  let moved = false;
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      const row = selectAcpSessionRow(database.db, fromSessionKey);
+      if (!row || !acpSessionRowMatchesEntry(row, params.entry)) {
+        return;
+      }
+      upsertAcpSessionMetaRow(database.db, {
+        ...row,
+        session_key: toSessionKey,
+        updated_at: params.now?.() ?? Date.now(),
+      });
+      executeSqliteQuerySync(
+        database.db,
+        getAcpSessionKysely(database.db)
+          .deleteFrom("acp_sessions")
+          .where("session_key", "=", fromSessionKey),
+      );
+      moved = true;
+    },
+    { env: params.env, path: params.databasePath },
+  );
+  return moved;
 }
 
 function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSessionsTable>): void {
