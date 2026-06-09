@@ -168,6 +168,38 @@ describe("buildCodexAppServerUsageSnapshot", () => {
     });
   });
 
+  it("uses reset cadence when Codex reports a 24h weekly secondary window", () => {
+    const nowMs = 1_700_000_000_000;
+    const primaryReset = Math.ceil(nowMs / 1000) + 60 * 60;
+    const weeklyReset = primaryReset + 7 * 24 * 60 * 60;
+    const payload = {
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          planType: "plus",
+          primary: {
+            usedPercent: 9,
+            windowDurationMins: 300,
+            resetsAt: primaryReset,
+          },
+          secondary: {
+            usedPercent: 30,
+            windowDurationMins: 24 * 60,
+            resetsAt: weeklyReset,
+          },
+        },
+      },
+    };
+
+    expect(buildCodexAppServerUsageSnapshot(payload).windows).toEqual([
+      { label: "5h", usedPercent: 9, resetAt: primaryReset * 1000 },
+      { label: "Week", usedPercent: 30, resetAt: weeklyReset * 1000 },
+    ]);
+    expect(summarizeCodexAccountUsage(payload, nowMs)?.usageLine).toBe(
+      "weekly 30% \u00b7 short-term 9%",
+    );
+  });
+
   it("accepts snake_case Codex core payload fields", () => {
     const result = buildCodexAppServerUsageSnapshot({
       rate_limits: {
