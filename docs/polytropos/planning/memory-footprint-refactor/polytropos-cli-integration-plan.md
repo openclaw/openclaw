@@ -280,6 +280,131 @@ Non-goals:
    - aggregate RSS under parallel or tool-heavy runs
    - correctness of permissions, routing, and stop behavior
 
+## Hook Relay Reuse Boundaries
+
+This section summarizes what appears reusable today for a `hooks relay` fork and
+what still requires Polytropos-owned wrapper/daemon logic.
+
+### Important finding
+
+The actual `openclaw hooks relay ...` command implementation does not appear to
+live in this core repo. The core repo contains the built-in `hooks` CLI for
+managing internal hooks, but the Codex-native relay command seems to come from
+the external Codex app-server plugin / integration layer.
+
+That means the analysis splits into:
+
+- core OpenClaw services that a replacement relay path can reuse
+- external relay-command glue that likely must be recreated or mirrored by
+  Polytropos
+
+### Reusable upstream core pieces
+
+These look reusable with little or no semantic change:
+
+- CLI argv helpers such as primary-command extraction and root-option parsing in
+  [src/cli/argv.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/cli/argv.ts)
+- plugin hook policy and hook precedence resolution in
+  [src/hooks/policy.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/hooks/policy.ts)
+- internal hook loading in
+  [src/hooks/loader.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/hooks/loader.ts)
+- typed plugin hook execution in
+  [src/plugins/hooks.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/plugins/hooks.ts)
+- plugin runtime state surfaces in
+  [src/plugins/runtime.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/plugins/runtime.ts)
+- metadata-only plugin CLI discovery via
+  [src/plugins/loader.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/plugins/loader.ts)
+  and [src/plugins/cli.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/plugins/cli.ts)
+- the existing in-memory takeover mechanism
+  `registerPluginCliCommands(..., { primary })`
+
+These are the main candidates to host inside a long-lived daemon once, instead
+of redoing them in a short-lived CLI process for every relay event.
+
+### Reusable, but probably too heavy for the hot wrapper path
+
+These are useful building blocks, but they still look too expensive to invoke on
+every wrapper startup:
+
+- `loadOpenClawPluginCliRegistry(...)`
+  - lighter than the full runtime loader
+  - but still does plugin discovery, manifest loading, config validation, module
+    import, and plugin `register(api)` execution in `cli-metadata` mode
+  - currently runs with `cache: false`, so it is not a cheap per-event lookup
+- `registerPluginCliCommands(...)`
+  - useful once the chosen root is already known
+  - not sufficient as the root-selection mechanism itself
+
+So these should be treated as:
+
+- good daemon-startup or daemon-refresh primitives
+- poor per-invocation wrapper primitives
+
+### Current core path that blocks direct builtin override
+
+Current `runCli()` behavior in
+[src/cli/run-main.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/cli/run-main.ts)
+registers the built-in primary command first:
+
+- `registerCoreCliByName(...)`
+- `registerSubCliByName(...)`
+
+Then it decides whether to skip plugin CLI registration:
+
+- if the selected primary is already a built-in command, plugin registration is
+  skipped entirely
+
+That matters because `hooks` is currently a built-in sub-CLI root, registered in
+[src/cli/program/register.subclis.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/cli/program/register.subclis.ts).
+
+Implication:
+
+- the existing `runCli()` path cannot simply be reused unchanged if Polytropos
+  wants to take over the `hooks` root
+- the wrapper must intercept before the current built-in-first registration flow
+  runs, or the core logic must be changed
+
+### Process-shaped or wrapper-owned layers
+
+These layers still look too process-shaped, too expensive, or too policy-specific
+to treat as the reusable hot path:
+
+- [src/entry.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/entry.ts)
+  - respawn logic
+  - process env mutation
+  - process title
+  - compile-cache setup
+- [src/cli/run-main.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/cli/run-main.ts)
+  - dotenv loading
+  - PATH rewriting
+  - console capture
+  - uncaught exception / rejection handlers
+  - full Commander program build
+- full plugin registry activation in
+  [src/cli/plugin-registry.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/cli/plugin-registry.ts)
+  and [src/plugins/loader.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/plugins/loader.ts)
+
+These are likely daemon-startup concerns at most, not per-relay invocation work.
+
+### Practical first-cut architecture for `hooks relay`
+
+For the first wave, the simplest useful design is probably:
+
+1. The installed Polytropos wrapper hardcodes a narrow intercept for the `hooks`
+   root, or even more narrowly the `hooks relay` subpath.
+2. All other argv falls through unchanged to the core OpenClaw CLI.
+3. The daemon preloads the reusable core pieces once:
+   - config snapshot
+   - plugin metadata / registry state
+   - hook policy state
+   - hook runner state
+4. The wrapper sends relay requests to the daemon.
+5. The daemon uses reusable upstream hook/plugin machinery where possible, but
+   does not rebuild the whole CLI program for each event.
+
+This avoids overgeneralizing too early. For the first experiment, we do not need
+to solve "arbitrary root override for any plugin" before solving `hooks relay`.
+
 ## Open Questions
 
 - Is upstream plugin CLI metadata loading light enough for the wrapper hot path,
