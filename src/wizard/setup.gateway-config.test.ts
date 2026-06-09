@@ -200,6 +200,24 @@ describe("configureGatewayForSetup", () => {
     expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).toBe(false);
   });
 
+  it("preserves explicit insecure local control ui auth opt-in in quickstart", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+
+    const result = await runGatewayConfig({
+      flow: "quickstart",
+      textQueue: [],
+      nextConfig: {
+        gateway: {
+          controlUi: {
+            allowInsecureAuth: true,
+          },
+        },
+      },
+    });
+
+    expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).toBe(true);
+  });
+
   it("keeps insecure local control ui auth disabled when quickstart reuses an existing loopback config", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
     const prompter = createPrompter({
