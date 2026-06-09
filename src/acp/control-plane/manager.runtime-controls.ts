@@ -18,7 +18,14 @@ import {
   resolveRuntimeOptionsFromMeta,
 } from "./runtime-options.js";
 
-const OPTIONAL_TIMEOUT_CONFIG_KEYS = new Set(["timeout", "timeout_seconds"]);
+const OPTIONAL_CONFIG_KEYS = new Set([
+  "timeout",
+  "timeout_seconds",
+  "effort",
+  "thinking",
+  "reasoning_effort",
+  "thought_level",
+]);
 
 function extractConfigOptionKeys(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -43,12 +50,12 @@ function extractRuntimeStatusConfigOptionKeys(status: AcpRuntimeStatus | undefin
   ];
 }
 
-function isOptionalTimeoutConfigKey(key: string): boolean {
-  return OPTIONAL_TIMEOUT_CONFIG_KEYS.has(normalizeLowercaseStringOrEmpty(key));
+function isOptionalConfigKey(key: string): boolean {
+  return OPTIONAL_CONFIG_KEYS.has(normalizeLowercaseStringOrEmpty(key));
 }
 
-function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown): boolean {
-  if (!isOptionalTimeoutConfigKey(key)) {
+function isUnsupportedOptionalConfigRejection(key: string, error: unknown): boolean {
+  if (!isOptionalConfigKey(key)) {
     return false;
   }
   const errorCode = error && typeof error === "object" ? (error as { code?: unknown }).code : null;
@@ -191,7 +198,7 @@ export async function applyManagerRuntimeControls(params: {
               value,
             });
           } catch (error) {
-            if (isUnsupportedOptionalTimeoutConfigRejection(key, error)) {
+            if (isUnsupportedOptionalConfigRejection(key, error)) {
               continue;
             }
             throw error;

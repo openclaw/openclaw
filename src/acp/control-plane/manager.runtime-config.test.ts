@@ -563,6 +563,51 @@ describe("AcpSessionManager runtime config", () => {
     expect(runtimeState.runTurn).not.toHaveBeenCalled();
   });
 
+  it("continues turns when adapters reject effort config", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_mode", "session/set_config_option", "session/status"],
+      configOptionKeys: ["mode", "model", "effort"],
+    });
+    runtimeState.setConfigOption.mockImplementation(async (input: { key: string }) => {
+      if (input.key === "effort") {
+        throw new AcpRuntimeError(
+          "ACP_TURN_FAILED",
+          'Agent rejected session/set_config_option for "effort": ACP -32602 Invalid params',
+        );
+      }
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:session-1",
+      storeSessionKey: "agent:claude:acp:session-1",
+      acp: {
+        ...readySessionMeta({ agent: "claude" }),
+        runtimeOptions: {
+          thinking: "high",
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:session-1",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-effort",
+    });
+
+    expectMockCallFields(runtimeState.setConfigOption, {
+      key: "effort",
+      value: "high",
+    });
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+  });
+
   it("maps persisted thinking runtime options to advertised effort config keys before running turns", async () => {
     const runtimeState = createRuntime();
     runtimeState.getCapabilities.mockResolvedValue({
