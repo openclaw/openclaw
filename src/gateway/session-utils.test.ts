@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
@@ -865,6 +866,45 @@ describe("gateway session utils", () => {
         { acp: undefined },
       ),
     ).toBe("deleted-agent");
+  });
+
+  test("resolveDeletedAgentIdFromSessionKey repairs canonical ACP metadata aliases", async () => {
+    await withStateDirEnv("session-utils-acp-deleted-agent-repair-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "agents", "claude", "sessions", "sessions.json");
+      const acpKey = "agent:claude:acp:55555555-5555-4555-8555-555555555555";
+      const legacyAcpKey = "agent:CLAUDE:acp:55555555-5555-4555-8555-555555555555";
+      const entry = {
+        sessionId: "sess-acp-repair",
+        updatedAt: 1,
+      } satisfies SessionEntry;
+      writeSessionStoreForTest(storePath, {
+        [acpKey]: entry,
+      });
+      writeAcpSessionMetaForMigration({
+        sessionKey: legacyAcpKey,
+        sessionId: "sess-acp-repair",
+        meta: {
+          backend: "acpx",
+          agent: "claude",
+          runtimeSessionName: legacyAcpKey,
+          mode: "oneshot",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      });
+      const cfg = {
+        session: {
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      expect(
+        resolveDeletedAgentIdFromSessionKey(cfg, acpKey, entry, {
+          acpMetadataSessionKey: acpKey,
+        }),
+      ).toBeNull();
+    });
   });
 
   test("resolveDeletedAgentIdFromSessionKey rejects deleted configured ACP binding owners", () => {

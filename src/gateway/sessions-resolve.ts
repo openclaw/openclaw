@@ -7,11 +7,9 @@ import {
   errorShape,
   type SessionsResolveParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import { repairAcpSessionMetaKeyForMigration } from "../acp/runtime/session-meta.js";
 import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
-import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import {
   filterAndSortSessionEntries,
@@ -130,12 +128,6 @@ export async function resolveSessionKeyFromResolveParams(params: {
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const store = loadSessionStore(target.storePath);
     if (store[target.canonicalKey]) {
-      if (isAcpSessionKey(target.canonicalKey)) {
-        repairAcpSessionMetaKeyForMigration({
-          sessionKey: target.canonicalKey,
-          entry: store[target.canonicalKey],
-        });
-      }
       if (
         !isResolvedSessionKeyVisible({
           cfg,
@@ -169,12 +161,6 @@ export async function resolveSessionKeyFromResolveParams(params: {
       }
     });
     const migratedStore = loadSessionStore(target.storePath);
-    if (isAcpSessionKey(target.canonicalKey) || isAcpSessionKey(legacyKey)) {
-      repairAcpSessionMetaKeyForMigration({
-        sessionKey: target.canonicalKey,
-        entry: migratedStore[target.canonicalKey],
-      });
-    }
     if (
       !isResolvedSessionKeyVisible({
         cfg,
