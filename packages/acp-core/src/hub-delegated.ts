@@ -98,6 +98,54 @@ export function findHubDelegatedLabelConflictInStore(params: {
   return undefined;
 }
 
+export type HubDelegatedLabelLookupResult =
+  | { status: "match"; index: number }
+  | { status: "missing" }
+  | { status: "ambiguous"; labels: string[] };
+
+/** Resolves owner-scoped hub-delegated labels with exact case-sensitive equality. */
+export function resolveHubDelegatedLabelLookup(params: {
+  entries: ReadonlyArray<{ label?: string | null }>;
+  label: string;
+}): HubDelegatedLabelLookupResult {
+  const label = normalizeOptionalString(params.label);
+  if (!label) {
+    return { status: "missing" };
+  }
+  const foldedLabel = label.toLowerCase();
+  const exactIndexes: number[] = [];
+  const caseFoldedIndexes: number[] = [];
+  for (let index = 0; index < params.entries.length; index += 1) {
+    const entryLabel = normalizeOptionalString(params.entries[index]?.label);
+    if (!entryLabel) {
+      continue;
+    }
+    if (entryLabel === label) {
+      exactIndexes.push(index);
+      continue;
+    }
+    if (entryLabel.toLowerCase() === foldedLabel) {
+      caseFoldedIndexes.push(index);
+    }
+  }
+  if (exactIndexes.length === 1) {
+    return { status: "match", index: exactIndexes[0]! };
+  }
+  if (exactIndexes.length > 1) {
+    const labels = exactIndexes
+      .map((index) => normalizeOptionalString(params.entries[index]?.label))
+      .filter((entryLabel): entryLabel is string => Boolean(entryLabel));
+    return { status: "ambiguous", labels };
+  }
+  if (caseFoldedIndexes.length > 1) {
+    const labels = caseFoldedIndexes
+      .map((index) => normalizeOptionalString(params.entries[index]?.label))
+      .filter((entryLabel): entryLabel is string => Boolean(entryLabel));
+    return { status: "ambiguous", labels };
+  }
+  return { status: "missing" };
+}
+
 export function resolveHubDelegatedLastActivityAt(
   entry: HubDelegatedSessionEntry & { hubDelegated: HubDelegatedSessionMeta },
 ): number {

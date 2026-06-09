@@ -3,6 +3,7 @@ import {
   isHubDelegatedAcpSessionEntry,
   resolveHubDelegatedAcpPolicy,
   resolveHubDelegatedExpiryPreview,
+  resolveHubDelegatedLabelLookup,
 } from "@openclaw/acp-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
@@ -138,9 +139,19 @@ export async function handleAcpDelegateAction(
     return stopWithText(ACP_DELEGATE_USAGE);
   }
 
-  const match = entries.find(
-    (entry) => normalizeOptionalString(entry.entry?.label)?.toLowerCase() === label.toLowerCase(),
-  );
+  const lookup = resolveHubDelegatedLabelLookup({
+    entries: entries.map((entry) => ({ label: entry.entry?.label })),
+    label,
+  });
+  if (lookup.status === "ambiguous") {
+    return stopWithText(
+      `⚠️ Multiple hub-delegated sessions match label "${label}" case-insensitively: ${lookup.labels.join(", ")}. Use the exact label.`,
+    );
+  }
+  if (lookup.status === "missing") {
+    return stopWithText(`⚠️ No hub-delegated session with label "${label}" for this owner.`);
+  }
+  const match = entries[lookup.index];
   if (!match?.entry?.hubDelegated || !isHubDelegatedAcpSessionEntry(match.entry)) {
     return stopWithText(`⚠️ No hub-delegated session with label "${label}" for this owner.`);
   }

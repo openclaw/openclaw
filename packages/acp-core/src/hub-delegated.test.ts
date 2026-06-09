@@ -10,6 +10,7 @@ import {
   resolveHubDelegatedAcpPolicy,
   resolveHubDelegatedAutoLabel,
   resolveHubDelegatedExpiry,
+  resolveHubDelegatedLabelLookup,
 } from "./hub-delegated.js";
 
 describe("resolveHubDelegatedAcpPolicy", () => {
@@ -170,6 +171,36 @@ describe("findHubDelegatedLabelConflictInStore", () => {
         label: "refactor",
       }),
     ).toBe("agent:codex:acp:other-owner");
+  });
+});
+
+describe("resolveHubDelegatedLabelLookup", () => {
+  const entries = [{ label: "Build" }, { label: "build" }, { label: "refactor" }];
+
+  it("matches labels with exact case-sensitive equality", () => {
+    expect(resolveHubDelegatedLabelLookup({ entries, label: "Build" })).toEqual({
+      status: "match",
+      index: 0,
+    });
+    expect(resolveHubDelegatedLabelLookup({ entries, label: "build" })).toEqual({
+      status: "match",
+      index: 1,
+    });
+  });
+
+  it("reports ambiguity for case-only duplicates", () => {
+    expect(resolveHubDelegatedLabelLookup({ entries, label: "BUILD" })).toEqual({
+      status: "ambiguous",
+      labels: ["Build", "build"],
+    });
+  });
+
+  it("returns missing when only a different-case label exists", () => {
+    expect(
+      resolveHubDelegatedLabelLookup({ entries: [{ label: "Build" }], label: "build" }),
+    ).toEqual({
+      status: "missing",
+    });
   });
 });
 
