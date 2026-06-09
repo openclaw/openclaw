@@ -1472,7 +1472,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
             colorize(
               rich,
               theme.success,
-              `Processed ${applyResult.applied} candidate(s) for ${shortenHomePath(applyResult.memoryPath)}.`,
+              `Archived ${applyResult.applied} candidate(s) to ${applyResult.archiveRelativePath.replaceAll("\\", "/")} while keeping ${shortenHomePath(applyResult.memoryPath)} compact.`,
             ),
           );
           lines.push(

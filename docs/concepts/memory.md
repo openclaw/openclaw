@@ -219,7 +219,9 @@ will be saved automatically before the summary happens.
 
 Dreaming is an optional background consolidation pass for memory. It collects
 short-term signals, scores candidates, and promotes only qualified items into
-long-term memory (`MEMORY.md`).
+archive-backed long-term memory: detailed excerpts land under
+`memory/archived/YYYY-Q#/`, while `MEMORY.md` keeps a compact latest-archive
+pointer.
 
 It is designed to keep long-term memory high signal:
 
@@ -240,7 +242,7 @@ The dreaming system now has two closely related review lanes:
 
 - **Live dreaming** works from the short-term dreaming store under
   `memory/.dreams/` and is what the normal deep phase uses when deciding what
-  can graduate into `MEMORY.md`.
+  can graduate into archive-backed long-term memory.
 - **Grounded backfill** reads historical `memory/YYYY-MM-DD.md` notes as
   standalone day files and writes structured review output into `DREAMS.md`.
 
@@ -259,7 +261,7 @@ means:
 
 - `DREAMS.md` stays the human review surface.
 - the short-term store stays the machine-facing ranking surface.
-- `MEMORY.md` is still only written by deep promotion.
+- Deep promotion is still the only path that updates the compact `MEMORY.md` pointer; detailed promoted excerpts land under `memory/archived/YYYY-Q#/`.
 
 If you decide the replay was not useful, you can remove the staged artifacts
 without touching ordinary diary entries or normal recall state:

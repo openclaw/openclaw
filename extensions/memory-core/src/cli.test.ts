@@ -350,6 +350,14 @@ describe("memory cli", () => {
     return captureHelpOutput(memoryCommand);
   }
 
+  function getMemorySubcommandHelpText(name: string) {
+    const program = new Command();
+    registerMemoryCli(program);
+    const memoryCommand = program.commands.find((command) => command.name() === "memory");
+    const subcommand = memoryCommand?.commands.find((command) => command.name() === name);
+    return captureHelpOutput(subcommand);
+  }
+
   async function withQmdIndexDb(content: string, run: (dbPath: string) => Promise<void>) {
     const dbPath = path.join(qmdFixtureRoot, `case-${qmdCaseId++}.sqlite`);
     await fs.writeFile(dbPath, content, "utf-8");
@@ -544,13 +552,27 @@ describe("memory cli", () => {
     expect(helpText).toContain('openclaw memory search --query "deployment" --max-results 20');
     expect(helpText).toContain("Limit results for focused troubleshooting.");
     expect(helpText).toContain("openclaw memory promote --apply");
-    expect(helpText).toContain("Append top-ranked short-term candidates into MEMORY.md.");
+    expect(helpText).toContain(
+      "Archive top-ranked short-term candidates while keeping MEMORY.md compact.",
+    );
     expect(helpText).toContain('openclaw memory promote-explain "router vlan"');
     expect(helpText).toContain("Explain why a specific candidate would or would not promote.");
     expect(helpText).toContain("openclaw memory rem-harness --json");
     expect(helpText).toContain(
       "Preview REM reflections, candidate truths, and deep promotion output.",
     );
+  });
+
+  it("documents archive-first promote subcommand help", () => {
+    const helpText = getMemorySubcommandHelpText("promote");
+
+    expect(helpText).toContain(
+      "Rank short-term recalls and optionally archive top entries outside compact",
+    );
+    expect(helpText).toContain("MEMORY.md");
+    expect(helpText).toContain("--apply");
+    expect(helpText).toContain("Archive selected candidates and keep MEMORY.md");
+    expect(helpText).toContain("compact (default: false)");
   });
 
   it("prints vector error when unavailable", async () => {
@@ -1903,7 +1925,7 @@ describe("memory cli", () => {
     });
   });
 
-  it("applies top promote candidates into MEMORY.md", async () => {
+  it("archives top promote candidates while keeping MEMORY.md compact", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
         "line 1",
@@ -1956,10 +1978,20 @@ describe("memory cli", () => {
 
       const memoryPath = path.join(workspaceDir, "MEMORY.md");
       const memoryText = await fs.readFile(memoryPath, "utf-8");
+      const archiveRoot = path.join(workspaceDir, "memory", "archived");
+      const now = new Date();
+      const quarterDir = path.join(
+        archiveRoot,
+        `${now.getFullYear()}-Q${Math.floor(now.getMonth() / 3) + 1}`,
+      );
+      const archiveFiles = await fs.readdir(quarterDir);
+      const archiveText = await fs.readFile(path.join(quarterDir, archiveFiles[0]), "utf-8");
       expect(memoryText).toContain("Promoted From Short-Term Memory");
-      expect(memoryText).toContain("openclaw-memory-promotion:");
-      expect(memoryText).toContain("memory/2026-04-01.md:10-10");
-      expectLogged(log, `Processed 1 candidate(s) for ${memoryPath}.`);
+      expect(memoryText).toContain("Latest promotion archive:");
+      expect(memoryText).not.toContain("openclaw-memory-promotion:");
+      expect(archiveText).toContain("openclaw-memory-promotion:");
+      expect(archiveText).toContain("memory/2026-04-01.md:10-10");
+      expectLogged(log, "Archived 1 candidate(s) to");
       expectLogged(log, "appended=1 reconciledExisting=0");
       expect(close).toHaveBeenCalled();
     });

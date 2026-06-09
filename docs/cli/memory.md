@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw memory` (status/index/search/promote/promo
 read_when:
   - You want to index or search semantic memory
   - You're debugging memory availability or indexing
-  - You want to promote recalled short-term memory into `MEMORY.md`
+  - You want to promote recalled short-term memory into an archive while keeping `MEMORY.md` compact
 title: "Memory"
 ---
 
@@ -82,7 +82,7 @@ Preview and apply short-term memory promotions.
 openclaw memory promote [--apply] [--limit <n>] [--include-promoted]
 ```
 
-- `--apply` -- write promotions to `MEMORY.md` (default: preview only).
+- `--apply` -- write detailed promotions to `memory/archived/YYYY-Q#/memory-promoted-short-term-dump-YYYY-MM-DD.md` and keep a compact pointer in `MEMORY.md` (default: preview only).
 - `--limit <n>` -- cap the number of candidates shown.
 - `--include-promoted` -- include entries already promoted in previous cycles.
 
@@ -96,9 +96,13 @@ Full options:
 - `--min-score <n>`: minimum weighted promotion score.
 - `--min-recall-count <n>`: minimum recall count required for a candidate.
 - `--min-unique-queries <n>`: minimum distinct query count required for a candidate.
-- `--apply`: append selected candidates into `MEMORY.md` and mark them promoted.
+- `--apply`: archive selected candidates under `memory/archived/YYYY-Q#/memory-promoted-short-term-dump-YYYY-MM-DD.md`, update the compact `MEMORY.md` pointer, and mark them promoted.
 - `--include-promoted`: include already promoted candidates in output.
 - `--json`: print JSON output.
+
+Archive/version-control note:
+
+- Promotion archive files are durable memory history and may contain the full promoted snippets. If you version-control your OpenClaw workspace, decide deliberately whether that history belongs in the repository. For private or large local-only archives, add a workspace `.gitignore` rule such as `memory/archived/` (or the narrower `memory/archived/*/memory-promoted-short-term-dump-*.md`). Keep `MEMORY.md` versioned if you rely on its compact pointer/history for workspace bootstrap.
 
 `memory promote-explain`:
 
@@ -128,16 +132,17 @@ openclaw memory rem-harness [--agent <id>] [--include-promoted] [--json]
 ## Dreaming
 
 Dreaming is the background memory consolidation system with three cooperative
-phases: **light** (sort/stage short-term material), **deep** (promote durable
-facts into `MEMORY.md`), and **REM** (reflect and surface themes).
+phases: **light** (sort/stage short-term material), **deep** (archive durable
+short-term excerpts and update the `MEMORY.md` pointer), and **REM** (reflect
+and surface themes).
 
 - Enable with `plugins.entries.memory-core.config.dreaming.enabled: true`.
 - Toggle from chat with `/dreaming on|off` (or inspect with `/dreaming status`).
 - Dreaming runs on one managed sweep schedule (`dreaming.frequency`) and executes phases in order: light, REM, deep.
-- Only the deep phase writes durable memory to `MEMORY.md`.
+- Only the deep phase writes durable memory updates: detailed short-term promotion excerpts go under `memory/archived/YYYY-Q#/`, while `MEMORY.md` keeps a compact latest-archive pointer.
 - Human-readable phase output and diary entries are written to `DREAMS.md` (or existing `dreams.md`), with optional per-phase reports in `memory/dreaming/<phase>/YYYY-MM-DD.md`.
 - Ranking uses weighted signals: recall frequency, retrieval relevance, query diversity, temporal recency, cross-day consolidation, and derived concept richness.
-- Promotion re-reads the live daily note before writing to `MEMORY.md`, so edited or deleted short-term snippets do not get promoted from stale recall-store snapshots.
+- Promotion re-reads the live daily note before archiving a short-term excerpt, so edited or deleted snippets do not get promoted from stale recall-store snapshots.
 - Scheduled and manual `memory promote` runs share the same deep phase defaults unless you pass CLI threshold overrides.
 - Automatic runs fan out across configured memory workspaces.
 

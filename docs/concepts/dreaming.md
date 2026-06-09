@@ -21,17 +21,17 @@ Dreaming keeps two kinds of output:
 - **Machine state** in `memory/.dreams/` (recall store, phase signals, ingestion checkpoints, locks).
 - **Human-readable output** in `DREAMS.md` (or existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
 
-Long-term promotion still writes only to `MEMORY.md`.
+Long-term promotion archives detailed short-term excerpts under `memory/archived/YYYY-Q#/` and updates `MEMORY.md` with a compact latest-archive pointer.
 
 ## Phase model
 
 Dreaming uses three cooperative phases:
 
-| Phase | Purpose                                   | Durable write     |
-| ----- | ----------------------------------------- | ----------------- |
-| Light | Sort and stage recent short-term material | No                |
-| Deep  | Score and promote durable candidates      | Yes (`MEMORY.md`) |
-| REM   | Reflect on themes and recurring ideas     | No                |
+| Phase | Purpose                                   | Durable write                       |
+| ----- | ----------------------------------------- | ----------------------------------- |
+| Light | Sort and stage recent short-term material | No                                  |
+| Deep  | Score and promote durable candidates      | Yes (archive + `MEMORY.md` pointer) |
+| REM   | Reflect on themes and recurring ideas     | No                                  |
 
 These phases are internal implementation details, not separate user-configured "modes."
 
@@ -51,7 +51,7 @@ These phases are internal implementation details, not separate user-configured "
     - Ranks candidates using weighted scoring and threshold gates.
     - Requires `minScore`, `minRecallCount`, and `minUniqueQueries` to pass.
     - Rehydrates snippets from live daily files before writing, so stale/deleted snippets are skipped.
-    - Appends promoted entries to `MEMORY.md`.
+    - Archives detailed promoted excerpts under `memory/archived/YYYY-Q#/` and updates the compact latest-archive pointer in `MEMORY.md`.
     - Writes a `## Deep Sleep` summary into `DREAMS.md` and optionally writes `memory/dreaming/deep/YYYY-MM-DD.md`.
 
   </Accordion>
@@ -75,7 +75,7 @@ Dreaming can ingest redacted session transcripts into the dreaming corpus. When 
 Dreaming also keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has enough material, `memory-core` runs a best-effort background subagent turn and appends a short diary entry. It uses the default runtime model unless `dreaming.model` is configured. If the configured model is unavailable, Dream Diary retries once with the session default model.
 
 <Note>
-This diary is for human reading in the Dreams UI, not a promotion source. Dreaming-generated diary/report artifacts are excluded from short-term promotion. Only grounded memory snippets are eligible to promote into `MEMORY.md`.
+This diary is for human reading in the Dreams UI, not a promotion source. Dreaming-generated diary/report artifacts are excluded from short-term promotion. Only grounded memory snippets are eligible for archive-backed deep promotion.
 </Note>
 
 There is also a grounded historical backfill lane for review and recovery work:
