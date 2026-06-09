@@ -94,7 +94,9 @@ export function registerGroupAllwaysCommand(registry: SlashCommandRegistry): voi
         const accountId = ctx.accountId;
         const isNamedAccount =
           accountId !== "default" &&
-          !!(qqbot.accounts as Record<string, Record<string, unknown>> | undefined)?.[accountId];
+          Boolean(
+            (qqbot.accounts as Record<string, Record<string, unknown>> | undefined)?.[accountId],
+          );
 
         if (isNamedAccount) {
           // 命名账户：更新 accounts.{accountId}.defaultRequireMention

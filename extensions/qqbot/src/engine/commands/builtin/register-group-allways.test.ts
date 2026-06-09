@@ -1,17 +1,17 @@
 // Qqbot tests cover group-allways command plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { QueuedMessage } from "../gateway/message-queue.js";
-import type { GatewayAccount } from "../gateway/types.js";
-import { sendText } from "../messaging/sender.js";
-import { trySlashCommand } from "./slash-command-handler.js";
-import { getWrittenQQBotConfig, installCommandRuntime } from "./slash-command-test-support.js";
+import type { QueuedMessage } from "../../gateway/message-queue.js";
+import type { GatewayAccount } from "../../gateway/types.js";
+import { sendText } from "../../messaging/sender.js";
+import { trySlashCommand } from "../slash-command-handler.js";
+import { installCommandRuntime } from "../slash-command-test-support.js";
 
-vi.mock("../messaging/outbound.js", () => ({
+vi.mock("../../messaging/outbound.js", () => ({
   sendDocument: vi.fn(async () => undefined),
 }));
 
-vi.mock("../messaging/sender.js", () => ({
+vi.mock("../../messaging/sender.js", () => ({
   accountToCreds: vi.fn(() => ({ appId: "app", clientSecret: "" })),
   buildDeliveryTarget: vi.fn(() => ({ targetType: "c2c", targetId: "TRUSTED_OPENID" })),
   sendText: vi.fn(async () => undefined),
