@@ -234,7 +234,9 @@ type ChatSendServerTimingPhase =
   | "model-selected"
   | "agent-run-started"
   | "dispatch-completed"
-  | "post-dispatch-completed";
+  | "post-dispatch-completed"
+  | "first-output"
+  | "completed";
 
 function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
@@ -3353,6 +3355,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         agentId: selectedAgent.agentId,
         clientRunId,
       });
+      context.chatSendReceivedAt.set(clientRunId, chatSendReceivedAtMs);
       const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
         ? {
             receivedToAckMs: roundedChatSendTimingMs(performance.now() - chatSendReceivedAtMs),

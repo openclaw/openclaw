@@ -63,6 +63,24 @@ export function startGatewayEventSubscriptions(params: {
           const entry = params.chatAbortControllers.get(runId);
           return entry !== undefined && entry.kind !== "agent";
         },
+        emitServerTiming: ({ clientRunId, sessionKey, agentId, phase, extra }) => {
+          const receivedAtMs = params.chatRunState.chatSendReceivedAt.get(clientRunId);
+          if (receivedAtMs === undefined) {
+            return;
+          }
+          const nowMs = performance.now();
+          const roundedMs = (v: number) => Math.max(0, Math.round(v * 1000) / 1000);
+          const payload = {
+            phase,
+            runId: clientRunId,
+            sessionKey,
+            ...(agentId ? { agentId } : {}),
+            ackToPhaseMs: roundedMs(nowMs - receivedAtMs),
+            receivedToPhaseMs: roundedMs(nowMs - receivedAtMs),
+            ...extra,
+          };
+          params.broadcast("chat.send_timing", payload, { dropIfSlow: true });
+        },
       }),
     );
     return agentEventHandlerPromise;

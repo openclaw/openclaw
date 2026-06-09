@@ -671,6 +671,8 @@ function createChatContext(): Pick<
   | "agentDeltaSentAt"
   | "bufferedAgentEvents"
   | "chatAbortedRuns"
+  | "chatSendReceivedAt"
+  | "firstOutputEmitted"
   | "clearChatRunState"
   | "addChatRun"
   | "removeChatRun"
@@ -694,6 +696,8 @@ function createChatContext(): Pick<
     agentDeltaSentAt: new Map(),
     bufferedAgentEvents: new Map(),
     chatAbortedRuns: new Map(),
+    chatSendReceivedAt: new Map(),
+    firstOutputEmitted: new Map(),
     clearChatRunState: vi.fn(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),

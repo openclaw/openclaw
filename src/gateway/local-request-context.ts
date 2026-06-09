@@ -59,6 +59,8 @@ export function createLocalGatewayRequestContext(
   const chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"] = new Map();
   const agentDeltaSentAt: GatewayRequestContext["agentDeltaSentAt"] = new Map();
   const bufferedAgentEvents: GatewayRequestContext["bufferedAgentEvents"] = new Map();
+  const chatSendReceivedAt: GatewayRequestContext["chatSendReceivedAt"] = new Map();
+  const firstOutputEmitted: GatewayRequestContext["firstOutputEmitted"] = new Map();
   // Clear every per-run buffer variant together; streamed assistant/thinking
   // deltas share the client run id prefix but are tracked under separate keys.
   const clearChatRunState = (runId: string) => {
@@ -66,6 +68,8 @@ export function createLocalGatewayRequestContext(
     chatDeltaSentAt.delete(runId);
     chatDeltaLastBroadcastLen.delete(runId);
     chatDeltaLastBroadcastText.delete(runId);
+    chatSendReceivedAt.delete(runId);
+    firstOutputEmitted.delete(runId);
     for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
       agentDeltaSentAt.delete(key);
       bufferedAgentEvents.delete(key);
@@ -103,6 +107,8 @@ export function createLocalGatewayRequestContext(
     chatDeltaLastBroadcastText,
     agentDeltaSentAt,
     bufferedAgentEvents,
+    chatSendReceivedAt,
+    firstOutputEmitted,
     clearChatRunState,
     addChatRun: (sessionId, entry) => {
       chatRuns.set(sessionId, entry);

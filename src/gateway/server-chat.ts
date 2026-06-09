@@ -255,6 +255,13 @@ export type AgentEventHandlerOptions = {
     clientRunId: string;
     sessionKey: string;
   }) => void;
+  emitServerTiming?: (params: {
+    clientRunId: string;
+    sessionKey: string;
+    agentId?: string;
+    phase: string;
+    extra?: Record<string, string | number>;
+  }) => void;
 };
 
 export function createAgentEventHandler({
@@ -272,6 +279,7 @@ export function createAgentEventHandler({
   lifecycleErrorRetryGraceMs = AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS,
   isChatSendRunActive = () => false,
   clearTrackedActiveRun,
+  emitServerTiming,
 }: AgentEventHandlerOptions) {
   type TerminalLifecycleOptions = { skipChatErrorFinal?: boolean };
   type PendingTerminalLifecycleError = {
@@ -616,6 +624,25 @@ export function createAgentEventHandler({
     chatRunState.deltaSentAt.set(clientRunId, now);
     chatRunState.deltaLastBroadcastLen.set(clientRunId, mergedText.length);
     chatRunState.deltaLastBroadcastText.set(clientRunId, mergedText);
+
+    // Emit first-output latency timing on the very first delta for this run
+    if (!chatRunState.firstOutputEmitted.has(clientRunId)) {
+      chatRunState.firstOutputEmitted.set(clientRunId, true);
+      const receivedAt = chatRunState.chatSendReceivedAt.get(clientRunId);
+      if (receivedAt !== undefined && emitServerTiming) {
+        const firstOutputLatencyMs = Math.max(
+          0,
+          Math.round((performance.now() - receivedAt) * 1000) / 1000,
+        );
+        emitServerTiming({
+          clientRunId,
+          sessionKey,
+          agentId,
+          phase: "first-output",
+          extra: { firstOutputLatencyMs },
+        });
+      }
+    }
     const spawnedBy = resolveSpawnedBy(sessionKey);
     const payload = {
       runId: clientRunId,
@@ -750,6 +777,23 @@ export function createAgentEventHandler({
     // suppressed the most recent chunk, leaving the client with stale text.
     // Only flush if the buffered text differs from the last broadcast to avoid duplicates.
     flushBufferedChatDeltaIfNeeded(sessionKey, opts?.agentId, clientRunId, sourceRunId, seq, opts);
+
+    // Emit total latency timing before clearing run state
+    const receivedAt = chatRunState.chatSendReceivedAt.get(clientRunId);
+    if (receivedAt !== undefined && emitServerTiming) {
+      const totalLatencyMs = Math.max(
+        0,
+        Math.round((performance.now() - receivedAt) * 1000) / 1000,
+      );
+      emitServerTiming({
+        clientRunId,
+        sessionKey,
+        agentId: opts?.agentId,
+        phase: "completed",
+        extra: { totalLatencyMs },
+      });
+    }
+
     chatRunState.clearRun(clientRunId);
     const spawnedBy = resolveSpawnedBy(sessionKey);
     if (jobState === "done") {

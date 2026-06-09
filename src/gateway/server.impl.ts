@@ -1415,6 +1415,8 @@ export async function startGatewayServer(
           chatDeltaLastBroadcastText: chatRunState.deltaLastBroadcastText,
           agentDeltaSentAt: chatRunState.agentDeltaSentAt,
           bufferedAgentEvents: chatRunState.bufferedAgentEvents,
+          chatSendReceivedAt: chatRunState.chatSendReceivedAt,
+          firstOutputEmitted: chatRunState.firstOutputEmitted,
           clearChatRunState: chatRunState.clearRun,
           addChatRun,
           removeChatRun,
