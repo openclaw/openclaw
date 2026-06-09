@@ -1372,19 +1372,22 @@ describe("sessions tools", () => {
     expect(details.error).toContain("No session found with label");
     expect(callGatewayMock).toHaveBeenCalledTimes(3);
     expect(
-      (callGatewayMock.mock.calls[0]?.[0] as { params?: Record<string, unknown> }).params,
+      (callGatewayMock.mock.calls[0]?.[0] as { params?: Record<string, unknown> } | undefined)
+        ?.params,
     ).toEqual({
       label: "refactor",
       hubDelegatedOwner: requesterKey,
     });
     expect(
-      (callGatewayMock.mock.calls[1]?.[0] as { params?: Record<string, unknown> }).params,
+      (callGatewayMock.mock.calls[1]?.[0] as { params?: Record<string, unknown> } | undefined)
+        ?.params,
     ).toEqual({
       label: "refactor",
       spawnedBy: requesterKey,
     });
     expect(
-      (callGatewayMock.mock.calls[2]?.[0] as { params?: Record<string, unknown> }).params,
+      (callGatewayMock.mock.calls[2]?.[0] as { params?: Record<string, unknown> } | undefined)
+        ?.params,
     ).toEqual({
       label: "refactor",
     });
