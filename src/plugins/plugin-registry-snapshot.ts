@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
+import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
@@ -328,9 +329,12 @@ function hasMismatchedPersistedBundledPluginRoot(
   if (!bundledPluginsDir) {
     return false;
   }
+  const legacyRoot = buildLegacyBundledRootPath(bundledPluginsDir);
   return index.plugins.some(
     (plugin) =>
-      plugin.origin === "bundled" && !isPathInsideOrEqual(plugin.rootDir, bundledPluginsDir),
+      plugin.origin === "bundled" &&
+      !isPathInsideOrEqual(plugin.rootDir, bundledPluginsDir) &&
+      (!legacyRoot || !isPathInsideOrEqual(plugin.rootDir, legacyRoot)),
   );
 }
 
