@@ -530,7 +530,7 @@ async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promi
   });
 }
 
-async function updateDreamsFile<T>(params: {
+export async function updateDreamsFile<T>(params: {
   workspaceDir: string;
   updater: (
     existing: string,

@@ -11,6 +11,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { updateDreamsFile } from "./dreaming-narrative.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
@@ -130,21 +131,68 @@ export async function writeDeepDreamingReport(params: {
   timezone?: string;
   storage: MemoryDreamingStorageConfig;
 }): Promise<string | undefined> {
-  if (!shouldWriteSeparate(params.storage)) {
-    return undefined;
-  }
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
-  const reportPath = resolveSeparateReportPath(params.workspaceDir, "deep", nowMs, params.timezone);
-  await fs.mkdir(path.dirname(reportPath), { recursive: true });
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
-  await fs.writeFile(reportPath, `# Deep Sleep\n\n${body}\n`, "utf-8");
+  const deepSection = `## Deep Sleep\n\n${body}\n`;
+
+  // Route the ## Deep Sleep section through the shared Dreams file
+  // infrastructure so the summary benefits from the existing resolver
+  // (lowercase dreams.md → DREAMS.md), file lock, atomic write, and
+  // symlink / non-file guard.  The section sits outside the diary
+  // markers so it stays separate from narrative diary entries.
+  await updateDreamsFile({
+    workspaceDir: params.workspaceDir,
+    updater: (existing) => {
+      // Allow ## Deep Sleep to appear anywhere, including at file start.
+      const deepHeading = "## Deep Sleep\n";
+      const deepMarker = "\n" + deepHeading;
+      let deepIndex = existing.indexOf(deepMarker);
+      if (deepIndex < 0 && existing.startsWith(deepHeading)) {
+        deepIndex = 0;
+      }
+      let updated: string;
+      if (deepIndex >= 0) {
+        // Replace the existing ## Deep Sleep section.
+        const markerLen = deepIndex === 0 ? deepHeading.length : deepMarker.length;
+        const before = existing.slice(0, deepIndex);
+        const afterMarker = existing.slice(deepIndex + markerLen);
+        const nextHeader = afterMarker.search(/\n## /);
+        const after =
+          nextHeader >= 0 ? afterMarker.slice(nextHeader) : "";
+        updated = before + deepSection + after;
+      } else {
+        // Append the ## Deep Sleep section at the end.
+        updated = existing.endsWith("\n") ? existing + deepSection : existing + "\n" + deepSection;
+      }
+      return { content: updated, result: undefined };
+    },
+  });
+
+  // Optionally write the separate deep report file when storage mode
+  // requests it (mirrors the inline DREAMS.md section above).
+  if (shouldWriteSeparate(params.storage)) {
+    const reportPath = resolveSeparateReportPath(
+      params.workspaceDir, "deep", nowMs, params.timezone,
+    );
+    await fs.mkdir(path.dirname(reportPath), { recursive: true });
+    await fs.writeFile(reportPath, `# Deep Sleep\n\n${body}\n`, "utf-8");
+    await appendMemoryHostEvent(params.workspaceDir, {
+      type: "memory.dream.completed",
+      timestamp: resolveMemoryCoreTimestamp(nowMs),
+      phase: "deep",
+      reportPath,
+      lineCount: params.bodyLines.length,
+      storageMode: params.storage.mode,
+    });
+    return reportPath;
+  }
+
   await appendMemoryHostEvent(params.workspaceDir, {
     type: "memory.dream.completed",
     timestamp: resolveMemoryCoreTimestamp(nowMs),
     phase: "deep",
-    reportPath,
     lineCount: params.bodyLines.length,
     storageMode: params.storage.mode,
   });
-  return reportPath;
+  return undefined;
 }
