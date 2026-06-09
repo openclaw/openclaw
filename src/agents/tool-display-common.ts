@@ -409,6 +409,16 @@ function normalizeToolSearchDisplayToolName(toolName: string | undefined): strin
   return normalizeOptionalString(catalogIdMatch?.[1]) ?? value;
 }
 
+function isMalformedCompoundToolName(toolName: string | undefined): boolean {
+  const value = normalizeOptionalString(toolName);
+  if (!value) {
+    return false;
+  }
+  // Reject stitched snake_case tool names like apply_patch.list_mcp_resources.
+  // Real dotted OpenClaw tools such as config.apply should still pass through.
+  return /^[a-z0-9]+(?:_[a-z0-9]+)+(?:\.[a-z0-9]+(?:_[a-z0-9]+)+)+$/i.test(value);
+}
+
 function collectToolSearchDescribeBindings(code: string): Map<string, string> {
   const bindings = new Map<string, string>();
   const bindingPattern =
@@ -595,7 +605,7 @@ export function resolveToolSearchCodeDisplayTarget(
   const call = parseToolSearchCall(code);
   if (call) {
     const toolName = resolveToolSearchCallTarget(code, call.target);
-    if (!toolName) {
+    if (!toolName || isMalformedCompoundToolName(toolName)) {
       return { toolName: "tool_search_code", detail: "call selected tool", bridgeVerb: "call" };
     }
     return {

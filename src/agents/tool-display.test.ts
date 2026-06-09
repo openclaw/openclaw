@@ -49,6 +49,32 @@ describe("tool display details", () => {
     });
   });
 
+  it("does not project malformed compound tool names from bridge code", () => {
+    expect(
+      resolveToolSearchCodeDisplayTarget({
+        code: 'return await openclaw.tools.call("apply_patch.list_mcp_resources", { path: "x" });',
+      }),
+    ).toEqual({
+      toolName: "tool_search_code",
+      detail: "call selected tool",
+      bridgeVerb: "call",
+    });
+  });
+
+  it("keeps legitimate dotted tool names when they are real tool ids", () => {
+    expect(
+      resolveToolSearchCodeDisplayTarget({
+        code: 'return await openclaw.tools.call("config.apply", { path: "/tmp/openclaw.json" });',
+      }),
+    ).toEqual({
+      toolName: "config.apply",
+      displayToolName: "config.apply",
+      displayArgs: { path: "/tmp/openclaw.json" },
+      detail: undefined,
+      bridgeVerb: "call",
+    });
+  });
+
   it("skips zero/false values for optional detail fields", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
