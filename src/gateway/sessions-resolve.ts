@@ -206,7 +206,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
         ),
       };
     }
-    const selectedEntry = matches.find(([key]) => key === selection.sessionKey)?.[1];
+    const selectedEntry = matches.find(([matchKey]) => matchKey === selection.sessionKey)?.[1];
     const agentCheckSessionId = validateSessionAgentExists(
       cfg,
       selection.sessionKey,
