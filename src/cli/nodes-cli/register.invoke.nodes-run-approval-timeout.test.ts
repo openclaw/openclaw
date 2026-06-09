@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals.js";
 import { parseTimeoutMs } from "../nodes-run.js";
+import { buildNodesRunApprovalUnavailableMessage } from "./register.invoke.messages.js";
 
 /**
  * Regression test for #12098:
@@ -111,5 +112,13 @@ describe("nodes run: approval transport timeout (#12098)", () => {
 
     const callOpts = callGatewaySpy.mock.calls[0][0];
     expect(callOpts.timeoutMs).toBe(130_000);
+  });
+
+  it("fix: approval-unavailable guidance points to current approval commands", () => {
+    const message = buildNodesRunApprovalUnavailableMessage("node-123");
+
+    expect(message).toContain("openclaw dashboard --no-open");
+    expect(message).toContain("openclaw approvals get --node node-123");
+    expect(message).not.toContain("exec-approvals list");
   });
 });

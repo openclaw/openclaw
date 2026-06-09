@@ -20,6 +20,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { parseEnvPairs, parseTimeoutMs } from "../nodes-run.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { parseNodeList } from "./format.js";
+import { buildNodesRunApprovalUnavailableMessage } from "./register.invoke.messages.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId, unauthorizedHintForMessage } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -237,9 +238,7 @@ async function maybeRequestNodesRunApproval(params: {
       approvedByAsk = true;
       approvalDecision = "allow-once";
     } else if (params.askFallback !== "allowlist") {
-      throw new Error(
-        `exec denied: approval required (approval UI not available; open the Control UI with \`openclaw dashboard --no-open\` or check pending approvals with \`openclaw approvals get --node ${params.nodeId}\`)`,
-      );
+      throw new Error(buildNodesRunApprovalUnavailableMessage(params.nodeId));
     }
   }
   if (decision === "allow-once") {
@@ -277,7 +276,7 @@ function buildSystemRunInvokeParams(params: {
       timeoutMs: params.timeoutMs,
       needsScreenRecording: params.needsScreenRecording,
     },
-    idempotencyKey: String(params.idempotencyKey ?? randomIdempotencyKey()),
+    idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
   };
   if (params.approvalPlan.agentId ?? params.fallbackAgentId) {
     (invokeParams.params as Record<string, unknown>).agentId =
@@ -311,24 +310,24 @@ export function registerNodesInvokeCommands(nodes: Command) {
       .option("--idempotency-key <key>", "Idempotency key (optional)")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("invoke", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const command = String(opts.command ?? "").trim();
+          const nodeId = await resolveNodeId(opts, opts.node ?? "");
+          const command = opts.command.trim();
           if (!nodeId || !command) {
             const { error } = getNodesTheme();
             defaultRuntime.error(error("--node and --command required"));
             defaultRuntime.exit(1);
             return;
           }
-          const params = JSON.parse(String(opts.params ?? "{}")) as unknown;
+          const params = JSON.parse(opts.params) as unknown;
           const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
+            ? Number.parseInt(opts.invokeTimeout, 10)
             : undefined;
 
           const invokeParams: Record<string, unknown> = {
             nodeId,
             command,
             params,
-            idempotencyKey: String(opts.idempotencyKey ?? randomIdempotencyKey()),
+            idempotencyKey: opts.idempotencyKey ?? randomIdempotencyKey(),
           };
           if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
             invokeParams.timeoutMs = timeoutMs;
@@ -350,7 +349,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
       .option(
         "--env <key=val>",
         "Environment override (repeatable)",
-        (value: string, prev: string[] = []) => [...prev, value],
+        (value: string, prev: string[] | undefined) => [...(prev ?? []), value],
       )
       .option("--raw <command>", "Run a raw shell command string (sh -lc / cmd.exe /c)")
       .option("--agent <id>", "Agent id (default: configured default agent)")
@@ -373,7 +372,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
             throw new Error("command required");
           }
 
-          const nodeQuery = String(opts.node ?? "").trim() || execDefaults?.node?.trim() || "";
+          const nodeQuery = opts.node?.trim() || execDefaults?.node?.trim() || "";
           if (!nodeQuery) {
             throw new Error("node required (set --node or tools.exec.node)");
           }
