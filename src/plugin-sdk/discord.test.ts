@@ -181,7 +181,7 @@ describe("discord plugin-sdk facade", () => {
   });
 
   it("types Discord component edit options and normalized result", () => {
-    type IsCfgOptional = {} extends Pick<DiscordComponentSendOpts, "cfg"> ? true : false;
+    type IsCfgOptional = object extends Pick<DiscordComponentSendOpts, "cfg"> ? true : false;
 
     expectTypeOf<IsCfgOptional>().toEqualTypeOf<false>();
     expectTypeOf<DiscordComponentSendOpts["cfg"]>().toEqualTypeOf<OpenClawConfig>();
