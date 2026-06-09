@@ -411,6 +411,52 @@ describe("Codex app-server config", () => {
         },
       }),
     ).toBe(false);
+    for (const openAIProvider of [
+      {
+        baseUrl: "https://api.openai.com/v1",
+        request: { proxy: { mode: "explicit-proxy" as const, url: "http://localhost:8080" } },
+        models: [],
+      },
+      {
+        baseUrl: "https://api.openai.com/v1",
+        headers: { "x-openclaw-reviewer-proxy": "local" },
+        models: [],
+      },
+      {
+        baseUrl: "https://api.openai.com/v1",
+        authHeader: false,
+        models: [],
+      },
+      {
+        baseUrl: "https://api.openai.com/v1",
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "GPT with custom headers",
+            reasoning: true,
+            input: ["text" as const],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128_000,
+            maxTokens: 8_192,
+            headers: { "x-openclaw-reviewer-proxy": "local" },
+          },
+        ],
+      },
+    ]) {
+      expect(
+        canUseCodexModelBackedApprovalsReviewerForModel({
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          config: {
+            models: {
+              providers: {
+                openai: openAIProvider,
+              },
+            },
+          },
+        }),
+      ).toBe(false);
+    }
     expect(
       canUseCodexModelBackedApprovalsReviewerForModel({
         modelProvider: "openai",

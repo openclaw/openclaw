@@ -1350,10 +1350,13 @@ function configuredOpenAIProviderIsTrustedForModelBackedReview(
   openAIProvider: Record<string, unknown>,
   modelInput: string | undefined,
 ): boolean {
-  if (readRecord(openAIProvider.localService)) {
-    return false;
-  }
-  if (!isNativeOpenAIBaseUrl(openAIProvider.baseUrl)) {
+  if (
+    readRecord(openAIProvider.localService) ||
+    hasNonEmptyRecord(openAIProvider.headers) ||
+    hasNonEmptyRecord(openAIProvider.request) ||
+    typeof openAIProvider.authHeader === "boolean" ||
+    !isNativeOpenAIBaseUrl(openAIProvider.baseUrl)
+  ) {
     return false;
   }
   const models = openAIProvider.models;
@@ -1369,7 +1372,11 @@ function configuredOpenAIProviderIsTrustedForModelBackedReview(
     if (typeof model?.id !== "string" || !matchesConfiguredOpenAIModelId(modelId, model.id)) {
       continue;
     }
-    if (!isNativeOpenAIBaseUrl(model.baseUrl)) {
+    if (
+      hasNonEmptyRecord(model.headers) ||
+      hasNonEmptyRecord(model.request) ||
+      !isNativeOpenAIBaseUrl(model.baseUrl)
+    ) {
       return false;
     }
   }
@@ -1388,6 +1395,11 @@ function normalizeOpenAIModelBackedReviewerModelId(modelInput: string | undefine
 function matchesConfiguredOpenAIModelId(modelId: string, configuredModelId: string): boolean {
   const configured = normalizeOpenAIModelBackedReviewerModelId(configuredModelId);
   return Boolean(configured) && (modelId === configured || modelId.startsWith(`${configured}@`));
+}
+
+function hasNonEmptyRecord(value: unknown): boolean {
+  const record = readRecord(value);
+  return record !== undefined && Object.keys(record).length > 0;
 }
 
 function isNativeOpenAIBaseUrl(value: unknown): boolean {
