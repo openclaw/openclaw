@@ -129,15 +129,17 @@ describe("run-opengrep.sh", () => {
     git(repo, "config", "user.name", "Test User");
 
     copyRunOpengrepFiles(repo);
-    writeFile(path.join(repo, ".semgrepignore"), "*.test.*\n");
+    writeFile(path.join(repo, ".semgrepignore"), "*.test.*\nextensions/qa-*/\n");
     writeFile(path.join(repo, "security/opengrep/precise.yml"), "rules: []\n");
     writeFile(path.join(repo, "src/prod.ts"), "export const prod = 1;\n");
     writeFile(path.join(repo, "src/prod.test.ts"), "export const test = 1;\n");
+    writeFile(path.join(repo, "extensions/qa-demo/src/index.ts"), "export const qa = 1;\n");
     git(repo, "add", ".");
     git(repo, "commit", "-qm", "base");
 
     writeFile(path.join(repo, "src/prod.ts"), "export const prod = 2;\n");
     writeFile(path.join(repo, "src/prod.test.ts"), "export const test = 2;\n");
+    writeFile(path.join(repo, "extensions/qa-demo/src/index.ts"), "export const qa = 2;\n");
 
     const argsPath = path.join(repo, "opengrep-args.txt");
     const binDir = path.join(repo, "bin");
@@ -166,5 +168,6 @@ describe("run-opengrep.sh", () => {
     const args = fs.readFileSync(argsPath, "utf8");
     expect(args).toContain("src/prod.ts");
     expect(args).not.toContain("src/prod.test.ts");
+    expect(args).not.toContain("extensions/qa-demo/src/index.ts");
   });
 });
