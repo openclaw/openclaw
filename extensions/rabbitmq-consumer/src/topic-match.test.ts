@@ -44,4 +44,27 @@ describe("pickTopicByName", () => {
   it("returns null for an empty requirement", () => {
     expect(pickTopicByName("", topics)).toBeNull();
   });
+
+  // Regression: "深圳农行的舆情日报" used to match "涉深舆情-网络动态参阅" because
+  // the shared generic word "舆情" scored 2 and the longer noise title won the
+  // tie-break, overriding the real 农行 topic.
+  it("does not match a noise topic on shared generic words (舆情/日报)", () => {
+    const candidates = [t(358, "涉深舆情-网络动态参阅"), t(89, "农业银行深圳市分行")];
+    const match = pickTopicByName("帮我出一个深圳农行的舆情日报", candidates);
+    expect(match?.topicId).toBe(89);
+    expect(match?.topicId).not.toBe(358);
+  });
+
+  it("returns null (keep primary) when only generic words overlap", () => {
+    // After stripping 舆情/网络/动态/参阅 the noise title is just "涉深"; the
+    // request shares only the single char "深", below the 2-char threshold.
+    expect(
+      pickTopicByName("本月舆情网络动态参阅日报", [t(358, "涉深舆情-网络动态参阅")]),
+    ).toBeNull();
+  });
+
+  it("still matches a real entity even when wrapped in generic words", () => {
+    const candidates = [t(358, "涉深舆情-网络动态参阅"), t(204, "南方基金")];
+    expect(pickTopicByName("帮我生成南方基金的舆情日报", candidates)?.topicId).toBe(204);
+  });
 });
