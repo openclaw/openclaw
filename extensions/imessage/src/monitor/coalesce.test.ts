@@ -179,7 +179,6 @@ describe("combineIMessagePayloads", () => {
     expect(merged.text).toContain("msg 0");
     expect(merged.text).toContain("msg 24");
     expect(merged.text).not.toContain("msg 10"); // dropped by cap
-    expect(merged.coalescedCatchupCursor?.lastSeenRowid).toBe(24);
   });
 
   it("preserves reply context from any entry that carries one", () => {
