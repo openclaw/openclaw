@@ -1,8 +1,12 @@
 version: 1
 id: stable-lts-initial
 title: Initial Stable/LTS QA maturity evidence map
-sourceRef: taxonomy.yaml
-taxonomyRef: taxonomy.yaml
+taxonomy:
+  sourcePath: taxonomy.yaml
+  version: 1
+  processVersion: 3
+  snapshotDate: "2026-05-26"
+  sourceRef: origin/main@41eef4a7965
 scoreSnapshotRef: docs/maturity-scores.yaml
 status: initial
 mappingAuthority: scaffold
