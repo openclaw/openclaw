@@ -12,6 +12,10 @@ import {
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
+import {
+  clearMemoryPluginState,
+  registerMemoryCapability,
+} from "openclaw/plugin-sdk/memory-host-core";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -107,6 +111,23 @@ function expectResumeRequest(
   for (const [key, value] of Object.entries(params)) {
     expect(requestParams?.[key]).toEqual(value);
   }
+}
+
+function registerTestMemoryRecallPrompt(): void {
+  clearMemoryPluginState();
+  registerMemoryCapability("test-memory-core", {
+    promptBuilder: ({ availableTools }) => {
+      const hasMemorySearch = availableTools.has("memory_search");
+      const hasMemoryGet = availableTools.has("memory_get");
+      if (!hasMemorySearch && !hasMemoryGet) {
+        return [];
+      }
+      const guidance = hasMemorySearch
+        ? "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search before answering."
+        : "Before answering anything about prior work, decisions, dates, people, preferences, or todos that already point to a specific memory file or note: run memory_get before answering.";
+      return ["## Memory Recall", guidance, ""];
+    },
+  });
 }
 
 async function writeExistingBinding(
@@ -2203,6 +2224,7 @@ describe("runCodexAppServerAttempt", () => {
     await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), toolGuidance);
     await fs.writeFile(path.join(workspaceDir, "USER.md"), userProfile);
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+    registerTestMemoryRecallPrompt();
     testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("memory_search"),
       createRuntimeDynamicTool("memory_get"),
@@ -2240,6 +2262,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(collaborationInstructions).toContain(
       "MEMORY.md exists in the active agent workspace as a memory file, not an instruction file",
     );
+    expect(collaborationInstructions).toContain("Codex Memory Tool Loading");
+    expect(collaborationInstructions).toContain("tool_search");
+    expect(collaborationInstructions).toContain("## Memory Recall");
+    expect(collaborationInstructions).toContain("Before answering anything about prior work");
     expect(collaborationInstructions).toContain("memory_search");
     expect(collaborationInstructions).toContain("memory_get");
     expect(collaborationInstructions).not.toContain(memorySummary);
@@ -2253,6 +2279,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).not.toContain(memorySummary);
     expect(inputText).not.toContain("OpenClaw Workspace Memory");
     expect(inputText).not.toContain("MEMORY.md exists in the active agent workspace");
+    expect(inputText).not.toContain("## Memory Recall");
     expect(inputText).not.toContain("memory_search");
     expect(inputText).not.toContain("memory_get");
     expect(inputText).not.toContain("Codex loads AGENTS.md natively");
@@ -2405,6 +2432,7 @@ describe("runCodexAppServerAttempt", () => {
     const memorySummary = "Memory summary goes here.";
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+    registerTestMemoryRecallPrompt();
     testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("memory_get")]);
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
@@ -2418,6 +2446,9 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).not.toContain("memory_search");
     expect(inputText).not.toContain(memorySummary);
     expect(collaborationInstructions).toContain("OpenClaw Workspace Memory");
+    expect(collaborationInstructions).toContain("Codex Memory Tool Loading");
+    expect(collaborationInstructions).toContain("tool_search");
+    expect(collaborationInstructions).toContain("## Memory Recall");
     expect(collaborationInstructions).toContain("memory_get");
     expect(collaborationInstructions).not.toContain("memory_search");
     expect(collaborationInstructions).not.toContain(memorySummary);
@@ -2430,6 +2461,38 @@ describe("runCodexAppServerAttempt", () => {
       injectedChars: 0,
       truncated: false,
     });
+  });
+
+  it("adds memory recall guidance when only daily memory files exist", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const dailyMemory = "Credit-card signup dates live in daily memory.";
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-05-20.md"), dailyMemory);
+    registerTestMemoryRecallPrompt();
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("memory_search"),
+      createRuntimeDynamicTool("memory_get"),
+    ]);
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setAgentWorkspaceForTest(params, workspaceDir);
+
+    const { collaborationInstructions, inputText, systemPromptReport } =
+      await buildCodexTurnContextForTest(params, workspaceDir);
+
+    expect(collaborationInstructions).toContain("Codex Memory Tool Loading");
+    expect(collaborationInstructions).toContain("tool_search");
+    expect(collaborationInstructions).toContain("## Memory Recall");
+    expect(collaborationInstructions).toContain("Before answering anything about prior work");
+    expect(collaborationInstructions).not.toContain("OpenClaw Workspace Memory");
+    expect(collaborationInstructions).not.toContain(dailyMemory);
+    expect(inputText).not.toContain("## Memory Recall");
+    expect(inputText).not.toContain(dailyMemory);
+    expect(systemPromptReport.injectedWorkspaceFiles).not.toContainEqual(
+      expect.objectContaining({ name: "2026-05-20.md" }),
+    );
   });
 
   it("reports MEMORY.md as truncated when no-tool fallback exceeds the bootstrap budget", async () => {
@@ -2595,6 +2658,7 @@ describe("runCodexAppServerAttempt", () => {
     const memorySummary = "Memory summary goes here.";
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+    registerTestMemoryRecallPrompt();
     testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("memory_search"),
       createRuntimeDynamicTool("memory_get"),
@@ -2604,12 +2668,14 @@ describe("runCodexAppServerAttempt", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
     setAgentWorkspaceForTest(params, path.join(tempDir, "memory-workspace"));
 
-    const { inputText, systemPromptReport } = await buildCodexTurnContextForTest(
-      params,
-      workspaceDir,
-    );
+    const { collaborationInstructions, inputText, systemPromptReport } =
+      await buildCodexTurnContextForTest(params, workspaceDir);
     expect(inputText).not.toContain("OpenClaw Workspace Memory");
     expect(inputText).toContain(memorySummary);
+    expect(collaborationInstructions).toContain("Codex Memory Tool Loading");
+    expect(collaborationInstructions).toContain("## Memory Recall");
+    expect(collaborationInstructions).not.toContain("OpenClaw Workspace Memory");
+    expect(collaborationInstructions).not.toContain(memorySummary);
 
     const fileStats = new Map(
       systemPromptReport.injectedWorkspaceFiles.map((file) => [file.name, file]),

@@ -15,6 +15,8 @@ import {
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import { ensureActiveMemoryCapability } from "openclaw/plugin-sdk/codex-native-task-runtime";
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
 import type { CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -164,8 +166,9 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   memoryToolNames: readonly string[];
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
-    const memoryToolsAvailable =
-      params.memoryToolNames.length > 0 &&
+    const memoryToolsAvailable = params.memoryToolNames.length > 0;
+    const canRouteWorkspaceMemoryThroughTools =
+      memoryToolsAvailable &&
       canRouteCodexWorkspaceMemoryThroughTools({
         config: params.params.config,
         agentId: params.params.agentId ?? params.sessionAgentId,
@@ -183,7 +186,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       contextMode: params.params.bootstrapContextMode,
       runKind: params.params.bootstrapContextRunKind,
     });
-    const memoryToolRoutedBootstrapFiles = memoryToolsAvailable
+    const memoryToolRoutedBootstrapFiles = canRouteWorkspaceMemoryThroughTools
       ? selectCodexWorkspaceMemoryReferenceFiles({
           bootstrapFiles,
           workspaceDir: params.resolvedWorkspace,
@@ -197,7 +200,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       }),
     );
     const contextFiles = buildBootstrapContextForFiles(
-      memoryToolsAvailable
+      canRouteWorkspaceMemoryThroughTools
         ? bootstrapFiles.filter(
             (file) =>
               !isCodexWorkspaceRootMemoryBootstrapFile({
@@ -218,16 +221,15 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         targetWorkspaceDir: params.effectiveWorkspace,
       }),
     );
+    const injectOpenClawPromptContext = shouldInjectCodexOpenClawPromptContext(params.params);
     const promptContextFiles = selectCodexWorkspacePromptContextFiles(contextFiles, {
-      excludeMemory: memoryToolsAvailable,
+      excludeMemory: canRouteWorkspaceMemoryThroughTools,
       memoryWorkspaceDir: params.effectiveWorkspace,
     });
-    const developerInstructionFiles = shouldInjectCodexOpenClawPromptContext(params.params)
+    const developerInstructionFiles = injectOpenClawPromptContext
       ? selectCodexWorkspaceInheritedDeveloperInstructionFiles(contextFiles)
       : [];
-    const turnScopedDeveloperInstructionFiles = shouldInjectCodexOpenClawPromptContext(
-      params.params,
-    )
+    const turnScopedDeveloperInstructionFiles = injectOpenClawPromptContext
       ? selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(contextFiles)
       : [];
     const heartbeatReferenceFiles = selectCodexWorkspaceHeartbeatReferenceFiles(contextFiles);
@@ -241,17 +243,20 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       memoryReferenceFiles,
       memoryToolRoutedBootstrapFiles,
       memoryToolNames: [...params.memoryToolNames],
-      memoryToolRouted: memoryToolsAvailable,
+      memoryToolRouted: canRouteWorkspaceMemoryThroughTools,
       promptContext: renderCodexWorkspaceBootstrapPromptContext(promptContextFiles),
       developerInstructions:
         renderCodexWorkspaceThreadDeveloperInstructions(developerInstructionFiles),
       turnScopedDeveloperInstructions: renderCodexWorkspaceCollaborationDeveloperInstructions(
         turnScopedDeveloperInstructionFiles,
       ),
-      memoryCollaborationInstructions: shouldInjectCodexOpenClawPromptContext(params.params)
-        ? renderCodexWorkspaceMemoryReference({
+      memoryCollaborationInstructions: injectOpenClawPromptContext
+        ? renderCodexWorkspaceMemoryCollaborationInstructions({
             files: memoryReferenceFiles,
             toolNames: params.memoryToolNames,
+            includeRecallInstructions: memoryToolsAvailable,
+            config: params.params.config,
+            citationsMode: params.params.config?.memory?.citations,
           })
         : undefined,
       heartbeatCollaborationInstructions:
@@ -777,6 +782,72 @@ function selectCodexWorkspaceMemoryReferenceFiles(params: {
       );
     })
     .toSorted(compareCodexBootstrapFiles);
+}
+
+function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
+  files: EmbeddedContextFile[];
+  toolNames: readonly string[];
+  includeRecallInstructions: boolean;
+  config?: EmbeddedRunAttemptParams["config"];
+  citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
+}): string | undefined {
+  const toolNames = params.toolNames.map((name) => normalizeCodexDynamicToolName(name));
+  const recallInstructions = params.includeRecallInstructions
+    ? renderCodexMemoryRecallInstructions({
+        toolNames,
+        config: params.config,
+        citationsMode: params.citationsMode,
+      })
+    : undefined;
+  const loadingInstructions = recallInstructions
+    ? renderCodexDeferredMemoryToolLoadingInstructions(toolNames)
+    : undefined;
+  const referenceInstructions = renderCodexWorkspaceMemoryReference({
+    files: params.files,
+    toolNames,
+  });
+  return joinCodexCollaborationSections(
+    loadingInstructions,
+    recallInstructions,
+    referenceInstructions,
+  );
+}
+
+function renderCodexMemoryRecallInstructions(params: {
+  toolNames: readonly string[];
+  config?: EmbeddedRunAttemptParams["config"];
+  citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
+}): string | undefined {
+  ensureActiveMemoryCapability(params.config);
+  const pluginInstructions = buildMemorySystemPromptAddition({
+    availableTools: new Set(params.toolNames),
+    citationsMode: params.citationsMode,
+  });
+  return pluginInstructions?.trim() ? pluginInstructions : undefined;
+}
+
+function renderCodexDeferredMemoryToolLoadingInstructions(
+  toolNames: readonly string[],
+): string | undefined {
+  if (toolNames.length === 0) {
+    return undefined;
+  }
+  const formattedTools = toolNames.map((name) => `\`${name}\``).join(" or ");
+  return [
+    "## Codex Memory Tool Loading",
+    `Memory tools ${formattedTools} may be searchable rather than directly listed in native Codex turns. If a memory recall instruction names a memory tool that is not currently callable, use \`tool_search\` to load that tool first, then call it.`,
+  ].join("\n\n");
+}
+
+function joinCodexCollaborationSections(
+  ...sections: Array<string | undefined>
+): string | undefined {
+  const joined = sections
+    .map((section) => section?.trim())
+    .filter(isNonEmptyString)
+    .join("\n\n")
+    .trim();
+  return joined || undefined;
 }
 
 /**

@@ -13,6 +13,11 @@ const ensureStandaloneRuntimePluginRegistryLoadedMock = vi.hoisted(() =>
 const applyPluginAutoEnableMock =
   vi.fn<typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable>();
 const getMemoryRuntimeMock = vi.fn<typeof import("./memory-state.js").getMemoryRuntime>();
+const getMemoryCapabilityRegistrationMock =
+  vi.fn<typeof import("./memory-state.js").getMemoryCapabilityRegistration>();
+const getActivePluginRuntimeSubagentModeMock = vi.fn<
+  typeof import("./runtime.js").getActivePluginRuntimeSubagentMode
+>(() => "default");
 const resolveAgentWorkspaceDirMock =
   vi.fn<typeof import("../agents/agent-scope.js").resolveAgentWorkspaceDir>();
 const resolveDefaultAgentIdMock = vi.fn<
@@ -41,13 +46,18 @@ vi.mock("./runtime/standalone-runtime-registry-loader.js", () => ({
 }));
 
 vi.mock("./memory-state.js", () => ({
+  getMemoryCapabilityRegistration: () => getMemoryCapabilityRegistrationMock(),
   getMemoryRuntime: () => getMemoryRuntimeMock(),
 }));
 
+vi.mock("./runtime.js", () => ({
+  getActivePluginRuntimeSubagentMode: () => getActivePluginRuntimeSubagentModeMock(),
+}));
+
+let ensureActiveMemoryCapability: typeof import("./memory-runtime.js").ensureActiveMemoryCapability;
 let getActiveMemorySearchManager: typeof import("./memory-runtime.js").getActiveMemorySearchManager;
 let resolveActiveMemoryBackendConfig: typeof import("./memory-runtime.js").resolveActiveMemoryBackendConfig;
 let closeActiveMemorySearchManager: typeof import("./memory-runtime.js").closeActiveMemorySearchManager;
-let closeActiveMemorySearchManagers: typeof import("./memory-runtime.js").closeActiveMemorySearchManagers;
 
 function createMemoryAutoEnableFixture() {
   const rawConfig = {
@@ -131,33 +141,23 @@ async function expectAutoEnabledMemoryRuntimeCase(params: {
   expectMemoryAutoEnableApplied(rawConfig, autoEnabledConfig);
 }
 
-async function expectCloseMemoryRuntimeCase(params: {
-  config: unknown;
-  setup: () => { closeAllMemorySearchManagers: ReturnType<typeof vi.fn> } | undefined;
-}) {
-  const runtime = params.setup();
-  await closeActiveMemorySearchManagers(params.config as never);
-
-  if (runtime) {
-    expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
-  }
-  expectNoMemoryRuntimeBootstrap();
-}
-
 describe("memory runtime auto-enable loading", () => {
   beforeEach(async () => {
     vi.resetModules();
     ({
+      ensureActiveMemoryCapability,
       getActiveMemorySearchManager,
       resolveActiveMemoryBackendConfig,
       closeActiveMemorySearchManager,
-      closeActiveMemorySearchManagers,
     } = await import("./memory-runtime.js"));
     resolveRuntimePluginRegistryMock.mockReset();
     getLoadedRuntimePluginRegistryMock.mockReset();
     ensureStandaloneRuntimePluginRegistryLoadedMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
     getMemoryRuntimeMock.mockReset();
+    getMemoryCapabilityRegistrationMock.mockReset();
+    getActivePluginRuntimeSubagentModeMock.mockReset();
+    getActivePluginRuntimeSubagentModeMock.mockReturnValue("default");
     resolveAgentWorkspaceDirMock.mockReset();
     resolveDefaultAgentIdMock.mockClear();
     applyPluginAutoEnableMock.mockImplementation((params) => ({
@@ -319,33 +319,52 @@ describe("memory runtime auto-enable loading", () => {
     expect(ensureStandaloneRuntimePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "does not bootstrap the memory runtime just to close managers",
-      config: {
-        plugins: {},
-        channels: { memory: { enabled: true } },
+  it("force-loads the loaded plugin set when a compatible registry exists without memory capability", () => {
+    const rawConfig = {
+      plugins: {
+        slots: {
+          memory: "memory-core",
+        },
       },
-      setup: () => {
-        getMemoryRuntimeMock.mockReturnValue(undefined);
-        return undefined;
+    };
+    const capability = {
+      pluginId: "memory-core",
+      capability: {
+        promptBuilder: () => ["## Memory Recall", "Search memory first."],
       },
-    },
-    {
-      name: "closes an already-registered memory runtime without reloading plugins",
-      config: {},
-      setup: () => {
-        const runtime = {
-          getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
-          resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
-          closeAllMemorySearchManagers: vi.fn(async () => {}),
-        };
-        getMemoryRuntimeMock.mockReturnValue(runtime);
-        return runtime;
+    };
+    let registeredCapability: typeof capability | undefined;
+    getActivePluginRuntimeSubagentModeMock.mockReturnValue("gateway-bindable");
+    getLoadedRuntimePluginRegistryMock.mockReturnValue({
+      plugins: [
+        { id: "telegram", status: "loaded" },
+        { id: "memory-core", status: "loaded" },
+        { id: "codex", status: "loaded" },
+      ],
+    } as never);
+    getMemoryCapabilityRegistrationMock.mockImplementation(() => registeredCapability as never);
+    ensureStandaloneRuntimePluginRegistryLoadedMock.mockImplementation(() => {
+      registeredCapability = capability;
+      return undefined as never;
+    });
+
+    const result = ensureActiveMemoryCapability(rawConfig as never);
+
+    expect(result).toBe(capability);
+    expect(getLoadedRuntimePluginRegistryMock).toHaveBeenCalledWith({
+      requiredPluginIds: ["memory-core"],
+    });
+    expect(ensureStandaloneRuntimePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      forceLoad: true,
+      requiredPluginIds: ["codex", "memory-core", "telegram"],
+      loadOptions: {
+        config: rawConfig,
+        onlyPluginIds: ["codex", "memory-core", "telegram"],
+        workspaceDir: "/resolved-workspace",
+        runtimeOptions: { allowGatewaySubagentBinding: true },
+        preferBuiltPluginArtifacts: true,
       },
-    },
-  ] as const)("$name", async ({ config, setup }) => {
-    await expectCloseMemoryRuntimeCase({ config, setup });
+    });
   });
 
   it("delegates scoped cleanup to the loaded memory runtime without reloading plugins", async () => {

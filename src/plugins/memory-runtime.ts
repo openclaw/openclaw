@@ -4,7 +4,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { getMemoryRuntime } from "./memory-state.js";
+import { getMemoryCapabilityRegistration, getMemoryRuntime } from "./memory-state.js";
+import { getActivePluginRuntimeSubagentMode } from "./runtime.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "./runtime/standalone-runtime-registry-loader.js";
 
 /** Resolves the configured memory slot to the single runtime plugin that may load memory. */
@@ -30,6 +31,70 @@ function resolveMemoryRuntimeWorkspaceDir(cfg: OpenClawConfig): string | undefin
   return resolveUserPath(dir);
 }
 
+type MemoryRuntimeLoadOptions = Parameters<
+  typeof ensureStandaloneRuntimePluginRegistryLoaded
+>[0]["loadOptions"];
+
+function listLoadedRegistryPluginIds(
+  registry: ReturnType<typeof getLoadedRuntimePluginRegistry>,
+): string[] {
+  const ids = new Set<string>();
+  for (const plugin of registry?.plugins ?? []) {
+    if (plugin.status === undefined || plugin.status === "loaded") {
+      ids.add(plugin.id);
+    }
+  }
+  return [...ids].toSorted((left, right) => left.localeCompare(right));
+}
+
+function buildMemoryRuntimeLoadOptions(params: {
+  cfg: OpenClawConfig;
+  pluginIds: string[];
+  workspaceDir: string | undefined;
+}): MemoryRuntimeLoadOptions {
+  const gatewayBindable = getActivePluginRuntimeSubagentMode() === "gateway-bindable";
+  return {
+    config: params.cfg,
+    onlyPluginIds: params.pluginIds,
+    workspaceDir: params.workspaceDir,
+    ...(gatewayBindable
+      ? {
+          runtimeOptions: { allowGatewaySubagentBinding: true as const },
+          preferBuiltPluginArtifacts: true,
+        }
+      : {}),
+  };
+}
+
+/** Ensures the configured memory plugin's prompt/runtime capability is registered. */
+export function ensureActiveMemoryCapability(cfg?: OpenClawConfig) {
+  const current = getMemoryCapabilityRegistration();
+  if (current || !cfg) {
+    return current;
+  }
+  const memoryPluginIds = resolveMemoryRuntimePluginIds(cfg);
+  if (memoryPluginIds.length === 0) {
+    return getMemoryCapabilityRegistration();
+  }
+  const loadedRegistry = getLoadedRuntimePluginRegistry({ requiredPluginIds: memoryPluginIds });
+  if (getMemoryCapabilityRegistration()) {
+    return getMemoryCapabilityRegistration();
+  }
+  const workspaceDir = resolveMemoryRuntimeWorkspaceDir(cfg);
+  // Tool discovery can leave a registry loaded while memory prompt hooks are absent.
+  // Reload that same plugin set so restoring memory does not discard gateway/channel plugins.
+  const pluginIds = loadedRegistry ? listLoadedRegistryPluginIds(loadedRegistry) : memoryPluginIds;
+  ensureStandaloneRuntimePluginRegistryLoaded({
+    requiredPluginIds: pluginIds,
+    ...(loadedRegistry ? { forceLoad: true } : {}),
+    loadOptions: buildMemoryRuntimeLoadOptions({
+      cfg,
+      pluginIds,
+      workspaceDir,
+    }),
+  });
+  return getMemoryCapabilityRegistration();
+}
 function ensureMemoryRuntime(cfg?: OpenClawConfig) {
   const current = getMemoryRuntime();
   if (current || !cfg) {
@@ -46,11 +111,11 @@ function ensureMemoryRuntime(cfg?: OpenClawConfig) {
   const workspaceDir = resolveMemoryRuntimeWorkspaceDir(cfg);
   ensureStandaloneRuntimePluginRegistryLoaded({
     requiredPluginIds: onlyPluginIds,
-    loadOptions: {
-      config: cfg,
-      onlyPluginIds,
+    loadOptions: buildMemoryRuntimeLoadOptions({
+      cfg,
+      pluginIds: onlyPluginIds,
       workspaceDir,
-    },
+    }),
   });
   return getMemoryRuntime();
 }
