@@ -85,6 +85,33 @@ describe("pickTopicByLlm", () => {
     expect(match?.topicId).toBe(411);
   });
 
+  it("reads the answer when content is an array of blocks (tool-using session)", async () => {
+    // Regression: the classifier's answer arrives as content blocks, not a bare
+    // string. Reading only string content used to drop it, so the picker fell
+    // back to substring even though the model had answered correctly (the real
+    // "深圳农行"→#553 case where the bare {"topicId":553} surfaced in logs).
+    const subagent = {
+      run: vi.fn(async () => ({ runId: "run-1" })),
+      waitForRun: vi.fn(async () => ({ status: "ok" as const })),
+      getSessionMessages: vi.fn(async () => ({
+        messages: [
+          { role: "user", content: "x" },
+          { role: "assistant", content: [{ type: "text", text: '{"topicId": 411}' }] },
+        ],
+      })),
+      deleteSession: vi.fn(async () => {}),
+    };
+    const match = await pickTopicByLlm({
+      requirement: "深圳农行的舆情日报",
+      topics: TOPICS,
+      subagent: subagent as never,
+      userId: "1",
+      token: 1,
+      logger,
+    });
+    expect(match?.topicId).toBe(411);
+  });
+
   it("parses the JSON even when wrapped in prose and a code fence", async () => {
     const subagent = subagentReturning('分析如下：\n```json\n{"topicId": 89}\n```\n仅供参考');
     const match = await pickTopicByLlm({

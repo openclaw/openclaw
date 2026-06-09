@@ -45,13 +45,19 @@ describe("pickTopicByName", () => {
     expect(pickTopicByName("", topics)).toBeNull();
   });
 
-  // Regression: "深圳农行的舆情日报" used to match "涉深舆情-网络动态参阅" because
-  // the shared generic word "舆情" scored 2 and the longer noise title won the
-  // tie-break, overriding the real 农行 topic.
+  // Regression with the REAL production topic set for the user who hit this:
+  // "深圳农行的舆情日报" used to match "涉深舆情-网络动态参阅" (#358) because the
+  // shared generic word "舆情" scored 2 and the longer noise title won the
+  // tie-break, overriding the real 农行 topic #553.
   it("does not match a noise topic on shared generic words (舆情/日报)", () => {
-    const candidates = [t(358, "涉深舆情-网络动态参阅"), t(89, "农业银行深圳市分行")];
+    const candidates = [
+      t(89, "华泰联合证券舆情监测"),
+      t(357, "中央部署-网络动态参阅"),
+      t(358, "涉深舆情-网络动态参阅"),
+      t(553, "农行深圳分行舆情监测"),
+    ];
     const match = pickTopicByName("帮我出一个深圳农行的舆情日报", candidates);
-    expect(match?.topicId).toBe(89);
+    expect(match?.topicId).toBe(553);
     expect(match?.topicId).not.toBe(358);
   });
 

@@ -54,12 +54,49 @@ function buildMessage(requirement: string, candidates: TopicInfo[]): string {
   ].join("\n");
 }
 
+/**
+ * Extract plain text from a session message's content, which is a string in
+ * simple sessions but an array of content blocks ([{type:"text", text}, ...])
+ * in tool-using sessions. Mirrors report-generator's extractMessageText (each
+ * extension is self-contained, so the small helper is duplicated by design).
+ *
+ * Handling the array form is essential: the classifier's "{topicId: N}" answer
+ * arrives as content blocks, and reading only string content silently dropped
+ * it — the picker then fell back to substring matching even though the model
+ * had answered correctly.
+ */
+function extractMessageText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (typeof block === "string") {
+          return block;
+        }
+        if (block && typeof block === "object") {
+          const b = block as { text?: unknown };
+          if (typeof b.text === "string") {
+            return b.text;
+          }
+        }
+        return "";
+      })
+      .join("");
+  }
+  return "";
+}
+
 /** The latest assistant turn's text, or null when there is none. */
 function latestAssistantText(messages: unknown[]): string | null {
   for (const msg of [...messages].toReversed()) {
-    const m = msg as { role?: string; content?: string };
-    if (m.role === "assistant" && typeof m.content === "string" && m.content.trim()) {
-      return m.content;
+    const m = msg as { role?: string; content?: unknown };
+    if (m.role === "assistant") {
+      const text = extractMessageText(m.content).trim();
+      if (text) {
+        return text;
+      }
     }
   }
   return null;
