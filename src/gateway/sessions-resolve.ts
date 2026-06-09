@@ -185,7 +185,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
       cfg,
       target.canonicalKey,
       migratedStore[target.canonicalKey],
-      { acpMetadataSessionKey: legacyKey },
+      { acpMetadataSessionKey: target.canonicalKey },
     );
     if (agentCheckLegacy) {
       return agentCheckLegacy;
