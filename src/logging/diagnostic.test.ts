@@ -1,5 +1,6 @@
 // Diagnostic logger tests cover event emission, metrics, and support output.
 import fs from "node:fs";
+import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -42,6 +43,7 @@ import {
 import {
   diagnosticLogger,
   logMessageQueued,
+  logSessionAttention,
   logSessionStateChange,
   markDiagnosticSessionProgress,
   resetDiagnosticStateForTest,
@@ -354,6 +356,58 @@ describe("stuck session diagnostics threshold", () => {
       recoverStuckSession,
       { sessionId: "s1", sessionKey: "main", queueDepth: 0 },
       ["ageMs", "stateGeneration"],
+    );
+  });
+
+  it("includes app-agent transcript context in stale-session attention logs", () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const tempStateDir = fs.mkdtempSync("/tmp/openclaw-app-agent-diagnostic-");
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    setDiagnosticsEnabledForProcess(true);
+
+    try {
+      fs.mkdirSync(path.join(tempStateDir, "agents", "oauth-agent", "sessions"), {
+        recursive: true,
+      });
+      fs.writeFileSync(
+        path.join(tempStateDir, "agents", "oauth-agent", "sessions", "oauth-session-1.jsonl"),
+        `${JSON.stringify({ message: { role: "user", content: "run OAuth agent" } })}\n${JSON.stringify(
+          {
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "OAuth agent listed 3 pending approvals." }],
+            },
+          },
+        )}\n`,
+      );
+
+      logSessionStateChange({
+        sessionId: "oauth-session-1",
+        sessionKey: "agent:oauth-agent:main",
+        state: "processing",
+      });
+
+      logSessionAttention({
+        sessionId: "oauth-session-1",
+        sessionKey: "agent:oauth-agent:main",
+        state: "processing",
+        ageMs: 61_000,
+        thresholdMs: 30_000,
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      setDiagnosticsEnabledForProcess(false);
+      fs.rmSync(tempStateDir, { recursive: true, force: true });
+    }
+
+    expectLoggerMessageContaining(
+      warnSpy,
+      'lastAssistant="OAuth agent listed 3 pending approvals."',
     );
   });
 

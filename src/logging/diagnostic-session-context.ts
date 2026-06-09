@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 
 const SESSION_TAIL_BYTES = 64 * 1024;
 const MAX_QUOTED_FIELD_CHARS = 140;
@@ -29,20 +30,25 @@ export function parseCronRunSessionKey(sessionKey?: string): {
   cronJobId?: string;
   cronRunId?: string;
 } {
-  const parts = sessionKey?.trim().split(":") ?? [];
-  if (parts[0] !== "agent") {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
     return {};
   }
+  const parts = parsed.rest.split(":").filter(Boolean);
   const cronIndex = parts.indexOf("cron");
-  if (cronIndex < 2) {
+  if (cronIndex < 0) {
     return {};
   }
   const runIndex = parts.indexOf("run", cronIndex + 2);
   return {
-    agentId: parts[1],
+    agentId: parsed.agentId,
     cronJobId: parts[cronIndex + 1],
     cronRunId: runIndex >= 0 ? parts[runIndex + 1] : undefined,
   };
+}
+
+function resolveDiagnosticAgentId(sessionKey: string | undefined): string | undefined {
+  return parseCronRunSessionKey(sessionKey).agentId ?? parseAgentSessionKey(sessionKey)?.agentId;
 }
 
 function resolveSessionFile(params: {
@@ -152,14 +158,13 @@ export function resolveCronSessionDiagnosticContext(params: {
   activeSessionId?: string;
 }): CronSessionContext {
   const parsed = parseCronRunSessionKey(params.sessionKey);
-  if (!parsed.cronJobId && !parsed.cronRunId) {
-    return {};
-  }
+  const agentId = parsed.agentId ?? resolveDiagnosticAgentId(params.sessionKey);
   return {
     ...parsed,
+    agentId,
     cronJobName: readCronJobName(parsed.cronJobId),
     lastAssistant: readLastAssistantFromSessionFile(
-      resolveSessionFile({ ...parsed, activeSessionId: params.activeSessionId }),
+      resolveSessionFile({ ...parsed, agentId, activeSessionId: params.activeSessionId }),
     ),
   };
 }

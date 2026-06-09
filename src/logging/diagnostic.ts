@@ -1032,7 +1032,10 @@ export function logSessionAttention(
         : "long-running session";
   const activityFields = formatSessionActivityLogFields(activity);
   const cronFields = formatCronSessionDiagnosticFields(
-    resolveCronSessionDiagnosticContext({ sessionKey: state.sessionKey }),
+    resolveCronSessionDiagnosticContext({
+      sessionKey: state.sessionKey,
+      activeSessionId: state.sessionId,
+    }),
   );
   const detailFields = [activityFields, cronFields].filter(Boolean).join(" ");
   const message = `${label}: sessionId=${state.sessionId ?? "unknown"} sessionKey=${

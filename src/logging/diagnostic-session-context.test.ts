@@ -46,6 +46,28 @@ describe("diagnostic session context", () => {
     });
   });
 
+  it("resolves app-agent transcript context from the active session id", () => {
+    const stateDir = tempDir!;
+    writeJsonl(path.join(stateDir, "agents", "oauth-agent", "sessions", "oauth-session-1.jsonl"), [
+      { message: { role: "user", content: "run OAuth agent" } },
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "OAuth agent listed 3 pending approvals." }],
+        },
+      },
+    ]);
+
+    const context = resolveCronSessionDiagnosticContext({
+      sessionKey: "agent:oauth-agent:main",
+      activeSessionId: "oauth-session-1",
+    });
+
+    expect(formatCronSessionDiagnosticFields(context)).toBe(
+      'lastAssistant="OAuth agent listed 3 pending approvals."',
+    );
+  });
+
   it("formats cron job and last assistant context for stalled session logs", async () => {
     const stateDir = tempDir!;
     await saveCronStore(path.join(stateDir, "cron", "jobs.json"), {
