@@ -109,7 +109,9 @@ describe("AuthTopicResolver.getAuthorizedTopics", () => {
     it("keeps the most recent grant first and dedupes repeated topics", async () => {
       mockExecuteQuery.mockResolvedValueOnce(suRow(0));
       mockExecuteQuery.mockResolvedValueOnce(authRows([0, 624], [270, 585], [270, 585], [116, 0]));
-      mockExecuteQuery.mockResolvedValueOnce(titleRows([624, "备份"], [585, "广本"], [116, "专题A"]));
+      mockExecuteQuery.mockResolvedValueOnce(
+        titleRows([624, "备份"], [585, "广本"], [116, "专题A"]),
+      );
 
       const topics = await resolver.getAuthorizedTopics("42");
 
@@ -144,7 +146,9 @@ describe("AuthTopicResolver.getAuthorizedTopics", () => {
       mockExecuteQuery.mockResolvedValueOnce(suRow(1));
       mockExecuteQuery.mockResolvedValueOnce(reportRows(3076, 3250));
       mockExecuteQuery.mockResolvedValueOnce(topicIdRows(270, 328));
-      mockExecuteQuery.mockResolvedValueOnce(titleRows([270, "广汽本田舆情监测"], [328, "中建四局全局监测"]));
+      mockExecuteQuery.mockResolvedValueOnce(
+        titleRows([270, "广汽本田舆情监测"], [328, "中建四局全局监测"]),
+      );
 
       const topics = await resolver.getAuthorizedTopics("962");
 
