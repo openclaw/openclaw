@@ -11,6 +11,7 @@ import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
+import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   testing as sessionBindingTesting,
@@ -2283,10 +2284,7 @@ describe("initSessionState reset policy", () => {
     expect(result.abortedLastRun).toBe(false);
     expect(result.sessionEntry.abortedLastRun).toBeUndefined();
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
+    const persisted = readSessionStoreForTest(storePath);
     expect(persisted[sessionKey]?.sessionId).toBe(existingSessionId);
     expect(persisted[sessionKey]?.status).toBeUndefined();
     expect(persisted[sessionKey]?.startedAt).toBeUndefined();
