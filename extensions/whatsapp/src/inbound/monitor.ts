@@ -436,6 +436,18 @@ export async function attachWebInboxToSocket(
             ? await currentSock.sendMessage(jid, content, sendOptions)
             : await currentSock.sendMessage(jid, content);
           rememberOutboundMessage(jid, result);
+          // Cache outbound message metadata so quote replies to bot-authored
+          // messages can resolve correct fromMe/participant. (#91445)
+          const outboundMessageId =
+            typeof result === "object" && result && "key" in result
+              ? ((result as { key?: { id?: string } }).key?.id ?? "")
+              : "";
+          if (outboundMessageId) {
+            cacheInboundMessageMeta(options.accountId, jid, outboundMessageId, {
+              participant: self.jid ?? undefined,
+              fromMe: true,
+            });
+          }
           return result;
         } catch (err) {
           if (!shouldRetryDisconnect() || !isRetryableSendDisconnectError(err)) {

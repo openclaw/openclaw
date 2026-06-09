@@ -395,6 +395,31 @@ describe("deliverWebReply", () => {
     });
   });
 
+  it("quotes a bot-authored message with correct fromMe and participant when cached", async () => {
+    const msg = makeMsg();
+    cacheInboundMessageMeta("work", "15551234567@s.whatsapp.net", "bot-msg-1", {
+      participant: "20000000000@s.whatsapp.net",
+      fromMe: true,
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "reply to bot", replyToId: "bot-msg-1" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expectQuotedOptions(mockCallArg(msg.reply, 0, 1, "reply"), {
+      id: "bot-msg-1",
+      fromMe: true,
+      participant: "20000000000@s.whatsapp.net",
+      body: "",
+    });
+  });
+
   it.each(["connection closed", "operation timed out"])(
     "retries text send on transient failure: %s",
     async (errorMessage) => {

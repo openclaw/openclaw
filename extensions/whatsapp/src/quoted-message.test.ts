@@ -81,4 +81,16 @@ describe("quoted message metadata cache", () => {
       lookupInboundMessageMetaForTarget("account-d", "222@s.whatsapp.net", "msg-3"),
     ).toBeUndefined();
   });
+
+  it("resolves outbound bot message metadata for group quote replies", () => {
+    cacheInboundMessageMeta("account-f", "120363400000000000@g.us", "out-msg-1", {
+      participant: "bot@s.whatsapp.net",
+      fromMe: true,
+    });
+
+    expect(lookupInboundMessageMeta("account-f", "120363400000000000@g.us", "out-msg-1")).toEqual({
+      participant: "bot@s.whatsapp.net",
+      fromMe: true,
+    });
+  });
 });
