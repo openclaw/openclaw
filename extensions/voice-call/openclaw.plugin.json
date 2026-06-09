@@ -327,9 +327,23 @@
             "properties": {
               "enabled": { "type": "boolean" },
               "workerBaseUrl": { "type": "string" },
-              "tenantId": { "type": "string" }
+              "tenantId": { "type": "string" },
+              "answerTimeoutMs": { "type": "integer", "minimum": 1 }
             }
-          }
+          },
+          "groupCall": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "requireAddress": { "type": "boolean" },
+              "wakePhrases": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "followUpWindowMs": { "type": "integer", "minimum": 0 }
+            }
+          },
+          "maxVisionPerMinute": { "type": "integer", "minimum": 0 }
         }
       },
       "fromNumber": {
