@@ -394,7 +394,7 @@ describe("sanitizeHostExecEnv", () => {
   });
 
   it("preserves inherited restrictive GIT_PROTOCOL_FROM_USER values", () => {
-    const restrictiveValues = ["", "0", "false", "False", "no", "off"];
+    const restrictiveValues = ["", "0", "00", "+0", "-0", "false", "False", "no", "off"];
 
     for (const value of restrictiveValues) {
       const env = sanitizeHostExecEnv({

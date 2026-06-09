@@ -92,11 +92,10 @@ enum HostEnvSanitizer {
 
     private static func isRestrictiveGitProtocolFromUserValue(_ value: String) -> Bool {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized.isEmpty
-            || normalized == "0"
-            || normalized == "false"
-            || normalized == "no"
-            || normalized == "off"
+        if normalized.isEmpty || normalized == "false" || normalized == "no" || normalized == "off" {
+            return true
+        }
+        return normalized.range(of: #"^[+-]?0+$"#, options: .regularExpression) != nil
     }
 
     private static func sanitizeInheritedGitAllowProtocolValue(_ value: String) -> String {

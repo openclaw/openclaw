@@ -153,13 +153,13 @@ function listNormalizedEnvEntries(
 
 function isRestrictiveGitProtocolFromUserValue(value: string): boolean {
   const normalized = value.trim().toLowerCase();
-  if (!normalized || normalized === "0" || normalized === "false" || normalized === "no") {
+  if (!normalized || normalized === "false" || normalized === "no") {
     return true;
   }
   if (normalized === "off") {
     return true;
   }
-  return false;
+  return /^[+-]?0+$/.test(normalized);
 }
 
 function sanitizeInheritedGitAllowProtocolValue(value: string): string {
