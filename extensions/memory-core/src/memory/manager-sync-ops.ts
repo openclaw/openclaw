@@ -6,7 +6,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import chokidar, { FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  classifyMemoryMultimodalPath,
+  DEFAULT_LOCAL_MODEL,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
   onSessionTranscriptUpdate,
@@ -40,6 +43,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import {
   createEmbeddingProvider,
   resolveEmbeddingProviderAdapterId,
+  resolveEmbeddingProviderAdapterTransport,
   resolveEmbeddingProviderFallbackModel,
   type EmbeddingProvider,
   type EmbeddingProviderId,
@@ -303,6 +307,13 @@ export abstract class MemoryManagerSyncOps {
     const hasProviderOverride = params && "provider" in params;
     // Plain status can compare identity before provider init. Mirror provider
     // init's empty-model fallback so adapter defaults do not look mismatched.
+    // The local provider's identity is its modelPath (what the worker returns and
+    // indexing persists), so a custom local.modelPath must mirror that here instead
+    // of settings.model / the adapter default — otherwise status always reads "dirty"
+    // before provider init (#91001).
+    const isLocalEmbeddingProvider =
+      this.settings.provider !== "none" &&
+      resolveEmbeddingProviderAdapterTransport(this.settings.provider, this.cfg) === "local";
     const configuredProvider =
       this.settings.provider === "none"
         ? null
@@ -310,9 +321,10 @@ export abstract class MemoryManagerSyncOps {
             id:
               resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
               this.settings.provider,
-            model:
-              this.settings.model.trim() ||
-              resolveEmbeddingProviderFallbackModel(this.settings.provider, "", this.cfg),
+            model: isLocalEmbeddingProvider
+              ? this.settings.local?.modelPath?.trim() || DEFAULT_LOCAL_MODEL
+              : this.settings.model.trim() ||
+                resolveEmbeddingProviderFallbackModel(this.settings.provider, "", this.cfg),
           };
     const provider = hasProviderOverride
       ? params.provider!

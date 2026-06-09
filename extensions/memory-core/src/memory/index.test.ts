@@ -74,6 +74,7 @@ vi.mock("./embeddings.js", () => {
       provider?: string;
       model?: string;
       outputDimensionality?: number;
+      local?: { modelPath?: string };
     }) => {
       providerCalls.push({
         provider: options.provider,
@@ -93,8 +94,14 @@ vi.mock("./embeddings.js", () => {
         options.provider === "fallback-provider" ||
         options.provider === "ollama"
           ? options.provider
-          : "mock";
-      const model = options.model ?? "mock-embed";
+          : options.provider === "local"
+            ? "local"
+            : "mock";
+      // The real local provider reports its modelPath as the provider model identity.
+      const model =
+        options.provider === "local"
+          ? options.local?.modelPath?.trim() || "default-local-model.gguf"
+          : (options.model ?? "mock-embed");
       return {
         requestedProvider: options.provider ?? "openai",
         provider: {
@@ -280,6 +287,7 @@ describe("memory index", () => {
     providerAliases?: NonNullable<NonNullable<TestCfg["models"]>["providers"]>;
     model?: string;
     outputDimensionality?: number;
+    local?: { modelPath?: string };
     multimodal?: {
       enabled?: boolean;
       modalities?: Array<"image" | "audio" | "all">;
@@ -297,6 +305,7 @@ describe("memory index", () => {
           workspace: workspaceDir,
           memorySearch: {
             ...(params.provider !== undefined ? { provider: params.provider } : {}),
+            ...(params.local !== undefined ? { local: params.local } : {}),
             model: params.model ?? "mock-embed",
             fallback: params.fallback,
             outputDimensionality: params.outputDimensionality,
@@ -536,6 +545,43 @@ describe("memory index", () => {
       storePath: dbPath,
       provider: "gemini",
       model: "",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const statusManager = await getFreshManager(statusCfg, "status");
+    try {
+      const status = statusManager.status();
+
+      expect(status.dirty).toBe(false);
+      expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      await statusManager.close?.();
+    }
+  });
+
+  it("keeps status clean for a custom local embedding modelPath (#91001)", async () => {
+    const dbPath = path.join(workspaceDir, "index-local-modelpath-status.sqlite");
+    const modelPath = "/models/embeddinggemma-300M-Q8_0.gguf";
+    await fs.writeFile(path.join(memoryDir, "2026-02-02.md"), "# Log\nLocal model memory line.");
+
+    // Index with the local provider, which reports its modelPath as the model identity.
+    const indexCfg = createCfg({
+      storePath: dbPath,
+      provider: "local",
+      model: "",
+      local: { modelPath },
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const indexManager = await getFreshManager(indexCfg);
+    await indexManager.sync({ reason: "test", force: true });
+    await indexManager.close?.();
+
+    // Plain status before provider init must mirror the local modelPath identity, not the
+    // empty settings.model / adapter default — otherwise status always reads dirty (#91001).
+    const statusCfg = createCfg({
+      storePath: dbPath,
+      provider: "local",
+      model: "",
+      local: { modelPath },
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const statusManager = await getFreshManager(statusCfg, "status");
