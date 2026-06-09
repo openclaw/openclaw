@@ -58,6 +58,10 @@ export function pruneDiagnosticSessionStates(now = Date.now(), force = false): v
     const isIdle = state.state === "idle";
     if (isIdle && state.queueDepth <= 0 && ageMs > SESSION_STATE_TTL_MS) {
       diagnosticSessionStates.delete(key);
+    } else if (ageMs > SESSION_STATE_TTL_MS) {
+      // Fallback: delete any stale entry regardless of state to prevent
+      // ghost entries from accumulating after failed recovery attempts.
+      diagnosticSessionStates.delete(key);
     }
   }
 
