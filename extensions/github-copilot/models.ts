@@ -263,8 +263,8 @@ export type FetchCopilotModelCatalogParams = {
  * without manifest churn.
  *
  * Filters out non-chat objects (embeddings, routers) and internal router ids.
- * On any HTTP/parse failure the caller should fall back to the static manifest
- * catalog; this function throws so the caller decides the recovery shape.
+ * This function throws on HTTP/parse failures so the caller can decide the
+ * degraded fallback shape without treating stale rows as live data.
  */
 export async function fetchCopilotModelCatalog(
   params: FetchCopilotModelCatalogParams,
