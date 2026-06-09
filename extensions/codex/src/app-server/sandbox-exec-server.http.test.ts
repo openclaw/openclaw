@@ -71,6 +71,61 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
     socket.close();
   });
 
+  it("blocks private HTTP targets before starting the sandbox backend", async () => {
+    const runShellCommand = vi.fn(async () => ({
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    }));
+    const sandbox = createSandboxContext({ runShellCommand });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "http/request", {
+        requestId: "http-private",
+        method: "GET",
+        url: "http://127.0.0.1:6379/",
+      }),
+    ).rejects.toThrow("Blocked hostname or private/internal IP");
+    expect(runShellCommand).not.toHaveBeenCalled();
+    socket.close();
+  });
+
+  it("blocks metadata HTTP targets before starting the streaming sandbox backend", async () => {
+    const buildExecSpec = vi.fn(async () => ({
+      argv: [process.execPath, "-e", ""],
+      env: testExecEnv(),
+      stdinMode: "pipe-closed" as const,
+    }));
+    const sandbox = createSandboxContext({ buildExecSpec });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "http/request", {
+        requestId: "http-metadata",
+        method: "GET",
+        url: "http://metadata.google.internal/",
+        streamResponse: true,
+      }),
+    ).rejects.toThrow("Blocked hostname or private/internal IP");
+    expect(buildExecSpec).not.toHaveBeenCalled();
+    socket.close();
+  });
+
   it("streams HTTP response body deltas from the sandbox backend", async () => {
     const headerLine = JSON.stringify({
       type: "headers",
