@@ -7,7 +7,10 @@ import {
   rememberIMessageSkippedFromMeForSelfChatDedupe,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
-import { resetPersistedIMessageEchoCacheForTest } from "./persisted-echo-cache.js";
+import {
+  rememberPersistedIMessageEcho,
+  resetPersistedIMessageEchoCacheForTest,
+} from "./persisted-echo-cache.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 
 /**
@@ -904,6 +907,70 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
 });
 
 describe("echo cache — text fallback for null-id inbound messages", () => {
+  it("does not drop normal DM text from a pending pre-send marker", async () => {
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+    const scope = "default:imessage:+15551234567";
+    rememberPersistedIMessageEcho({
+      scope,
+      text: "same pending text",
+      ttlMs: 155_000,
+      pending: true,
+    });
+
+    const decision = await resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 12001,
+          sender: "+15551234567",
+          chat_identifier: "+15551234567",
+          destination_caller_id: "+15550001111",
+          text: "same pending text",
+          is_from_me: false,
+          is_group: false,
+        },
+        messageText: "same pending text",
+        bodyText: "same pending text",
+        echoCache,
+        selfChatCache,
+      }),
+    );
+
+    expect(decision.kind).toBe("dispatch");
+  });
+
+  it("drops self-chat reflected text from a pending pre-send marker", async () => {
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+    const scope = "default:imessage:+15551234567";
+    rememberPersistedIMessageEcho({
+      scope,
+      text: "pending self-chat reply",
+      ttlMs: 155_000,
+      pending: true,
+    });
+
+    const decision = await resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 12002,
+          sender: "+15551234567",
+          chat_identifier: "+15551234567",
+          destination_caller_id: "tel:+15551234567",
+          text: "pending self-chat reply",
+          is_from_me: false,
+          is_group: false,
+        },
+        messageText: "pending self-chat reply",
+        bodyText: "pending self-chat reply",
+        echoCache,
+        selfChatCache,
+      }),
+    );
+
+    expect(decision).toEqual({ kind: "drop", reason: "echo" });
+  });
+
   it("still identifies echo via text when inbound message has id: null", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));

@@ -691,6 +691,7 @@ describe("sendMessageIMessage receipts", () => {
       hasPersistedIMessageEcho({
         scope: "default:imessage:+15551234567",
         text: "hello",
+        includePendingText: true,
       }),
     ).toBe(true);
 
@@ -723,6 +724,7 @@ describe("sendMessageIMessage receipts", () => {
       hasPersistedIMessageEcho({
         scope: "default:imessage:+15551234567",
         text: "slow hello",
+        includePendingText: true,
       }),
     ).toBe(true);
 

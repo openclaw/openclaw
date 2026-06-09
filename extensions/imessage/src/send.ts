@@ -779,6 +779,7 @@ async function trySendAttachmentForTarget(params: {
         scope: echoScope,
         text: params.echoText,
         ttlMs: params.pendingEchoTtlMs,
+        pending: true,
       });
     }
     result = await params.runCliJson([
@@ -1028,6 +1029,7 @@ export async function sendMessageIMessage(
           scope: echoScope,
           text: echoText,
           ttlMs: pendingEchoTtlMs,
+          pending: true,
         });
       }
       result = await client.request<Record<string, unknown>>("send", params, {

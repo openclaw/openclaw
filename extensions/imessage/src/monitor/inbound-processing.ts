@@ -246,13 +246,14 @@ function hasIMessageEchoMatch(params: {
     has: (
       scope: string,
       lookup: { text?: string; messageId?: string },
-      skipIdShortCircuit?: boolean,
+      options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
     ) => boolean;
   };
   scope: string | readonly string[];
   text?: string;
   messageIds: string[];
   skipIdShortCircuit?: boolean;
+  includePendingText?: boolean;
 }): boolean {
   // Outbound sends persist echo scopes keyed by whichever target shape was
   // used (chat_id, chat_guid, chat_identifier, or imessage:<handle>). Inbound
@@ -280,7 +281,10 @@ function hasIMessageEchoMatch(params: {
       params.echoCache.has(
         scope,
         { text: params.text, messageId: fallbackMessageId },
-        params.skipIdShortCircuit,
+        {
+          skipIdShortCircuit: params.skipIdShortCircuit,
+          includePendingText: params.includePendingText,
+        },
       )
     ) {
       return true;
@@ -397,7 +401,7 @@ export async function resolveIMessageInboundDecision(params: {
     has: (
       scope: string,
       lookup: { text?: string; messageId?: string },
-      skipIdShortCircuit?: boolean,
+      options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
     ) => boolean;
   };
   selfChatCache?: SelfChatCache;
@@ -501,6 +505,7 @@ export async function resolveIMessageInboundDecision(params: {
           text: bodyText || undefined,
           messageIds: inboundMessageIds,
           skipIdShortCircuit: !hasInboundGuid,
+          includePendingText: true,
         })
       ) {
         return { kind: "drop", reason: "agent echo in self-chat" };
@@ -697,6 +702,7 @@ export async function resolveIMessageInboundDecision(params: {
         scope: echoScope,
         text: bodyText || undefined,
         messageIds: inboundMessageIds,
+        includePendingText: isSelfChat,
       })
     ) {
       params.logVerbose?.(

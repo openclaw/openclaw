@@ -10,6 +10,7 @@ type PersistedEchoEntry = {
   messageId?: string;
   timestamp: number;
   expiresAt?: number;
+  pending?: true;
 };
 
 // 12h comfortably outlives the inbound replay guard window
@@ -119,6 +120,7 @@ export function rememberPersistedIMessageEcho(params: {
   text?: string;
   messageId?: string;
   ttlMs?: number;
+  pending?: boolean;
 }): string | undefined {
   const text = normalizeText(params.text);
   const messageId = normalizeMessageId(params.messageId);
@@ -127,6 +129,7 @@ export function rememberPersistedIMessageEcho(params: {
     timestamp: Date.now(),
     ...(text ? { text } : {}),
     ...(messageId ? { messageId } : {}),
+    ...(params.pending ? { pending: true } : {}),
   };
   if (typeof params.ttlMs === "number" && Number.isFinite(params.ttlMs) && params.ttlMs > 0) {
     entry.expiresAt = entry.timestamp + params.ttlMs;
@@ -158,6 +161,7 @@ export function hasPersistedIMessageEcho(params: {
   scope: string;
   text?: string;
   messageId?: string;
+  includePendingText?: boolean;
 }): boolean {
   const text = normalizeText(params.text);
   const messageId = normalizeMessageId(params.messageId);
@@ -171,7 +175,7 @@ export function hasPersistedIMessageEcho(params: {
     if (messageId && entry.messageId === messageId) {
       return true;
     }
-    if (text && entry.text === text) {
+    if (text && entry.text === text && (!entry.pending || params.includePendingText)) {
       return true;
     }
   }
