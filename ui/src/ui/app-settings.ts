@@ -71,7 +71,11 @@ import {
   tabFromPath,
   type Tab,
 } from "./navigation.ts";
-import { normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "./session-key.ts";
 import {
   normalizeTextScale,
   saveLocalUserIdentity,
@@ -471,9 +475,11 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
       case "skills":
         await loadSkills(app);
         break;
-      case "skillWorkshop":
-        await loadSkillWorkshopProposals(app, { force: true });
+      case "skillWorkshop": {
+        const workshopAgentId = resolveAgentIdFromSessionKey(host.sessionKey);
+        await loadSkillWorkshopProposals(app, workshopAgentId, { force: true });
         break;
+      }
       case "agents":
         await refreshAgentsTab(host, app);
         break;

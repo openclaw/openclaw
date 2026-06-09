@@ -286,6 +286,7 @@ export function countSkillWorkshopProposals(
 
 export async function loadSkillWorkshopProposals(
   state: SkillWorkshopState,
+  agentId: string,
   options?: { force?: boolean },
 ): Promise<void> {
   if (!state.client || !state.connected || state.skillWorkshopLoading) {
@@ -297,7 +298,9 @@ export async function loadSkillWorkshopProposals(
   state.skillWorkshopLoading = true;
   state.skillWorkshopError = null;
   try {
-    const result = await state.client.request<SkillProposalManifest>("skills.proposals.list", {});
+    const result = await state.client.request<SkillProposalManifest>("skills.proposals.list", {
+      agentId,
+    });
     const previousByKey = new Map(
       state.skillWorkshopProposals.map((proposal) => [proposal.key, proposal]),
     );
@@ -310,7 +313,7 @@ export async function loadSkillWorkshopProposals(
       state.skillWorkshopSelectedKey = proposals[0]?.key ?? null;
     }
     if (state.skillWorkshopSelectedKey) {
-      await loadSkillWorkshopProposalDetail(state, state.skillWorkshopSelectedKey);
+      await loadSkillWorkshopProposalDetail(state, agentId, state.skillWorkshopSelectedKey);
     }
   } catch (err) {
     state.skillWorkshopError = getErrorMessage(err);
@@ -321,6 +324,7 @@ export async function loadSkillWorkshopProposals(
 
 export async function loadSkillWorkshopProposalDetail(
   state: SkillWorkshopState,
+  agentId: string,
   proposalId: string,
   options?: { force?: boolean },
 ): Promise<void> {
@@ -338,6 +342,7 @@ export async function loadSkillWorkshopProposalDetail(
       "skills.proposals.inspect",
       {
         proposalId,
+        agentId,
       },
     );
     mergeProposal(state, proposalFromInspect(result, existing));
@@ -350,19 +355,28 @@ export async function loadSkillWorkshopProposalDetail(
   }
 }
 
-export function selectSkillWorkshopProposal(state: SkillWorkshopState, proposalId: string): void {
+export function selectSkillWorkshopProposal(
+  state: SkillWorkshopState,
+  agentId: string,
+  proposalId: string,
+): void {
   state.skillWorkshopSelectedKey = proposalId;
-  void loadSkillWorkshopProposalDetail(state, proposalId);
+  void loadSkillWorkshopProposalDetail(state, agentId, proposalId);
 }
 
-async function refreshAfterMutation(state: SkillWorkshopState, proposalId: string): Promise<void> {
+async function refreshAfterMutation(
+  state: SkillWorkshopState,
+  agentId: string,
+  proposalId: string,
+): Promise<void> {
   state.skillWorkshopLoaded = false;
-  await loadSkillWorkshopProposals(state, { force: true });
-  await loadSkillWorkshopProposalDetail(state, proposalId, { force: true });
+  await loadSkillWorkshopProposals(state, agentId, { force: true });
+  await loadSkillWorkshopProposalDetail(state, agentId, proposalId, { force: true });
 }
 
 export async function runSkillWorkshopLifecycleAction(
   state: SkillWorkshopState,
+  agentId: string,
   action: Extract<SkillWorkshopAction, "apply" | "reject">,
   proposalId: string,
 ): Promise<void> {
@@ -375,8 +389,8 @@ export async function runSkillWorkshopLifecycleAction(
   state.skillWorkshopError = null;
   try {
     const method = action === "apply" ? "skills.proposals.apply" : "skills.proposals.reject";
-    await state.client.request(method, { proposalId });
-    await refreshAfterMutation(state, proposalId);
+    await state.client.request(method, { proposalId, agentId });
+    await refreshAfterMutation(state, agentId, proposalId);
     const updated = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
     showActionNotice(state, updated ?? previous, action === "apply" ? "Applied" : "Rejected");
   } catch (err) {
@@ -393,6 +407,7 @@ export async function runSkillWorkshopLifecycleAction(
 
 export async function requestSkillWorkshopRevision(
   state: SkillWorkshopState,
+  agentId: string,
   proposalId: string,
   sendRevisionRequest: (instructions: string, proposal: SkillWorkshopProposal) => Promise<void>,
 ): Promise<boolean> {
@@ -408,7 +423,7 @@ export async function requestSkillWorkshopRevision(
   state.skillWorkshopActionNotice = null;
   state.skillWorkshopError = null;
   try {
-    await loadSkillWorkshopProposalDetail(state, proposalId);
+    await loadSkillWorkshopProposalDetail(state, agentId, proposalId);
     const currentProposal =
       state.skillWorkshopProposals.find((item) => item.key === proposalId) ?? proposal;
     await sendRevisionRequest(instructions, currentProposal);
