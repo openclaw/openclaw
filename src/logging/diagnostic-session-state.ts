@@ -58,6 +58,11 @@ export function pruneDiagnosticSessionStates(now = Date.now(), force = false): v
     const isIdle = state.state === "idle";
     if (isIdle && state.queueDepth <= 0 && ageMs > SESSION_STATE_TTL_MS) {
       diagnosticSessionStates.delete(key);
+    } else if (ageMs > SESSION_STATE_TTL_MS && state.queueDepth <= 0) {
+      // Non-idle ghost entries that have exceeded the TTL and have no queued
+      // work (e.g. orphaned "processing" state from failed session recovery)
+      // also accumulate. Prune them to prevent unbounded Map growth. (#91697)
+      diagnosticSessionStates.delete(key);
     }
   }
 
