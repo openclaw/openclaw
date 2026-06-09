@@ -986,11 +986,16 @@ export function logSessionAttention(
     { sessionId: state.sessionId, sessionKey: state.sessionKey },
     Date.now(),
   );
+  const sessionContext = resolveCronSessionDiagnosticContext({
+    sessionKey: state.sessionKey,
+    activeSessionId: state.sessionId,
+  });
   const classification = classifySessionAttention({
     state: state.state as "idle" | "processing" | "waiting" | undefined,
     queueDepth: state.queueDepth,
     activity,
     staleMs: params.thresholdMs,
+    hasTranscriptAssistantContext: Boolean(sessionContext.lastAssistant),
   });
   const recoveryEligible =
     classification.recoveryEligible ||
@@ -1031,12 +1036,7 @@ export function logSessionAttention(
         ? "stalled session"
         : "long-running session";
   const activityFields = formatSessionActivityLogFields(activity);
-  const cronFields = formatCronSessionDiagnosticFields(
-    resolveCronSessionDiagnosticContext({
-      sessionKey: state.sessionKey,
-      activeSessionId: state.sessionId,
-    }),
-  );
+  const cronFields = formatCronSessionDiagnosticFields(sessionContext);
   const detailFields = [activityFields, cronFields].filter(Boolean).join(" ");
   const message = `${label}: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
     state.sessionKey ?? "unknown"

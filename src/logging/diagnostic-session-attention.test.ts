@@ -27,6 +27,18 @@ describe("classifySessionAttention", () => {
       },
     },
     {
+      name: "transcript assistant context without active work",
+      queueDepth: 0,
+      activity: {},
+      hasTranscriptAssistantContext: true,
+      expected: {
+        eventType: "session.stalled",
+        reason: "transcript_progress_observed",
+        classification: "stalled_agent_run",
+        recoveryEligible: false,
+      },
+    },
+    {
       name: "active embedded run making progress",
       queueDepth: 0,
       activity: {
@@ -155,13 +167,14 @@ describe("classifySessionAttention", () => {
         recoveryEligible: false,
       },
     },
-  ])("$name", ({ activity, expected, queueDepth, state }) => {
+  ])("$name", ({ activity, expected, hasTranscriptAssistantContext, queueDepth, state }) => {
     expect(
       classifySessionAttention({
         state,
         queueDepth,
         activity,
         staleMs: 30_000,
+        hasTranscriptAssistantContext,
       }),
     ).toEqual(expected);
   });

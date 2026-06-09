@@ -359,10 +359,11 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("includes app-agent transcript context in stale-session attention logs", () => {
+  it("classifies app-agent transcript context as stalled instead of stale", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const tempStateDir = fs.mkdtempSync("/tmp/openclaw-app-agent-diagnostic-");
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    let classification: SessionAttentionClassification | undefined;
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     setDiagnosticsEnabledForProcess(true);
 
@@ -388,7 +389,7 @@ describe("stuck session diagnostics threshold", () => {
         state: "processing",
       });
 
-      logSessionAttention({
+      classification = logSessionAttention({
         sessionId: "oauth-session-1",
         sessionKey: "agent:oauth-agent:main",
         state: "processing",
@@ -405,10 +406,88 @@ describe("stuck session diagnostics threshold", () => {
       fs.rmSync(tempStateDir, { recursive: true, force: true });
     }
 
+    expect(classification).toEqual({
+      eventType: "session.stalled",
+      reason: "transcript_progress_observed",
+      classification: "stalled_agent_run",
+      recoveryEligible: false,
+    });
+    expectLoggerMessageContaining(warnSpy, "stalled session:");
     expectLoggerMessageContaining(
       warnSpy,
       'lastAssistant="OAuth agent listed 3 pending approvals."',
     );
+    expectLoggerMessageContaining(warnSpy, "classification=stalled_agent_run");
+    expectLoggerMessageContaining(warnSpy, "recovery=none");
+    expectNoLoggerMessageContaining(warnSpy, "classification=stale_session_state");
+    expectNoLoggerMessageContaining(warnSpy, "recovery=checking");
+  });
+
+  it("does not recover app-agent sessions whose transcript shows assistant work", () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const tempStateDir = fs.mkdtempSync("/tmp/openclaw-app-agent-diagnostic-");
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    try {
+      fs.mkdirSync(path.join(tempStateDir, "agents", "oauth-agent", "sessions"), {
+        recursive: true,
+      });
+      fs.writeFileSync(
+        path.join(tempStateDir, "agents", "oauth-agent", "sessions", "oauth-session-1.jsonl"),
+        `${JSON.stringify({ message: { role: "user", content: "run OAuth agent" } })}\n${JSON.stringify(
+          {
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "OAuth agent listed 3 pending approvals." }],
+            },
+          },
+        )}\n`,
+      );
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({
+        sessionId: "oauth-session-1",
+        sessionKey: "agent:oauth-agent:main",
+        state: "processing",
+      });
+
+      vi.advanceTimersByTime(61_000);
+    } finally {
+      unsubscribe();
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(tempStateDir, { recursive: true, force: true });
+    }
+
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.stalled"),
+        "app-agent stalled transcript event",
+      ),
+      {
+        type: "session.stalled",
+        state: "processing",
+        classification: "stalled_agent_run",
+        reason: "transcript_progress_observed",
+        queueDepth: 0,
+      },
+    );
+    expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
   it("keeps queued stale sessions eligible for lane recovery", () => {
