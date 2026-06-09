@@ -214,7 +214,8 @@ func translateSnippet(ctx context.Context, translator docsTranslator, tm *Transl
 	}
 	translated, err := translator.Translate(ctx, textValue, srcLang, tgtLang)
 	if err != nil {
-		return "", err
+		log.Printf("docs-i18n: frontmatter fallback %s reason=%v", segmentID, err)
+		return textValue, nil
 	}
 	shouldCache := true
 	if validationErr := validateFrontmatterScalarTranslation(textValue, translated); validationErr != nil {

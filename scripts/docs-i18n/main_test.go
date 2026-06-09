@@ -51,6 +51,18 @@ func (transcriptFrontmatterTranslator) TranslateRaw(_ context.Context, text, _, 
 
 func (transcriptFrontmatterTranslator) Close() {}
 
+type errorTranslator struct{}
+
+func (errorTranslator) Translate(context.Context, string, string, string) (string, error) {
+	return "", errors.New("codex exec failed: exit status 1")
+}
+
+func (errorTranslator) TranslateRaw(context.Context, string, string, string) (string, error) {
+	return "", errors.New("codex exec failed: exit status 1")
+}
+
+func (errorTranslator) Close() {}
+
 type partialFailTranslator struct{}
 
 func (partialFailTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
@@ -153,6 +165,59 @@ func TestRunDocsI18NAllowPartialKeepsSuccessfulDocOutputs(t *testing.T) {
 	}
 }
 
+func TestRunDocsI18NRewritesLineTitleFromExactGlossaryWithoutModel(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
+	linePath := filepath.Join(docsRoot, "channels", "line.md")
+	writeFile(t, linePath, stringsJoin(
+		"---",
+		"title: LINE",
+		"---",
+		"",
+	))
+
+	locales := []string{"zh-CN", "zh-TW", "de", "es"}
+	for _, locale := range locales {
+		writeFile(t, filepath.Join(docsRoot, ".i18n", "glossary."+locale+".json"), `[{"source":"LINE","target":"LINE"}]`)
+		writeFile(t, filepath.Join(docsRoot, locale, "channels", "line.md"), stringsJoin(
+			"---",
+			"title: 行",
+			"---",
+			"",
+		))
+
+		err := runDocsI18N(context.Background(), runConfig{
+			targetLang: locale,
+			sourceLang: "en",
+			docsRoot:   docsRoot,
+			mode:       "doc",
+			thinking:   "low",
+			overwrite:  true,
+			parallel:   1,
+		}, []string{linePath}, func(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (docsTranslator, error) {
+			translator, err := NewCodexTranslator(srcLang, tgtLang, glossary, thinking)
+			if err != nil {
+				return nil, err
+			}
+			translator.runPrompt = func(context.Context, codexPromptRequest) (string, error) {
+				t.Fatalf("exact LINE title for %s should not call Codex", tgtLang)
+				return "", nil
+			}
+			return translator, nil
+		})
+		if err != nil {
+			t.Fatalf("runDocsI18N(%s) failed: %v", locale, err)
+		}
+
+		got := mustReadFile(t, filepath.Join(docsRoot, locale, "channels", "line.md"))
+		if !containsLine(got, "title: LINE") {
+			t.Fatalf("expected %s title to stay LINE, got:\n%s", locale, got)
+		}
+	}
+}
+
 func TestTranslateSnippetDoesNotCacheFallbackToSource(t *testing.T) {
 	t.Parallel()
 
@@ -190,6 +255,26 @@ func TestTranslateSnippetRejectsTranscriptArtifact(t *testing.T) {
 	cacheKey := cacheKey(cacheNamespace(), "en", "th", "tools/reactions.md:frontmatter:read_when:0", hashText(source))
 	if _, ok := tm.Get(cacheKey); ok {
 		t.Fatalf("expected fallback translation not to be cached")
+	}
+}
+
+func TestTranslateSnippetFallsBackWhenFrontmatterTranslatorFails(t *testing.T) {
+	t.Parallel()
+
+	tm := &TranslationMemory{entries: map[string]TMEntry{}}
+	source := "LINE Messaging API plugin setup, config, and usage"
+
+	translated, err := translateSnippet(context.Background(), errorTranslator{}, tm, "channels/line.md:frontmatter:summary", source, "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("translateSnippet returned error: %v", err)
+	}
+	if translated != source {
+		t.Fatalf("expected fallback to source text, got %q", translated)
+	}
+
+	cacheKey := cacheKey(cacheNamespace(), "en", "zh-CN", "channels/line.md:frontmatter:summary", hashText(source))
+	if _, ok := tm.Get(cacheKey); ok {
+		t.Fatalf("expected failed frontmatter translation not to be cached")
 	}
 }
 
