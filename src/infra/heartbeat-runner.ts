@@ -129,6 +129,7 @@ import {
   type HeartbeatWakeIntent,
   type HeartbeatWakeRequest,
   type HeartbeatWakeSource,
+  HEARTBEAT_SKIP_MIN_SPACING,
   isRetryableHeartbeatBusySkipReason,
   requestHeartbeat,
   setHeartbeatsEnabled,
@@ -2159,6 +2160,10 @@ export function startHeartbeatRunner(opts: {
     });
 
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number, reason?: string) => {
+    // All reasons advance nextDueMs: interval uses the phase scheduler, all
+    // others (exec-event, cron, hook, acp-spawn, etc.) use now + intervalMs.
+    // Exec-event wakes bypass the nextDueMs check in shouldDeferWake directly,
+    // so no special handling is needed here.
     const rawDueMs =
       reason === "interval"
         ? computeNextHeartbeatPhaseDueMs({
@@ -2166,9 +2171,7 @@ export function startHeartbeatRunner(opts: {
             intervalMs: agent.intervalMs,
             phaseMs: agent.phaseMs,
           })
-        : // Targeted and action-driven wakes still count as a fresh heartbeat run
-          // for cooldown purposes, so keep the existing now + interval behavior.
-          now + agent.intervalMs;
+        : now + agent.intervalMs;
     agent.nextDueMs = seekActiveSlotForAgent(agent, rawDueMs);
   };
 
@@ -2195,10 +2198,12 @@ export function startHeartbeatRunner(opts: {
     now: number,
     reason?: string,
     intent: HeartbeatWakeIntent = "event",
+    source?: HeartbeatWakeSource,
   ): DeferDecision => {
     const decision = shouldDeferWake({
       intent,
       reason,
+      source,
       now,
       nextDueMs: agent.nextDueMs,
       lastRunStartedAtMs: agent.lastRunStartedAtMs,
@@ -2379,7 +2384,7 @@ export function startHeartbeatRunner(opts: {
         if (!targetAgent) {
           return { status: "skipped", reason: "disabled" };
         }
-        const deferral = evaluateWakeDeferral(targetAgent, now, reason, intent);
+        const deferral = evaluateWakeDeferral(targetAgent, now, reason, intent, params.source);
         if (deferral.defer) {
           advanceStaleScheduleAfterDeferral(targetAgent, now, reason, deferral);
           return { status: "skipped", reason: deferral.reason };
@@ -2441,9 +2446,18 @@ export function startHeartbeatRunner(opts: {
         retryableBusySkip?: HeartbeatRunResult;
       };
       const runOneAgent = async (agent: HeartbeatAgentState): Promise<AgentWakeOutcome> => {
-        const deferral = evaluateWakeDeferral(agent, now, reason, intent);
+        const deferral = evaluateWakeDeferral(agent, now, reason, intent, params.source);
         if (deferral.defer) {
           advanceStaleScheduleAfterDeferral(agent, now, reason, deferral);
+          // Propagate min-spacing deferrals for exec-event wakes as retryable
+          // so the wake-layer retry loop picks them up, matching the targeted
+          // path behavior where min-spacing defers are already retryable.
+          if (deferral.reason === HEARTBEAT_SKIP_MIN_SPACING && params.source === "exec-event") {
+            return {
+              ran: false,
+              retryableBusySkip: { status: "skipped", reason: HEARTBEAT_SKIP_MIN_SPACING },
+            };
+          }
           return { ran: false };
         }
 

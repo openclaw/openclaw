@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_LANES_BUSY,
+  HEARTBEAT_SKIP_MIN_SPACING,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   hasHeartbeatWakeHandler,
   hasPendingHeartbeatWake,
@@ -433,5 +434,35 @@ describe("heartbeat-wake", () => {
         sessionKey: "agent:main:forum:group:-1001",
       },
     ]);
+  });
+});
+
+describe("isRetryableHeartbeatBusySkipReason", () => {
+  it("returns true for requests-in-flight", async () => {
+    const { isRetryableHeartbeatBusySkipReason } = await import("./heartbeat-wake.js");
+    expect(isRetryableHeartbeatBusySkipReason(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT)).toBe(true);
+  });
+
+  it("returns true for cron-in-progress", async () => {
+    const { isRetryableHeartbeatBusySkipReason } = await import("./heartbeat-wake.js");
+    expect(isRetryableHeartbeatBusySkipReason(HEARTBEAT_SKIP_CRON_IN_PROGRESS)).toBe(true);
+  });
+
+  it("returns true for lanes-busy", async () => {
+    const { isRetryableHeartbeatBusySkipReason } = await import("./heartbeat-wake.js");
+    expect(isRetryableHeartbeatBusySkipReason(HEARTBEAT_SKIP_LANES_BUSY)).toBe(true);
+  });
+
+  it("returns true for min-spacing (retryable deferral)", async () => {
+    const { isRetryableHeartbeatBusySkipReason } = await import("./heartbeat-wake.js");
+    expect(isRetryableHeartbeatBusySkipReason(HEARTBEAT_SKIP_MIN_SPACING)).toBe(true);
+  });
+
+  it("returns false for non-retryable reasons", async () => {
+    const { isRetryableHeartbeatBusySkipReason } = await import("./heartbeat-wake.js");
+    expect(isRetryableHeartbeatBusySkipReason("not-due")).toBe(false);
+    expect(isRetryableHeartbeatBusySkipReason("flood")).toBe(false);
+    expect(isRetryableHeartbeatBusySkipReason("disabled")).toBe(false);
+    expect(isRetryableHeartbeatBusySkipReason("unknown")).toBe(false);
   });
 });

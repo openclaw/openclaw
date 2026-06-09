@@ -12,7 +12,11 @@
 // defer it?" Both the targeted and broadcast dispatch branches must call
 // `shouldDeferWake` so the gate can never be forgotten on one path.
 
-import type { HeartbeatWakeIntent, HeartbeatWakeSource } from "./heartbeat-wake.js";
+import {
+  HEARTBEAT_SKIP_MIN_SPACING,
+  type HeartbeatWakeIntent,
+  type HeartbeatWakeSource,
+} from "./heartbeat-wake.js";
 
 // Default minimum spacing between heartbeat runs for the same agent, regardless
 // of configured `every`. Even when `nextDueMs` is enforced, two wakes arriving
@@ -114,13 +118,18 @@ export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
     return { defer: false };
   }
 
-  if (input.now < input.nextDueMs) {
+  // Skip nextDueMs check for exec-event wakes: a background process exit is a
+  // real-time notification that should not wait for the next interval schedule.
+  // The `running` flag in heartbeat-wake and `isReplyRunActive` in heartbeat-runner
+  // already prevent concurrent runs for the same session. The min-spacing and
+  // flood guard below remain active for all event sources.
+  if (input.source !== "exec-event" && input.now < input.nextDueMs) {
     return { defer: true, reason: "not-due" };
   }
 
   const minSpacing = input.minSpacingMs ?? DEFAULT_MIN_WAKE_SPACING_MS;
   if (minSpacing > 0 && input.now - input.lastRunStartedAtMs < minSpacing) {
-    return { defer: true, reason: "min-spacing" };
+    return { defer: true, reason: HEARTBEAT_SKIP_MIN_SPACING };
   }
 
   return { defer: false };

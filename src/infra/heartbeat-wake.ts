@@ -11,15 +11,18 @@ export type HeartbeatRunResult =
 export const HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT = "requests-in-flight";
 export const HEARTBEAT_SKIP_CRON_IN_PROGRESS = "cron-in-progress";
 export const HEARTBEAT_SKIP_LANES_BUSY = "lanes-busy";
+export const HEARTBEAT_SKIP_MIN_SPACING = "min-spacing";
 export type RetryableHeartbeatBusySkipReason =
   | typeof HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT
   | typeof HEARTBEAT_SKIP_CRON_IN_PROGRESS
-  | typeof HEARTBEAT_SKIP_LANES_BUSY;
+  | typeof HEARTBEAT_SKIP_LANES_BUSY
+  | typeof HEARTBEAT_SKIP_MIN_SPACING;
 
 const RETRYABLE_BUSY_SKIP_REASONS = new Set([
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_LANES_BUSY,
+  HEARTBEAT_SKIP_MIN_SPACING,
 ]);
 
 export function isRetryableHeartbeatBusySkipReason(reason: string): boolean {
