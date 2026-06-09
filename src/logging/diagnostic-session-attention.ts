@@ -30,7 +30,7 @@ export function classifySessionAttention(params: {
   queueDepth: number;
   activity: DiagnosticSessionActivitySnapshot;
   staleMs: number;
-  hasTranscriptAssistantContext?: boolean;
+  hasCurrentTurnTranscriptAssistantContext?: boolean;
 }): SessionAttentionClassification {
   if (params.activity.activeWorkKind) {
     // Idle session with queued work and stale orphaned activity (no active
@@ -94,7 +94,7 @@ export function classifySessionAttention(params: {
     };
   }
 
-  if (params.hasTranscriptAssistantContext) {
+  if (params.hasCurrentTurnTranscriptAssistantContext) {
     return {
       eventType: "session.stalled",
       reason:

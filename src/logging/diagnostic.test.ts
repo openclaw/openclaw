@@ -359,7 +359,7 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("classifies app-agent transcript context as stalled instead of stale", () => {
+  it("keeps reused app-agent transcript context recoverable for a new stuck turn", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const tempStateDir = fs.mkdtempSync("/tmp/openclaw-app-agent-diagnostic-");
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
@@ -407,23 +407,23 @@ describe("stuck session diagnostics threshold", () => {
     }
 
     expect(classification).toEqual({
-      eventType: "session.stalled",
-      reason: "transcript_progress_observed",
-      classification: "stalled_agent_run",
-      recoveryEligible: false,
+      eventType: "session.stuck",
+      reason: "stale_session_state",
+      classification: "stale_session_state",
+      recoveryEligible: true,
     });
-    expectLoggerMessageContaining(warnSpy, "stalled session:");
+    expectLoggerMessageContaining(warnSpy, "stuck session:");
     expectLoggerMessageContaining(
       warnSpy,
       'lastAssistant="OAuth agent listed 3 pending approvals."',
     );
-    expectLoggerMessageContaining(warnSpy, "classification=stalled_agent_run");
-    expectLoggerMessageContaining(warnSpy, "recovery=none");
-    expectNoLoggerMessageContaining(warnSpy, "classification=stale_session_state");
-    expectNoLoggerMessageContaining(warnSpy, "recovery=checking");
+    expectLoggerMessageContaining(warnSpy, "classification=stale_session_state");
+    expectLoggerMessageContaining(warnSpy, "recovery=checking");
+    expectNoLoggerMessageContaining(warnSpy, "classification=stalled_agent_run");
+    expectNoLoggerMessageContaining(warnSpy, "recovery=none");
   });
 
-  it("does not recover app-agent sessions whose transcript shows assistant work", () => {
+  it("does not recover app-agent sessions when the current turn appends assistant work", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const tempStateDir = fs.mkdtempSync("/tmp/openclaw-app-agent-diagnostic-");
     const events: DiagnosticEventPayload[] = [];
@@ -437,16 +437,16 @@ describe("stuck session diagnostics threshold", () => {
       fs.mkdirSync(path.join(tempStateDir, "agents", "oauth-agent", "sessions"), {
         recursive: true,
       });
+      const sessionFile = path.join(
+        tempStateDir,
+        "agents",
+        "oauth-agent",
+        "sessions",
+        "oauth-session-1.jsonl",
+      );
       fs.writeFileSync(
-        path.join(tempStateDir, "agents", "oauth-agent", "sessions", "oauth-session-1.jsonl"),
-        `${JSON.stringify({ message: { role: "user", content: "run OAuth agent" } })}\n${JSON.stringify(
-          {
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "OAuth agent listed 3 pending approvals." }],
-            },
-          },
-        )}\n`,
+        sessionFile,
+        `${JSON.stringify({ message: { role: "user", content: "run OAuth agent" } })}\n`,
       );
       startDiagnosticHeartbeat(
         {
@@ -462,6 +462,15 @@ describe("stuck session diagnostics threshold", () => {
         sessionKey: "agent:oauth-agent:main",
         state: "processing",
       });
+      fs.appendFileSync(
+        sessionFile,
+        `${JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "OAuth agent listed 3 pending approvals." }],
+          },
+        })}\n`,
+      );
 
       vi.advanceTimersByTime(61_000);
     } finally {

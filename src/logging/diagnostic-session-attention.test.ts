@@ -27,10 +27,22 @@ describe("classifySessionAttention", () => {
       },
     },
     {
-      name: "transcript assistant context without active work",
+      name: "old transcript assistant context without current progress",
       queueDepth: 0,
       activity: {},
-      hasTranscriptAssistantContext: true,
+      hasCurrentTurnTranscriptAssistantContext: false,
+      expected: {
+        eventType: "session.stuck",
+        reason: "stale_session_state",
+        classification: "stale_session_state",
+        recoveryEligible: true,
+      },
+    },
+    {
+      name: "current-turn transcript assistant context without active work",
+      queueDepth: 0,
+      activity: {},
+      hasCurrentTurnTranscriptAssistantContext: true,
       expected: {
         eventType: "session.stalled",
         reason: "transcript_progress_observed",
@@ -167,15 +179,18 @@ describe("classifySessionAttention", () => {
         recoveryEligible: false,
       },
     },
-  ])("$name", ({ activity, expected, hasTranscriptAssistantContext, queueDepth, state }) => {
-    expect(
-      classifySessionAttention({
-        state,
-        queueDepth,
-        activity,
-        staleMs: 30_000,
-        hasTranscriptAssistantContext,
-      }),
-    ).toEqual(expected);
-  });
+  ])(
+    "$name",
+    ({ activity, expected, hasCurrentTurnTranscriptAssistantContext, queueDepth, state }) => {
+      expect(
+        classifySessionAttention({
+          state,
+          queueDepth,
+          activity,
+          staleMs: 30_000,
+          hasCurrentTurnTranscriptAssistantContext,
+        }),
+      ).toEqual(expected);
+    },
+  );
 });
