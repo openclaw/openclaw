@@ -19,8 +19,12 @@ const MAX_PREWARM_AGENTS = 100;
  * or index sync should not starve the remaining agents in the serial queue.
  * The timed-out work keeps running in the background (the manager caches its
  * provider init promise), so a later real search still benefits from it.
+ *
+ * Set to 60s because per-user agents (e.g. rabbitmq-<uid>) with large memory
+ * stores need longer than 30s to finish their initial index sync; warming them
+ * fully here avoids paying that cost on the user's first message.
  */
-const PREWARM_AGENT_TIMEOUT_MS = 30_000;
+const PREWARM_AGENT_TIMEOUT_MS = 60_000;
 
 type GatewayStartupLog = { info?: (msg: string) => void; warn: (msg: string) => void };
 
