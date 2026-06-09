@@ -1167,7 +1167,11 @@ export class MsteamsProvider implements VoiceCallProvider {
     // shapes its mouth (smile/frown/surprise) as it begins talking. Best-effort — the worker ignores
     // an unknown tag, and a failed send must never block playback.
     try {
-      state.session.send({ type: "expression", emotion: inferEmotion(input.text) });
+      const emotion = inferEmotion(input.text);
+      this.logger?.debug?.(
+        `MsteamsProvider: expression cue '${emotion}' for ${state.providerCallId}`,
+      );
+      state.session.send({ type: "expression", emotion });
     } catch {
       // non-fatal: expression is a cosmetic cue
     }
@@ -1188,6 +1192,9 @@ export class MsteamsProvider implements VoiceCallProvider {
       const durationMs = (pcm16k.length / BYTES_PER_SAMPLE / MSTEAMS_SAMPLE_RATE_HZ) * 1000;
       const marks = estimateVisemes(input.text, durationMs);
       if (marks.length > 0) {
+        this.logger?.debug?.(
+          `MsteamsProvider: speech.marks ${marks.length} visemes for ${state.providerCallId}`,
+        );
         state.session.send({ type: "speech.marks", ts: 0, marks });
       }
     } catch {
