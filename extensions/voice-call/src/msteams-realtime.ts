@@ -512,6 +512,7 @@ export function createMsteamsRealtimeCall(params: {
         const emotion = inferEmotion(text);
         if (emotion !== lastSentExpression) {
           lastSentExpression = emotion;
+          logger?.debug?.(`MsteamsRealtime: expression cue '${emotion}' for ${callId}`);
           try {
             session.send({ type: "expression", emotion });
           } catch {
@@ -568,6 +569,7 @@ export function createMsteamsRealtimeCall(params: {
       return; // over the per-call vision budget
     }
     lastPushedFrameData = frame.dataBase64;
+    logger?.debug?.(`MsteamsRealtime: ambient vision push (${frame.source}) for ${callId}`);
     try {
       realtime.sendImage({
         dataBase64: frame.dataBase64,
@@ -761,6 +763,7 @@ export function createMsteamsRealtimeCall(params: {
         if (bytes.length === 0 || bytes.length > MSTEAMS_MAX_DISPLAY_IMAGE_BYTES) {
           continue;
         }
+        logger?.debug?.(`MsteamsRealtime: display.image (${mime}, ${bytes.length}B) for ${callId}`);
         session.send({ type: "display.image", dataBase64: bytes.toString("base64"), mime });
         shown += 1;
       } catch (err) {
