@@ -102,9 +102,22 @@ export function createTeamsReplyStreamController(params: {
 
   const wasCanceled = () => canceledLocally || Boolean(stream?.canceled);
 
+  // #59297: block fallback must not re-send tokens already stream.emit'd — e.g.
+  // when streamFailed latches after the 4000-char Teams limit mid-delivery.
+  const trimAlreadyStreamedPrefix = (payload: ReplyPayload): ReplyPayload => {
+    if (emittedTextLength === 0 || typeof payload.text !== "string") {
+      return payload;
+    }
+    if (emittedTextLength >= payload.text.length) {
+      return { ...payload, text: undefined };
+    }
+    return { ...payload, text: payload.text.slice(emittedTextLength) };
+  };
+
   const fallbackPayloadForSuppressedFinal = (payload: ReplyPayload): ReplyPayload => {
     const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-    return hasMedia ? { ...payload, mediaUrl: undefined, mediaUrls: undefined } : payload;
+    const trimmed = trimAlreadyStreamedPrefix(payload);
+    return hasMedia ? { ...trimmed, mediaUrl: undefined, mediaUrls: undefined } : trimmed;
   };
 
   /**
@@ -186,11 +199,8 @@ export function createTeamsReplyStreamController(params: {
           canceledLocally = true;
           return;
         }
-        // Non-cancel failure: latch streamFailed so `preparePayload` lets
-        // block delivery happen even though tokens were already emitted.
-        // The user may see a duplicate (streamed prefix + full block reply)
-        // — that's intentional and matches the pre-migration recovery
-        // behavior; truncated-only is the worse outcome.
+        // Non-cancel failure: latch streamFailed so `preparePayload` falls
+        // through to block delivery for the un-streamed suffix only (#59297).
         streamFailed = true;
         params.log?.warn?.(
           `msteams stream emit failed, falling back to block delivery: ${err instanceof Error ? err.message : String(err)}`,
@@ -305,6 +315,9 @@ export function createTeamsReplyStreamController(params: {
             `progress-mode finalize failed: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
+      }
+      if (streamFailed && emittedTextLength > 0) {
+        return trimAlreadyStreamedPrefix(payload);
       }
       return payload;
     },

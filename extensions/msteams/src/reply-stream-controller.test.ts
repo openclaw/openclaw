@@ -199,7 +199,7 @@ describe("createTeamsReplyStreamController", () => {
     ctrl.onPartialReply({ text: "streamed" });
     expect(ctrl.preparePayload({ text: "streamed final" })).toBeUndefined();
 
-    await expect(ctrl.finalize()).resolves.toEqual({ text: "streamed final" });
+    await expect(ctrl.finalize()).resolves.toEqual({ text: " final" });
   });
 
   it("returns text-only fallback when stream close no-ops after media already queued", async () => {
@@ -214,7 +214,7 @@ describe("createTeamsReplyStreamController", () => {
     });
 
     await expect(ctrl.finalize()).resolves.toEqual({
-      text: "streamed final",
+      text: " final",
       mediaUrl: undefined,
       mediaUrls: undefined,
     });
@@ -228,7 +228,7 @@ describe("createTeamsReplyStreamController", () => {
     ctrl.onPartialReply({ text: "streamed" });
     expect(ctrl.preparePayload({ text: "streamed final" })).toBeUndefined();
 
-    await expect(ctrl.finalize()).resolves.toEqual({ text: "streamed final" });
+    await expect(ctrl.finalize()).resolves.toEqual({ text: " final" });
   });
 
   it("does not close the stream in finalize when no tokens were emitted", async () => {
@@ -375,9 +375,9 @@ describe("createTeamsReplyStreamController", () => {
       ctrl.onPartialReply({ text: "hello world" });
       // Without the streamFailed latch, preparePayload would suppress the
       // payload because tokens were emitted; the user would see only "hello".
-      // With the latch, block delivery sends the full final reply.
+      // With the latch, block delivery sends only the un-streamed suffix.
       const result = ctrl.preparePayload({ text: "hello world final" });
-      expect(result).toEqual(expect.objectContaining({ text: "hello world final" }));
+      expect(result).toEqual(expect.objectContaining({ text: " world final" }));
     });
 
     it("preserves the no-duplicate behavior for the active streamed segment", () => {
@@ -399,7 +399,65 @@ describe("createTeamsReplyStreamController", () => {
       });
       // Finalize must not propagate; it returns the retained payload so the
       // dispatcher can fall back to normal Teams delivery.
-      await expect(ctrl.finalize()).resolves.toEqual({ text: "partial final" });
+      await expect(ctrl.finalize()).resolves.toEqual({ text: " final" });
+    });
+
+    it("trims streamed prefix from block fallback after partial stream failure", () => {
+      const stream = makeStream();
+      const ctrl = makeController({ stream });
+      ctrl.onPartialReply({ text: "prefix-" });
+      expect(stream.emit).toHaveBeenCalledTimes(1);
+      stream.emit.mockImplementation(() => {
+        throw new Error("over 4000 char limit");
+      });
+      ctrl.onPartialReply({ text: "prefix-suffix" });
+      const result = ctrl.preparePayload({ text: "prefix-suffix-tail" });
+      expect(result).toEqual({ text: "suffix-tail" });
+    });
+
+    it("suppresses text in block fallback when streamed prefix covers full text", () => {
+      const stream = makeStream();
+      const ctrl = makeController({ stream });
+      ctrl.onPartialReply({ text: "complete reply" });
+      stream.emit.mockImplementation(() => {
+        throw new Error("over 4000 char limit");
+      });
+      // Extend past the emitted prefix so emit is retried and streamFailed latches.
+      ctrl.onPartialReply({ text: "complete reply!" });
+      expect(ctrl.preparePayload({ text: "complete reply" })).toEqual({ text: undefined });
+    });
+
+    it("preserves media when streamed prefix covers full text after stream failure", () => {
+      const stream = makeStream();
+      const ctrl = makeController({ stream });
+      ctrl.onPartialReply({ text: "complete reply" });
+      stream.emit.mockImplementation(() => {
+        throw new Error("over 4000 char limit");
+      });
+      ctrl.onPartialReply({ text: "complete reply!" });
+      expect(ctrl.preparePayload({ text: "complete reply", mediaUrl: "https://x/y.png" })).toEqual({
+        text: undefined,
+        mediaUrl: "https://x/y.png",
+      });
+    });
+
+    it("delivers full text when stream fails before any tokens were streamed", () => {
+      const stream = makeStream();
+      stream.emit.mockImplementation(() => {
+        throw new Error("network failure");
+      });
+      const ctrl = makeController({ stream });
+      ctrl.onPartialReply({ text: "never emitted" });
+      expect(ctrl.preparePayload({ text: "never emitted" })).toEqual({ text: "never emitted" });
+    });
+
+    it("suppresses text in finalize fallback when streamed prefix covers full text", async () => {
+      const stream = makeStream();
+      stream.close.mockResolvedValueOnce(undefined);
+      const ctrl = makeController({ stream });
+      ctrl.onPartialReply({ text: "streamed final" });
+      expect(ctrl.preparePayload({ text: "streamed final" })).toBeUndefined();
+      await expect(ctrl.finalize()).resolves.toEqual({ text: undefined });
     });
 
     it("treats post-cancel stream as inactive without further emit attempts", () => {
