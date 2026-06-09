@@ -74,7 +74,10 @@ export {
   SUBAGENT_SPAWN_ACCEPTED_NOTE,
   SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
 } from "./subagent-spawn-accepted-note.js";
-import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
+import {
+  preferParentExternalOriginWhenLiveOriginIsInternal,
+  resolveRequesterOriginForChild,
+} from "./spawn-requester-origin.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
@@ -87,6 +90,7 @@ import {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
   buildSubagentSystemPrompt,
   callGateway,
+  deliveryContextFromSession,
   dispatchGatewayMethodInProcess,
   emitSessionLifecycleEvent,
   forkSessionFromParent,
@@ -106,6 +110,7 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
+  resolveStorePath,
   resolveSandboxRuntimeStatus,
   updateSessionStore,
   isAdminOnlyMethod,
@@ -1216,16 +1221,33 @@ export async function spawnSubagentDirect(
       ? { threadId: ctx.agentThreadId }
       : {}),
   });
-  let childSessionOrigin = resolveRequesterOriginForChild({
-    cfg,
-    targetAgentId,
-    requesterAgentId,
-    requesterChannel: ctx.agentChannel,
-    requesterAccountId: ctx.agentAccountId,
-    requesterTo: ctx.agentTo,
-    requesterThreadId: ctx.agentThreadId,
-    requesterGroupSpace: ctx.agentGroupSpace,
-    requesterMemberRoleIds: ctx.agentMemberRoleIds,
+  let parentDeliveryContext: DeliveryContext | undefined;
+  if (requesterInternalKey && requesterAgentId) {
+    try {
+      parentDeliveryContext = deliveryContextFromSession(
+        loadSessionStore(
+          resolveStorePath(cfg.session?.store, {
+            agentId: requesterAgentId,
+          }),
+        )[requesterInternalKey],
+      );
+    } catch {
+      parentDeliveryContext = undefined;
+    }
+  }
+  let childSessionOrigin = preferParentExternalOriginWhenLiveOriginIsInternal({
+    parentDeliveryContext,
+    liveOrigin: resolveRequesterOriginForChild({
+      cfg,
+      targetAgentId,
+      requesterAgentId,
+      requesterChannel: ctx.agentChannel,
+      requesterAccountId: ctx.agentAccountId,
+      requesterTo: ctx.agentTo,
+      requesterThreadId: ctx.agentThreadId,
+      requesterGroupSpace: ctx.agentGroupSpace,
+      requesterMemberRoleIds: ctx.agentMemberRoleIds,
+    }),
   });
   const targetPolicy = resolveSubagentTargetPolicy({
     requesterAgentId,

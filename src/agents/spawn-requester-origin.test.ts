@@ -3,7 +3,10 @@
 import { describe, expect, it } from "vitest";
 import type { AgentBindingMatch } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
+import {
+  preferParentExternalOriginWhenLiveOriginIsInternal,
+  resolveRequesterOriginForChild,
+} from "./spawn-requester-origin.js";
 
 describe("resolveRequesterOriginForChild", () => {
   function routeBinding(match: AgentBindingMatch) {
@@ -351,5 +354,29 @@ describe("resolveRequesterOriginForChild", () => {
         to,
       },
     );
+  });
+
+  it("keeps parent external delivery when a webchat view spawns child work for an SMS session", () => {
+    expect(
+      preferParentExternalOriginWhenLiveOriginIsInternal({
+        liveOrigin: {
+          channel: "webchat",
+          accountId: "browser",
+          to: "session:webchat-control",
+          threadId: "webchat-thread",
+        },
+        parentDeliveryContext: {
+          channel: "imessage",
+          accountId: "messages",
+          to: "+17372941355",
+          threadId: "sms-thread",
+        },
+      }),
+    ).toEqual({
+      channel: "imessage",
+      accountId: "messages",
+      to: "+17372941355",
+      threadId: "sms-thread",
+    });
   });
 });
