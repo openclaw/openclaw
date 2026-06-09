@@ -105,7 +105,7 @@ function rewriteAssistantEntryWithEmptyContent(entry: SessionMessageEntry): Sess
   };
 }
 
-function isImageMimeType(value: unknown): boolean {
+function isImageMimeType(value: unknown): value is string {
   return typeof value === "string" && /^image\//iu.test(value.trim());
 }
 

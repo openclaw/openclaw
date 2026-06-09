@@ -56,7 +56,7 @@ function isPlainTranscriptObject(value: object): value is Record<string, unknown
   return prototype === Object.prototype || prototype === null;
 }
 
-function isImageMimeType(value: unknown): boolean {
+function isImageMimeType(value: unknown): value is string {
   return typeof value === "string" && /^image\//iu.test(value.trim());
 }
 
