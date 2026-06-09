@@ -47,6 +47,10 @@ function clearMarker(marker: string) {
   }
 }
 
+function envRecord(entries: ReadonlyArray<readonly [string, string]>): Record<string, string> {
+  return Object.fromEntries(entries);
+}
+
 async function runGitLsRemote(gitPath: string, target: string, env: NodeJS.ProcessEnv) {
   await new Promise<void>((resolve) => {
     const child = spawn(gitPath, ["ls-remote", target], { env, stdio: "ignore" });
@@ -71,6 +75,25 @@ async function runGitCommand(
     });
     child.once("error", () => resolve());
     child.once("close", () => resolve());
+  });
+}
+
+async function runGitCommandExitCode(
+  gitPath: string,
+  args: string[],
+  options?: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<number | null> {
+  return await new Promise<number | null>((resolve) => {
+    const child = spawn(gitPath, args, {
+      cwd: options?.cwd,
+      env: options?.env,
+      stdio: "ignore",
+    });
+    child.once("error", () => resolve(null));
+    child.once("close", (code) => resolve(code));
   });
 }
 
@@ -133,6 +156,8 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("BROWSER")).toBe(true);
     expect(isDangerousHostEnvVarName("browser")).toBe(true);
     expect(isDangerousHostEnvVarName("SHELL")).toBe(true);
+    expect(isDangerousHostEnvVarName("GIT_ALLOW_PROTOCOL")).toBe(true);
+    expect(isDangerousHostEnvVarName("git_protocol_from_user")).toBe(true);
     expect(isDangerousHostEnvVarName("GIT_EDITOR")).toBe(true);
     expect(isDangerousHostEnvVarName("git_editor")).toBe(true);
     expect(isDangerousHostEnvVarName("GIT_EXTERNAL_DIFF")).toBe(true);
@@ -316,6 +341,7 @@ describe("sanitizeHostExecEnv", () => {
         PATH: "/usr/bin:/bin",
         BASH_ENV: "/tmp/pwn.sh",
         BROWSER: "/tmp/pwn-browser",
+        GIT_ALLOW_PROTOCOL: "ext",
         GIT_EDITOR: "/tmp/pwn-editor",
         GIT_EXTERNAL_DIFF: "/tmp/pwn.sh",
         GIT_DIR: "/tmp/evil-git-dir",
@@ -326,6 +352,7 @@ describe("sanitizeHostExecEnv", () => {
         GIT_OBJECT_DIRECTORY: "/tmp/evil-git-objects",
         GIT_ALTERNATE_OBJECT_DIRECTORIES: "/tmp/evil-git-alt-objects",
         GIT_NAMESPACE: "evil-namespace",
+        GIT_PROTOCOL_FROM_USER: "1",
         GIT_SEQUENCE_EDITOR: "/tmp/pwn-sequence-editor",
         HGRCPATH: "/tmp/evil-hgrc",
         CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
@@ -382,6 +409,8 @@ describe("sanitizeHostExecEnv", () => {
       SSL_CERT_DIR: "/tmp/evil-cert-dir",
       DOCKER_CONTEXT: "trusted-remote",
       DOCKER_HOST: "tcp://docker.example.test:2376",
+      GIT_ALLOW_PROTOCOL: "",
+      GIT_PROTOCOL_FROM_USER: "0",
       RUSTUP_DIST_ROOT: "https://mirror.example.test/deprecated-dist",
       RUSTUP_DIST_SERVER: "https://mirror.example.test",
       RUSTUP_HOME: "/tmp/rustup-home",
@@ -391,115 +420,187 @@ describe("sanitizeHostExecEnv", () => {
     });
   });
 
+  it("preserves inherited non-permissive GIT_PROTOCOL_FROM_USER values", () => {
+    const restrictiveValues = ["", "0", "00", "+0", "-0", "false", "False", "no", "off", "maybe"];
+
+    for (const value of restrictiveValues) {
+      const env = sanitizeHostExecEnv({
+        baseEnv: {
+          PATH: "/usr/bin:/bin",
+          GIT_PROTOCOL_FROM_USER: value,
+        },
+      });
+
+      expect(env.GIT_PROTOCOL_FROM_USER).toBe(value);
+    }
+  });
+
+  it("preserves inherited safe GIT_ALLOW_PROTOCOL allowlist values", () => {
+    const safeValues = ["", "git", "https:ssh", "git:http:https:ssh"];
+
+    for (const value of safeValues) {
+      const env = sanitizeHostExecEnv({
+        baseEnv: {
+          PATH: "/usr/bin:/bin",
+          GIT_ALLOW_PROTOCOL: value,
+        },
+      });
+
+      expect(env.GIT_ALLOW_PROTOCOL).toBe(value);
+    }
+  });
+
+  it("filters inherited GIT_ALLOW_PROTOCOL allowlists to Git safe defaults", () => {
+    const cases = [
+      ["ext", ""],
+      ["https:ext", "https"],
+      ["file", ""],
+      ["https:file", "https"],
+      ["hg", ""],
+      ["https::ssh", "https:ssh"],
+    ] as const;
+
+    for (const [value, expected] of cases) {
+      const env = sanitizeHostExecEnv({
+        baseEnv: {
+          PATH: "/usr/bin:/bin",
+          GIT_ALLOW_PROTOCOL: value,
+        },
+      });
+
+      expect(env.GIT_ALLOW_PROTOCOL).toBe(expected);
+    }
+  });
+
+  it("forces inherited permissive GIT_PROTOCOL_FROM_USER values to the Git disabled value", () => {
+    const permissiveValues = ["1", "01", "+1", "-1", "2", "true", "yes", "on"];
+
+    for (const value of permissiveValues) {
+      const env = sanitizeHostExecEnv({
+        baseEnv: {
+          PATH: "/usr/bin:/bin",
+          GIT_PROTOCOL_FROM_USER: value,
+        },
+      });
+
+      expect(env.GIT_PROTOCOL_FROM_USER).toBe("0");
+    }
+  });
+
   it("blocks PATH and dangerous override values", () => {
-    // Regression fixture intentionally feeds blocked override pivots into the sanitizer.
-    const baseEnv = {
-      PATH: "/usr/bin:/bin",
-      HOME: "/tmp/trusted-home",
-      ZDOTDIR: "/tmp/trusted-zdotdir",
-      CARGO_REGISTRIES_CRATES_IO_INDEX: "https://trusted.example/crates.io-index",
-      YARN_RC_FILENAME: ".trusted-yarnrc.yml",
-    };
-    const overrides = {
-      PATH: "/tmp/evil",
-      HOME: "/tmp/evil-home",
-      ZDOTDIR: "/tmp/evil-zdotdir",
-      BASH_ENV: "/tmp/pwn.sh",
-      BROWSER: "/tmp/browser",
-      CC: "/tmp/evil-cc",
-      CXX: "/tmp/evil-cxx",
-      CARGO_BUILD_RUSTC: "/tmp/evil-rustc",
-      CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
-      CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
-      CMAKE_CXX_COMPILER: "/tmp/evil-cxx-compiler",
-      RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
-      HGRCPATH: "/tmp/evil-hgrc",
-      GIT_SSH_COMMAND: "touch /tmp/pwned",
-      GIT_EDITOR: "/tmp/git-editor",
-      GIT_DIR: "/tmp/evil-git-dir",
-      GIT_WORK_TREE: "/tmp/evil-work-tree",
-      GIT_COMMON_DIR: "/tmp/evil-common-dir",
-      GIT_EXEC_PATH: "/tmp/git-exec-path",
-      GIT_INDEX_FILE: "/tmp/evil-git-index",
-      GIT_OBJECT_DIRECTORY: "/tmp/evil-git-objects",
-      GIT_ALTERNATE_OBJECT_DIRECTORIES: "/tmp/evil-git-alt-objects",
-      GIT_NAMESPACE: "evil-namespace",
-      GIT_SEQUENCE_EDITOR: "/tmp/git-sequence-editor",
-      EDITOR: "/tmp/editor",
-      NPM_CONFIG_USERCONFIG: "/tmp/npmrc",
-      GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
-      CARGO_REGISTRIES_CRATES_IO_INDEX: "https://example.invalid/crates.io-index",
-      AWS_CONFIG_FILE: "/tmp/override-aws-config",
-      YARN_RC_FILENAME: ".evil-yarnrc.yml",
-      KUBECONFIG: "/tmp/override-kubeconfig",
-      GOOGLE_APPLICATION_CREDENTIALS: "/tmp/override-gcp.json",
-      AWS_SHARED_CREDENTIALS_FILE: "/tmp/override-aws-credentials",
-      AWS_WEB_IDENTITY_TOKEN_FILE: "/tmp/override-aws-web-token",
-      AZURE_AUTH_LOCATION: "/tmp/override-azure-auth.json",
-      PIP_INDEX_URL: "https://example.invalid/simple",
-      PIP_PYPI_URL: "https://example.invalid/simple",
-      PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
-      PIP_CONFIG_FILE: "/tmp/evil-pip.conf",
-      PIP_FIND_LINKS: "https://example.invalid/wheels",
-      PIP_TRUSTED_HOST: "example.invalid",
-      UV_INDEX: "https://example.invalid/simple",
-      UV_INDEX_URL: "https://example.invalid/simple",
-      UV_PYTHON: "/tmp/evil-uv-python",
-      UV_DEFAULT_INDEX: "https://example.invalid/simple",
-      UV_EXTRA_INDEX_URL: "https://example.invalid/simple",
-      DOCKER_HOST: "tcp://example.invalid:2376",
-      DOCKER_TLS_VERIFY: "1",
-      DOCKER_CERT_PATH: "/tmp/evil-docker-certs",
-      DOCKER_CONTEXT: "evil-remote",
-      LIBRARY_PATH: "/tmp/evil-lib",
-      CPATH: "/tmp/evil-headers",
-      C_INCLUDE_PATH: "/tmp/evil-c-headers",
-      CPLUS_INCLUDE_PATH: "/tmp/evil-cpp-headers",
-      OBJC_INCLUDE_PATH: "/tmp/evil-objc-headers",
-      HELM_HOME: "/tmp/override-helm",
-      BASHOPTS: "xtrace",
-      FPATH: "/tmp/evil-fpath",
-      KSH_ENV: "/tmp/evil-ksh-env",
-      TCLLIBPATH: "/tmp/evil-tcllibpath",
-      NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
-      NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
-      NODE_REPL_HISTORY: "/tmp/node-repl-history",
-      NODE_V8_COVERAGE: "/tmp/coverage",
-      NODE_EXTRA_CA_CERTS: "/tmp/evil-ca.pem",
-      SSL_CERT_FILE: "/tmp/evil-cert.pem",
-      SSL_CERT_DIR: "/tmp/evil-cert-dir",
-      REQUESTS_CA_BUNDLE: "/tmp/evil-requests-ca.pem",
-      CURL_CA_BUNDLE: "/tmp/evil-curl-ca.pem",
-      GIT_SSL_NO_VERIFY: "1",
-      GIT_SSL_CAINFO: "/tmp/evil-git-ca.pem",
-      GIT_SSL_CAPATH: "/tmp/evil-git-ca-dir",
-      GOPROXY: "https://example.invalid/proxy",
-      GONOSUMCHECK: "example.invalid/*",
-      GONOSUMDB: "example.invalid/*",
-      GONOPROXY: "example.invalid/*",
-      GOPRIVATE: "example.invalid/*",
-      GOENV: "/tmp/evil-goenv",
-      GOPATH: "/tmp/evil-go",
-      PYTHONUSERBASE: "/tmp/evil-python-userbase",
-      VIRTUAL_ENV: "/tmp/evil-venv",
-      SHELLOPTS: "xtrace",
-      PS4: "$(touch /tmp/pwned)",
-      CLASSPATH: "/tmp/evil-classpath",
-      JAVA_OPTS: "-javaagent:/tmp/evil.jar",
-      GOFLAGS: "-mod=mod",
-      RUSTFLAGS: "-C link-args=-l/tmp/evil.so",
-      MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
-      MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
-      PHPRC: "/tmp/evil-php.ini",
-      XDG_CONFIG_HOME: "/tmp/evil-config",
-      SAFE: "ok",
-    };
-    const env = sanitizeHostExecEnv({ baseEnv, overrides });
+    const baseEnv = envRecord([
+      ["PATH", "/usr/bin:/bin"],
+      ["HOME", "/tmp/trusted-home"],
+      ["ZDOTDIR", "/tmp/trusted-zdotdir"],
+      ["CARGO_REGISTRIES_CRATES_IO_INDEX", "https://trusted.example/crates.io-index"],
+      ["YARN_RC_FILENAME", ".trusted-yarnrc.yml"],
+    ]);
+    const overrides = envRecord([
+      ["PATH", "/tmp/evil"],
+      ["HOME", "/tmp/evil-home"],
+      ["ZDOTDIR", "/tmp/evil-zdotdir"],
+      ["BASH_ENV", "/tmp/pwn.sh"],
+      ["BROWSER", "/tmp/browser"],
+      ["CC", "/tmp/evil-cc"],
+      ["CXX", "/tmp/evil-cxx"],
+      ["CARGO_BUILD_RUSTC", "/tmp/evil-rustc"],
+      ["CARGO_BUILD_RUSTC_WRAPPER", "/tmp/evil-rustc-wrapper"],
+      ["CMAKE_C_COMPILER", "/tmp/evil-c-compiler"],
+      ["CMAKE_CXX_COMPILER", "/tmp/evil-cxx-compiler"],
+      ["RUSTC_WRAPPER", "/tmp/evil-rustc-wrapper"],
+      ["HGRCPATH", "/tmp/evil-hgrc"],
+      ["GIT_ALLOW_PROTOCOL", "ext"],
+      ["GIT_PROTOCOL_FROM_USER", "1"],
+      ["GIT_SSH_COMMAND", "touch /tmp/pwned"],
+      ["GIT_EDITOR", "/tmp/git-editor"],
+      ["GIT_DIR", "/tmp/evil-git-dir"],
+      ["GIT_WORK_TREE", "/tmp/evil-work-tree"],
+      ["GIT_COMMON_DIR", "/tmp/evil-common-dir"],
+      ["GIT_EXEC_PATH", "/tmp/git-exec-path"],
+      ["GIT_INDEX_FILE", "/tmp/evil-git-index"],
+      ["GIT_OBJECT_DIRECTORY", "/tmp/evil-git-objects"],
+      ["GIT_ALTERNATE_OBJECT_DIRECTORIES", "/tmp/evil-git-alt-objects"],
+      ["GIT_NAMESPACE", "evil-namespace"],
+      ["GIT_SEQUENCE_EDITOR", "/tmp/git-sequence-editor"],
+      ["EDITOR", "/tmp/editor"],
+      ["NPM_CONFIG_USERCONFIG", "/tmp/npmrc"],
+      ["GIT_CONFIG_GLOBAL", "/tmp/gitconfig"],
+      ["CARGO_REGISTRIES_CRATES_IO_INDEX", "https://example.invalid/crates.io-index"],
+      ["AWS_CONFIG_FILE", "/tmp/override-aws-config"],
+      ["YARN_RC_FILENAME", ".evil-yarnrc.yml"],
+      ["KUBECONFIG", "/tmp/override-kubeconfig"],
+      ["GOOGLE_APPLICATION_CREDENTIALS", "/tmp/override-gcp.json"],
+      ["AWS_SHARED_CREDENTIALS_FILE", "/tmp/override-aws-credentials"],
+      ["AWS_WEB_IDENTITY_TOKEN_FILE", "/tmp/override-aws-web-token"],
+      ["AZURE_AUTH_LOCATION", "/tmp/override-azure-auth.json"],
+      ["PIP_INDEX_URL", "https://example.invalid/simple"],
+      ["PIP_PYPI_URL", "https://example.invalid/simple"],
+      ["PIP_EXTRA_INDEX_URL", "https://example.invalid/simple"],
+      ["PIP_CONFIG_FILE", "/tmp/evil-pip.conf"],
+      ["PIP_FIND_LINKS", "https://example.invalid/wheels"],
+      ["PIP_TRUSTED_HOST", "example.invalid"],
+      ["UV_INDEX", "https://example.invalid/simple"],
+      ["UV_INDEX_URL", "https://example.invalid/simple"],
+      ["UV_PYTHON", "/tmp/evil-uv-python"],
+      ["UV_DEFAULT_INDEX", "https://example.invalid/simple"],
+      ["UV_EXTRA_INDEX_URL", "https://example.invalid/simple"],
+      ["DOCKER_HOST", "tcp://example.invalid:2376"],
+      ["DOCKER_TLS_VERIFY", "1"],
+      ["DOCKER_CERT_PATH", "/tmp/evil-docker-certs"],
+      ["DOCKER_CONTEXT", "evil-remote"],
+      ["LIBRARY_PATH", "/tmp/evil-lib"],
+      ["CPATH", "/tmp/evil-headers"],
+      ["C_INCLUDE_PATH", "/tmp/evil-c-headers"],
+      ["CPLUS_INCLUDE_PATH", "/tmp/evil-cpp-headers"],
+      ["OBJC_INCLUDE_PATH", "/tmp/evil-objc-headers"],
+      ["HELM_HOME", "/tmp/override-helm"],
+      ["BASHOPTS", "xtrace"],
+      ["FPATH", "/tmp/evil-fpath"],
+      ["KSH_ENV", "/tmp/evil-ksh-env"],
+      ["TCLLIBPATH", "/tmp/evil-tcllibpath"],
+      ["NODE_REDIRECT_WARNINGS", "/tmp/node-warnings.log"],
+      ["NODE_REPL_EXTERNAL_MODULE", "/tmp/pwn.js"],
+      ["NODE_REPL_HISTORY", "/tmp/node-repl-history"],
+      ["NODE_V8_COVERAGE", "/tmp/coverage"],
+      ["NODE_EXTRA_CA_CERTS", "/tmp/evil-ca.pem"],
+      ["SSL_CERT_FILE", "/tmp/evil-cert.pem"],
+      ["SSL_CERT_DIR", "/tmp/evil-cert-dir"],
+      ["REQUESTS_CA_BUNDLE", "/tmp/evil-requests-ca.pem"],
+      ["CURL_CA_BUNDLE", "/tmp/evil-curl-ca.pem"],
+      ["GIT_SSL_NO_VERIFY", "1"],
+      ["GIT_SSL_CAINFO", "/tmp/evil-git-ca.pem"],
+      ["GIT_SSL_CAPATH", "/tmp/evil-git-ca-dir"],
+      ["GOPROXY", "https://example.invalid/proxy"],
+      ["GONOSUMCHECK", "example.invalid/*"],
+      ["GONOSUMDB", "example.invalid/*"],
+      ["GONOPROXY", "example.invalid/*"],
+      ["GOPRIVATE", "example.invalid/*"],
+      ["GOENV", "/tmp/evil-goenv"],
+      ["GOPATH", "/tmp/evil-go"],
+      ["PYTHONUSERBASE", "/tmp/evil-python-userbase"],
+      ["VIRTUAL_ENV", "/tmp/evil-venv"],
+      ["SHELLOPTS", "xtrace"],
+      ["PS4", "$(touch /tmp/pwned)"],
+      ["CLASSPATH", "/tmp/evil-classpath"],
+      ["JAVA_OPTS", "-javaagent:/tmp/evil.jar"],
+      ["GOFLAGS", "-mod=mod"],
+      ["RUSTFLAGS", "-C link-args=-l/tmp/evil.so"],
+      ["MAKEFLAGS", "--eval=$(shell touch /tmp/pwned)"],
+      ["MFLAGS", "--eval=$(shell touch /tmp/pwned-too)"],
+      ["PHPRC", "/tmp/evil-php.ini"],
+      ["XDG_CONFIG_HOME", "/tmp/evil-config"],
+      ["SAFE", "ok"],
+    ]);
+    const env = sanitizeHostExecEnv({
+      baseEnv,
+      overrides,
+    });
 
     expect(env.PATH).toBe("/usr/bin:/bin");
     expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(env.BASH_ENV).toBeUndefined();
     expect(env.BROWSER).toBeUndefined();
+    expect(env.GIT_ALLOW_PROTOCOL).toBeUndefined();
     expect(env.GIT_EDITOR).toBeUndefined();
     expect(env.GIT_DIR).toBeUndefined();
     expect(env.GIT_WORK_TREE).toBeUndefined();
@@ -517,6 +618,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.GIT_OBJECT_DIRECTORY).toBeUndefined();
     expect(env.GIT_ALTERNATE_OBJECT_DIRECTORIES).toBeUndefined();
     expect(env.GIT_NAMESPACE).toBeUndefined();
+    expect(env.GIT_PROTOCOL_FROM_USER).toBeUndefined();
     expect(env.GIT_SEQUENCE_EDITOR).toBeUndefined();
     expect(env.AWS_CONFIG_FILE).toBeUndefined();
     expect(env.KUBECONFIG).toBeUndefined();
@@ -575,6 +677,10 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.GOPATH).toBeUndefined();
     expect(env.CARGO_HOME).toBeUndefined();
     expect(env.HELM_HOME).toBeUndefined();
+    expect(env.BASHOPTS).toBeUndefined();
+    expect(env.FPATH).toBeUndefined();
+    expect(env.KSH_ENV).toBeUndefined();
+    expect(env.TCLLIBPATH).toBeUndefined();
     expect(env.NODE_REDIRECT_WARNINGS).toBeUndefined();
     expect(env.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
     expect(env.NODE_REPL_HISTORY).toBeUndefined();
@@ -994,90 +1100,93 @@ describe("isDangerousHostEnvOverrideVarName", () => {
 
 describe("sanitizeHostExecEnvWithDiagnostics", () => {
   it("reports blocked and invalid requested overrides", () => {
-    // Diagnostics coverage needs the denied keys present at the sanitizer boundary.
-    const baseEnv = {
-      PATH: "/usr/bin:/bin",
-    };
-    const overrides = {
-      PATH: "/tmp/evil",
-      CXX: "/tmp/evil-cxx",
-      CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
-      CARGO_REGISTRIES_CRATES_IO_INDEX: "https://example.invalid/crates.io-index",
-      CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
-      KUBECONFIG: "/tmp/evil-kubeconfig",
-      GOOGLE_APPLICATION_CREDENTIALS: "/tmp/evil-gcp.json",
-      AWS_SHARED_CREDENTIALS_FILE: "/tmp/evil-aws-credentials",
-      AWS_WEB_IDENTITY_TOKEN_FILE: "/tmp/evil-aws-web-token",
-      AZURE_AUTH_LOCATION: "/tmp/evil-azure-auth.json",
-      CLASSPATH: "/tmp/evil-classpath",
-      PIP_INDEX_URL: "https://example.invalid/simple",
-      PIP_PYPI_URL: "https://example.invalid/simple",
-      PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
-      PIP_CONFIG_FILE: "/tmp/evil-pip.conf",
-      PIP_FIND_LINKS: "https://example.invalid/wheels",
-      PIP_TRUSTED_HOST: "example.invalid",
-      UV_INDEX: "https://example.invalid/simple",
-      UV_INDEX_URL: "https://example.invalid/simple",
-      UV_PYTHON: "/tmp/evil-uv-python",
-      UV_DEFAULT_INDEX: "https://example.invalid/simple",
-      UV_EXTRA_INDEX_URL: "https://example.invalid/simple",
-      DOCKER_HOST: "tcp://example.invalid:2376",
-      DOCKER_TLS_VERIFY: "1",
-      DOCKER_CERT_PATH: "/tmp/evil-docker-certs",
-      DOCKER_CONTEXT: "evil-remote",
-      LIBRARY_PATH: "/tmp/evil-lib",
-      CPATH: "/tmp/evil-headers",
-      C_INCLUDE_PATH: "/tmp/evil-c-headers",
-      CPLUS_INCLUDE_PATH: "/tmp/evil-cpp-headers",
-      OBJC_INCLUDE_PATH: "/tmp/evil-objc-headers",
-      NODE_EXTRA_CA_CERTS: "/tmp/evil-ca.pem",
-      SSL_CERT_FILE: "/tmp/evil-cert.pem",
-      SSL_CERT_DIR: "/tmp/evil-cert-dir",
-      REQUESTS_CA_BUNDLE: "/tmp/evil-requests-ca.pem",
-      CURL_CA_BUNDLE: "/tmp/evil-curl-ca.pem",
-      GIT_DIR: "/tmp/evil-git-dir",
-      GIT_WORK_TREE: "/tmp/evil-work-tree",
-      GIT_COMMON_DIR: "/tmp/evil-common-dir",
-      GIT_INDEX_FILE: "/tmp/evil-git-index",
-      GIT_OBJECT_DIRECTORY: "/tmp/evil-git-objects",
-      GIT_ALTERNATE_OBJECT_DIRECTORIES: "/tmp/evil-git-alt-objects",
-      GIT_NAMESPACE: "evil-namespace",
-      GOPROXY: "https://example.invalid/proxy",
-      GONOSUMCHECK: "example.invalid/*",
-      GONOSUMDB: "example.invalid/*",
-      GONOPROXY: "example.invalid/*",
-      GOPRIVATE: "example.invalid/*",
-      GOENV: "/tmp/evil-goenv",
-      GOPATH: "/tmp/evil-go",
-      CARGO_HOME: "/tmp/evil-cargo",
-      HGRCPATH: "/tmp/evil-hgrc",
-      MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
-      MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
-      HELM_HOME: "/tmp/evil-helm",
-      NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
-      NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
-      NODE_REPL_HISTORY: "/tmp/node-repl-history",
-      NODE_V8_COVERAGE: "/tmp/coverage",
-      PYTHONUSERBASE: "/tmp/evil-python-userbase",
-      RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
-      RUSTFLAGS: "-C link-args=-l/tmp/evil.so",
-      RUSTUP_DIST_ROOT: "https://evil.example.test/deprecated-dist",
-      RUSTUP_DIST_SERVER: "https://evil.example.test",
-      RUSTUP_HOME: "/tmp/evil-rustup-home",
-      RUSTUP_TOOLCHAIN: "/tmp/evil-toolchain",
-      RUSTUP_UPDATE_ROOT: "https://evil.example.test/rustup",
-      VIRTUAL_ENV: "/tmp/evil-venv",
-      JAVA_OPTS: "-javaagent:/tmp/evil.jar",
-      YARN_RC_FILENAME: ".evil-yarnrc.yml",
-      HTTPS_PROXY: "http://proxy.example.test:8080",
-      GIT_SSL_NO_VERIFY: "1",
-      GIT_SSL_CAINFO: "/tmp/evil-git-ca.pem",
-      GIT_SSL_CAPATH: "/tmp/evil-git-capath",
-      NODE_TLS_REJECT_UNAUTHORIZED: "0",
-      SAFE_KEY: "ok",
-      "BAD-KEY": "bad",
-    };
-    const result = sanitizeHostExecEnvWithDiagnostics({ baseEnv, overrides });
+    const overrides = envRecord([
+      ["PATH", "/tmp/evil"],
+      ["CXX", "/tmp/evil-cxx"],
+      ["CARGO_BUILD_RUSTC_WRAPPER", "/tmp/evil-rustc-wrapper"],
+      ["CARGO_REGISTRIES_CRATES_IO_INDEX", "https://example.invalid/crates.io-index"],
+      ["CMAKE_C_COMPILER", "/tmp/evil-c-compiler"],
+      ["KUBECONFIG", "/tmp/evil-kubeconfig"],
+      ["GOOGLE_APPLICATION_CREDENTIALS", "/tmp/evil-gcp.json"],
+      ["AWS_SHARED_CREDENTIALS_FILE", "/tmp/evil-aws-credentials"],
+      ["AWS_WEB_IDENTITY_TOKEN_FILE", "/tmp/evil-aws-web-token"],
+      ["AZURE_AUTH_LOCATION", "/tmp/evil-azure-auth.json"],
+      ["CLASSPATH", "/tmp/evil-classpath"],
+      ["PIP_INDEX_URL", "https://example.invalid/simple"],
+      ["PIP_PYPI_URL", "https://example.invalid/simple"],
+      ["PIP_EXTRA_INDEX_URL", "https://example.invalid/simple"],
+      ["PIP_CONFIG_FILE", "/tmp/evil-pip.conf"],
+      ["PIP_FIND_LINKS", "https://example.invalid/wheels"],
+      ["PIP_TRUSTED_HOST", "example.invalid"],
+      ["UV_INDEX", "https://example.invalid/simple"],
+      ["UV_INDEX_URL", "https://example.invalid/simple"],
+      ["UV_PYTHON", "/tmp/evil-uv-python"],
+      ["UV_DEFAULT_INDEX", "https://example.invalid/simple"],
+      ["UV_EXTRA_INDEX_URL", "https://example.invalid/simple"],
+      ["DOCKER_HOST", "tcp://example.invalid:2376"],
+      ["DOCKER_TLS_VERIFY", "1"],
+      ["DOCKER_CERT_PATH", "/tmp/evil-docker-certs"],
+      ["DOCKER_CONTEXT", "evil-remote"],
+      ["LIBRARY_PATH", "/tmp/evil-lib"],
+      ["CPATH", "/tmp/evil-headers"],
+      ["C_INCLUDE_PATH", "/tmp/evil-c-headers"],
+      ["CPLUS_INCLUDE_PATH", "/tmp/evil-cpp-headers"],
+      ["OBJC_INCLUDE_PATH", "/tmp/evil-objc-headers"],
+      ["NODE_EXTRA_CA_CERTS", "/tmp/evil-ca.pem"],
+      ["SSL_CERT_FILE", "/tmp/evil-cert.pem"],
+      ["SSL_CERT_DIR", "/tmp/evil-cert-dir"],
+      ["REQUESTS_CA_BUNDLE", "/tmp/evil-requests-ca.pem"],
+      ["CURL_CA_BUNDLE", "/tmp/evil-curl-ca.pem"],
+      ["GIT_ALLOW_PROTOCOL", "ext"],
+      ["GIT_DIR", "/tmp/evil-git-dir"],
+      ["GIT_WORK_TREE", "/tmp/evil-work-tree"],
+      ["GIT_COMMON_DIR", "/tmp/evil-common-dir"],
+      ["GIT_INDEX_FILE", "/tmp/evil-git-index"],
+      ["GIT_OBJECT_DIRECTORY", "/tmp/evil-git-objects"],
+      ["GIT_ALTERNATE_OBJECT_DIRECTORIES", "/tmp/evil-git-alt-objects"],
+      ["GIT_NAMESPACE", "evil-namespace"],
+      ["GIT_PROTOCOL_FROM_USER", "1"],
+      ["GOPROXY", "https://example.invalid/proxy"],
+      ["GONOSUMCHECK", "example.invalid/*"],
+      ["GONOSUMDB", "example.invalid/*"],
+      ["GONOPROXY", "example.invalid/*"],
+      ["GOPRIVATE", "example.invalid/*"],
+      ["GOENV", "/tmp/evil-goenv"],
+      ["GOPATH", "/tmp/evil-go"],
+      ["CARGO_HOME", "/tmp/evil-cargo"],
+      ["HGRCPATH", "/tmp/evil-hgrc"],
+      ["MAKEFLAGS", "--eval=$(shell touch /tmp/pwned)"],
+      ["MFLAGS", "--eval=$(shell touch /tmp/pwned-too)"],
+      ["HELM_HOME", "/tmp/evil-helm"],
+      ["NODE_REDIRECT_WARNINGS", "/tmp/node-warnings.log"],
+      ["NODE_REPL_EXTERNAL_MODULE", "/tmp/pwn.js"],
+      ["NODE_REPL_HISTORY", "/tmp/node-repl-history"],
+      ["NODE_V8_COVERAGE", "/tmp/coverage"],
+      ["PYTHONUSERBASE", "/tmp/evil-python-userbase"],
+      ["RUSTC_WRAPPER", "/tmp/evil-rustc-wrapper"],
+      ["RUSTFLAGS", "-C link-args=-l/tmp/evil.so"],
+      ["RUSTUP_DIST_ROOT", "https://evil.example.test/deprecated-dist"],
+      ["RUSTUP_DIST_SERVER", "https://evil.example.test"],
+      ["RUSTUP_HOME", "/tmp/evil-rustup-home"],
+      ["RUSTUP_TOOLCHAIN", "/tmp/evil-toolchain"],
+      ["RUSTUP_UPDATE_ROOT", "https://evil.example.test/rustup"],
+      ["VIRTUAL_ENV", "/tmp/evil-venv"],
+      ["JAVA_OPTS", "-javaagent:/tmp/evil.jar"],
+      ["YARN_RC_FILENAME", ".evil-yarnrc.yml"],
+      ["HTTPS_PROXY", "http://proxy.example.test:8080"],
+      ["GIT_SSL_NO_VERIFY", "1"],
+      ["GIT_SSL_CAINFO", "/tmp/evil-git-ca.pem"],
+      ["GIT_SSL_CAPATH", "/tmp/evil-git-capath"],
+      ["NODE_TLS_REJECT_UNAUTHORIZED", "0"],
+      ["SAFE_KEY", "ok"],
+      ["BAD-KEY", "bad"],
+    ]);
+    const result = sanitizeHostExecEnvWithDiagnostics({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+      },
+      overrides,
+    });
 
     expect(result.rejectedOverrideBlockedKeys).toEqual([
       "AWS_SHARED_CREDENTIALS_FILE",
@@ -1097,12 +1206,14 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "DOCKER_CONTEXT",
       "DOCKER_HOST",
       "DOCKER_TLS_VERIFY",
+      "GIT_ALLOW_PROTOCOL",
       "GIT_ALTERNATE_OBJECT_DIRECTORIES",
       "GIT_COMMON_DIR",
       "GIT_DIR",
       "GIT_INDEX_FILE",
       "GIT_NAMESPACE",
       "GIT_OBJECT_DIRECTORY",
+      "GIT_PROTOCOL_FROM_USER",
       "GIT_SSL_CAINFO",
       "GIT_SSL_CAPATH",
       "GIT_SSL_NO_VERIFY",
@@ -1204,6 +1315,8 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.GIT_ALTERNATE_OBJECT_DIRECTORIES).toBeUndefined();
     expect(result.env.GIT_OBJECT_DIRECTORY).toBeUndefined();
     expect(result.env.GIT_NAMESPACE).toBeUndefined();
+    expect(result.env.GIT_ALLOW_PROTOCOL).toBeUndefined();
+    expect(result.env.GIT_PROTOCOL_FROM_USER).toBeUndefined();
     expect(result.env.GOPROXY).toBeUndefined();
     expect(result.env.GONOSUMCHECK).toBeUndefined();
     expect(result.env.GONOSUMDB).toBeUndefined();
@@ -1642,6 +1755,191 @@ describe("git env exploit regression", () => {
     }
   });
 
+  it("blocks inherited GIT_ALLOW_PROTOCOL so git cannot enable ext transport helpers", async () => {
+    const gitPath = getSystemGitPath();
+    if (!gitPath) {
+      return;
+    }
+
+    const helperDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-git-allow-protocol-${process.pid}-${Date.now()}-`),
+    );
+    const helperPath = path.join(helperDir, "ext-helper.sh");
+    const marker = path.join(
+      os.tmpdir(),
+      `openclaw-git-allow-protocol-marker-${process.pid}-${Date.now()}`,
+    );
+
+    try {
+      clearMarker(marker);
+      fs.writeFileSync(helperPath, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`, "utf8");
+      fs.chmodSync(helperPath, 0o755);
+
+      const target = `ext::${helperPath}`;
+      const unsafeEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        GIT_ALLOW_PROTOCOL: "ext",
+        GIT_TERMINAL_PROMPT: "0",
+      };
+
+      await runGitLsRemote(gitPath, target, unsafeEnv);
+
+      expect(fs.existsSync(marker)).toBe(true);
+      clearMarker(marker);
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv: unsafeEnv,
+      });
+
+      await runGitLsRemote(gitPath, target, safeEnv);
+
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(helperDir, { recursive: true, force: true });
+      fs.rmSync(marker, { force: true });
+    }
+  });
+
+  it("filters inherited GIT_ALLOW_PROTOCOL without widening file transport access", async () => {
+    const gitPath = getSystemGitPath();
+    if (!gitPath) {
+      return;
+    }
+
+    const repoDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-git-allow-protocol-source-${process.pid}-${Date.now()}-`),
+    );
+    const cloneDir = path.join(
+      os.tmpdir(),
+      `openclaw-git-allow-protocol-clone-${process.pid}-${Date.now()}`,
+    );
+
+    try {
+      await runGitCommand(gitPath, ["init", repoDir]);
+      await runGitCommand(
+        gitPath,
+        [
+          "-C",
+          repoDir,
+          "-c",
+          "user.name=OpenClaw Test",
+          "-c",
+          "user.email=test@example.com",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "init",
+        ],
+        {
+          env: {
+            PATH: process.env.PATH ?? "/usr/bin:/bin",
+          },
+        },
+      );
+
+      const inheritedEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        GIT_ALLOW_PROTOCOL: "https::ssh",
+        GIT_TERMINAL_PROMPT: "0",
+      };
+      const unsafeExitCode = await runGitCommandExitCode(gitPath, ["clone", repoDir, cloneDir], {
+        env: inheritedEnv,
+      });
+
+      expect(unsafeExitCode).not.toBe(0);
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv: inheritedEnv,
+      });
+
+      expect(safeEnv.GIT_ALLOW_PROTOCOL).toBe("https:ssh");
+
+      const safeExitCode = await runGitCommandExitCode(gitPath, ["clone", repoDir, cloneDir], {
+        env: safeEnv,
+      });
+
+      expect(safeExitCode).not.toBe(0);
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+      fs.rmSync(cloneDir, { recursive: true, force: true });
+    }
+  });
+
+  it("forces inherited permissive GIT_PROTOCOL_FROM_USER to block file transport access", async () => {
+    const gitPath = getSystemGitPath();
+    if (!gitPath) {
+      return;
+    }
+
+    const repoDir = fs.mkdtempSync(
+      path.join(
+        os.tmpdir(),
+        `openclaw-git-protocol-from-user-source-${process.pid}-${Date.now()}-`,
+      ),
+    );
+    const unsafeCloneDir = path.join(
+      os.tmpdir(),
+      `openclaw-git-protocol-from-user-unsafe-${process.pid}-${Date.now()}`,
+    );
+    const safeCloneDir = path.join(
+      os.tmpdir(),
+      `openclaw-git-protocol-from-user-safe-${process.pid}-${Date.now()}`,
+    );
+
+    try {
+      await runGitCommand(gitPath, ["init", repoDir]);
+      await runGitCommand(
+        gitPath,
+        [
+          "-C",
+          repoDir,
+          "-c",
+          "user.name=OpenClaw Test",
+          "-c",
+          "user.email=test@example.com",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "init",
+        ],
+        {
+          env: {
+            PATH: process.env.PATH ?? "/usr/bin:/bin",
+          },
+        },
+      );
+
+      const inheritedEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        GIT_PROTOCOL_FROM_USER: "1",
+        GIT_TERMINAL_PROMPT: "0",
+      };
+      const unsafeExitCode = await runGitCommandExitCode(
+        gitPath,
+        ["clone", repoDir, unsafeCloneDir],
+        { env: inheritedEnv },
+      );
+
+      expect(unsafeExitCode).toBe(0);
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv: inheritedEnv,
+      });
+
+      expect(safeEnv.GIT_PROTOCOL_FROM_USER).toBe("0");
+
+      const safeExitCode = await runGitCommandExitCode(gitPath, ["clone", repoDir, safeCloneDir], {
+        env: safeEnv,
+      });
+
+      expect(safeExitCode).not.toBe(0);
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+      fs.rmSync(unsafeCloneDir, { recursive: true, force: true });
+      fs.rmSync(safeCloneDir, { recursive: true, force: true });
+    }
+  });
+
   it("blocks GIT_SSH_COMMAND override so git cannot execute helper payloads", async () => {
     const gitPath = getSystemGitPath();
     if (!gitPath) {
@@ -1653,24 +1951,23 @@ describe("git env exploit regression", () => {
 
     const target = "ssh://127.0.0.1:1/does-not-matter";
     const exploitValue = `touch ${JSON.stringify(marker)}; false`;
+    const gitSshCommandKey = "GIT_SSH_COMMAND";
     const baseEnv = {
       PATH: process.env.PATH ?? "/usr/bin:/bin",
       GIT_TERMINAL_PROMPT: "0",
     };
 
-    const unsafeEnv = {
-      ...baseEnv,
-      GIT_SSH_COMMAND: exploitValue,
-    };
+    const unsafeEnv = envRecord([...Object.entries(baseEnv), [gitSshCommandKey, exploitValue]]);
 
     await runGitLsRemote(gitPath, target, unsafeEnv);
 
     expect(fs.existsSync(marker)).toBe(true);
     clearMarker(marker);
 
-    // Exploit regression proves the sanitizer removes the Git command pivot before spawn.
-    const safeOverrides = { GIT_SSH_COMMAND: exploitValue };
-    const safeEnv = sanitizeHostExecEnv({ baseEnv, overrides: safeOverrides });
+    const safeEnv = sanitizeHostExecEnv({
+      baseEnv,
+      overrides: envRecord([[gitSshCommandKey, exploitValue]]),
+    });
 
     await runGitLsRemote(gitPath, target, safeEnv);
 
@@ -1709,18 +2006,21 @@ describe("compiler override exploit regression", () => {
       const baseEnv = {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
       };
+      const compilerKey = "CC";
 
-      await runMakeCommand(makePath, tempDir, {
-        ...baseEnv,
-        CC: exploitPath,
-      });
+      await runMakeCommand(
+        makePath,
+        tempDir,
+        envRecord([...Object.entries(baseEnv), [compilerKey, exploitPath]]),
+      );
 
       expect(fs.existsSync(marker)).toBe(true);
       clearMarker(marker);
 
-      // Exploit regression proves compiler override pivots are blocked before make runs.
-      const safeOverrides = { CC: exploitPath };
-      const safeEnv = sanitizeHostExecEnv({ baseEnv, overrides: safeOverrides });
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv,
+        overrides: envRecord([[compilerKey, exploitPath]]),
+      });
 
       await runMakeCommand(makePath, tempDir, safeEnv);
 
@@ -1755,18 +2055,21 @@ describe("make env exploit regression", () => {
       const baseEnv = {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
       };
+      const makeFlagsKey = "MAKEFLAGS";
 
-      await runMakeCommand(makePath, tempDir, {
-        ...baseEnv,
-        MAKEFLAGS: exploitValue,
-      });
+      await runMakeCommand(
+        makePath,
+        tempDir,
+        envRecord([...Object.entries(baseEnv), [makeFlagsKey, exploitValue]]),
+      );
 
       const baselineTriggered = fs.existsSync(marker);
       clearMarker(marker);
 
-      // Exploit regression proves make flag pivots are blocked before child execution.
-      const safeOverrides = { MAKEFLAGS: exploitValue };
-      const safeEnv = sanitizeHostExecEnv({ baseEnv, overrides: safeOverrides });
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv,
+        overrides: envRecord([[makeFlagsKey, exploitValue]]),
+      });
       expect(safeEnv.MAKEFLAGS).toBeUndefined();
 
       await runMakeCommand(makePath, tempDir, safeEnv);

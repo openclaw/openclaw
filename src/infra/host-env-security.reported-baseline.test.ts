@@ -97,7 +97,7 @@ describe("host env reported baseline coverage", () => {
       baseline.reportedDangerousEverywhereKeys.length +
         baseline.reportedDangerousOverrideOnlyKeys.length,
     ).toBe(baseline.expectedTotalReportedEntries);
-    expect(baseline.expectedTotalReportedEntries).toBe(252);
+    expect(baseline.expectedTotalReportedEntries).toBe(254);
     expect(sortUniqueUpper(baseline.reportedDangerousEverywhereKeys)).toEqual(
       baseline.reportedDangerousEverywhereKeys,
     );
@@ -119,6 +119,14 @@ describe("host env reported baseline coverage", () => {
     for (const key of baseline.reportedDangerousEverywhereKeys) {
       expect(isDangerousHostEnvVarName(key)).toBe(true);
       expect(isDangerousHostInheritedEnvVarName(key)).toBe(true);
+      if (key === "GIT_ALLOW_PROTOCOL") {
+        expect(inheritedSanitized[key]).toBe("");
+        continue;
+      }
+      if (key === "GIT_PROTOCOL_FROM_USER") {
+        expect(inheritedSanitized[key]).toBe(`${key.toLowerCase()}-from-inherited`);
+        continue;
+      }
       expect(inheritedSanitized[key]).toBeUndefined();
     }
 

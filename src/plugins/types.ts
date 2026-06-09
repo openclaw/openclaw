@@ -677,6 +677,7 @@ export type ProviderFetchUsageSnapshotContext = {
   provider: string;
   token: string;
   accountId?: string;
+  authProfileId?: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
 };

@@ -442,7 +442,7 @@ export function resolveMattermostEffectiveReplyToId(params: {
     return undefined;
   }
   const threadRootId = normalizeOptionalString(params.threadRootId);
-  if (threadRootId && params.replyToMode !== "off") {
+  if (threadRootId) {
     return threadRootId;
   }
   const postId = normalizeOptionalString(params.postId);
