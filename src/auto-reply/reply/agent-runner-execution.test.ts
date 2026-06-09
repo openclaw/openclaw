@@ -38,6 +38,8 @@ const state = vi.hoisted(() => ({
   isCliProviderMock: vi.fn((_: unknown) => false),
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
   createBlockReplyDeliveryHandlerMock: vi.fn(),
+  routeReplyMock: vi.fn(),
+  isRoutableChannelMock: vi.fn((value: unknown) => Boolean(value)),
   isCompactionFailureErrorMock: vi.fn((_: string | undefined) => false),
   isContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
   isLikelyContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
@@ -203,6 +205,11 @@ vi.mock("./agent-runner-utils.js", () => ({
 vi.mock("./reply-delivery.js", () => ({
   createBlockReplyDeliveryHandler: (params: unknown) =>
     state.createBlockReplyDeliveryHandlerMock(params),
+}));
+
+vi.mock("./route-reply.js", () => ({
+  routeReply: (params: unknown) => state.routeReplyMock(params),
+  isRoutableChannel: (value: unknown) => state.isRoutableChannelMock(value),
 }));
 
 vi.mock("./reply-media-paths.runtime.js", () => ({
@@ -1146,6 +1153,10 @@ describe("runAgentTurnWithFallback", () => {
     state.isInternalMessageChannelMock.mockReturnValue(false);
     state.createBlockReplyDeliveryHandlerMock.mockReset();
     state.createBlockReplyDeliveryHandlerMock.mockReturnValue(undefined);
+    state.routeReplyMock.mockReset();
+    state.routeReplyMock.mockResolvedValue({ ok: true });
+    state.isRoutableChannelMock.mockReset();
+    state.isRoutableChannelMock.mockImplementation((value: unknown) => Boolean(value));
     state.isCompactionFailureErrorMock.mockReset();
     state.isCompactionFailureErrorMock.mockReturnValue(false);
     state.isContextOverflowErrorMock.mockReset();
@@ -4589,6 +4600,73 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("routes compaction notices to the origin when block replies are unavailable", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", completed: true },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.originatingChannel = "whatsapp";
+    followupRun.originatingTo = "channel:C1";
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          compaction: {
+            notifyUser: true,
+          },
+        },
+      },
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(state.routeReplyMock).toHaveBeenCalledTimes(1);
+    expectMockCallArgFields(state.routeReplyMock, 0, "compaction route", {
+      channel: "whatsapp",
+      to: "channel:C1",
+      sessionKey: "main",
+      mirror: false,
+      replyKind: "block",
+    });
+    expectRecordFields(
+      requireRecord(requireMockCall(state.routeReplyMock, 0, "compaction route")[0], "route")
+        .payload as Record<string, unknown>,
+      {
+        text: "🧹 Compaction complete",
+        replyToId: "msg",
+        replyToCurrent: true,
+        isCompactionNotice: true,
+      },
+    );
+  });
+
   it("delivers compaction hook messages without duplicating notifyUser notices", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -4652,6 +4730,80 @@ describe("runAgentTurnWithFallback", () => {
       replyToCurrent: true,
       isCompactionNotice: true,
     });
+  });
+
+  it("routes compaction hook messages to the origin when block replies are unavailable", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "start", messages: ["Hook before"] },
+      });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", completed: true, messages: ["Hook after"] },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.originatingChannel = "whatsapp";
+    followupRun.originatingTo = "channel:C1";
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          compaction: {
+            notifyUser: true,
+          },
+        },
+      },
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(state.routeReplyMock).toHaveBeenCalledTimes(2);
+    expectRecordFields(
+      requireRecord(requireMockCall(state.routeReplyMock, 0, "hook route")[0], "route")
+        .payload as Record<string, unknown>,
+      {
+        text: "Hook before",
+        replyToId: "msg",
+        replyToCurrent: true,
+        isCompactionNotice: true,
+      },
+    );
+    expectRecordFields(
+      requireRecord(requireMockCall(state.routeReplyMock, 1, "hook route")[0], "route")
+        .payload as Record<string, unknown>,
+      {
+        text: "Hook after",
+        replyToId: "msg",
+        replyToCurrent: true,
+        isCompactionNotice: true,
+      },
+    );
   });
 
   it("fires both notifyUser notices alongside onCompactionStart / onCompactionEnd callbacks (#87107)", async () => {
