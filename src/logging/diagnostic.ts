@@ -1016,7 +1016,6 @@ export function logSessionAttention(
     queueDepth: state.queueDepth,
     activity,
     staleMs: params.thresholdMs,
-    hasCurrentTurnTranscriptAssistantContext: Boolean(sessionContext.currentTurnAssistant),
   });
   const recoveryEligible =
     classification.recoveryEligible ||

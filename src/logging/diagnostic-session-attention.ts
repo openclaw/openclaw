@@ -30,13 +30,9 @@ export function classifySessionAttention(params: {
   queueDepth: number;
   activity: DiagnosticSessionActivitySnapshot;
   staleMs: number;
-  hasCurrentTurnTranscriptAssistantContext?: boolean;
 }): SessionAttentionClassification {
   if (params.activity.activeWorkKind) {
-    // Idle session with queued work and stale orphaned activity (no active
-    // embedded owner) should be classified as recoverable stuck state, not as
-    // stalled active work. This prevents orphaned model_call or tool_call
-    // activity from blocking the queue indefinitely.
+    // Orphaned activity must not keep an idle queued session unrecoverable.
     if (
       params.state === "idle" &&
       params.queueDepth > 0 &&
@@ -90,18 +86,6 @@ export function classifySessionAttention(params: {
       reason: params.queueDepth > 0 ? "queued_behind_active_work" : "active_work",
       classification: "long_running",
       activeWorkKind: params.activity.activeWorkKind,
-      recoveryEligible: false,
-    };
-  }
-
-  if (params.hasCurrentTurnTranscriptAssistantContext) {
-    return {
-      eventType: "session.stalled",
-      reason:
-        params.queueDepth > 0
-          ? "queued_behind_transcript_progress"
-          : "transcript_progress_observed",
-      classification: "stalled_agent_run",
       recoveryEligible: false,
     };
   }

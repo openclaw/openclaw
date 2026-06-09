@@ -423,7 +423,7 @@ describe("stuck session diagnostics threshold", () => {
     expectNoLoggerMessageContaining(warnSpy, "recovery=none");
   });
 
-  it("does not recover app-agent sessions when the current turn appends assistant work", () => {
+  it("keeps transcript-only current-turn app-agent sessions recoverable after they go stale", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const tempStateDir = fs.mkdtempSync("/tmp/openclaw-app-agent-diagnostic-");
     const events: DiagnosticEventPayload[] = [];
@@ -485,18 +485,22 @@ describe("stuck session diagnostics threshold", () => {
 
     expectRecordFields(
       requireRecord(
-        events.findLast((event) => event.type === "session.stalled"),
-        "app-agent stalled transcript event",
+        events.findLast((event) => event.type === "session.stuck"),
+        "app-agent stuck transcript event",
       ),
       {
-        type: "session.stalled",
+        type: "session.stuck",
         state: "processing",
-        classification: "stalled_agent_run",
-        reason: "transcript_progress_observed",
+        classification: "stale_session_state",
+        reason: "stale_session_state",
         queueDepth: 0,
       },
     );
-    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "oauth-session-1", sessionKey: "agent:oauth-agent:main", queueDepth: 0 },
+      ["ageMs", "stateGeneration"],
+    );
   });
 
   it("keeps queued stale sessions eligible for lane recovery", () => {
