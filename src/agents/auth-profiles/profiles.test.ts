@@ -12,7 +12,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
-import { loadPersistedAuthProfileStore } from "./persisted.js";
+import { coercePersistedAuthProfileStore, loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   clearLastGoodProfileWithLock,
   promoteAuthProfileInOrder,
@@ -193,35 +193,27 @@ describe("promoteAuthProfileInOrder", () => {
   });
 
   it("normalizes legacy OpenAI Codex OAuth field aliases on load", async () => {
-    await withAuthProfileTestState("openclaw-auth-codex-legacy-aliases-", ({ agentDir }) => {
-      fs.mkdirSync(agentDir, { recursive: true });
-      const expires = Date.now() + 60_000;
-      fs.writeFileSync(
-        path.join(agentDir, "auth-profiles.json"),
-        JSON.stringify({
-          version: AUTH_STORE_VERSION,
-          profiles: {
-            "openai-codex:default": {
-              type: "oauth",
-              provider: "openai-codex",
-              access_token: "legacy-access-token",
-              refreshToken: "legacy-refresh-token",
-              expires_at: String(expires),
-              account_id: "acct_legacy",
-            },
-          },
-        }),
-      );
+    const expires = Date.now() + 60_000;
+    const credential = coercePersistedAuthProfileStore({
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access_token: "legacy-access-token",
+          refreshToken: "legacy-refresh-token",
+          expires_at: String(expires),
+          account_id: "acct_legacy",
+        },
+      },
+    })?.profiles["openai-codex:default"];
 
-      const credential = loadPersistedAuthProfileStore(agentDir)?.profiles["openai-codex:default"];
-
-      expectOAuthCredentialFields(credential, {
-        provider: "openai-codex",
-        access: "legacy-access-token",
-        refresh: "legacy-refresh-token",
-        expires,
-        accountId: "acct_legacy",
-      });
+    expectOAuthCredentialFields(credential, {
+      provider: "openai-codex",
+      access: "legacy-access-token",
+      refresh: "legacy-refresh-token",
+      expires,
+      accountId: "acct_legacy",
     });
   });
 
