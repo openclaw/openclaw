@@ -305,6 +305,50 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
     });
   });
 
+  it("repairs ACP metadata when the session store key was already canonicalized", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-acp-harness-partial-", async () => {
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main", default: true }] },
+      };
+      const acpKey = "agent:claude:acp:44444444-4444-4444-8444-444444444444";
+      const legacyAcpKey = "agent:CLAUDE:acp:44444444-4444-4444-8444-444444444444";
+      const claudeStorePath = resolveStorePath(cfg.session?.store, { agentId: "claude" });
+      await saveSessionStore(claudeStorePath, {
+        [acpKey]: {
+          sessionId: "sess-acp-harness-partial",
+          label: "claude-delegate-partial",
+          updatedAt: freshUpdatedAt(),
+        },
+      });
+      writeAcpSessionMetaForMigration({
+        sessionKey: legacyAcpKey,
+        sessionId: "sess-acp-harness-partial",
+        meta: {
+          backend: "acpx",
+          agent: "claude",
+          runtimeSessionName: legacyAcpKey,
+          mode: "oneshot",
+          state: "idle",
+          lastActivityAt: freshUpdatedAt(),
+        },
+      });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { key: acpKey },
+        }),
+      ).resolves.toEqual({ ok: true, key: acpKey });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { key: acpKey },
+        }),
+      ).resolves.toEqual({ ok: true, key: acpKey });
+    });
+  });
+
   it("rejects ACP-shaped bridge sessions without ACP runtime metadata under deleted agents", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-acp-bridge-deleted-", async () => {
       const cfg: OpenClawConfig = {

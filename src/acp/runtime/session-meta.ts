@@ -251,43 +251,59 @@ export function writeAcpSessionMetaForMigration(params: {
   );
 }
 
-export function moveAcpSessionMetaForMigration(params: {
-  fromSessionKey: string;
-  toSessionKey: string;
+export function repairAcpSessionMetaKeyForMigration(params: {
+  sessionKey: string;
   entry?: Pick<SessionEntry, "sessionId">;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
   now?: () => number;
 }): boolean {
-  const fromSessionKey = params.fromSessionKey.trim();
-  const toSessionKey = params.toSessionKey.trim();
-  if (!fromSessionKey || !toSessionKey || fromSessionKey === toSessionKey) {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
     return false;
   }
 
-  let moved = false;
+  let repaired = false;
   runOpenClawStateWriteTransaction(
     (database) => {
-      const row = selectAcpSessionRow(database.db, fromSessionKey);
-      if (!row || !acpSessionRowMatchesEntry(row, params.entry)) {
+      const currentRow = selectAcpSessionRow(database.db, sessionKey);
+      if (currentRow && acpSessionRowMatchesEntry(currentRow, params.entry)) {
+        return;
+      }
+
+      const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+      const row = executeSqliteQuerySync(
+        database.db,
+        getAcpSessionKysely(database.db)
+          .selectFrom("acp_sessions")
+          .selectAll()
+          .orderBy("last_activity_at", "desc")
+          .orderBy("session_key", "asc"),
+      ).rows.find(
+        (candidate) =>
+          candidate.session_key !== sessionKey &&
+          normalizeLowercaseStringOrEmpty(candidate.session_key) === normalizedSessionKey &&
+          acpSessionRowMatchesEntry(candidate, params.entry),
+      );
+      if (!row) {
         return;
       }
       upsertAcpSessionMetaRow(database.db, {
         ...row,
-        session_key: toSessionKey,
+        session_key: sessionKey,
         updated_at: params.now?.() ?? Date.now(),
       });
       executeSqliteQuerySync(
         database.db,
         getAcpSessionKysely(database.db)
           .deleteFrom("acp_sessions")
-          .where("session_key", "=", fromSessionKey),
+          .where("session_key", "=", row.session_key),
       );
-      moved = true;
+      repaired = true;
     },
     { env: params.env, path: params.databasePath },
   );
-  return moved;
+  return repaired;
 }
 
 function upsertAcpSessionMetaRow(db: DatabaseSync, row: Insertable<AcpSessionsTable>): void {

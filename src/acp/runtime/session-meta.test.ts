@@ -8,9 +8,9 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   listAcpSessionEntries,
-  moveAcpSessionMetaForMigration,
   readAcpSessionEntry,
   readAcpSessionMetaForEntry,
+  repairAcpSessionMetaKeyForMigration,
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "./session-meta.js";
@@ -215,7 +215,7 @@ describe("ACP session metadata SQLite store", () => {
     });
   });
 
-  it("moves ACP metadata rows when session-store keys are canonicalized", async () => {
+  it("repairs ACP metadata rows when session-store keys are canonicalized", async () => {
     await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
@@ -243,10 +243,9 @@ describe("ACP session metadata SQLite store", () => {
       });
 
       expect(
-        moveAcpSessionMetaForMigration({
+        repairAcpSessionMetaKeyForMigration({
           databasePath,
-          fromSessionKey: legacyKey,
-          toSessionKey: canonicalKey,
+          sessionKey: canonicalKey,
           entry: { sessionId: "sess-acp" },
           now: () => 200,
         }),
