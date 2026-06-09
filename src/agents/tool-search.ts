@@ -955,9 +955,13 @@ export function addClientToolsToToolSearchCatalog(params: {
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
 }): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
+  const config = resolveToolSearchConfig(params.config);
+  if (config.mode === "directory") {
+    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
+  }
   return addClientToolsToToolCatalog({
     ...params,
-    enabled: resolveToolSearchConfig(params.config).enabled,
+    enabled: config.enabled,
   });
 }
 

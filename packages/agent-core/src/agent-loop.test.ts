@@ -252,4 +252,93 @@ describe("runAgentLoop missing tool resolution", () => {
     ]);
     expect(messages.some((message) => message.role === "toolResult")).toBe(true);
   });
+
+  it("hydrates sequential missing tools before choosing the executor", async () => {
+    let activeExecutions = 0;
+    let maxActiveExecutions = 0;
+    const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => {
+      activeExecutions += 1;
+      maxActiveExecutions = Math.max(maxActiveExecutions, activeExecutions);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      activeExecutions -= 1;
+      return {
+        content: [{ type: "text", text: "hidden ok" }],
+        details: { ok: true },
+      };
+    });
+    const hiddenTool: AgentTool = {
+      name: "hidden_serial",
+      label: "hidden_serial",
+      description: "Hidden sequential tool",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+      executionMode: "sequential",
+      execute,
+    };
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        streamCalls += 1;
+        const message =
+          streamCalls === 1
+            ? {
+                role: "assistant" as const,
+                content: [
+                  {
+                    type: "toolCall" as const,
+                    id: "call-hidden-1",
+                    name: "hidden_serial",
+                    arguments: { query: "one" },
+                  },
+                  {
+                    type: "toolCall" as const,
+                    id: "call-hidden-2",
+                    name: "hidden_serial",
+                    arguments: { query: "two" },
+                  },
+                ],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "toolUse" as const,
+                timestamp: Date.now(),
+              }
+            : {
+                role: "assistant" as const,
+                content: [{ type: "text" as const, text: "done" }],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "stop" as const,
+                timestamp: Date.now(),
+              };
+        stream.push({ type: "done", reason: message.stopReason, message });
+      });
+      return stream;
+    };
+    const resolveMissingTool = vi.fn(() => hiddenTool);
+
+    await runAgentLoop(
+      [{ role: "user", content: "search twice", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [] },
+      {
+        model,
+        convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never,
+        resolveMissingTool,
+      },
+      (_event: AgentEvent) => {},
+      undefined,
+      streamFn,
+    );
+
+    expect(resolveMissingTool).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(maxActiveExecutions).toBe(1);
+  });
 });

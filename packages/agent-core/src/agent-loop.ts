@@ -496,9 +496,25 @@ async function executeToolCalls(
   emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
   const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
-  const hasSequentialToolCall = toolCalls.some(
-    (tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === "sequential",
-  );
+  let hasSequentialToolCall = false;
+  if (config.toolExecution !== "sequential") {
+    for (const toolCall of toolCalls) {
+      const tool = await resolveToolCallTool(
+        currentContext,
+        assistantMessage,
+        toolCall,
+        config,
+        signal,
+      );
+      if (tool?.executionMode === "sequential") {
+        hasSequentialToolCall = true;
+        break;
+      }
+      if (signal?.aborted) {
+        break;
+      }
+    }
+  }
   if (config.toolExecution === "sequential" || hasSequentialToolCall) {
     return executeToolCallsSequential(
       currentContext,
@@ -706,13 +722,13 @@ function prepareToolCallArguments(tool: AgentTool, toolCall: AgentToolCall): Age
   };
 }
 
-async function prepareToolCall(
+async function resolveToolCallTool(
   currentContext: AgentContext,
   assistantMessage: AssistantMessage,
   toolCall: AgentToolCall,
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
-): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
+): Promise<AgentTool | undefined> {
   let tool = currentContext.tools?.find((t) => t.name === toolCall.name);
   if (!tool) {
     tool = await config.resolveMissingTool?.(
@@ -728,6 +744,23 @@ async function prepareToolCall(
       currentContext.tools = [...(currentContext.tools ?? []), tool];
     }
   }
+  return tool;
+}
+
+async function prepareToolCall(
+  currentContext: AgentContext,
+  assistantMessage: AssistantMessage,
+  toolCall: AgentToolCall,
+  config: AgentLoopConfig,
+  signal: AbortSignal | undefined,
+): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
+  const tool = await resolveToolCallTool(
+    currentContext,
+    assistantMessage,
+    toolCall,
+    config,
+    signal,
+  );
   if (!tool) {
     return {
       kind: "immediate",

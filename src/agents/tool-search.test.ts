@@ -562,6 +562,33 @@ describe("Tool Search", () => {
     expect(clientEntry?.source).toBe("client");
   });
 
+  it("keeps client tools visible in directory mode", () => {
+    const describeTool = fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe");
+    const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
+    const target = pluginTool("fake_lookup", "Lookup fake records");
+    const config = { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never;
+    applyToolSchemaDirectoryCatalog({
+      tools: [describeTool, callTool, target],
+      config,
+      sessionId: "session-directory-client",
+    });
+
+    const clientTool = fakeTool("client_pick_file", "Ask the client to pick a file");
+    const compacted = addClientToolsToToolSearchCatalog({
+      tools: [clientTool],
+      config,
+      sessionId: "session-directory-client",
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual(["client_pick_file"]);
+    expect(compacted.compacted).toBe(false);
+    expect(compacted.catalogToolCount).toBe(0);
+    const clientEntry = testing.sessionCatalogs
+      .get("session:session-directory-client")
+      ?.entries.find((entry) => entry.id === "client:client:client_pick_file");
+    expect(clientEntry).toBeUndefined();
+  });
+
   it("wraps cataloged OpenClaw tools with before_tool_call hooks", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const target = pluginTool("fake_hooked", "Run a hook-aware fake tool");
