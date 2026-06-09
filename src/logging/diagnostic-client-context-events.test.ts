@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { normalizeDiagnosticClientContext } from "../infra/diagnostic-client-context.js";
 import {
   onDiagnosticEvent,
-  onTrustedDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
@@ -34,9 +34,13 @@ function capture(run: () => void): Capture {
   const stopPublic = onDiagnosticEvent((event) => {
     publicEvents.push(event);
   });
-  const stopTrusted = onTrustedDiagnosticEvent((event, privateData: DiagnosticEventPrivateData) => {
-    trusted.push({ type: event.type, clientContext: privateData.clientContext });
-  });
+  // The grant-backed trusted channel (exposed to diagnostics exporters via
+  // `ctx.internalDiagnostics.onEvent`) is the only path that receives privateData.
+  const stopTrusted = onTrustedInternalDiagnosticEvent(
+    (event, _metadata, privateData: DiagnosticEventPrivateData) => {
+      trusted.push({ type: event.type, clientContext: privateData.clientContext });
+    },
+  );
   try {
     run();
   } finally {

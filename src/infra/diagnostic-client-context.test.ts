@@ -85,4 +85,17 @@ describe("normalizeDiagnosticClientContext", () => {
     const huge = { blob: "x".repeat(CLIENT_CONTEXT_MAX_BYTES + 1) };
     expect(normalizeDiagnosticClientContext(huge)).toBeUndefined();
   });
+
+  it("measures the byte cap in UTF-8 bytes, not UTF-16 code units", () => {
+    // "中" is 3 UTF-8 bytes but 1 string-length unit. Pick a count that
+    // stays under the cap by code-unit length yet exceeds it by encoded bytes,
+    // so a length-based check would wrongly accept it.
+    const charCount = Math.floor(CLIENT_CONTEXT_MAX_BYTES / 2);
+    const bag = { blob: "中".repeat(charCount) };
+    expect(bag.blob.length).toBeLessThan(CLIENT_CONTEXT_MAX_BYTES);
+    expect(Buffer.byteLength(JSON.stringify(bag), "utf8")).toBeGreaterThan(
+      CLIENT_CONTEXT_MAX_BYTES,
+    );
+    expect(normalizeDiagnosticClientContext(bag)).toBeUndefined();
+  });
 });
