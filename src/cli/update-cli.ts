@@ -60,12 +60,12 @@ function registerUpdateRepairCommand(update: Command, name: string, params?: { h
           "Docs:",
         )} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`,
     )
-    .action(async (opts, command) => {
+    .action(async (opts, actionCommand) => {
       try {
         await updateFinalizeCommand({
-          json: Boolean(opts.json) || inheritedUpdateJson(command),
+          json: Boolean(opts.json) || inheritedUpdateJson(actionCommand),
           channel: opts.channel as string | undefined,
-          timeout: inheritedUpdateTimeout(opts, command),
+          timeout: inheritedUpdateTimeout(opts, actionCommand),
           yes: Boolean(opts.yes),
           restart: false,
         });
