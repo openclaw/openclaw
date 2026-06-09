@@ -85,11 +85,6 @@ type AgentEventBridge = {
   drain: () => Promise<void>;
 };
 
-type CommentaryTextPayload = {
-  text: string;
-  itemId?: string;
-};
-
 async function stopAgentEventBridges(bridges: readonly AgentEventBridge[]): Promise<void> {
   for (const bridge of bridges) {
     bridge.unsubscribe();
@@ -123,6 +118,11 @@ function createAssistantTextBridge(params: {
   });
 }
 
+type CommentaryTextPayload = {
+  text: string;
+  itemId?: string;
+};
+
 function readCommentaryTextPayload(evt: AgentEventPayload): CommentaryTextPayload | undefined {
   if (evt.stream !== "item" || evt.data.kind !== "preamble") {
     return undefined;
@@ -131,7 +131,10 @@ function readCommentaryTextPayload(evt: AgentEventPayload): CommentaryTextPayloa
   if (!text) {
     return undefined;
   }
-  return { text, itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined };
+  return {
+    text,
+    ...(typeof evt.data.itemId === "string" ? { itemId: evt.data.itemId } : {}),
+  };
 }
 
 export type CliToolEventPayload = {
@@ -335,7 +338,7 @@ type RunCliAgentWithLifecycleParams = {
   onAssistantText?: (text: string) => Promise<void>;
   onReasoningText?: (text: string) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
-  onCommentaryText?: (payload: { text: string; itemId?: string }) => Promise<void>;
+  onCommentaryText?: (payload: CommentaryTextPayload) => Promise<void>;
   onFastModeAutoProgress?: (payload: ReplyPayload) => Promise<void>;
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
   transformResult?: (result: EmbeddedAgentRunResult) => EmbeddedAgentRunResult;
@@ -359,11 +362,11 @@ async function runCliAgentWithLifecycleInternal(
   const fastModeStartedAtMs = params.runParams.fastModeStartedAtMs ?? startedAt;
   const fastModeAutoOnSeconds =
     params.runParams.fastModeAutoOnSeconds ?? DEFAULT_FAST_MODE_AUTO_ON_SECONDS;
-  const fastModeAutoProgressState: FastModeAutoProgressState = params.runParams
-    .fastModeAutoProgressState ?? {
-    offAnnounced: false,
-    resetAnnounced: false,
-  };
+  const fastModeAutoProgressState: FastModeAutoProgressState =
+    params.runParams.fastModeAutoProgressState ?? {
+      offAnnounced: false,
+      resetAnnounced: false,
+    };
   const emitFastModeAutoProgress = async (payload: {
     enabled: boolean;
     elapsedSeconds: number;

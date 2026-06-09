@@ -314,6 +314,13 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/chat/session-controls.ts",
+      "text": "Auto"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/chat/session-controls.ts",
       "text": "Default"
     },
     {
