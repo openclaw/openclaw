@@ -86,6 +86,7 @@ function buildPreparedCliRunContext(params: {
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
   thinkLevel?: PreparedCliRunContext["params"]["thinkLevel"];
   workspaceDir?: string;
+  cwd?: string;
   timeoutMs?: number;
 }): PreparedCliRunContext {
   // Produces a prepared context without invoking prepare.runtime, keeping spawn
@@ -127,6 +128,7 @@ function buildPreparedCliRunContext(params: {
       agentId: params.agentId,
       sessionFile: "/tmp/session.jsonl",
       workspaceDir,
+      cwd: params.cwd,
       config: params.config,
       prompt: params.prompt ?? "hi",
       provider: params.provider,
@@ -138,6 +140,7 @@ function buildPreparedCliRunContext(params: {
     },
     started: Date.now(),
     workspaceDir,
+    cwd: params.cwd,
     backendResolved: {
       id: params.provider,
       config: backend,
@@ -479,6 +482,7 @@ describe("runCliAgent spawn path", () => {
         runId: "run-claude-thinking-args",
         thinkLevel: "high",
         resolveExecutionArgs,
+        cwd: "/tmp/task-repo",
       }),
     );
 
@@ -487,9 +491,30 @@ describe("runCliAgent spawn path", () => {
     expect(resolveArgsInput.modelId).toBe("sonnet");
     expect(resolveArgsInput.thinkingLevel).toBe("high");
     expect(resolveArgsInput.useResume).toBe(false);
+    expect(resolveArgsInput.cwd).toBe("/tmp/task-repo");
+    expect(resolveArgsInput.backendConfig).toMatchObject({ command: "claude" });
     expect(resolveArgsInput.baseArgs).toEqual(["-p", "--output-format", "stream-json"]);
     const input = mockCallArg(supervisorSpawnMock) as { argv?: string[] };
     expect(requireArgAfter(input.argv, "--effort")).toBe("high");
+  });
+
+  it("cleans up backend-owned per-run args after spawning", async () => {
+    mockSuccessfulCliRun();
+    const cleanup = vi.fn();
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-args-cleanup",
+        resolveExecutionArgs: ({ baseArgs }) => ({
+          args: [...baseArgs, "--settings", "/tmp/private-settings.json"],
+          cleanup,
+        }),
+      }),
+    );
+
+    expect(cleanup).toHaveBeenCalledOnce();
   });
 
   it("passes OpenClaw skills to Claude as a session plugin", async () => {
@@ -921,6 +946,11 @@ describe("runCliAgent spawn path", () => {
 
   it("reuses a Claude live session process across turns", async () => {
     const logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
+    const settingsDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-settings-"));
+    const firstSettingsPath = path.join(settingsDir, "settings-one.json");
+    const secondSettingsPath = path.join(settingsDir, "settings-two.json");
+    await fs.writeFile(firstSettingsPath, '{"ultracode":true}', "utf8");
+    await fs.writeFile(secondSettingsPath, '{"ultracode":true}', "utf8");
     const agentEvents: unknown[] = [];
     const stop = onAgentEvent((evt) => {
       if (evt.stream === "assistant") {
@@ -976,7 +1006,14 @@ describe("runCliAgent spawn path", () => {
           runId: "run-live-1",
           prompt: "first",
           backend: {
-            args: ["-p", "--strict-mcp-config", "--mcp-config", "/tmp/mcp-one.json"],
+            args: [
+              "-p",
+              "--strict-mcp-config",
+              "--mcp-config",
+              "/tmp/mcp-one.json",
+              "--settings",
+              firstSettingsPath,
+            ],
             liveSession: "claude-stdio",
           },
           mcpConfigHash: "same-mcp-config",
@@ -989,7 +1026,14 @@ describe("runCliAgent spawn path", () => {
           runId: "run-live-2",
           prompt: "second",
           backend: {
-            args: ["-p", "--strict-mcp-config", "--mcp-config", "/tmp/mcp-two.json"],
+            args: [
+              "-p",
+              "--strict-mcp-config",
+              "--mcp-config",
+              "/tmp/mcp-two.json",
+              "--settings",
+              secondSettingsPath,
+            ],
             liveSession: "claude-stdio",
           },
           mcpConfigHash: "same-mcp-config",
@@ -1010,6 +1054,7 @@ describe("runCliAgent spawn path", () => {
       expect(spawnInput.argv).toContain("--replay-user-messages");
       expect(spawnInput.argv).not.toContain("--session-id");
       expect(spawnInput.argv).toContain("/tmp/mcp-one.json");
+      expect(spawnInput.argv).toContain(firstSettingsPath);
       expect(
         writes.map(
           (entry) => (JSON.parse(entry) as { message: { content: string } }).message.content,
@@ -1029,11 +1074,12 @@ describe("runCliAgent spawn path", () => {
       expect(turnLogs.join("\n")).not.toContain("two");
     } finally {
       logInfoSpy.mockRestore();
+      await fs.rm(settingsDir, { recursive: true, force: true });
       stop();
     }
   });
 
-  it("defers prepared backend cleanup to the Claude live session lifecycle", async () => {
+  it("defers prepared backend and execution-args cleanup to the Claude live session lifecycle", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
       write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
@@ -1064,6 +1110,7 @@ describe("runCliAgent spawn path", () => {
       };
     });
     const preparedBackendCleanup = vi.fn(async () => {});
+    const executionArgsCleanup = vi.fn(async () => {});
     const context = buildPreparedCliRunContext({
       provider: "claude-cli",
       model: "sonnet",
@@ -1074,6 +1121,10 @@ describe("runCliAgent spawn path", () => {
         liveSession: "claude-stdio",
       },
       mcpConfigHash: "cleanup-mcp-config",
+      resolveExecutionArgs: ({ baseArgs }) => ({
+        args: [...baseArgs, "--settings", "/tmp/claude-live-cleanup-settings.json"],
+        cleanup: executionArgsCleanup,
+      }),
     });
     context.preparedBackend.cleanup = preparedBackendCleanup;
 
@@ -1082,9 +1133,13 @@ describe("runCliAgent spawn path", () => {
     expect(result.text).toBe("ok");
     expect(context.preparedBackend.cleanup).toBeUndefined();
     expect(preparedBackendCleanup).not.toHaveBeenCalled();
+    expect(executionArgsCleanup).not.toHaveBeenCalled();
 
     resetClaudeLiveSessionsForTest();
-    await vi.waitFor(() => expect(preparedBackendCleanup).toHaveBeenCalledOnce());
+    await vi.waitFor(() => {
+      expect(preparedBackendCleanup).toHaveBeenCalledOnce();
+      expect(executionArgsCleanup).toHaveBeenCalledOnce();
+    });
   });
 
   it("accepts Claude live stream-json lines larger than 256 KiB", async () => {

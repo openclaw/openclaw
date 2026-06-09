@@ -558,6 +558,25 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.ownsNativeCompaction).toBe(true);
   });
 
+  it("leaves the ultracode opt-in unset by default", () => {
+    const resolved = requireCliBackendConfig("claude-cli");
+    expect((resolved?.config as { ultracode?: boolean })?.ultracode).toBeUndefined();
+    expect(resolved?.config.args).not.toContain("--settings");
+  });
+
+  it("carries the ultracode opt-in through config merge for the claude-cli backend", () => {
+    // The backend's own normalizeConfig injects `--settings '{"ultracode":true}'`
+    // from this flag (covered in extensions/anthropic/cli-shared.test.ts); here we
+    // assert the opt-in survives backend-config merge so it reaches that hook.
+    const resolved = resolveCliBackendConfig("claude-cli", {
+      agents: {
+        defaults: { cliBackends: { "claude-cli": { command: "claude", ultracode: true } } },
+      },
+    });
+
+    expect((resolved?.config as { ultracode?: boolean })?.ultracode).toBe(true);
+  });
+
   it("keeps Claude permission mode unset when OpenClaw exec policy is not YOLO", () => {
     const resolved = requireCliBackendConfig("claude-cli", {
       tools: { exec: { security: "allowlist", ask: "on-miss" } },

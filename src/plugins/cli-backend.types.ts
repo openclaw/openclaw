@@ -47,7 +47,9 @@ export type CliBackendThinkingLevel =
 
 export type CliBackendResolveExecutionArgsContext = {
   config?: OpenClawConfig;
+  backendConfig?: CliBackendConfig;
   workspaceDir: string;
+  cwd?: string;
   provider: string;
   modelId: string;
   authProfileId?: string;
@@ -56,9 +58,14 @@ export type CliBackendResolveExecutionArgsContext = {
   baseArgs: readonly string[];
 };
 
+export type CliBackendResolvedExecutionArgs = {
+  args: readonly string[];
+  cleanup?: () => Promise<void> | void;
+};
+
 export type CliBackendResolveExecutionArgs = (
   ctx: CliBackendResolveExecutionArgsContext,
-) => readonly string[] | null | undefined;
+) => readonly string[] | CliBackendResolvedExecutionArgs | null | undefined;
 
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
@@ -185,7 +192,8 @@ export type CliBackendPlugin = {
    *
    * Use this for request-scoped CLI dialect flags that should not be modeled
    * as static config, such as mapping OpenClaw thinking levels to a backend's
-   * native effort flag.
+   * native effort flag. The context includes the merged backend config and
+   * execution cwd; return a cleanup when the rewrite creates temporary files.
    */
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
   /**

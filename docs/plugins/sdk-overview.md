@@ -363,7 +363,8 @@ AI CLI backend such as `claude-cli` or `my-cli`.
   (for example normalizing old flag shapes).
 - Use `resolveExecutionArgs` for request-scoped argv rewrites that belong to
   the CLI dialect, such as mapping OpenClaw thinking levels to a native effort
-  flag.
+  flag. The hook receives the merged backend config and execution cwd; it can
+  return cleanup for temporary files created during the rewrite.
 
 For an end-to-end authoring guide, see
 [CLI backend plugins](/plugins/cli-backend-plugins).

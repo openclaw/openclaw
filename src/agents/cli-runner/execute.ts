@@ -14,6 +14,7 @@ import {
 import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-wake.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
+import type { CliBackendResolvedExecutionArgs } from "../../plugins/cli-backend.types.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
@@ -48,6 +49,12 @@ import {
   LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
 } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
+
+function isResolvedExecutionArgsResult(
+  value: CliBackendResolvedExecutionArgs | readonly string[] | null | undefined,
+): value is CliBackendResolvedExecutionArgs {
+  return value !== null && value !== undefined && !Array.isArray(value);
+}
 
 const executeDeps = {
   getProcessSupervisor: getProcessSupervisorImpl,
@@ -332,50 +339,66 @@ export async function executePreparedCliRun(
   const resolvedArgs = useResume
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
     : baseArgs;
-  const fallbackClaudeSkillsPlugin =
-    context.claudeSkillsPluginArgs === undefined
-      ? await prepareClaudeCliSkillsPlugin({
-          backendId: context.backendResolved.id,
-          skillsSnapshot: params.skillsSnapshot,
-        })
-      : undefined;
+  let fallbackClaudeSkillsPlugin:
+    | Awaited<ReturnType<typeof prepareClaudeCliSkillsPlugin>>
+    | undefined;
   let fallbackClaudeSkillsPluginCleanupOwned = false;
-  const claudeSkillsPluginArgs =
-    context.claudeSkillsPluginArgs ?? fallbackClaudeSkillsPlugin?.args ?? [];
-  const baseArgsWithSkills =
-    claudeSkillsPluginArgs.length > 0 ? [...resolvedArgs, ...claudeSkillsPluginArgs] : resolvedArgs;
-  const executionBaseArgs =
-    context.backendResolved.resolveExecutionArgs?.({
+  let cleanupExecutionArgs: (() => Promise<void> | void) | undefined;
+  try {
+    fallbackClaudeSkillsPlugin =
+      context.claudeSkillsPluginArgs === undefined
+        ? await prepareClaudeCliSkillsPlugin({
+            backendId: context.backendResolved.id,
+            skillsSnapshot: params.skillsSnapshot,
+          })
+        : undefined;
+    const claudeSkillsPluginArgs =
+      context.claudeSkillsPluginArgs ?? fallbackClaudeSkillsPlugin?.args ?? [];
+    const baseArgsWithSkills =
+      claudeSkillsPluginArgs.length > 0
+        ? [...resolvedArgs, ...claudeSkillsPluginArgs]
+        : resolvedArgs;
+    const executionArgsResult = context.backendResolved.resolveExecutionArgs?.({
       config: params.config,
+      backendConfig: backend,
       workspaceDir: context.workspaceDir,
+      cwd: context.cwd ?? context.workspaceDir,
       provider: params.provider,
       modelId: context.modelId,
       authProfileId: context.effectiveAuthProfileId,
       thinkingLevel: params.thinkLevel,
       useResume,
       baseArgs: baseArgsWithSkills,
-    }) ?? baseArgsWithSkills;
-  const args = buildCliArgs({
-    backend,
-    baseArgs: Array.from(executionBaseArgs),
-    modelId: context.normalizedModel,
-    sessionId: resolvedSessionId,
-    systemPrompt: systemPromptArg,
-    systemPromptFilePath: systemPromptFile?.filePath,
-    imagePaths,
-    promptArg: argsPrompt,
-    useResume,
-  });
+    });
+    const executionArgsObject = isResolvedExecutionArgsResult(executionArgsResult)
+      ? executionArgsResult
+      : undefined;
+    const executionBaseArgs: readonly string[] = executionArgsObject
+      ? executionArgsObject.args
+      : Array.isArray(executionArgsResult)
+        ? executionArgsResult
+        : baseArgsWithSkills;
+    cleanupExecutionArgs = executionArgsObject?.cleanup;
+    const args = buildCliArgs({
+      backend,
+      baseArgs: Array.from(executionBaseArgs),
+      modelId: context.normalizedModel,
+      sessionId: resolvedSessionId,
+      systemPrompt: systemPromptArg,
+      systemPromptFilePath: systemPromptFile?.filePath,
+      imagePaths,
+      promptArg: argsPrompt,
+      useResume,
+    });
 
-  const queueKey = resolveCliRunQueueKey({
-    backendId: context.backendResolved.id,
-    serialize: backend.serialize,
-    runId: params.runId,
-    workspaceDir: context.workspaceDir,
-    cliSessionId: useResume ? resolvedSessionId : undefined,
-  });
+    const queueKey = resolveCliRunQueueKey({
+      backendId: context.backendResolved.id,
+      serialize: backend.serialize,
+      runId: params.runId,
+      workspaceDir: context.workspaceDir,
+      cliSessionId: useResume ? resolvedSessionId : undefined,
+    });
 
-  try {
     return await enqueueCliRun(queueKey, async () => {
       const cliTurnStartedAt = Date.now();
       const restoreSkillEnv = params.skillsSnapshot
@@ -526,7 +549,9 @@ export async function executePreparedCliRun(
           });
           fallbackClaudeSkillsPluginCleanupOwned = true;
           const ownedPreparedBackendCleanup = context.preparedBackend.cleanup;
+          const ownedExecutionArgsCleanup = cleanupExecutionArgs;
           context.preparedBackend.cleanup = undefined;
+          cleanupExecutionArgs = undefined;
           const liveResult = await runClaudeLiveSessionTurn({
             context,
             args,
@@ -562,7 +587,11 @@ export async function executePreparedCliRun(
               try {
                 await fallbackClaudeSkillsPlugin?.cleanup();
               } finally {
-                await ownedPreparedBackendCleanup?.();
+                try {
+                  await ownedPreparedBackendCleanup?.();
+                } finally {
+                  await ownedExecutionArgsCleanup?.();
+                }
               }
             },
           });
@@ -873,5 +902,6 @@ export async function executePreparedCliRun(
     if (cleanupImages) {
       await cleanupImages();
     }
+    await cleanupExecutionArgs?.();
   }
 }

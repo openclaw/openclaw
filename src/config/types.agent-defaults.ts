@@ -138,6 +138,13 @@ export type CliBackendConfig = {
   jsonlDialect?: "claude-stream-json";
   /** Long-lived CLI process mode. */
   liveSession?: "claude-stdio";
+  /**
+   * Opt this Claude CLI backend into ultracode (xhigh effort plus standing
+   * dynamic-workflow orchestration). When true, the backend injects and merges
+   * the `--settings '{"ultracode":true}'` override at execution time.
+   * Claude-CLI only; ignored by other backends.
+   */
+  ultracode?: boolean;
   /** Prompt input mode (default: arg). */
   input?: "arg" | "stdin";
   /** Max prompt length for arg mode (if exceeded, stdin is used). */

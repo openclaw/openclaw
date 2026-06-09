@@ -1,14 +1,44 @@
 // Anthropic tests cover cli shared plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
   CLAUDE_CLI_CLEAR_ENV,
+  injectClaudeSettings,
   normalizeClaudeBackendConfig,
   normalizeClaudePermissionArgs,
   normalizeClaudeSettingSourcesArgs,
   resolveClaudePermissionMode,
   resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
+
+function resolveClaudeArgsResult(
+  overrides: Partial<Parameters<typeof resolveClaudeCliExecutionArgs>[0]> & {
+    baseArgs: readonly string[];
+  },
+): { args: string[]; cleanup?: () => Promise<void> | void } {
+  const result = resolveClaudeCliExecutionArgs({
+    backendConfig: { command: "claude" },
+    workspaceDir: "/tmp",
+    provider: "claude-cli",
+    modelId: "claude-sonnet-4-6",
+    useResume: false,
+    ...overrides,
+  });
+  return Array.isArray(result)
+    ? { args: result }
+    : { args: Array.from(result.args), cleanup: result.cleanup };
+}
+
+function resolveClaudeArgs(
+  overrides: Partial<Parameters<typeof resolveClaudeCliExecutionArgs>[0]> & {
+    baseArgs: readonly string[];
+  },
+): string[] {
+  return resolveClaudeArgsResult(overrides).args;
+}
 
 describe("normalizeClaudePermissionArgs", () => {
   it("leaves args alone when they omit permission flags", () => {
@@ -94,12 +124,8 @@ describe("Claude CLI model aliases", () => {
 describe("resolveClaudeCliExecutionArgs", () => {
   it("omits effort args when thinking is off", () => {
     expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
-        modelId: "claude-sonnet-4-6",
+      resolveClaudeArgs({
         thinkingLevel: "off",
-        useResume: false,
         baseArgs: ["-p", "--output-format", "stream-json"],
       }),
     ).toEqual(["-p", "--output-format", "stream-json"]);
@@ -107,29 +133,21 @@ describe("resolveClaudeCliExecutionArgs", () => {
 
   it("maps OpenClaw thinking levels to Claude effort args", () => {
     expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
+      resolveClaudeArgs({
         modelId: "claude-opus-4-7",
         thinkingLevel: "minimal",
-        useResume: false,
         baseArgs: ["-p"],
       }),
     ).toEqual(["-p", "--effort", "low"]);
     expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
+      resolveClaudeArgs({
         modelId: "claude-opus-4-7",
         thinkingLevel: "adaptive",
-        useResume: false,
         baseArgs: ["-p"],
       }),
     ).toEqual(["-p", "--effort", "medium"]);
     expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
+      resolveClaudeArgs({
         modelId: "claude-opus-4-7",
         thinkingLevel: "xhigh",
         useResume: true,
@@ -140,19 +158,185 @@ describe("resolveClaudeCliExecutionArgs", () => {
 
   it("replaces static effort args when a session thinking level is active", () => {
     expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
+      resolveClaudeArgs({
         modelId: "claude-opus-4-7",
         thinkingLevel: "max",
-        useResume: false,
         baseArgs: ["-p", "--effort", "low", "--effort=high"],
       }),
     ).toEqual(["-p", "--effort", "max"]);
   });
+
+  it("injects ultracode settings at execution time when opted in", () => {
+    expect(
+      resolveClaudeArgs({
+        backendConfig: { command: "claude", ultracode: true },
+        baseArgs: ["-p", "--output-format", "stream-json"],
+      }),
+    ).toEqual(["-p", "--output-format", "stream-json", "--settings", '{"ultracode":true}']);
+  });
+
+  it("merges path-based settings files into one private settings file", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-settings-"));
+    await fs.writeFile(
+      path.join(workspaceDir, "claude-settings.json"),
+      JSON.stringify({ cleanupPeriodDays: 7, ultracode: false }),
+      "utf8",
+    );
+
+    const result = resolveClaudeArgsResult({
+      backendConfig: { command: "claude", ultracode: true },
+      cwd: workspaceDir,
+      workspaceDir,
+      baseArgs: ["--settings", "./claude-settings.json", "--verbose"],
+    });
+    const settingsPath = result.args[1] ?? "";
+
+    expect(result.args).toEqual(["--settings", settingsPath, "--verbose"]);
+    expect(settingsPath).not.toBe("./claude-settings.json");
+    expect(settingsPath).not.toContain("cleanupPeriodDays");
+    await expect(fs.readFile(settingsPath, "utf8")).resolves.toBe(
+      '{"cleanupPeriodDays":7,"ultracode":true}',
+    );
+
+    const reusedResult = resolveClaudeArgsResult({
+      backendConfig: { command: "claude", ultracode: true },
+      cwd: workspaceDir,
+      workspaceDir,
+      baseArgs: ["--settings", "./claude-settings.json", "--verbose"],
+    });
+    const reusedSettingsPath = reusedResult.args[1] ?? "";
+    expect(reusedSettingsPath).not.toBe(settingsPath);
+    await expect(fs.readFile(reusedSettingsPath, "utf8")).resolves.toBe(
+      '{"cleanupPeriodDays":7,"ultracode":true}',
+    );
+
+    await result.cleanup?.();
+    await expect(fs.access(settingsPath)).rejects.toThrow();
+    await expect(fs.access(reusedSettingsPath)).resolves.toBeUndefined();
+    await reusedResult.cleanup?.();
+    await expect(fs.access(reusedSettingsPath)).rejects.toThrow();
+  });
+
+  it("resolves path-based settings files against the execution cwd", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-workspace-"));
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-cwd-"));
+    await fs.writeFile(
+      path.join(workspaceDir, "claude-settings.json"),
+      JSON.stringify({ cleanupPeriodDays: 1 }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(cwd, "claude-settings.json"),
+      JSON.stringify({ cleanupPeriodDays: 7 }),
+      "utf8",
+    );
+
+    const result = resolveClaudeArgsResult({
+      backendConfig: { command: "claude", ultracode: true },
+      cwd,
+      workspaceDir,
+      baseArgs: ["--settings", "./claude-settings.json", "--verbose"],
+    });
+    const settingsPath = result.args[1] ?? "";
+
+    await expect(fs.readFile(settingsPath, "utf8")).resolves.toBe(
+      '{"cleanupPeriodDays":7,"ultracode":true}',
+    );
+    await result.cleanup?.();
+  });
+
+  it("fails clearly when ultracode cannot merge a path-based settings file", () => {
+    expect(() =>
+      resolveClaudeArgs({
+        backendConfig: { command: "claude", ultracode: true },
+        workspaceDir: "/tmp",
+        baseArgs: ["--settings", "./missing-claude-settings.json"],
+      }),
+    ).toThrow("Failed to merge Claude settings file ./missing-claude-settings.json");
+  });
+});
+
+describe("injectClaudeSettings", () => {
+  it("appends a fresh --settings flag when none is present", () => {
+    expect(injectClaudeSettings(["-p", "--verbose"], { ultracode: true })).toEqual([
+      "-p",
+      "--verbose",
+      "--settings",
+      '{"ultracode":true}',
+    ]);
+  });
+
+  it("merges into an existing inline --settings object (patch wins)", () => {
+    expect(
+      injectClaudeSettings(["-p", "--settings", '{"foo":1}', "--verbose"], { ultracode: true }),
+    ).toEqual(["-p", "--settings", '{"foo":1,"ultracode":true}', "--verbose"]);
+  });
+
+  it("merges into the --settings=<json> equals form", () => {
+    expect(injectClaudeSettings(["-p", '--settings={"foo":1}'], { ultracode: true })).toEqual([
+      "-p",
+      '--settings={"foo":1,"ultracode":true}',
+    ]);
+  });
+
+  it("lets the patch override a conflicting key", () => {
+    expect(
+      injectClaudeSettings(["--settings", '{"ultracode":false}'], { ultracode: true }),
+    ).toEqual(["--settings", '{"ultracode":true}']);
+  });
+
+  it("drops a malformed bare settings flag and forwards the patch alone", () => {
+    expect(injectClaudeSettings(["--settings", "--verbose"], { ultracode: true })).toEqual([
+      "--verbose",
+      "--settings",
+      '{"ultracode":true}',
+    ]);
+  });
+
+  it("drops malformed inline settings JSON and forwards the patch alone", () => {
+    expect(injectClaudeSettings(["--settings", "{not-json}"], { ultracode: true })).toEqual([
+      "--settings",
+      '{"ultracode":true}',
+    ]);
+  });
+
+  it("preserves path-based settings values until a workspace is available", () => {
+    expect(
+      injectClaudeSettings(["--settings", "./claude-settings.json"], { ultracode: true }),
+    ).toEqual(["--settings", "./claude-settings.json"]);
+  });
 });
 
 describe("normalizeClaudeBackendConfig", () => {
+  it("carries ultracode for execution-time settings injection when opted in", () => {
+    const normalized = normalizeClaudeBackendConfig({
+      command: "claude",
+      ultracode: true,
+      args: ["-p", "--output-format", "stream-json"],
+      resumeArgs: ["-p", "--output-format", "stream-json", "--resume", "{sessionId}"],
+    });
+
+    expect(normalized.ultracode).toBe(true);
+    expect(normalized.args).not.toContain("--settings");
+    expect(normalized.resumeArgs).not.toContain("--settings");
+  });
+
+  it("does not inject ultracode settings when the flag is absent or false", () => {
+    expect(
+      normalizeClaudeBackendConfig({
+        command: "claude",
+        args: ["-p", "--output-format", "stream-json"],
+      }).args,
+    ).not.toContain("--settings");
+    expect(
+      normalizeClaudeBackendConfig({
+        command: "claude",
+        ultracode: false,
+        args: ["-p", "--output-format", "stream-json"],
+      }).args,
+    ).not.toContain("--settings");
+  });
+
   it("normalizes both args and resumeArgs for custom overrides", () => {
     const normalized = normalizeClaudeBackendConfig({
       command: "claude",

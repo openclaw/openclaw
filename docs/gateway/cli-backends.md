@@ -187,6 +187,15 @@ to Claude Code's native `--effort` flag for non-off levels. `minimal` and
 `xhigh`, and `max` map directly. Other CLI backends need their owning plugin to
 declare an equivalent argv mapper before `/think` can affect the spawned CLI.
 
+For Claude Code's dynamic workflow mode, set
+`agents.defaults.cliBackends.claude-cli.ultracode: true`. OpenClaw injects the
+session-scoped `--settings '{"ultracode":true}'` override into fresh and resume
+Claude CLI args at execution time. Existing inline `--settings` JSON objects
+are shallow-merged, and backend `--settings` file paths are resolved against the
+run cwd, read, and replaced with one private merged settings file. Unreadable,
+missing, or non-object settings files fail the run instead of launching Claude
+with ambiguous duplicate `--settings` flags.
+
 Before OpenClaw can use the bundled `claude-cli` backend, Claude Code itself
 must already be logged in on the same host:
 

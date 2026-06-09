@@ -9,6 +9,7 @@ export type {
   CliBackendPlugin,
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,
+  CliBackendResolvedExecutionArgs,
   CliBackendResolveExecutionArgs,
   CliBackendResolveExecutionArgsContext,
   CliBackendThinkingLevel,
