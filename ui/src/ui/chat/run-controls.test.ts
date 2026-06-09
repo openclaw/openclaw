@@ -264,6 +264,30 @@ describe("chat status indicators", () => {
         "Fallback active: deepinfra/moonshotai/Kimi-K2.5",
       );
 
+      const switchedModels: string[] = [];
+      render(
+        renderFallbackIndicator(
+          {
+            selected: "fireworks/minimax-m2p5",
+            active: "deepinfra/moonshotai/Kimi-K2.5",
+            attempts: [],
+            occurredAt: 900,
+          },
+          {
+            onSwitchToSelected: (model) => {
+              switchedModels.push(model);
+            },
+          },
+        ),
+        container,
+      );
+      const switchButton = container.querySelector<HTMLButtonElement>(
+        ".compaction-indicator__action",
+      );
+      expect(switchButton?.textContent?.trim()).toBe("Switch to selected");
+      switchButton?.click();
+      expect(switchedModels).toEqual(["fireworks/minimax-m2p5"]);
+
       renderIndicators(
         {
           phase: "complete",
@@ -300,7 +324,7 @@ describe("chat status indicators", () => {
           occurredAt: 0,
         },
       );
-      expect(container.querySelector(".compaction-indicator--fallback")).toBeNull();
+      expect(container.querySelector(".compaction-indicator--fallback")).not.toBeNull();
       expect(container.querySelector(".compaction-indicator--complete")).toBeNull();
     } finally {
       nowSpy.mockRestore();
