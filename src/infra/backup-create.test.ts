@@ -291,6 +291,123 @@ describe("writeTarArchiveWithRetry", () => {
   });
 });
 
+describe("cleanupStaleTempArchives", () => {
+  const { cleanupStaleTempArchives } = backupCreateInternals;
+
+  it("removes stale .tmp files matching the backup temp pattern", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-cleanup-"));
+    try {
+      const outputPath = path.join(dir, "backup.tar.gz");
+      const stale1 = `${outputPath}.a1b2c3d4-e5f6-7890-abcd-ef1234567890.tmp`;
+      const stale2 = `${outputPath}.12345678-90ab-cdef-1234-567890abcdef.tmp`;
+      // File that should NOT be cleaned up (not matching UUID pattern)
+      const notStale = `${outputPath}.not-a-uuid.tmp`;
+      // Non-tmp file that should NOT be cleaned up
+      const finalArchive = outputPath;
+
+      await fs.writeFile(stale1, "stale content 1", "utf8");
+      await fs.writeFile(stale2, "stale content 2", "utf8");
+      await fs.writeFile(notStale, "not stale", "utf8");
+      await fs.writeFile(finalArchive, "final archive", "utf8");
+
+      const log = vi.fn();
+      await cleanupStaleTempArchives({ outputPath, log });
+
+      // Stale files removed
+      await expect(fs.access(stale1)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(stale2)).rejects.toMatchObject({ code: "ENOENT" });
+
+      // Non-matching files preserved
+      await expect(fs.access(notStale)).resolves.toBeUndefined();
+      await expect(fs.access(finalArchive)).resolves.toBeUndefined();
+
+      // Log should mention the cleanup
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0][0]).toContain("Backup cleaned up 2 stale temp archives");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does nothing when no stale temp archives exist", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-cleanup-"));
+    try {
+      const outputPath = path.join(dir, "backup.tar.gz");
+
+      // Only a non-tmp file
+      await fs.writeFile(outputPath, "final archive", "utf8");
+
+      const log = vi.fn();
+      await cleanupStaleTempArchives({ outputPath, log });
+
+      // Final archive preserved
+      await expect(fs.access(outputPath)).resolves.toBeUndefined();
+
+      // No log messages emitted
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("handles a non-existent output directory gracefully", async () => {
+    const outputPath = path.join(os.tmpdir(), "nonexistent-dir-9999", "backup.tar.gz");
+    const log = vi.fn();
+
+    await expect(
+      cleanupStaleTempArchives({ outputPath, log }),
+    ).resolves.toBeUndefined();
+
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("does not match .tmp files from a differently-named archive", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-cleanup-"));
+    try {
+      const outputPath = path.join(dir, "my-backup.tar.gz");
+      const otherOutputPath = path.join(dir, "other-backup.tar.gz");
+      // This file matches the pattern for `other-backup.tar.gz`, not `my-backup.tar.gz`
+      const otherStale = `${otherOutputPath}.a1b2c3d4-e5f6-7890-abcd-ef1234567890.tmp`;
+      // This file matches our output path
+      const myStale = `${outputPath}.12345678-90ab-cdef-1234-567890abcdef.tmp`;
+
+      await fs.writeFile(otherStale, "other archive stale", "utf8");
+      await fs.writeFile(myStale, "my stale", "utf8");
+
+      const log = vi.fn();
+      await cleanupStaleTempArchives({ outputPath, log });
+
+      // Only our .tmp removed
+      await expect(fs.access(myStale)).rejects.toMatchObject({ code: "ENOENT" });
+      // Other archive's .tmp preserved
+      await expect(fs.access(otherStale)).resolves.toBeUndefined();
+
+      expect(log).toHaveBeenCalledTimes(1);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports total size of cleaned archives in human-readable format", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-cleanup-"));
+    try {
+      const outputPath = path.join(dir, "backup.tar.gz");
+      const stale1 = `${outputPath}.a1b2c3d4-e5f6-7890-abcd-ef1234567890.tmp`;
+      // Write a multi-MB file to exercise the size label formatting
+      const largeContent = Buffer.alloc(2_097_152, "x"); // exactly 2 MB
+      await fs.writeFile(stale1, largeContent);
+
+      const log = vi.fn();
+      await cleanupStaleTempArchives({ outputPath, log });
+
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0][0]).toContain("(2.0MB)");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("buildExtensionsNodeModulesFilter", () => {
   it("excludes dependency trees only under state extensions", () => {
     const filter = buildExtensionsNodeModulesFilter("/state/");

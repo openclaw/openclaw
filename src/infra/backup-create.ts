@@ -191,7 +191,7 @@ async function writeTarArchiveWithRetry(params: {
   throw new Error(`Backup archive write failed: ${final.message}${suffix}`, { cause: final });
 }
 
-export const testApi = { writeTarArchiveWithRetry, isTarEofRaceError };
+export const testApi = { writeTarArchiveWithRetry, isTarEofRaceError, cleanupStaleTempArchives };
 export { testApi as __test };
 
 async function resolveOutputPath(params: {
@@ -244,6 +244,75 @@ async function assertOutputPathReady(outputPath: string): Promise<void> {
 
 function buildTempArchivePath(outputPath: string): string {
   return `${outputPath}.${randomUUID()}.tmp`;
+}
+
+function buildTempArchiveGlobPattern(outputPath: string): RegExp {
+  const escaped = path.basename(outputPath).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Match <basename>.<uuid>.tmp where uuid is a standard v4 hex pattern.
+  return new RegExp(`^${escaped}\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.tmp$`);
+}
+
+async function cleanupStaleTempArchives(params: {
+  outputPath: string;
+  log?: (message: string) => void;
+}): Promise<void> {
+  const dir = path.dirname(params.outputPath);
+  const pattern = buildTempArchiveGlobPattern(params.outputPath);
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // ENOENT is fine — the directory doesn't exist yet, so there's nothing to
+    // clean up. Other errors (EPERM, EACCES) are also non-fatal: the backup
+    // archiver will report them at the point where it needs the directory.
+    if (code === "ENOENT") {
+      return;
+    }
+    params.log?.(
+      `Backup could not list the output directory to clean up stale temp archives: ${String(err)}. Continuing.`,
+    );
+    return;
+  }
+  let cleaned = 0;
+  let cleanedBytes = 0;
+  for (const entry of entries) {
+    if (!entry.isFile() || !pattern.test(entry.name)) {
+      continue;
+    }
+    const fullPath = path.join(dir, entry.name);
+    try {
+      const stat = await fs.stat(fullPath);
+      // Defensive: skip non-files or already-deleted entries.
+      if (!stat.isFile()) {
+        continue;
+      }
+      const size = stat.size;
+      await fs.rm(fullPath);
+      cleaned += 1;
+      cleanedBytes += size;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        params.log?.(
+          `Backup could not remove stale temp archive ${fullPath}: ${String(err)}. Continuing.`,
+        );
+      }
+    }
+  }
+  if (cleaned > 0) {
+    const sizeLabel =
+      cleanedBytes >= 1_073_741_824
+        ? `${(cleanedBytes / 1_073_741_824).toFixed(1)}GB`
+        : cleanedBytes >= 1_048_576
+          ? `${(cleanedBytes / 1_048_576).toFixed(1)}MB`
+          : `${cleanedBytes} bytes`;
+    params.log?.(
+      `Backup cleaned up ${cleaned} stale temp archive${
+        cleaned === 1 ? "" : "s"
+      } (${sizeLabel}) from a previous interrupted run.`,
+    );
+  }
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {
@@ -615,6 +684,7 @@ export async function createBackupArchive(
 
   if (!opts.dryRun) {
     await assertOutputPathReady(outputPath);
+    await cleanupStaleTempArchives({ outputPath, log: opts.log });
   }
 
   const createdAt = new Date(nowMs).toISOString();
