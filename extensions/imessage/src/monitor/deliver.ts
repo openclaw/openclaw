@@ -55,10 +55,6 @@ export async function deliverReplies(params: {
           accountId,
           replyToId: payload.replyToId,
         });
-        // Post-send cache population (#47830): caching happens after each chunk is sent,
-        // not before. The window between send completion and cache write is sub-millisecond;
-        // the next SQLite inbound poll is 1-2s away, so no echo can arrive before the
-        // cache entry exists.
         sentMessageCache?.remember(scope, {
           text: sent.echoText ?? sent.sentText,
           messageId: sent.messageId,

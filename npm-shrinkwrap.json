@@ -25,7 +25,6 @@
         "@mozilla/readability": "0.6.0",
         "@openclaw/fs-safe": "0.3.0",
         "@openclaw/proxyline": "0.3.3",
-        "@smithy/types": "4.14.3",
         "chalk": "5.6.2",
         "chokidar": "5.0.0",
         "clawpdf": "0.3.0",
@@ -448,18 +447,6 @@
       "resolved": "https://registry.npmjs.org/@silvia-odwyer/photon-node/-/photon-node-0.3.4.tgz",
       "integrity": "sha512-bnly4BKB3KDTFxrUIcgCLbaeVVS8lrAkri1pEzskpmxu9MdfGQTy8b8EgcD83ywD3RPMsIulY8xJH5Awa+t9fA==",
       "license": "Apache-2.0"
-    },
-    "node_modules/@smithy/types": {
-      "version": "4.14.3",
-      "resolved": "https://registry.npmjs.org/@smithy/types/-/types-4.14.3.tgz",
-      "integrity": "sha512-YupL0ZWmFtJexUN2cHzkvvF/b9pKrtAIfT1o7/oY/Ppu8IYeZ+lDPM5vZdQJaSeA132dJCqojjGC9NhXeF71VQ==",
-      "license": "Apache-2.0",
-      "dependencies": {
-        "tslib": "^2.6.2"
-      },
-      "engines": {
-        "node": ">=18.0.0"
-      }
     },
     "node_modules/@stablelib/base64": {
       "version": "1.0.1",

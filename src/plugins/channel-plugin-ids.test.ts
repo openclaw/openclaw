@@ -205,6 +205,17 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         },
       },
       {
+        id: "llama-cpp",
+        channels: [],
+        origin: "global",
+        enabledByDefault: true,
+        providers: [],
+        cliBackends: [],
+        contracts: {
+          embeddingProviders: ["local"],
+        },
+      },
+      {
         id: "google",
         channels: [],
         origin: "bundled",
@@ -1102,7 +1113,7 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "memory-core"],
     ],
     [
-      "ignores sentinel memory embedding providers that no plugin owns",
+      "includes the llama.cpp provider for configured local memory embeddings",
       {
         channels: {},
         agents: {
@@ -1111,7 +1122,7 @@ describe("resolveGatewayStartupPluginIds", () => {
           },
         },
       } as OpenClawConfig,
-      ["browser", "memory-core"],
+      ["browser", "llama-cpp", "memory-core"],
     ],
     [
       "skips memory embedding providers from disabled memory search blocks",
