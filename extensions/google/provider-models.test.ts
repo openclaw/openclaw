@@ -213,6 +213,30 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     });
   });
 
+  it("resolves gemini 3.5 flash from direct google templates", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google",
+      ctx: createContext({
+        provider: "google",
+        modelId: "gemini-3.5-flash",
+        models: [
+          createTemplateModel("google", "gemini-3.5-flash", {
+            reasoning: true,
+            contextWindow: 1_048_576,
+          }),
+        ],
+      }),
+    });
+
+    expectModelFields(model, {
+      provider: "google",
+      id: "gemini-3.5-flash",
+      api: "google-generative-ai",
+      reasoning: true,
+      contextWindow: 1_048_576,
+    });
+  });
+
   it("resolves gemini 3.1 flash from direct google templates", () => {
     const model = resolveGoogleGeminiForwardCompatModel({
       providerId: "google",
