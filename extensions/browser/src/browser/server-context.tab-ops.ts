@@ -231,15 +231,25 @@ export function createProfileTabOps({
         type?: string;
       }>
     >(appendCdpPath(cdpHttpBase, "/json/list"), undefined, undefined, getCdpControlPolicy());
-    return raw
-      .map((t) => ({
+    const cdpControlPolicy = getCdpControlPolicy();
+    const tabs: BrowserTab[] = [];
+    for (const t of raw) {
+      const tab: BrowserTab = {
         targetId: t.id ?? "",
         title: t.title ?? "",
         url: t.url ?? "",
         wsUrl: normalizeWsUrl(t.webSocketDebuggerUrl, profile.cdpUrl),
         type: t.type,
-      }))
-      .filter((t) => Boolean(t.targetId) && isSelectableCdpBrowserTarget(t));
+      };
+      if (!tab.targetId || !isSelectableCdpBrowserTarget(tab)) {
+        continue;
+      }
+      if (tab.wsUrl) {
+        await assertCdpEndpointAllowed(tab.wsUrl, cdpControlPolicy);
+      }
+      tabs.push(tab);
+    }
+    return tabs;
   };
 
   const listTabs = async (): Promise<BrowserTab[]> => {
