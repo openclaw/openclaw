@@ -1,6 +1,5 @@
 // Lobster plugin module implements lobster tool behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   optionalNonNegativeIntegerSchema,
@@ -10,6 +9,7 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import {
@@ -270,7 +270,7 @@ function buildEmbeddedLlmAdapters(api: OpenClawPluginApi): Record<string, Embedd
     const runId = `lobster-llm-${Date.now()}`;
 
     const sessionFile = path.join(
-      os.tmpdir(),
+      resolvePreferredOpenClawTmpDir(),
       `lobster-llm-${runId}-${Math.random().toString(36).slice(2)}.session.json`,
     );
     try {
