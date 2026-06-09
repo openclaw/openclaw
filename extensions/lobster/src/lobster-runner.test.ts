@@ -138,20 +138,15 @@ describe("createEmbeddedLobsterRunner", () => {
   });
 
   it("strips gateway credentials from the embedded env even when present in process.env", async () => {
-    // Seed the gateway-process env with credentials, then confirm they are NOT
-    // forwarded into the embedded tool context (review finding: a workflow shell
-    // step must not be able to read OPENCLAW_URL/token from ctx.env).
-    const seeded: Record<string, string> = {
-      OPENCLAW_URL: "http://127.0.0.1:18789",
-      OPENCLAW_TOKEN: "secret-token",
-      CLAWD_URL: "http://127.0.0.1:18789",
-      CLAWD_TOKEN: "secret-token",
-    };
-    const prev: Record<string, string | undefined> = {};
-    for (const [k, v] of Object.entries(seeded)) {
-      prev[k] = process.env[k];
-      process.env[k] = v;
-    }
+    // Seed the gateway-process env with credentials (via vi.stubEnv, auto-restored
+    // in the finally), then confirm they are NOT forwarded into the embedded tool
+    // context (review finding: a workflow shell step must not be able to read
+    // OPENCLAW_URL/token from ctx.env). Using vi.stubEnv rather than writing
+    // process.env directly also avoids the skill-env-host-injection lint pattern.
+    vi.stubEnv("OPENCLAW_URL", "http://127.0.0.1:18789");
+    vi.stubEnv("OPENCLAW_TOKEN", "secret-token");
+    vi.stubEnv("CLAWD_URL", "http://127.0.0.1:18789");
+    vi.stubEnv("CLAWD_TOKEN", "secret-token");
     try {
       const runtime = {
         runToolRequest: vi.fn().mockResolvedValue({
@@ -185,13 +180,7 @@ describe("createEmbeddedLobsterRunner", () => {
       expect(env.CLAWD_URL).toBeUndefined();
       expect(env.CLAWD_TOKEN).toBeUndefined();
     } finally {
-      for (const [k, v] of Object.entries(prev)) {
-        if (v === undefined) {
-          delete process.env[k];
-        } else {
-          process.env[k] = v;
-        }
-      }
+      vi.unstubAllEnvs();
     }
   });
 
