@@ -69,6 +69,7 @@ export function buildEmbeddedSystemPrompt(params: {
     activeProcessSessions?: ActiveProcessSessionReference[];
   };
   messageToolHints?: string[];
+  toolSchemaDirectoryPrompt?: string;
   sandboxInfo?: EmbeddedSandboxInfo;
   tools: AgentTool[];
   modelAliasLines?: string[];
@@ -110,6 +111,7 @@ export function buildEmbeddedSystemPrompt(params: {
     nativeCommandGuidanceLines: params.nativeCommandGuidanceLines,
     runtimeInfo: params.runtimeInfo,
     messageToolHints: params.messageToolHints,
+    toolSchemaDirectoryPrompt: params.toolSchemaDirectoryPrompt,
     sandboxInfo: params.sandboxInfo,
     toolNames: params.tools.map((tool) => tool.name),
     modelAliasLines: params.modelAliasLines,

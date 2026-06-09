@@ -56,6 +56,12 @@ export interface BeforeToolCallResult {
   reason?: string;
 }
 
+export interface MissingToolCallContext {
+  assistantMessage: AssistantMessage;
+  toolCall: AgentToolCall;
+  context: AgentContext;
+}
+
 /**
  * Partial override returned from `afterToolCall`.
  *
@@ -262,6 +268,18 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     context: BeforeToolCallContext,
     signal?: AbortSignal,
   ) => Promise<BeforeToolCallResult | undefined>;
+
+  /**
+   * Called when an assistant emits a tool call whose name is not in the current context.
+   *
+   * Return a tool to execute that call, or undefined to keep the normal
+   * "Tool <name> not found" result. The hook must only resolve tools that are
+   * already authorized for this run.
+   */
+  resolveMissingTool?: (
+    context: MissingToolCallContext,
+    signal?: AbortSignal,
+  ) => Promise<AgentTool | undefined> | AgentTool | undefined;
 
   /**
    * Called after a tool finishes executing, before `tool_execution_end` and tool-result message events are emitted.

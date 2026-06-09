@@ -11,10 +11,14 @@ import {
   testing,
   addClientToolsToToolSearchCatalog,
   applyToolSearchCatalog,
+  applyToolSchemaDirectoryCatalog,
+  buildToolSchemaDirectoryPrompt,
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
   createToolSearchTools,
+  estimateToolSchemaDirectoryToolNames,
   projectToolSearchTargetTranscriptMessages,
+  resolveToolSearchCatalogTool,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -71,12 +75,12 @@ describe("Tool Search", () => {
     const resolved = testing.resolveToolSearchConfig({
       tools: {
         toolSearch: {
-          mode: "tools",
+          mode: "directory",
         },
       },
     } as never);
     expect(resolved.enabled).toBe(true);
-    expect(resolved.mode).toBe("tools");
+    expect(resolved.mode).toBe("directory");
   });
 
   it("falls back to structured controls when code mode is unsupported", () => {
@@ -282,6 +286,231 @@ describe("Tool Search", () => {
       TOOL_CALL_RAW_TOOL_NAME,
     ]);
     expect(compacted.catalogToolCount).toBe(1);
+  });
+
+  it("can expose a compact tool directory while deferring full schemas", async () => {
+    const describeTool = fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe");
+    const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
+    const target = pluginTool(
+      "fake_message",
+      "Send, reply, react, and manage channel messages with a long schema hidden behind describe.",
+    );
+    target.parameters = {
+      type: "object",
+      required: ["action"],
+      properties: {
+        action: { type: "string", enum: ["send", "react", "upload-file"] },
+        message: { type: "string" },
+      },
+    };
+
+    const compacted = applyToolSchemaDirectoryCatalog({
+      tools: [describeTool, callTool, target],
+      config: { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never,
+      sessionId: "session-schema-directory",
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      TOOL_DESCRIBE_RAW_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
+    ]);
+    expect(JSON.stringify(compacted.tools)).not.toContain("upload-file");
+
+    const directory = buildToolSchemaDirectoryPrompt({
+      sessionId: "session-schema-directory",
+      config: { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never,
+    });
+    expect(directory).toContain("- fake_message");
+    expect(directory).toContain("Call tool_describe");
+    expect(directory).not.toContain("upload-file");
+
+    const runtimeTools = createToolSearchTools({
+      sessionId: "session-schema-directory",
+      config: { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never,
+    });
+    const runtimeDescribeTool = runtimeTools.find(
+      (tool) => tool.name === TOOL_DESCRIBE_RAW_TOOL_NAME,
+    );
+    const runtimeCallTool = runtimeTools.find((tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME);
+    if (!runtimeDescribeTool || !runtimeCallTool) {
+      throw new Error("expected structured Tool Search controls");
+    }
+
+    const described = await runtimeDescribeTool.execute("describe-schema-directory", {
+      id: "fake_message",
+    });
+    expect(JSON.stringify(described)).toContain("upload-file");
+
+    await runtimeCallTool.execute("call-schema-directory", {
+      id: "fake_message",
+      args: { action: "send", message: "hello" },
+    });
+    expect(target.execute).toHaveBeenCalledWith(
+      "tool_search_code:call-schema-directory:fake_message:1",
+      { action: "send", message: "hello" },
+      undefined,
+      undefined,
+      undefined,
+    );
+  });
+
+  it("resolves exact deferred directory tools without fuzzy lookup", () => {
+    const describeTool = fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe");
+    const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
+    const target = pluginTool("fake_exact_hidden", "Hidden directory target");
+    const config = { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never;
+
+    applyToolSchemaDirectoryCatalog({
+      tools: [describeTool, callTool, target],
+      config,
+      sessionId: "session-directory-resolve",
+    });
+
+    expect(
+      resolveToolSearchCatalogTool(
+        { sessionId: "session-directory-resolve", config },
+        "fake_exact_hidden",
+      ),
+    ).toBe(target);
+    expect(
+      resolveToolSearchCatalogTool(
+        { sessionId: "session-directory-resolve", config },
+        "fake_exact",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("hydrates likely directory tool schemas while cataloging the rest", () => {
+    const describeTool = fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe");
+    const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
+    const searchTool = pluginTool("searxng_search", "Search the web for current facts");
+    const messageTool = pluginTool("message", "Send Discord messages and reactions");
+    const cronTool = pluginTool("cron", "Manage reminders and scheduled wakeups");
+    const hydrated = estimateToolSchemaDirectoryToolNames({
+      tools: [searchTool, messageTool, cronTool],
+      query: "look up funny penguin meme and post it here",
+      maxTools: 2,
+      requiredToolNames: ["message"],
+    });
+
+    expect(hydrated).toEqual(["message", "searxng_search"]);
+
+    const compacted = applyToolSchemaDirectoryCatalog({
+      tools: [describeTool, callTool, messageTool, searchTool, cronTool],
+      config: { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never,
+      sessionId: "session-schema-directory-hydrated",
+      hydrateToolNames: hydrated,
+    });
+
+    expect(compacted.catalogToolCount).toBe(3);
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      TOOL_DESCRIBE_RAW_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
+      "message",
+      "searxng_search",
+    ]);
+  });
+
+  it("hydrates web search and fetch together for directory web intents", () => {
+    const webSearchTool = pluginTool("web_search", "Search the web for current facts");
+    const webFetchTool = pluginTool("web_fetch", "Fetch URLs and extract readable content");
+    const memoryTool = pluginTool("memory_search", "Search durable memory");
+    const cronTool = pluginTool("cron", "Manage reminders and scheduled wakeups");
+
+    const hydrated = estimateToolSchemaDirectoryToolNames({
+      tools: [memoryTool, cronTool, webFetchTool, webSearchTool],
+      query: "search today's latest AI news",
+      maxTools: 2,
+    });
+
+    expect(hydrated).toEqual(["web_search", "web_fetch"]);
+  });
+
+  it("keeps grouped web tools inside the directory hydration cap", () => {
+    const webSearchTool = pluginTool("web_search", "Search the web for current facts");
+    const webFetchTool = pluginTool("web_fetch", "Fetch URLs and extract readable content");
+    const messageTool = pluginTool("message", "Send Discord messages and reactions");
+
+    const hydrated = estimateToolSchemaDirectoryToolNames({
+      tools: [messageTool, webFetchTool, webSearchTool],
+      query: "read https://example.com and post it here",
+      maxTools: 3,
+      requiredToolNames: ["message"],
+    });
+
+    expect(hydrated).toEqual(["message", "web_fetch", "web_search"]);
+  });
+
+  it("groups active web-capability tools without hard-coded tool names", () => {
+    const searchTool = pluginTool("brave_lookup", "Search the web for live current facts");
+    const fetchTool = pluginTool("firecrawl_page", "Fetch URL pages and extract article content");
+    const memoryTool = pluginTool("memory_search", "Search durable memory");
+
+    const hydrated = estimateToolSchemaDirectoryToolNames({
+      tools: [memoryTool, fetchTool, searchTool],
+      query: "search current GPU prices and read the best result",
+      maxTools: 2,
+    });
+
+    expect(hydrated).toEqual(["brave_lookup", "firecrawl_page"]);
+  });
+
+  it("groups common web providers without hydrating memory search", () => {
+    const searchTool = pluginTool("google_search", "Search Google for live results");
+    const fetchTool = pluginTool("page_fetch", "Fetch URL pages and extract article content");
+    const memoryTool = pluginTool("memory_search", "Search durable memory");
+
+    const hydrated = estimateToolSchemaDirectoryToolNames({
+      tools: [memoryTool, fetchTool, searchTool],
+      query: "latest market news",
+      maxTools: 2,
+    });
+
+    expect(hydrated).toEqual(["google_search", "page_fetch"]);
+  });
+
+  it("groups active memory-capability tools for recall intents without hard-coded tool names", () => {
+    const recallTool = pluginTool("recall_find", "Search durable memory and prior history");
+    const getTool = pluginTool("knowledge_get", "Get one recalled knowledge item by id");
+    const expandTool = pluginTool("graph_expand", "Expand prior memory graph context");
+    const webTool = pluginTool("web_search", "Search the web for current facts");
+
+    const hydrated = estimateToolSchemaDirectoryToolNames({
+      tools: [webTool, expandTool, getTool, recallTool],
+      query: "what did we decide about tool loop fixes?",
+      maxTools: 3,
+      requiredToolNames: ["recall_find"],
+    });
+
+    expect(hydrated).toEqual(["recall_find", "graph_expand", "knowledge_get"]);
+  });
+
+  it("does not group memory tools for current-fact web queries", () => {
+    const webTool = pluginTool("web_search", "Search the web for current facts");
+    const memorySearchTool = pluginTool("memory_search", "Search durable memory");
+    const memoryGetTool = pluginTool("memory_get", "Get recalled memory by id");
+
+    const hydrated = estimateToolSchemaDirectoryToolNames({
+      tools: [memoryGetTool, memorySearchTool, webTool],
+      query: "what is the gold price today?",
+      maxTools: 3,
+    });
+
+    expect(hydrated).toEqual(["web_search"]);
+  });
+
+  it("does not treat current who-is questions as memory recall", () => {
+    const webTool = pluginTool("web_search", "Search the web for current facts");
+    const memorySearchTool = pluginTool("memory_search", "Search durable memory");
+    const memoryGetTool = pluginTool("memory_get", "Get recalled memory by id");
+
+    const hydrated = estimateToolSchemaDirectoryToolNames({
+      tools: [memoryGetTool, memorySearchTool, webTool],
+      query: "who is the president today?",
+      maxTools: 3,
+    });
+
+    expect(hydrated).toEqual(["web_search"]);
   });
 
   it("drops inactive controls when the selected Tool Search control is unavailable", () => {

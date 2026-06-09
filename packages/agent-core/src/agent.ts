@@ -124,6 +124,8 @@ export interface AgentOptions {
     context: BeforeToolCallContext,
     signal?: AbortSignal,
   ) => Promise<BeforeToolCallResult | undefined>;
+  /** Hook that may resolve a not-currently-visible tool call into an authorized tool. */
+  resolveMissingTool?: AgentLoopConfig["resolveMissingTool"];
   /** Hook that may alter a tool result after execution. */
   afterToolCall?: (
     context: AfterToolCallContext,
@@ -220,6 +222,7 @@ export class Agent {
     context: BeforeToolCallContext,
     signal?: AbortSignal,
   ) => Promise<BeforeToolCallResult | undefined>;
+  public resolveMissingTool?: AgentLoopConfig["resolveMissingTool"];
   public afterToolCall?: (
     context: AfterToolCallContext,
     signal?: AbortSignal,
@@ -249,6 +252,7 @@ export class Agent {
     this.onPayload = options.onPayload;
     this.onResponse = options.onResponse;
     this.beforeToolCall = options.beforeToolCall;
+    this.resolveMissingTool = options.resolveMissingTool;
     this.afterToolCall = options.afterToolCall;
     this.prepareNextTurn = options.prepareNextTurn;
     this.steeringQueue = new PendingMessageQueue(options.steeringMode ?? "one-at-a-time");
@@ -480,6 +484,7 @@ export class Agent {
       maxRetryDelayMs: this.maxRetryDelayMs,
       toolExecution: this.toolExecution,
       beforeToolCall: this.beforeToolCall,
+      resolveMissingTool: this.resolveMissingTool,
       afterToolCall: this.afterToolCall,
       prepareNextTurn: this.prepareNextTurn
         ? async () => await this.prepareNextTurn?.(this.signal)

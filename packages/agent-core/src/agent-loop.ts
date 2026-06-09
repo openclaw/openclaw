@@ -713,7 +713,21 @@ async function prepareToolCall(
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
-  const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
+  let tool = currentContext.tools?.find((t) => t.name === toolCall.name);
+  if (!tool) {
+    tool = await config.resolveMissingTool?.(
+      {
+        assistantMessage,
+        toolCall,
+        context: currentContext,
+      },
+      signal,
+    );
+    if (tool) {
+      // Make the recovered tool visible to later provider continuations in this run.
+      currentContext.tools = [...(currentContext.tools ?? []), tool];
+    }
+  }
   if (!tool) {
     return {
       kind: "immediate",
