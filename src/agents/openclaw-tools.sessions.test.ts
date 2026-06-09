@@ -1636,6 +1636,62 @@ describe("sessions tools", () => {
     expect(calls.some((call) => call.method === "agent")).toBe(false);
   });
 
+  it("sessions_send keeps ordinary active session targets on the gateway agent path", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    const ordinaryActiveKey = "agent:main:main";
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun(
+      "ordinary-active-session",
+      {
+        queueMessage,
+        isStreaming: () => true,
+        isCompacting: () => false,
+        supportsTranscriptCommitWait: true,
+        sourceReplyDeliveryMode: "automatic",
+        abort: () => {},
+      },
+      ordinaryActiveKey,
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "ordinary-agent-run", status: "accepted", acceptedAt: 2000 };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:re-portal:main",
+      agentChannel: "telegram",
+      config: {
+        ...TEST_CONFIG,
+        session: {
+          ...TEST_CONFIG.session,
+          agentToAgent: { maxPingPongTurns: 0 },
+        },
+      },
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-ordinary-active", {
+      sessionKey: ordinaryActiveKey,
+      message: "ordinary active target should stay gateway routed",
+      timeoutSeconds: 0,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("accepted");
+    expect(details.runId).toBe("ordinary-agent-run");
+    expect(details.sessionKey).toBe(ordinaryActiveKey);
+    expect(queueMessage).not.toHaveBeenCalled();
+    const agentCalls = calls.filter((call) => call.method === "agent");
+    expect(agentCalls).toHaveLength(1);
+    expect(agentParams(agentCalls[0] ?? {}).sessionKey).toBe(ordinaryActiveKey);
+  });
+
   it("sessions_send falls back from stranded cron run key to durable cron parent", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";

@@ -201,6 +201,11 @@ function isPendingErrorAgentWaitTimeout(result: AgentWaitResult): boolean {
   );
 }
 
+function isRunScopedAgentSessionKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(normalizeOptionalString(sessionKey));
+  return Boolean(parsed && /(?:^|:)run:[^:]+(?::|$)/.test(parsed.rest));
+}
+
 function resolveCronRunScopedFallbackSessionKey(sessionKey: string): string | undefined {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
   if (!normalizedSessionKey || !isCronRunSessionKey(normalizedSessionKey)) {
@@ -252,9 +257,10 @@ async function startAgentRun(params: {
   | { ok: false; result: ReturnType<typeof jsonResult> }
 > {
   try {
-    const activeRunSessionId = params.allowActiveRunQueueDelivery
-      ? resolveActiveEmbeddedRunSessionId(params.sessionKey)
-      : undefined;
+    const activeRunSessionId =
+      params.allowActiveRunQueueDelivery && isRunScopedAgentSessionKey(params.sessionKey)
+        ? resolveActiveEmbeddedRunSessionId(params.sessionKey)
+        : undefined;
     const messageText =
       typeof params.sendParams.message === "string" ? params.sendParams.message : undefined;
     if (activeRunSessionId && messageText) {
