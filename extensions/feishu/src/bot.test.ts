@@ -413,7 +413,11 @@ afterAll(() => {
   vi.resetModules();
 });
 
-async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
+async function dispatchMessage(params: {
+  cfg: ClawdbotConfig;
+  event: FeishuMessageEvent;
+  botOpenId?: string;
+}) {
   const runtime = createRuntimeEnv();
   const feishuConfig = params.cfg.channels?.feishu;
   const cfg =
@@ -432,6 +436,7 @@ async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessa
   await handleFeishuMessage({
     cfg,
     event: params.event,
+    botOpenId: params.botOpenId,
     runtime,
   });
   return runtime;
@@ -1585,7 +1590,9 @@ describe("handleFeishuMessage command authorization", () => {
         chat_type: "group",
         message_type: "text",
         content: JSON.stringify({ text: "@_user_1/model" }),
-        mentions: [{ key: "@_user_1", id: { open_id: "ou-bot" }, name: "Bot", tenant_key: "" }],
+        mentions: [
+          { key: "@_user_1", id: { open_id: "ou-bot" }, name: "Bot", tenant_key: "" },
+        ],
       },
     };
 
@@ -3743,6 +3750,101 @@ describe("handleFeishuMessage command authorization", () => {
 
     // No reply should be dispatched: empty message is silently skipped
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("skips empty quoted group replies that do not mention the bot", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-empty-quoted-sender",
+        },
+      },
+      message: {
+        message_id: "msg-empty-quote-unmentioned",
+        parent_id: "om_parent_unmentioned",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event, botOpenId: "ou-bot" });
+
+    expect(mockGetMessageFeishu).not.toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("dispatches mention-only group replies when quoted parent content is available (#90177)", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_parent_90177",
+      chatId: "oc-group",
+      senderId: "ou-parent-author",
+      senderType: "user",
+      content: "quoted parent content",
+      contentType: "text",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groups: {
+            "oc-group": {
+              requireMention: true,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-reply-only-bot",
+        },
+      },
+      message: {
+        message_id: "msg-empty-with-quote-90177",
+        parent_id: "om_parent_90177",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "@_user_1" }),
+        mentions: [
+          { key: "@_user_1", id: { open_id: "ou-bot" }, name: "Bot", tenant_key: "" },
+        ],
+      },
+    };
+
+    await dispatchMessage({ cfg, event, botOpenId: "ou-bot" });
+
+    expect(mockGetMessageFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "om_parent_90177" }),
+    );
+    const context = mockCallArg<{
+      BodyForAgent?: string;
+      SupplementalContext?: { quote?: { body?: string } };
+    }>(mockFinalizeInboundContext, 0, 0);
+    expect(context.SupplementalContext?.quote?.body).toBe("quoted parent content");
+    expect(context.BodyForAgent).toContain('[Replying to: "quoted parent content"]');
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 });
 

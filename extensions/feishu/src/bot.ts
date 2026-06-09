@@ -952,15 +952,61 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
-    // Skip messages with no text content and no media attachments. Feishu can
-    // deliver empty-text events (e.g. `{"text":""}`) when a user sends a blank
-    // message or when media parsing produces an empty string. Writing a blank
-    // user turn to the session causes downstream LLM providers (e.g. MiniMax)
-    // to reject the request with "messages must not be empty" errors. Logging
-    // the skip avoids silent loss without polluting the agent session.
-    if (!ctx.content.trim() && mediaList.length === 0) {
+
+    const hasCurrentUserPayload = Boolean(ctx.content.trim()) || mediaList.length > 0;
+    const canUseQuoteForEmptyMessage = isGroup && ctx.mentionedBot;
+
+    // Fetch quoted/replied message content before the empty-message guard so
+    // mention-only group replies still reach the agent when the parent carries
+    // the actual user context. Plain blank replies stay protected by the guard.
+    let quotedMessageInfo: Awaited<ReturnType<typeof getMessageFeishu>> = null;
+    let quotedContent: string | undefined;
+    if (ctx.parentId && (hasCurrentUserPayload || canUseQuoteForEmptyMessage)) {
+      try {
+        quotedMessageInfo = await getMessageFeishu({
+          cfg,
+          messageId: ctx.parentId,
+          accountId: account.accountId,
+        });
+        if (
+          quotedMessageInfo &&
+          (await shouldIncludeFetchedGroupContextMessage({
+            cfg,
+            accountId: account.accountId,
+            chatId: ctx.chatId,
+            isGroup,
+            allowFrom: effectiveGroupSenderAllowFrom,
+            mode: contextVisibilityMode,
+            kind: "quote",
+            senderId: quotedMessageInfo.senderId,
+            senderType: quotedMessageInfo.senderType,
+          }))
+        ) {
+          quotedContent = quotedMessageInfo.content;
+          log(
+            `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
+          );
+        } else if (quotedMessageInfo) {
+          log(
+            `feishu[${account.accountId}]: skipped quoted message from sender ${quotedMessageInfo.senderId ?? "unknown"} (mode=${contextVisibilityMode})`,
+          );
+        }
+      } catch (err) {
+        log(`feishu[${account.accountId}]: failed to fetch quoted message: ${String(err)}`);
+      }
+    }
+
+    // Skip messages with no user-supplied text or media. Feishu can deliver
+    // empty-text events (e.g. `{"text":""}`) when a user sends a blank message
+    // or when media parsing produces an empty string. Writing a blank user turn
+    // to the session causes downstream LLM providers (e.g. MiniMax) to reject
+    // the request with "messages must not be empty" errors. Logging the skip
+    // avoids silent loss without polluting the agent session.
+    const quoteSuppliesMentionOnlyGroupReply =
+      canUseQuoteForEmptyMessage && Boolean(quotedContent?.trim());
+    if (!hasCurrentUserPayload && !quoteSuppliesMentionOnlyGroupReply) {
       log(
-        `feishu[${account.accountId}]: skipping empty message (no text, no media) from ${ctx.senderOpenId}`,
+        `feishu[${account.accountId}]: skipping empty message (no text, no media, no quoted) from ${ctx.senderOpenId}`,
       );
       return;
     }
@@ -1029,44 +1075,6 @@ export async function handleFeishuMessage(params: {
               })
             ).commandAccess.authorized
       : undefined;
-
-    // Fetch quoted/replied message content if parentId exists
-    let quotedMessageInfo: Awaited<ReturnType<typeof getMessageFeishu>> = null;
-    let quotedContent: string | undefined;
-    if (ctx.parentId) {
-      try {
-        quotedMessageInfo = await getMessageFeishu({
-          cfg,
-          messageId: ctx.parentId,
-          accountId: account.accountId,
-        });
-        if (
-          quotedMessageInfo &&
-          (await shouldIncludeFetchedGroupContextMessage({
-            cfg,
-            accountId: account.accountId,
-            chatId: ctx.chatId,
-            isGroup,
-            allowFrom: effectiveGroupSenderAllowFrom,
-            mode: contextVisibilityMode,
-            kind: "quote",
-            senderId: quotedMessageInfo.senderId,
-            senderType: quotedMessageInfo.senderType,
-          }))
-        ) {
-          quotedContent = quotedMessageInfo.content;
-          log(
-            `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
-          );
-        } else if (quotedMessageInfo) {
-          log(
-            `feishu[${account.accountId}]: skipped quoted message from sender ${quotedMessageInfo.senderId ?? "unknown"} (mode=${contextVisibilityMode})`,
-          );
-        }
-      } catch (err) {
-        log(`feishu[${account.accountId}]: failed to fetch quoted message: ${String(err)}`);
-      }
-    }
 
     const isTopicSessionForThread =
       isGroup &&
