@@ -82,7 +82,10 @@ function expectCronStatus(
   params: { storePath: string; jobs: number },
 ) {
   expect(status.enabled).toBe(true);
-  expect(status.storePath).toBe(params.storePath);
+  // storePath now reports the canonical SQLite database path, not the
+  // legacy JSON store path (fixes #91766).
+  expect(status.storePath).toBeTypeOf("string");
+  expect(status.storePath).toMatch(/openclaw\.sqlite$/);
   expect(status.jobs).toBe(params.jobs);
   if (status.nextWakeAtMs !== null) {
     expect(status.nextWakeAtMs).toBeTypeOf("number");
