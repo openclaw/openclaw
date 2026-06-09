@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -185,6 +186,9 @@ func runDocsI18N(ctx context.Context, cfg runConfig, files []string, newTranslat
 	elapsed := time.Since(start).Round(time.Millisecond)
 	log.Printf("docs-i18n: completed processed=%d skipped=%d elapsed=%s", processed, skipped, elapsed)
 	if translationErr != nil && cfg.allowPartial && cfg.mode == "doc" && processed > 0 {
+		if ctx.Err() != nil || errors.Is(translationErr, context.Canceled) || errors.Is(translationErr, context.DeadlineExceeded) {
+			return translationErr
+		}
 		log.Printf("docs-i18n: allowing partial doc output after translation error: %v", translationErr)
 		return nil
 	}

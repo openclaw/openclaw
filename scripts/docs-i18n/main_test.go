@@ -126,6 +126,31 @@ func (cancelAwareTranslator) TranslateRaw(ctx context.Context, text, _, _ string
 
 func (cancelAwareTranslator) Close() {}
 
+type cancelAfterFirstDocTranslator struct {
+	cancel context.CancelFunc
+	calls  int
+}
+
+func (t *cancelAfterFirstDocTranslator) Translate(ctx context.Context, text, _, _ string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return text, nil
+}
+
+func (t *cancelAfterFirstDocTranslator) TranslateRaw(ctx context.Context, text, _, _ string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	t.calls++
+	if t.calls == 1 {
+		t.cancel()
+	}
+	return text, nil
+}
+
+func (t *cancelAfterFirstDocTranslator) Close() {}
+
 func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 	t.Parallel()
 
@@ -310,6 +335,41 @@ func TestRunDocsI18NAllowPartialStopsAfterRunCancellation(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected canceled run to fail even with allowPartial=true")
+	}
+	if _, err := os.Stat(filepath.Join(docsRoot, "zh-CN", "zzz-second.md")); err == nil {
+		t.Fatal("did not expect later output to be written after run cancellation")
+	}
+}
+
+func TestRunDocsI18NAllowPartialReturnsCancellationAfterPartialSuccess(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	writeFile(t, filepath.Join(docsRoot, ".i18n", "glossary.zh-CN.json"), "[]")
+	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
+	firstPath := filepath.Join(docsRoot, "aaa-first.md")
+	secondPath := filepath.Join(docsRoot, "zzz-second.md")
+	writeFile(t, firstPath, "# Gateway\n")
+	writeFile(t, secondPath, "# Gateway\n")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	err := runDocsI18N(ctx, runConfig{
+		targetLang:   "zh-CN",
+		sourceLang:   "en",
+		docsRoot:     docsRoot,
+		mode:         "doc",
+		thinking:     "high",
+		overwrite:    true,
+		allowPartial: true,
+		parallel:     1,
+	}, []string{firstPath, secondPath}, func(_, _ string, _ []GlossaryEntry, _ string) (docsTranslator, error) {
+		return &cancelAfterFirstDocTranslator{cancel: cancel}, nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled run after partial success, got %v", err)
+	}
+	if got := mustReadFile(t, filepath.Join(docsRoot, "zh-CN", "aaa-first.md")); !strings.Contains(got, "# Gateway") {
+		t.Fatalf("expected first output to be written before cancellation, got:\n%s", got)
 	}
 	if _, err := os.Stat(filepath.Join(docsRoot, "zh-CN", "zzz-second.md")); err == nil {
 		t.Fatal("did not expect later output to be written after run cancellation")
