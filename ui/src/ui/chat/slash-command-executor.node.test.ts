@@ -788,7 +788,9 @@ describe("executeSlashCommand directives", () => {
       "",
     );
 
-    expect(result.content).toBe("Current fast mode: on.\nOptions: on, off, auto, default, status.");
+    expect(result.content).toBe(
+      "Current fast mode: on.\nOptions: on, off, auto (60 sec), default, status.",
+    );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
   });
 
@@ -810,7 +812,35 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "Current fast mode: auto.\nOptions: on, off, auto, default, status.",
+      "Current fast mode: auto (60 sec).\nOptions: on, off, auto (60 sec), default, status.",
+    );
+  });
+
+  it("reports effective model-default auto fast mode for bare /fast", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              effectiveFastMode: "auto",
+              effectiveFastModeSource: "config",
+              fastAutoOnSeconds: 30,
+            }),
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "fast",
+      "",
+    );
+
+    expect(result.content).toBe(
+      "Current fast mode: auto (30 sec) (default: model).\nOptions: on, off, auto (30 sec), default, status.",
     );
   });
 

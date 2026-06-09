@@ -1,6 +1,7 @@
 /**
  * Resolves fast-mode state from agent config and runtime defaults.
  */
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { normalizeFastMode } from "../auto-reply/thinking.shared.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -9,17 +10,19 @@ import {
   resolveFastModeModelAutoOnSeconds,
   resolveFastModeModelParams,
 } from "../shared/fast-mode.js";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 export {
   DEFAULT_FAST_MODE_AUTO_ON_SECONDS,
   formatFastModeAutoLabel,
   formatFastModeAutoProgressText,
+  formatFastModeCommandOptions,
+  formatFastModeCurrentStatus,
   formatFastModeSourceSuffix,
   formatFastModeStatusValue,
   formatFastModeValue,
   normalizeFastModeAutoOnSeconds,
+  normalizeFastModeSource,
   resolveFastModeForElapsed,
   resolveFastModeModelAutoOnSeconds,
 } from "../shared/fast-mode.js";

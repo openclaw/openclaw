@@ -141,6 +141,18 @@ export function formatFastModeStatusValue(params: {
   return formatFastModeValue(params.mode);
 }
 
+export function formatFastModeCommandOptions(params?: { fastAutoOnSeconds?: number }): string {
+  return `on, off, ${formatFastModeAutoLabel({
+    fastAutoOnSeconds: params?.fastAutoOnSeconds,
+  })}, default, status`;
+}
+
+export function normalizeFastModeSource(value: unknown): FastModeSource | undefined {
+  return value === "session" || value === "agent" || value === "config" || value === "default"
+    ? value
+    : undefined;
+}
+
 export function formatFastModeSourceSuffix(source: FastModeSource | undefined): string {
   switch (source) {
     case "session":
@@ -154,4 +166,17 @@ export function formatFastModeSourceSuffix(source: FastModeSource | undefined): 
     default:
       return "";
   }
+}
+
+export function formatFastModeCurrentStatus(params: {
+  mode: FastMode | undefined;
+  source?: FastModeSource;
+  fastAutoOnSeconds?: number;
+  label?: string;
+}): string {
+  const label = params.label ?? "Current fast mode";
+  return `${label}: ${formatFastModeStatusValue({
+    mode: params.mode,
+    fastAutoOnSeconds: params.fastAutoOnSeconds,
+  })}${formatFastModeSourceSuffix(params.source)}.`;
 }

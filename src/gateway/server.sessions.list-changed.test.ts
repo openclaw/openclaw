@@ -347,6 +347,83 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   });
 });
 
+test("sessions.list exposes effective fast auto defaults from the selected model", async () => {
+  testState.agentConfig = {
+    model: { primary: "openai/gpt-5.5" },
+    models: {
+      "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+    },
+  };
+  await writeMainSessionStore({
+    modelProvider: "openai",
+    model: "gpt-5.5",
+  });
+
+  const { respond } = await invokeSessionsList({
+    requestId: "req-sessions-list-fast-default",
+  });
+
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:main");
+  expectFields(session, {
+    fastMode: undefined,
+    effectiveFastMode: "auto",
+    effectiveFastModeSource: "config",
+    fastAutoOnSeconds: 30,
+  });
+});
+
+test("sessions.list resolves effective fast metadata from the raw runtime provider", async () => {
+  testState.agentConfig = {
+    model: { primary: "openai-codex/gpt-5.5" },
+    models: {
+      "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+      "openai-codex/gpt-5.5": { params: { fastMode: false, fastAutoOnSeconds: 45 } },
+    },
+  };
+  await writeMainSessionStore({
+    modelProvider: "openai-codex",
+    model: "gpt-5.5",
+  });
+
+  const { respond } = await invokeSessionsList({
+    requestId: "req-sessions-list-fast-raw-provider",
+  });
+
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:main");
+  expectFields(session, {
+    effectiveFastMode: false,
+    effectiveFastModeSource: "config",
+    fastAutoOnSeconds: 45,
+  });
+});
+
+test("sessions.changed mutation events refresh effective fast metadata", async () => {
+  testState.agentConfig = {
+    model: { primary: "openai/gpt-5.5" },
+    models: {
+      "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+    },
+  };
+  await writeMainSessionStore({
+    modelProvider: "openai",
+    model: "gpt-5.5",
+  });
+
+  const result = await invokeSessionsPatch({
+    key: "main",
+    fastMode: false,
+  });
+
+  expectMainPatchBroadcast(result, {
+    fastMode: false,
+    effectiveFastMode: false,
+    effectiveFastModeSource: "session",
+    fastAutoOnSeconds: 30,
+  });
+});
+
 test("sessions.list marks sessions with active abortable runs", async () => {
   await expectListedSessionActiveRun("req-sessions-list-active-run", {}, true);
 });

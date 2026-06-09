@@ -38,6 +38,8 @@ export {
 } from "../auto-reply/command-auth.js";
 export { resolveStoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
 export {
+  formatFastModeCommandOptions,
+  formatFastModeCurrentStatus,
   formatFastModeSourceSuffix,
   formatFastModeStatusValue,
   resolveFastModeState,

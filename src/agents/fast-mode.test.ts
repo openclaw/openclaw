@@ -4,7 +4,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   formatFastModeAutoLabel,
   formatFastModeAutoProgressText,
+  formatFastModeCommandOptions,
+  formatFastModeCurrentStatus,
   formatFastModeStatusValue,
+  normalizeFastModeSource,
   resolveFastModeForElapsed,
   resolveFastModeState,
 } from "./fast-mode.js";
@@ -129,6 +132,18 @@ describe("resolveFastModeState", () => {
       "auto (30 sec)",
     );
     expect(formatFastModeStatusValue({ mode: true })).toBe("on");
+    expect(formatFastModeCommandOptions({ fastAutoOnSeconds: 30 })).toBe(
+      "on, off, auto (30 sec), default, status",
+    );
+    expect(
+      formatFastModeCurrentStatus({
+        mode: "auto",
+        source: "config",
+        fastAutoOnSeconds: 30,
+      }),
+    ).toBe("Current fast mode: auto (30 sec) (default: model).");
+    expect(normalizeFastModeSource("config")).toBe("config");
+    expect(normalizeFastModeSource("bad")).toBeUndefined();
   });
 
   it("uses model fastAutoOnSeconds for auto cutoff across session overrides", () => {

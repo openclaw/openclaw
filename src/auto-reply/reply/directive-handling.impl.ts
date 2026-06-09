@@ -4,9 +4,8 @@ import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope
 import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
 import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import {
-  formatFastModeAutoLabel,
-  formatFastModeSourceSuffix,
-  formatFastModeStatusValue,
+  formatFastModeCommandOptions,
+  formatFastModeCurrentStatus,
   formatFastModeValue,
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
@@ -209,18 +208,20 @@ export async function handleDirectiveOnly(
       !directives.rawFastMode ||
       normalizeLowercaseStringOrEmpty(directives.rawFastMode) === "status"
     ) {
-      const sourceSuffix = formatFastModeSourceSuffix(effectiveFastModeSource);
-      const statusText = `Current fast mode: ${formatFastModeStatusValue({
+      const statusText = formatFastModeCurrentStatus({
         mode: effectiveFastMode,
+        source: effectiveFastModeSource,
         fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
-      })}${sourceSuffix}.`;
+      });
       if (normalizeLowercaseStringOrEmpty(directives.rawFastMode) === "status") {
         return { text: statusText };
       }
       return {
         text: withOptions(
           statusText,
-          `on, off, ${formatFastModeAutoLabel({ fastAutoOnSeconds: fastModeState.fastAutoOnSeconds })}, default, status`,
+          formatFastModeCommandOptions({
+            fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
+          }),
         ),
       };
     }
