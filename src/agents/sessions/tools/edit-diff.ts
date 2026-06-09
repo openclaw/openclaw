@@ -218,7 +218,7 @@ function mapLineOffsetThroughNfkc(origLine: string, normOffset: number, snapToEn
   // find how many normalized code units it produces.
   let origPos = 0;
   let nfkcPos = 0;
-  const codePoints = [...origLine];
+  const codePoints = Array.from(origLine);
   let i = 0;
 
   while (i < codePoints.length) {
