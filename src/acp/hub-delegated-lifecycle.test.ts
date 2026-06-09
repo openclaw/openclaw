@@ -2,6 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  readSessionStoreForTest,
+  writeSessionStoreForTest,
+} from "../config/sessions/test-helpers.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
@@ -43,7 +47,7 @@ describe("hub-delegated lifecycle", () => {
           createdAt: Date.now(),
         },
       };
-      fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: entry }));
+      writeSessionStoreForTest(storePath, { [sessionKey]: entry });
       runtimeConfigState.cfg = {
         session: { store: storePath },
         acp: { allowedAgents: ["codex"] },
@@ -69,7 +73,7 @@ describe("hub-delegated lifecycle", () => {
           createdAt: Date.now(),
         },
       };
-      fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: entry }));
+      writeSessionStoreForTest(storePath, { [sessionKey]: entry });
       const events: string[] = [];
       await closeHubDelegatedAcpWorker({
         cfg: { session: { store: storePath } },
@@ -79,10 +83,7 @@ describe("hub-delegated lifecycle", () => {
         reason: "manual-delegate-close",
         closeRuntime: async () => {
           events.push("close");
-          const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
-            string,
-            SessionEntry
-          >;
+          const persisted = readSessionStoreForTest<SessionEntry>(storePath);
           expect(persisted[sessionKey]?.hubDelegated).toBeUndefined();
         },
         unbind: async () => {
@@ -97,16 +98,13 @@ describe("hub-delegated lifecycle", () => {
     await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
       const storePath = path.join(home, "sessions.json");
       const sessionKey = "agent:codex:acp:repair-before-close";
-      fs.writeFileSync(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sess-repair-before-close",
-            updatedAt: Date.now(),
-            hubDelegated: { ownerSessionKey: "agent:main:main", createdAt: Date.now() },
-          },
-        }),
-      );
+      writeSessionStoreForTest(storePath, {
+        [sessionKey]: {
+          sessionId: "sess-repair-before-close",
+          updatedAt: Date.now(),
+          hubDelegated: { ownerSessionKey: "agent:main:main", createdAt: Date.now() },
+        },
+      });
       const events: string[] = [];
 
       await closeHubDelegatedAcpWorker({
@@ -117,10 +115,7 @@ describe("hub-delegated lifecycle", () => {
         reason: "manual-delegate-close",
         prepareRuntime: async () => {
           events.push("prepare");
-          const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
-            string,
-            SessionEntry
-          >;
+          const persisted = readSessionStoreForTest<SessionEntry>(storePath);
           expect(persisted[sessionKey]?.hubDelegated).toBeDefined();
         },
         closeRuntime: async () => {
@@ -146,7 +141,7 @@ describe("hub-delegated lifecycle", () => {
         updatedAt: Date.now(),
         hubDelegated: marker,
       };
-      fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: entry }));
+      writeSessionStoreForTest(storePath, { [sessionKey]: entry });
 
       await expect(
         closeHubDelegatedAcpWorker({
@@ -161,10 +156,7 @@ describe("hub-delegated lifecycle", () => {
         }),
       ).rejects.toThrow("close failed");
 
-      const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
-        string,
-        SessionEntry
-      >;
+      const persisted = readSessionStoreForTest<SessionEntry>(storePath);
       expect(persisted[sessionKey]?.hubDelegated).toEqual(marker);
     });
   });
@@ -183,7 +175,7 @@ describe("hub-delegated lifecycle", () => {
           createdAt: Date.now(),
         },
       };
-      fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: entry }));
+      writeSessionStoreForTest(storePath, { [sessionKey]: entry });
       runtimeConfigState.cfg = {};
 
       const entries = await listHubDelegatedMaintenanceCandidates({});
@@ -197,29 +189,26 @@ describe("hub-delegated lifecycle", () => {
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
       const ownedKey = "agent:codex:acp:owned-delegate";
       const foreignKey = "agent:codex:acp:foreign-delegate";
-      fs.writeFileSync(
-        storePath,
-        JSON.stringify({
-          [ownedKey]: {
-            sessionId: "sess-owned",
-            updatedAt: Date.now(),
-            label: "owned",
-            hubDelegated: {
-              ownerSessionKey: "agent:main:webchat:main",
-              createdAt: Date.now(),
-            },
+      writeSessionStoreForTest(storePath, {
+        [ownedKey]: {
+          sessionId: "sess-owned",
+          updatedAt: Date.now(),
+          label: "owned",
+          hubDelegated: {
+            ownerSessionKey: "agent:main:webchat:main",
+            createdAt: Date.now(),
           },
-          [foreignKey]: {
-            sessionId: "sess-foreign",
-            updatedAt: Date.now(),
-            label: "foreign",
-            hubDelegated: {
-              ownerSessionKey: "agent:main:discord:other",
-              createdAt: Date.now(),
-            },
+        },
+        [foreignKey]: {
+          sessionId: "sess-foreign",
+          updatedAt: Date.now(),
+          label: "foreign",
+          hubDelegated: {
+            ownerSessionKey: "agent:main:discord:other",
+            createdAt: Date.now(),
           },
-        }),
-      );
+        },
+      });
       runtimeConfigState.cfg = {};
 
       const entries = await listOwnedHubDelegatedSessionEntries({
@@ -261,24 +250,18 @@ describe("hub-delegated lifecycle", () => {
     await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
       const storePath = path.join(home, "sessions.json");
       const sessionKey = "agent:codex:acp:marker";
-      fs.writeFileSync(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sess-marker",
-            updatedAt: Date.now(),
-            hubDelegated: {
-              ownerSessionKey: "agent:main:main",
-              createdAt: Date.now(),
-            },
+      writeSessionStoreForTest(storePath, {
+        [sessionKey]: {
+          sessionId: "sess-marker",
+          updatedAt: Date.now(),
+          hubDelegated: {
+            ownerSessionKey: "agent:main:main",
+            createdAt: Date.now(),
           },
-        }),
-      );
+        },
+      });
       await clearHubDelegatedSessionMarker({ storePath, storeSessionKey: sessionKey });
-      const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
-        string,
-        SessionEntry
-      >;
+      const persisted = readSessionStoreForTest<SessionEntry>(storePath);
       expect(persisted[sessionKey]?.hubDelegated).toBeUndefined();
     });
   });

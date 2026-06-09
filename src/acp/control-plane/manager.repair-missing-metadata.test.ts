@@ -1,8 +1,10 @@
 // ACP missing-metadata repair helpers decide when store rows can be re-initialized.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { writeSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   hasPersistedAcpSessionMetadata,
@@ -10,6 +12,10 @@ import {
 } from "./manager.repair-missing-metadata.js";
 
 describe("shouldRepairMissingAcpSessionMetadata", () => {
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+  });
+
   it("returns persistent mode for hub-delegated store rows missing sqlite metadata", async () => {
     await withTempDir({ prefix: "openclaw-acp-repair-" }, async (home) => {
       process.env.OPENCLAW_STATE_DIR = path.join(home, "state");
@@ -26,7 +32,7 @@ describe("shouldRepairMissingAcpSessionMetadata", () => {
           createdAt: Date.now(),
         },
       };
-      fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: entry }));
+      writeSessionStoreForTest(storePath, { [sessionKey]: entry });
 
       expect(
         shouldRepairMissingAcpSessionMetadata({
@@ -67,7 +73,7 @@ describe("shouldRepairMissingAcpSessionMetadata", () => {
         spawnedBy: "agent:main:main",
         parentSessionKey: "agent:main:main",
       };
-      fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: entry }));
+      writeSessionStoreForTest(storePath, { [sessionKey]: entry });
 
       expect(
         shouldRepairMissingAcpSessionMetadata({
@@ -95,7 +101,7 @@ describe("shouldRepairMissingAcpSessionMetadata", () => {
         spawnedBy: "agent:main:main",
         parentSessionKey: "agent:main:main",
       };
-      fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: entry }));
+      writeSessionStoreForTest(storePath, { [sessionKey]: entry });
 
       expect(
         shouldRepairMissingAcpSessionMetadata({
@@ -121,7 +127,7 @@ describe("shouldRepairMissingAcpSessionMetadata", () => {
         sessionId: "child-session-id",
         updatedAt: Date.now(),
       };
-      fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: entry }));
+      writeSessionStoreForTest(storePath, { [sessionKey]: entry });
 
       expect(
         shouldRepairMissingAcpSessionMetadata({
