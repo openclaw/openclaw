@@ -56,11 +56,13 @@ vi.mock("../auto-reply/continuation/state.js", async (importOriginal) => ({
 vi.mock("../auto-reply/continuation-delegate-store.js", () => ({
   consumePendingDelegates: vi.fn(() => []),
   markPendingDelegateFailed: vi.fn(),
+  stagePostCompactionDelegate: vi.fn(),
 }));
 
 import {
   consumePendingDelegates,
   markPendingDelegateFailed,
+  stagePostCompactionDelegate,
 } from "../auto-reply/continuation-delegate-store.js";
 import { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -539,5 +541,70 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
       setTimeout(resolve, 50);
     });
     expect(spawnSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Announce-path post-compaction routing (#978 fix #3)
+// ---------------------------------------------------------------------------
+
+/**
+ * A light-context leaf / completion path that emits a post-compaction bracket
+ * delegate must STAGE the delegate at the compaction seam (parity with
+ * agent-runner.ts) instead of spawning it as a normal immediate chain hop.
+ * The two routes are mutually exclusive: staging skips spawnSubagentDirect.
+ */
+const mockedStagePostCompactionDelegate = vi.mocked(stagePostCompactionDelegate);
+
+describe("announce-path post-compaction routing (stage at seam, skip spawn)", () => {
+  let spawnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    await writeSessionStore({});
+    setRuntimeConfigSnapshot(makeConfig() as any);
+    spawnSpy = vi.spyOn(subagentSpawn, "spawnSubagentDirect").mockResolvedValue({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:should-not-spawn",
+      runId: "run-should-not-spawn",
+    });
+  });
+
+  afterEach(() => {
+    spawnSpy.mockRestore();
+    mockedStagePostCompactionDelegate.mockClear();
+    clearRuntimeConfigSnapshot();
+    clearSessionStoreCacheForTest();
+  });
+
+  it("stages a post-compaction bracket delegate and skips the normal chain-spawn", async () => {
+    const params = buildChainShardParams(1);
+    params.roundOneReply =
+      "Working state captured.\n[[CONTINUE_DELEGATE: resume migration step 3 | post-compaction]]";
+
+    await runSubagentAnnounceFlow(params);
+    // Allow any fire-and-forget spawn microtasks to flush (proving none fire).
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    expect(mockedStagePostCompactionDelegate).toHaveBeenCalledTimes(1);
+    const [stagedSessionKey, stagedDelegate] = mockedStagePostCompactionDelegate.mock.calls[0];
+    expect(stagedSessionKey).toBe(params.requesterSessionKey);
+    expect(stagedDelegate).toMatchObject({ task: "resume migration step 3" });
+    // Mutual exclusion: staging at-seam must NOT also chain-spawn now.
+    expect(spawnSpy).not.toHaveBeenCalled();
+  });
+
+  it("still chain-spawns a normal (non-post-compaction) bracket delegate", async () => {
+    const params = buildChainShardParams(1);
+    params.roundOneReply = "Done.\n[[CONTINUE_DELEGATE: continue next step]]";
+
+    await runSubagentAnnounceFlow(params);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    expect(mockedStagePostCompactionDelegate).not.toHaveBeenCalled();
+    expect(spawnSpy).toHaveBeenCalledTimes(1);
   });
 });

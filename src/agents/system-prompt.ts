@@ -1465,6 +1465,7 @@ export function buildAgentSystemPrompt(params: {
         "  [[CONTINUE_DELEGATE: task +30s]]          — delayed spawn",
         "  [[CONTINUE_DELEGATE: task | silent]]       — silent return (no channel output)",
         "  [[CONTINUE_DELEGATE: task | silent-wake]]  — silent return + triggers parent turn",
+        "  [[CONTINUE_DELEGATE: task | post-compaction]] — stage working-state survival across the compaction seam (fires at compaction)",
         "",
         "Use `| silent` when the result should only enrich the parent's future context.",
         "Use `| silent-wake` when the result should enrich the parent and wake it to act.",
