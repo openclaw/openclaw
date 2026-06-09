@@ -4650,11 +4650,10 @@ describe("runCodexAppServerAttempt", () => {
       const params = createParams(sessionFile, workspaceDir);
       params.fastMode = fastMode;
 
-      const run = runCodexAppServerAttempt(params, {
-        ...(configuredServiceTier
-          ? { pluginConfig: { appServer: { serviceTier: configuredServiceTier } } }
-          : {}),
-      });
+      const options = configuredServiceTier
+        ? { pluginConfig: { appServer: { serviceTier: configuredServiceTier } } }
+        : {};
+      const run = runCodexAppServerAttempt(params, options);
       await waitForMethod("turn/start");
       await completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
       await run;

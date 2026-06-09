@@ -70,11 +70,6 @@ type AgentEventBridge = {
   drain: () => Promise<void>;
 };
 
-type CommentaryTextPayload = {
-  text: string;
-  itemId?: string;
-};
-
 async function stopAgentEventBridges(bridges: readonly AgentEventBridge[]): Promise<void> {
   for (const bridge of bridges) {
     bridge.unsubscribe();
@@ -106,17 +101,6 @@ function createAssistantTextBridge(params: {
       return text;
     },
   });
-}
-
-function readCommentaryTextPayload(evt: AgentEventPayload): CommentaryTextPayload | undefined {
-  if (evt.stream !== "item" || evt.data.kind !== "preamble") {
-    return undefined;
-  }
-  const text = typeof evt.data.progressText === "string" ? evt.data.progressText.trim() : "";
-  if (!text) {
-    return undefined;
-  }
-  return { text, itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined };
 }
 
 export type CliToolEventPayload = {
@@ -210,19 +194,6 @@ function createToolEventBridge(params: {
   });
 }
 
-function createCommentaryEventBridge(params: {
-  runId: string;
-  suppressed?: boolean;
-  deliver?: (payload: CommentaryTextPayload) => Promise<void>;
-}) {
-  return createAgentEventBridge({
-    runId: params.runId,
-    suppressed: params.suppressed,
-    deliver: params.deliver,
-    read: readCommentaryTextPayload,
-  });
-}
-
 function createToolBoundaryBridge(params: {
   runId: string;
   suppressed?: boolean;
@@ -254,7 +225,6 @@ export async function runCliAgentWithLifecycle(params: {
   onAssistantText?: (text: string) => Promise<void>;
   onReasoningText?: (text: string) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
-  onCommentaryText?: (payload: { text: string; itemId?: string }) => Promise<void>;
   onFastModeAutoProgress?: (payload: ReplyPayload) => Promise<void>;
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
   transformResult?: (result: EmbeddedAgentRunResult) => EmbeddedAgentRunResult;
@@ -350,31 +320,17 @@ export async function runCliAgentWithLifecycle(params: {
     suppressed: params.suppressAssistantBridge,
     deliver: params.onToolEvent,
   });
-  const commentaryBridge = createCommentaryEventBridge({
-    runId: params.runId,
-    suppressed: params.suppressAssistantBridge,
-    deliver: params.onCommentaryText,
-  });
   const toolBoundaryBridge = createToolBoundaryBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
     deliver: maybeAnnounceFastModeAutoOff,
   });
-  const bridges = [
-    assistantBridge,
-    reasoningBridge,
-    toolBridge,
-    commentaryBridge,
-    toolBoundaryBridge,
-  ].filter((bridge): bridge is AgentEventBridge => bridge !== undefined);
+  const bridges = [assistantBridge, reasoningBridge, toolBridge, toolBoundaryBridge].filter(
+    (bridge): bridge is AgentEventBridge => bridge !== undefined,
+  );
   let lifecycleTerminalEmitted = false;
   try {
-    const rawResult = await runCliAgent({
-      ...params.runParams,
-      classifyCommentaryText:
-        params.runParams.classifyCommentaryText ?? Boolean(params.onCommentaryText),
-      emitCommentaryText: Boolean(params.onCommentaryText),
-    });
+    const rawResult = await runCliAgent(params.runParams);
     const result = params.transformResult?.(rawResult) ?? rawResult;
     await stopAgentEventBridges(bridges);
 
