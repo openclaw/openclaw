@@ -99,6 +99,7 @@ import {
   isWebchatClient,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 import {
   abortChatRunById,
   boundInFlightRunSnapshotForChatHistory,
@@ -4306,7 +4307,12 @@ export const chatHandlers: GatewayRequestHandlers = {
                           );
                           return stripped?.length
                             ? stripped
-                            : [{ type: "text", text: "Media reply could not be displayed." }];
+                            : [
+                                {
+                                  type: "text",
+                                  text: runtimeT("runtime.gateway.mediaReplyCouldNotBeDisplayed"),
+                                },
+                              ];
                         }
                         return state.broadcastContent;
                       })

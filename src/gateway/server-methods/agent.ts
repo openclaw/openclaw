@@ -118,6 +118,7 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import {
   type ChatAbortControllerEntry,
@@ -273,7 +274,9 @@ async function runSessionResetFromAgent(params: {
 }
 
 function sessionResetAckText(reason: "new" | "reset"): string {
-  return reason === "new" ? "✅ New session started." : "✅ Session reset.";
+  return reason === "new"
+    ? runtimeT("runtime.channel.sessionStarted")
+    : runtimeT("runtime.channel.sessionReset");
 }
 
 function buildBareSessionResetResult(params: { reason: "new" | "reset"; sessionId?: string }) {

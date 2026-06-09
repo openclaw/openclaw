@@ -5,6 +5,7 @@ import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/bind
 import { updateSessionStoreEntry } from "../../config/sessions/store.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
@@ -149,12 +150,12 @@ export async function maybeHandleResetCommand(
       }
       return {
         shouldContinue: false,
-        reply: { text: "✅ ACP session reset in place." },
+        reply: { text: runtimeT("runtime.channel.sessionResetAcpInPlace") },
       };
     }
     return {
       shouldContinue: false,
-      reply: { text: "⚠️ ACP session reset failed. Check /acp status and try again." },
+      reply: { text: runtimeT("runtime.channel.sessionResetAcpFailed") },
     };
   }
 
@@ -177,7 +178,10 @@ export async function maybeHandleResetCommand(
         ? {}
         : {
             reply: {
-              text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
+              text:
+                commandAction === "reset"
+                  ? runtimeT("runtime.channel.sessionReset")
+                  : runtimeT("runtime.channel.sessionStarted"),
             },
           }),
     };

@@ -1,6 +1,7 @@
 // Classifies provider request failures into retry and user-facing categories.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 
 /** Provider request error classes that get a specialized user-facing reply. */
 export type ProviderRequestErrorCode =
@@ -15,8 +16,9 @@ export type ProviderRequestErrorClassification = {
 };
 
 /** User-facing copy for provider-side broken conversation state. */
-export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
-  "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.";
+export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE = runtimeT(
+  "runtime.channel.providerConversationStateError",
+);
 
 export const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";

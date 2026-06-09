@@ -16,6 +16,7 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { t as runtimeT } from "../wizard/i18n/index.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
@@ -340,7 +341,7 @@ function writeUpgradeAuthFailure(
         "",
         JSON.stringify({
           error: {
-            message: "Too many failed authentication attempts. Please try again later.",
+            message: runtimeT("runtime.gateway.tooManyFailedAuthAttempts"),
             type: "rate_limited",
           },
         }),

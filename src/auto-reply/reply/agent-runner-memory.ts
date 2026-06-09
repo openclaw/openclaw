@@ -40,6 +40,7 @@ import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -310,7 +311,9 @@ function buildMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
   if (!message) {
     return undefined;
   }
-  const visibleText = message.startsWith("⚠️") ? message : `⚠️ ${message}`;
+  const visibleText = message.startsWith("⚠️")
+    ? message
+    : runtimeT("runtime.channel.warningMessage", { message });
   return {
     text:
       visibleText.length > MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS
@@ -1419,7 +1422,9 @@ export async function runMemoryFlushIfNeeded(params: {
           }
           params.onVisibleErrorPayloads?.([
             {
-              text: `⚠️ Memory flush failed after ${MAX_FLUSH_FAILURES} attempts; skipping for this cycle. It will retry after the next compaction.`,
+              text: runtimeT("runtime.channel.memoryFlushExhausted", {
+                attempts: MAX_FLUSH_FAILURES,
+              }),
               isError: true,
             },
           ]);

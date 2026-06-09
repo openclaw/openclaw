@@ -10,6 +10,7 @@ import {
   SILENT_REPLY_TOKEN,
 } from "../../../auto-reply/tokens.js";
 import type { EmbeddedAgentExecutionContract } from "../../../config/types.agent-defaults.js";
+import { t as runtimeT } from "../../../wizard/i18n/index.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import {
@@ -338,8 +339,8 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   return resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
-    ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
-    : "⚠️ Agent couldn't generate a response. Please try again.";
+    ? runtimeT("runtime.channel.agentCouldntGenerateResponseWithSideEffects")
+    : runtimeT("runtime.channel.agentCouldntGenerateResponse");
 }
 
 /**

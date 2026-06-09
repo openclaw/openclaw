@@ -1,9 +1,13 @@
 // Centralizes user-facing failure copy for external agent runner errors.
-export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
-  "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 
-export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT =
-  "⚠️ Heartbeat check failed before it could produce an update. The main chat session remains available.";
+export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT = runtimeT(
+  "runtime.channel.genericExternalRunFailure",
+);
+
+export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT = runtimeT(
+  "runtime.channel.heartbeatExternalRunFailure",
+);
 
 /** True when text is exactly the generic external run failure copy. */
 export function isGenericExternalRunFailureText(text: string | undefined): boolean {

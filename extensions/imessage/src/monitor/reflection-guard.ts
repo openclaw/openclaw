@@ -9,7 +9,8 @@ const RELEVANT_MEMORIES_TAG_RE = /<\s*\/?\s*relevant[-_]memories\b[^<>]*>/i;
 // Require closing `>` to avoid false-positives on phrases like "<final answer>".
 const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/i;
 const ACP_ERROR_RE = /\bACP error\s*\(\s*ACP_[A-Z0-9_]+\s*\):/i;
-const GATEWAY_MISSING_API_KEY_RE = /\bMissing API key for\b.+\bon the gateway\b/i;
+const GATEWAY_MISSING_API_KEY_RE =
+  /\bMissing API key for\b.+\bon the gateway\b|Gateway\s+缺少.+API Key|缺少\s+provider\s+"[^"]+"\s+的\s+API Key.+gateway/i;
 
 const REFLECTION_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: INTERNAL_SEPARATOR_RE, label: "internal-separator" },

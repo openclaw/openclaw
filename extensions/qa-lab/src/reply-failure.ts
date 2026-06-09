@@ -9,10 +9,23 @@ const FAILURE_REPLY_PREFIXES = [
   "⚠️ message ordering conflict.",
   "⚠️ model login expired on the gateway",
   "⚠️ model login failed on the gateway",
+  "⚠️ gateway 上的模型登录已过期",
+  "⚠️ gateway 上的模型登入已過期",
+  "⚠️ gateway 上的模型登录失败",
+  "⚠️ gateway 上的模型登入失敗",
   "⚠️ agent failed before reply:",
+  "⚠️ agent 在回复前失败：",
+  "⚠️ agent 在回覆前失敗：",
   "⚠️ ✉️ message failed",
   "⚠️ no api key found for provider ",
   "⚠️ missing api key for ",
+  "⚠️ gateway 缺少",
+  "⚠️ 缺少 provider ",
+  "⚠️ 处理你的请求时出了问题。",
+  "⚠️ 處理你的請求時發生問題。",
+  "⚠️ 上下文超出限制",
+  "⚠️ 上下文过大",
+  "⚠️ 上下文過大",
 ];
 
 const VISIBLE_REPLY_LEAK_PATTERNS = [

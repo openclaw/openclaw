@@ -3805,6 +3805,37 @@ describe("active-memory plugin", () => {
     expect(prompt).not.toContain("User prefers aisle seats and extra buffer on connections.");
   });
 
+  it("strips localized incomplete-turn boilerplate from retrieval queries", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "recent",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: [
+          "⚠️ Agent 未能生成回复。请重试。",
+          "⚠️ Agent 未能產生回覆。請重試。",
+          "what wings should i order?",
+        ].join("\n"),
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prompt = lastEmbeddedPrompt();
+    const searchQuerySection = prompt.split("\n\nConversation context:")[0] ?? prompt;
+    expect(prompt).toContain("Bounded memory search query:\nwhat wings should i order?");
+    expect(searchQuerySection).not.toContain("未能生成回复");
+    expect(searchQuerySection).not.toContain("未能產生回覆");
+  });
+
   it("does not drop ordinary user text when the active-memory tag appears inline without a matching block", async () => {
     api.pluginConfig = {
       agents: ["main"],

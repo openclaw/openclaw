@@ -24,6 +24,7 @@ import {
   stripToolCallXmlTags,
 } from "../../shared/text/assistant-visible-text.js";
 import { stripFinalTags } from "../../shared/text/final-tags.js";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { stableStringify } from "../stable-stringify.js";
@@ -41,18 +42,19 @@ export function formatBillingErrorMessage(provider?: string, model?: string): st
   const providerLabel =
     providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
   if (providerLabel) {
-    return `⚠️ ${providerLabel} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
+    return runtimeT("runtime.channel.apiBillingErrorForProvider", {
+      providerLabel,
+      providerName,
+    });
   }
-  return "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
+  return runtimeT("runtime.channel.apiBillingError");
 }
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
-const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
-const MODEL_CAPACITY_ERROR_USER_MESSAGE =
-  "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
-const OVERLOADED_ERROR_USER_MESSAGE =
-  "The AI service is temporarily overloaded. Please try again in a moment.";
+const RATE_LIMIT_ERROR_USER_MESSAGE = runtimeT("runtime.channel.apiRateLimitReached");
+const MODEL_CAPACITY_ERROR_USER_MESSAGE = runtimeT("runtime.channel.modelAtCapacity");
+const OVERLOADED_ERROR_USER_MESSAGE = runtimeT("runtime.channel.aiServiceOverloaded");
 const TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE = /^[ \t]*\[tool calls omitted\][ \t]*$/i;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;

@@ -121,4 +121,17 @@ describe("detectReflectedContent", () => {
     expect(result.isReflection).toBe(true);
     expect(result.matchedLabels).toContain("gateway-missing-api-key");
   });
+
+  it("detects reflected localized gateway auth failure replies", () => {
+    for (const text of [
+      "⚠️ Gateway 缺少 OpenAI API Key。请使用带 OpenAI OAuth profile 的 `openai/gpt-5.5`，或为直接 OpenAI API Key 运行设置 `OPENAI_API_KEY`。",
+      "⚠️ Gateway 缺少 OpenAI API Key。請使用帶 OpenAI OAuth profile 的 `openai/gpt-5.5`，或為直接 OpenAI API Key 執行設定 `OPENAI_API_KEY`。",
+      '⚠️ 缺少 provider "openai" 的 API Key。请运行 `openclaw doctor --fix` 修复过期的 OpenAI 模型/会话路由；如果 doctor 提示，请重启 gateway 后再试。',
+      '⚠️ 缺少 provider "openai" 的 API Key。請執行 `openclaw doctor --fix` 修復過期的 OpenAI 模型/工作階段路由；如果 doctor 提示，請重新啟動 gateway 後再試。',
+    ]) {
+      const result = detectReflectedContent(text);
+      expect(result.isReflection).toBe(true);
+      expect(result.matchedLabels).toContain("gateway-missing-api-key");
+    }
+  });
 });

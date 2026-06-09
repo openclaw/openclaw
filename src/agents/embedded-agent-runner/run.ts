@@ -26,6 +26,7 @@ import type { CommandQueueEnqueueOptions } from "../../process/command-queue.typ
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 import {
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
@@ -1306,18 +1307,15 @@ export async function runEmbeddedAgent(
           `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
         );
         paramsLocal.logFallbackDecision("fallback_model", { status });
-        throw new FailoverError(
-          "The AI service is temporarily rate-limited. Please try again in a moment.",
-          {
-            reason: "rate_limit",
-            provider: paramsLocal.failoverProvider,
-            model: paramsLocal.failoverModel,
-            profileId: lastProfileId,
-            sessionId: activeSessionId,
-            lane: globalLane,
-            status,
-          },
-        );
+        throw new FailoverError(runtimeT("runtime.channel.aiServiceRateLimited"), {
+          reason: "rate_limit",
+          provider: paramsLocal.failoverProvider,
+          model: paramsLocal.failoverModel,
+          profileId: lastProfileId,
+          sessionId: activeSessionId,
+          lane: globalLane,
+          status,
+        });
       };
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
@@ -3364,15 +3362,16 @@ export async function runEmbeddedAgent(
             };
           }
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
-            const replayInvalid = resolveReplayInvalidForAttempt(
-              "⚠️ Agent couldn't generate a response. Please try again.",
+            const agentCouldntGenerateResponse = runtimeT(
+              "runtime.channel.agentCouldntGenerateResponse",
             );
+            const replayInvalid = resolveReplayInvalidForAttempt(agentCouldntGenerateResponse);
             const livenessState = resolveRunLivenessState({
               payloadCount: 0,
               aborted,
               timedOut,
               attempt,
-              incompleteTurnText: "⚠️ Agent couldn't generate a response. Please try again.",
+              incompleteTurnText: agentCouldntGenerateResponse,
             });
             setTerminalLifecycleMeta({
               replayInvalid,
@@ -3388,7 +3387,7 @@ export async function runEmbeddedAgent(
             return {
               payloads: [
                 {
-                  text: "⚠️ Agent couldn't generate a response. Please try again.",
+                  text: agentCouldntGenerateResponse,
                   isError: true,
                 },
               ],

@@ -131,6 +131,8 @@ const RECALLED_CONTEXT_LINE_PATTERNS = [
   /^active memory debug:/i,
   /^active memory:/i,
 ];
+const INCOMPLETE_TURN_FAILURE_LINE_RE =
+  /^⚠️?\s*(?:Agent couldn't generate a response|Agent 未能生成回复|Agent 未能產生回覆)/i;
 
 type ActiveRecallPluginConfig = {
   enabled?: boolean;
@@ -2199,7 +2201,7 @@ function normalizeSearchQueryText(text: string): string {
       if (/^(source: external|---|untrusted discord message body)$/i.test(line)) {
         return false;
       }
-      if (/^⚠️?\s*Agent couldn't generate a response/i.test(line)) {
+      if (INCOMPLETE_TURN_FAILURE_LINE_RE.test(line)) {
         return false;
       }
       if (/^Please try again\.?$/i.test(line)) {

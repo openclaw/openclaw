@@ -18,6 +18,102 @@ export const zh_CN = {
     skipForNow: "暂时跳过",
     tokenRecommended: "令牌（推荐）",
   },
+  runtime: {
+    channel: {
+      aiServiceOverloaded: "AI 服务暂时过载。请稍后再试。",
+      aiServiceRateLimited: "AI 服务暂时触发限流。请稍后再试。",
+      agentFailedBeforeReply:
+        "⚠️ Agent 在回复前失败：{detail}{suffix} 请重试，或使用 /new 开始一个新会话。",
+      agentFailedBeforeReplyWithLogs:
+        "⚠️ Agent 在回复前失败：{detail}。\n日志：openclaw logs --follow",
+      agentCouldntGenerateResponse: "⚠️ Agent 未能生成回复。请重试。",
+      agentCouldntGenerateResponseWithSideEffects:
+        "⚠️ Agent 未能生成回复。注意：部分工具操作可能已经执行，请先确认结果后再重试。",
+      apiBillingError:
+        "⚠️ API 提供商返回了计费错误：你的 API Key 额度已用尽或余额不足。请检查提供商的计费面板并充值，或切换到其他 API Key。",
+      apiBillingErrorForProvider:
+        "⚠️ {providerLabel} 返回了计费错误：你的 API Key 额度已用尽或余额不足。请检查 {providerName} 的计费面板并充值，或切换到其他 API Key。",
+      apiRateLimitReached: "⚠️ API 已触发限流。请稍后再试。",
+      autoCompactionComplete: "🧹 自动压缩已完成{suffix}。",
+      cliBackendTimeout:
+        "⚠️ CLI 子进程{routingSuffix}：{modeLabel} 超时，已运行 {seconds} 秒。Gateway 可能仍然正常。请尝试 `/new`、更轻量的模型，或提高 `agents.defaults.timeoutSeconds` 以及 `cliBackends.<your-runtime>` 下的 watchdog `noOutputTimeoutMs`。",
+      codexAppServerConnectionClosed:
+        "⚠️ Codex app-server 连接在本轮完成前关闭。OpenClaw 已在 stdio 回放仍安全时重试一次；如果持续发生，请再试一次。",
+      codexAppServerStopped:
+        "⚠️ Codex app-server 在确认本轮完成前停止。OpenClaw 未自动重放，因为该轮可能仍在运行；请重试，或在会话持续卡住时使用 /new。",
+      compactionComplete: "🧹 压缩已完成",
+      compactionIncomplete: "🧹 压缩未完成",
+      compactingContext: "🧹 正在压缩上下文...",
+      contextAutoCompactionCouldNotRecover:
+        "⚠️ 自动压缩未能恢复本轮。我已保留这段对话到当前会话的映射。请重试，使用 /compact，或使用 /new 开始一个新会话。",
+      contextLimitExceededDuringCompaction:
+        "⚠️ 压缩期间上下文超出限制。我已重置对话并重新开始，请再试一次。",
+      contextLimitExceededReset: "⚠️ 上下文超出限制。我已重置对话并重新开始，请再试一次。",
+      contextOverflowConversationTooLarge:
+        "⚠️ 上下文超出限制：这段对话对当前模型来说太长了。请使用 /new 开始一个新会话。",
+      contextOverflowPromptTooLarge:
+        "⚠️ 上下文超出限制：这次请求对当前模型来说太长了。请缩短消息，或换用更大上下文的模型。",
+      fallbackBackendNoVisibleReply:
+        "⚠️ 无法连接配置的模型后端 {selectedModelRef}。已使用备用模型 {activeModelRef}，但没有产生可见回复。",
+      gatewayRestarting: "⚠️ Gateway 正在重启。请稍等几秒后再试。",
+      genericExternalRunFailure: "⚠️ 处理你的请求时出了问题。请重试，或使用 /new 开始一个新会话。",
+      heartbeatExternalRunFailure: "⚠️ 心跳检查未能生成更新。主聊天会话仍可继续使用。",
+      llmConnectionFailed:
+        "⚠️ LLM 连接失败。可能是服务端问题、网络问题，或上下文长度超限（例如 LM Studio 等本地 LLM）。原始错误：",
+      mediaFailed: "⚠️ 媒体发送失败。",
+      memoryFlushExhausted: "⚠️ 记忆刷新连续 {attempts} 次失败；本轮将跳过。下次压缩后会再次尝试。",
+      missingApiKeyOpenAi:
+        '⚠️ 缺少 provider "openai" 的 API Key。请运行 `openclaw doctor --fix` 修复过期的 OpenAI 模型/会话路由；如果 doctor 提示，请重启 gateway 后再试。如果 doctor 没有可修复项或错误仍然存在，请使用 `openclaw models auth login --provider openai` 重新认证，或运行 `openclaw configure`。',
+      missingApiKeyOpenAiOAuth:
+        "⚠️ Gateway 缺少 OpenAI API Key。请使用带 OpenAI OAuth profile 的 `openai/gpt-5.5`，或为直接 OpenAI API Key 运行设置 `OPENAI_API_KEY`。",
+      missingApiKeyProvider:
+        '⚠️ 缺少 provider "{provider}" 的 API Key。请为 gateway 配置该 provider 的认证后再试。',
+      missingApiKeySelectedProvider:
+        "⚠️ Gateway 缺少当前所选 provider 的 API Key。请配置 provider 认证后再试。",
+      modelAtCapacity: "⚠️ 当前所选模型容量已满。请切换模型，或稍后重试。",
+      modelLoginExpired:
+        "⚠️ Gateway 上的模型登录已过期{providerSuffix}。请使用 `{loginCommand}` 重新认证后再试。",
+      modelLoginFailed:
+        "⚠️ Gateway 上的模型登录失败{providerSuffix}。请重试。如果持续发生，请使用 `{loginCommand}` 重新认证。",
+      modelLoginProviderSuffix: "（{provider}）",
+      modelSwitchCouldNotComplete: "⚠️ 模型切换未能完成。请求的模型可能暂时不可用。请稍后重试。",
+      modelSwitchFailedBeforeReply:
+        "⚠️ Agent 在回复前失败：模型切换未能完成。请求的模型可能暂时不可用。请稍后重试。",
+      modelSwitchFailedBeforeReplyWithLogs:
+        "⚠️ Agent 在回复前失败：模型切换未能完成。请求的模型可能暂时不可用。\n日志：openclaw logs --follow",
+      newSession: "🧭 新会话：{sessionId}",
+      preflightCompactionFailure:
+        "⚠️ 上下文过大，自动压缩未能恢复本轮。{reasonSuffix} 请重试，使用 /compact，或使用 /new 开始一个新会话。",
+      preflightCompactionReason: " 原因：{reason}。",
+      previousRunStillShuttingDown: "⚠️ 上一次运行仍在关闭中。请稍后再试。",
+      providerConversationStateError:
+        "⚠️ 模型提供商拒绝了当前对话状态。请重试，或使用 /new 开始一个新会话。",
+      sessionReset: "✅ 会话已重置。",
+      sessionResetAcpFailed: "⚠️ ACP 会话重置失败。请检查 /acp status 后再试。",
+      sessionResetAcpInPlace: "✅ ACP 会话已原地重置。",
+      sessionStarted: "✅ 新会话已开始。",
+      toolFailed: "⚠️ {toolSummary} 失败{errorSuffix}",
+      unknownError: "未知错误",
+      warningMessage: "⚠️ {message}",
+      rateLimitAllModels: "⚠️ 所有模型暂时触发限流。请几分钟后再试。",
+      rateLimitReadyMinutes: "⚠️ 已触发限流，约 {minutes} 分钟后可重试。请稍后再试。",
+      rateLimitReadySeconds: "⚠️ 已触发限流，约 {seconds} 秒后可重试。请稍等。",
+    },
+    gateway: {
+      attachmentUnavailable: "附件不可用",
+      blockedLocalFile: "本地文件被阻止",
+      fileNotFound: "文件未找到",
+      invalidFile: "文件无效",
+      mediaReplyCouldNotBeDisplayed: "媒体回复无法显示。",
+      notAFile: "不是文件",
+      outsideAllowedFolders: "不在允许访问的文件夹内",
+      sessionStillActive: "会话 {sessionKey} 仍在运行；请稍后再试。",
+      tooManyFailedAuthAttempts: "认证失败次数过多。请稍后再试。",
+    },
+    tui: {
+      thinking: "思考",
+    },
+  },
   wizard: {
     customProvider: {
       apiBaseUrl: "API 基础 URL",

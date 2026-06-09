@@ -4,6 +4,7 @@ import type {
   MessagePresentation,
   ReplyPayloadDelivery,
 } from "../interactive/payload.js";
+import { t as runtimeT } from "../wizard/i18n/index.js";
 
 /** Channel-agnostic assistant reply payload. */
 export type ReplyPayload = {
@@ -67,7 +68,7 @@ export type ReplyPayloadTtsSupplement = {
   visibleTextAlreadyDelivered?: boolean;
 };
 
-export const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+export const REPLY_MEDIA_FAILURE_WARNING = runtimeT("runtime.channel.mediaFailed");
 
 /** Appends the standard media failure warning without duplicating it. */
 export function appendReplyMediaFailureWarning(text: string | undefined): string {

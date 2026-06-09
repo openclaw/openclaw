@@ -26,6 +26,7 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import { isCronSessionKey } from "../../../routing/session-key.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
 import { parseInlineDirectives } from "../../../utils/directive-tags.js";
+import { t as runtimeT } from "../../../wizard/i18n/index.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -548,7 +549,10 @@ export function buildEmbeddedRunPayloads(params: {
         warningPolicy.includeDetails && params.lastToolError.error
           ? `: ${params.lastToolError.error}`
           : "";
-      const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;
+      const warningText = runtimeT("runtime.channel.toolFailed", {
+        toolSummary,
+        errorSuffix,
+      });
       const normalizedWarning = normalizeTextForComparison(warningText);
       const duplicateWarning = normalizedWarning
         ? replyItems.some((item) => {

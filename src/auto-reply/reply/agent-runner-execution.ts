@@ -77,6 +77,7 @@ import {
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -545,19 +546,19 @@ function buildRateLimitCooldownMessage(err: unknown): string {
     return BILLING_ERROR_USER_MESSAGE;
   }
   if (!isFallbackSummaryError(err)) {
-    return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
+    return runtimeT("runtime.channel.rateLimitAllModels");
   }
   const expiry = err.soonestCooldownExpiry;
   const now = Date.now();
   if (typeof expiry === "number" && expiry > now) {
     const secsLeft = Math.max(1, Math.ceil((expiry - now) / 1000));
     if (secsLeft <= 60) {
-      return `⚠️ Rate-limited — ready in ~${secsLeft}s. Please wait a moment.`;
+      return runtimeT("runtime.channel.rateLimitReadySeconds", { seconds: secsLeft });
     }
     const minsLeft = Math.ceil(secsLeft / 60);
-    return `⚠️ Rate-limited — ready in ~${minsLeft} min. Please try again shortly.`;
+    return runtimeT("runtime.channel.rateLimitReadyMinutes", { minutes: minsLeft });
   }
-  return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
+  return runtimeT("runtime.channel.rateLimitAllModels");
 }
 
 function extractCodexUsageLimitErrorMessage(err: unknown): string | undefined {
@@ -633,7 +634,6 @@ function collapseRepeatedFailureDetail(message: string): string {
 
 const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai"]);
 const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
-const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";
 const PREFLIGHT_COMPACTION_FAILURE_PREFIX = "Preflight compaction required but failed:";
 
 type ExternalRunFailureReply = {
@@ -656,12 +656,15 @@ function resolveExternalRunFailureTextForConversation(params: {
   text: string;
   sessionCtx: TemplateContext;
   isGenericRunnerFailure: boolean;
+  applyRunnerFailureSilentPolicy?: boolean;
   cfg?: OpenClawConfig;
 }): string {
   if (!isNonDirectConversationContext(params.sessionCtx)) {
     return params.text;
   }
-  if (!params.isGenericRunnerFailure && !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)) {
+  const shouldApplySilentPolicy =
+    params.isGenericRunnerFailure || params.applyRunnerFailureSilentPolicy === true;
+  if (!shouldApplySilentPolicy) {
     return params.text;
   }
   // Match normal reply routing: default group/channel failures stay silent,
@@ -691,10 +694,10 @@ const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
 function buildCodexAppServerFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
   if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
-    return "⚠️ Codex app-server connection closed before this turn finished. OpenClaw retried once when the stdio turn was still replay-safe; please try again if this keeps happening.";
+    return runtimeT("runtime.channel.codexAppServerConnectionClosed");
   }
   if (CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalizedMessage)) {
-    return "⚠️ Codex app-server stopped before confirming turn completion. OpenClaw did not replay the turn automatically because it may still be active; try again, or use /new if the session stays stuck.";
+    return runtimeT("runtime.channel.codexAppServerStopped");
   }
   return null;
 }
@@ -714,11 +717,11 @@ export function buildPreflightCompactionFailureText(
   )
     .trim()
     .replace(/\s+/gu, " ");
-  const reasonSuffix = options?.includeDetails && reason ? ` Reason: ${reason}.` : "";
-  return (
-    "⚠️ Context is too large and auto-compaction could not recover this turn." +
-    `${reasonSuffix} Try again, use /compact, or use /new to start a fresh session.`
-  );
+  const reasonSuffix =
+    options?.includeDetails && reason
+      ? runtimeT("runtime.channel.preflightCompactionReason", { reason })
+      : "";
+  return runtimeT("runtime.channel.preflightCompactionFailure", { reasonSuffix });
 }
 
 function buildCliBackendTimeoutFailureText(message: string): string | null {
@@ -733,10 +736,11 @@ function buildCliBackendTimeoutFailureText(message: string): string | null {
   const routedModelRef = normalizedMessage.match(CLI_BACKEND_ROUTING_REF_BEFORE_ERROR_RE)?.[1];
   const routingSuffix = routedModelRef ? ` (routing ${routedModelRef})` : "";
   const modeLabel = stall ? "no-output stall" : "overall CLI turn budget";
-  return (
-    `⚠️ CLI subprocess${routingSuffix}: timed out after ${seconds}s (${modeLabel}). The gateway may still be healthy. Try \`/new\`, a lighter model, or raise ` +
-    "`agents.defaults.timeoutSeconds` and the watchdog `noOutputTimeoutMs` entries under `cliBackends.<your-runtime>`."
-  );
+  return runtimeT("runtime.channel.cliBackendTimeout", {
+    routingSuffix,
+    seconds,
+    modeLabel,
+  });
 }
 
 function buildMissingApiKeyFailureText(input: { message: string; error?: unknown }): string | null {
@@ -751,15 +755,15 @@ function buildMissingApiKeyFailureText(input: { message: string; error?: unknown
     return null;
   }
   if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
-    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
+    return runtimeT("runtime.channel.missingApiKeyOpenAiOAuth");
   }
   if (provider === "openai") {
-    return '⚠️ Missing API key for provider "openai". Run `openclaw doctor --fix` to repair stale OpenAI model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.';
+    return runtimeT("runtime.channel.missingApiKeyOpenAi");
   }
   if (SAFE_MISSING_API_KEY_PROVIDERS.has(provider)) {
-    return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
+    return runtimeT("runtime.channel.missingApiKeyProvider", { provider });
   }
-  return "⚠️ Missing API key for the selected provider on the gateway. Configure provider auth, then try again.";
+  return runtimeT("runtime.channel.missingApiKeySelectedProvider");
 }
 
 function buildAuthProfileFailoverFailureText(error: unknown): string | null {
@@ -787,7 +791,7 @@ function formatForwardedExternalRunFailureText(message: string): string {
       ? `${sanitized.slice(0, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
       : sanitized;
   const suffix = /[.!?]$/u.test(detail) ? "" : ".";
-  return `⚠️ Agent failed before reply: ${detail}${suffix} Please try again, or use /new to start a fresh session.`;
+  return runtimeT("runtime.channel.agentFailedBeforeReply", { detail, suffix });
 }
 
 function buildExternalRunFailureReply(
@@ -819,14 +823,25 @@ function buildExternalRunFailureReply(
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {
     const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider);
+    const providerSuffix = oauthRefreshFailure.provider
+      ? runtimeT("runtime.channel.modelLoginProviderSuffix", {
+          provider: oauthRefreshFailure.provider,
+        })
+      : "";
     if (oauthRefreshFailure.reason) {
       return {
-        text: `⚠️ Model login expired on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Re-auth with \`${loginCommand}\`, then try again.`,
+        text: runtimeT("runtime.channel.modelLoginExpired", {
+          providerSuffix,
+          loginCommand,
+        }),
         isGenericRunnerFailure: false,
       };
     }
     return {
-      text: `⚠️ Model login failed on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Please try again. If this keeps happening, re-auth with \`${loginCommand}\`.`,
+      text: runtimeT("runtime.channel.modelLoginFailed", {
+        providerSuffix,
+        loginCommand,
+      }),
       isGenericRunnerFailure: false,
     };
   }
@@ -1219,10 +1234,10 @@ export function buildContextOverflowRecoveryText(params: {
   activeSessionEntry?: SessionEntry;
 }): string {
   const prefix = params.preserveSessionMapping
-    ? "⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session."
+    ? runtimeT("runtime.channel.contextAutoCompactionCouldNotRecover")
     : params.duringCompaction
-      ? "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again."
-      : "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.";
+      ? runtimeT("runtime.channel.contextLimitExceededDuringCompaction")
+      : runtimeT("runtime.channel.contextLimitExceededReset");
   const primaryContextWindow = resolveContextWindowForCompactionHint({
     cfg: params.cfg,
     primaryProvider: params.primaryProvider,
@@ -1250,7 +1265,7 @@ export function buildContextOverflowRecoveryText(params: {
 }
 
 function buildRestartLifecycleReplyText(): string {
-  return "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
+  return runtimeT("runtime.channel.gatewayRestarting");
 }
 
 function resolveRestartLifecycleError(
@@ -1613,10 +1628,10 @@ export async function runAgentTurnWithFallback(params: {
     }
     const text =
       phase === "start"
-        ? "🧹 Compacting context..."
+        ? runtimeT("runtime.channel.compactingContext")
         : phase === "end"
-          ? "🧹 Compaction complete"
-          : "🧹 Compaction incomplete";
+          ? runtimeT("runtime.channel.compactionComplete")
+          : runtimeT("runtime.channel.compactionIncomplete");
     const noticePayload = params.applyReplyToMode({
       text,
       replyToId: currentMessageId,
@@ -2741,7 +2756,9 @@ export async function runAgentTurnWithFallback(params: {
           kind: "final",
           payload: markAgentRunFailureReplyPayload({
             text: shouldSurfaceToControlUi
-              ? `⚠️ Agent failed before reply: ${embeddedErrorText}.\nLogs: openclaw logs --follow`
+              ? runtimeT("runtime.channel.agentFailedBeforeReplyWithLogs", {
+                  detail: embeddedErrorText,
+                })
               : (providerRequestError?.userMessage ??
                 PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE),
           }),
@@ -2763,13 +2780,10 @@ export async function runAgentTurnWithFallback(params: {
               `(${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}). The requested model may be unavailable.`,
           );
           const switchErrorText = shouldSurfaceToControlUi
-            ? "⚠️ Agent failed before reply: model switch could not be completed. " +
-              "The requested model may be temporarily unavailable.\n" +
-              "Logs: openclaw logs --follow"
+            ? runtimeT("runtime.channel.modelSwitchFailedBeforeReplyWithLogs")
             : isVerboseFailureDetailEnabled(params.resolvedVerboseLevel)
-              ? "⚠️ Agent failed before reply: model switch could not be completed. " +
-                "The requested model may be temporarily unavailable. Please try again shortly."
-              : "⚠️ Model switch could not be completed. The requested model may be temporarily unavailable. Please try again shortly.";
+              ? runtimeT("runtime.channel.modelSwitchFailedBeforeReply")
+              : runtimeT("runtime.channel.modelSwitchCouldNotComplete");
           params.replyOperation?.fail("run_failed", err);
           return {
             kind: "final",
@@ -2778,6 +2792,7 @@ export async function runAgentTurnWithFallback(params: {
                 text: switchErrorText,
                 sessionCtx: params.sessionCtx,
                 isGenericRunnerFailure: !shouldSurfaceToControlUi,
+                applyRunnerFailureSilentPolicy: true,
                 cfg: params.followupRun.run.config,
               }),
             }),
@@ -2940,14 +2955,23 @@ export async function runAgentTurnWithFallback(params: {
           : rateLimitOrOverloadedCopy
             ? rateLimitOrOverloadedCopy
             : isContextOverflow
-              ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+              ? runtimeT("runtime.channel.contextOverflowPromptTooLarge")
               : shouldSurfaceToControlUi
-                ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
+                ? runtimeT("runtime.channel.agentFailedBeforeReplyWithLogs", {
+                    detail: trimmedMessage,
+                  })
                 : (externalRunFailureReply?.text ?? genericFallbackText);
+      const usesGeneratedAgentFailedBeforeReplyText =
+        !isBilling &&
+        !(isRateLimit && !isOverloadedErrorMessage(message)) &&
+        !rateLimitOrOverloadedCopy &&
+        !isContextOverflow &&
+        shouldSurfaceToControlUi;
       const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
         text: fallbackText,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
+        applyRunnerFailureSilentPolicy: usesGeneratedAgentFailedBeforeReplyText,
         cfg: params.followupRun.run.config,
       });
 
@@ -2975,7 +2999,7 @@ export async function runAgentTurnWithFallback(params: {
       return {
         kind: "final",
         payload: markAgentRunFailureReplyPayload({
-          text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
+          text: runtimeT("runtime.channel.contextOverflowConversationTooLarge"),
         }),
       };
     }

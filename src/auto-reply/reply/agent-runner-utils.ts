@@ -22,6 +22,7 @@ import {
   type OpenClawConfig,
 } from "../../config/config.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import { t as runtimeT } from "../../wizard/i18n/index.js";
 import type { TemplateContext } from "../templating.js";
 import {
   resolveProviderScopedAuthProfile,
@@ -183,9 +184,9 @@ export const isBunFetchSocketError = (message?: string) =>
 export const formatBunFetchSocketError = (message: string) => {
   const trimmed = message.trim();
   return [
-    "⚠️ LLM connection failed. This could be due to server issues, network problems, or context length exceeded (e.g., with local LLMs like LM Studio). Original error:",
+    runtimeT("runtime.channel.llmConnectionFailed"),
     "```",
-    trimmed || "Unknown error",
+    trimmed || runtimeT("runtime.channel.unknownError"),
     "```",
   ].join("\n");
 };
