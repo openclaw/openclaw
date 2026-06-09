@@ -129,10 +129,18 @@ describe("loadControlUiBootstrapConfig", () => {
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     // Pre-seed a prior seamColor so we can verify removal
-    document.documentElement.style.setProperty("--accent", "#00aaff");
-    document.documentElement.style.setProperty("--ring", "#00aaff");
-    document.documentElement.style.setProperty("--primary", "#00aaff");
-    document.documentElement.style.setProperty("--focus", "#00aaff");
+    for (const v of [
+      "--accent",
+      "--accent-hover",
+      "--accent-muted",
+      "--accent-subtle",
+      "--accent-glow",
+      "--ring",
+      "--primary",
+      "--focus",
+    ]) {
+      document.documentElement.style.setProperty(v, "#00aaff");
+    }
 
     const state = {
       basePath: "",
@@ -150,10 +158,18 @@ describe("loadControlUiBootstrapConfig", () => {
 
     expect(state.seamColor).toBeNull();
     const root = document.documentElement.style;
-    expect(root.getPropertyValue("--accent")).toBe("");
-    expect(root.getPropertyValue("--ring")).toBe("");
-    expect(root.getPropertyValue("--primary")).toBe("");
-    expect(root.getPropertyValue("--focus")).toBe("");
+    for (const v of [
+      "--accent",
+      "--accent-hover",
+      "--accent-muted",
+      "--accent-subtle",
+      "--accent-glow",
+      "--ring",
+      "--primary",
+      "--focus",
+    ]) {
+      expect(root.getPropertyValue(v)).toBe("");
+    }
 
     vi.unstubAllGlobals();
   });

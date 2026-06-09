@@ -73,9 +73,15 @@ function normalizeHexColor(hex: string): string {
 
 function hexToRgba(hex: string, alpha: number): string {
   const normalized = normalizeHexColor(hex);
+  if (normalized.length !== 7) {
+    return "";
+  }
   const r = Number.parseInt(normalized.slice(1, 3), 16);
   const g = Number.parseInt(normalized.slice(3, 5), 16);
   const b = Number.parseInt(normalized.slice(5, 7), 16);
+  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) {
+    return "";
+  }
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
