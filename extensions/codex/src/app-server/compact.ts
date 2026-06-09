@@ -13,10 +13,19 @@ import {
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import type { JsonObject } from "./protocol.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
-import { readCodexAppServerBinding } from "./session-binding.js";
+import {
+  readCodexAppServerBinding,
+  writeCodexAppServerBinding,
+  type CodexAppServerThreadBinding,
+} from "./session-binding.js";
 import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 
 const warnedIgnoredCompactionOverrides = new Set<string>();
+type CodexAppServerCompactOptions = {
+  pluginConfig?: unknown;
+  clientFactory?: CodexAppServerClientFactory;
+  allowNonManualNativeRequest?: boolean;
+};
 
 /**
  * Starts native Codex compaction for a manually requested bound session, or
@@ -24,7 +33,7 @@ const warnedIgnoredCompactionOverrides = new Set<string>();
  */
 export async function maybeCompactCodexAppServerSession(
   params: CompactEmbeddedAgentSessionParams,
-  options: { pluginConfig?: unknown; clientFactory?: CodexAppServerClientFactory } = {},
+  options: CodexAppServerCompactOptions = {},
 ): Promise<EmbeddedAgentCompactResult | undefined> {
   warnIfIgnoringOpenClawCompactionOverrides(params);
   // Codex owns automatic context-pressure compaction for Codex runtime sessions.
@@ -134,9 +143,9 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
 
 async function compactCodexNativeThread(
   params: CompactEmbeddedAgentSessionParams,
-  options: { pluginConfig?: unknown; clientFactory?: CodexAppServerClientFactory } = {},
+  options: CodexAppServerCompactOptions = {},
 ): Promise<EmbeddedAgentCompactResult | undefined> {
-  if (params.trigger !== "manual") {
+  if (params.trigger !== "manual" && !options.allowNonManualNativeRequest) {
     embeddedAgentLog.info("skipping codex app-server compaction for non-manual trigger", {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -186,6 +195,14 @@ async function compactCodexNativeThread(
     // with another profile risks operating on a different Codex account.
     return { ok: false, compacted: false, reason: "auth profile mismatch for session binding" };
   }
+  if (options.allowNonManualNativeRequest) {
+    await clearContextEngineProjectionBeforeNativeCompaction({
+      sessionId: params.sessionId,
+      sessionFile: params.sessionFile,
+      binding,
+      config: params.config,
+    });
+  }
 
   const shouldReleaseDefaultLease = !options.clientFactory;
   const clientFactory = options.clientFactory ?? defaultLeasedCodexAppServerClientFactory;
@@ -232,6 +249,12 @@ async function compactCodexNativeThread(
     threadId: binding.threadId,
     signal: "thread/compact/start",
     pending: true,
+    ...(options.allowNonManualNativeRequest
+      ? {
+          request: "after_context_engine",
+          trigger: params.trigger ?? "unknown",
+        }
+      : {}),
   };
   return {
     ok: true,
@@ -269,6 +292,38 @@ function failedCodexThreadBindingCompactionResult(
       rawError: recovery.reason,
     },
   };
+}
+
+async function clearContextEngineProjectionBeforeNativeCompaction(params: {
+  sessionId: string;
+  sessionFile: string;
+  binding: CodexAppServerThreadBinding;
+  config: CompactEmbeddedAgentSessionParams["config"];
+}): Promise<void> {
+  const contextEngineBinding = params.binding.contextEngine;
+  if (!contextEngineBinding?.projection) {
+    return;
+  }
+  // Native Codex compaction mutates the thread history outside the projection
+  // guard. Clear only the projection marker so the next turn reprojects context.
+  await writeCodexAppServerBinding(
+    params.sessionFile,
+    {
+      ...params.binding,
+      contextEngine: {
+        ...contextEngineBinding,
+        projection: undefined,
+      },
+      createdAt: params.binding.createdAt,
+    },
+    { config: params.config },
+  );
+  embeddedAgentLog.info("cleared codex context-engine projection before native compaction", {
+    sessionId: params.sessionId,
+    threadId: params.binding.threadId,
+    previousEpoch: contextEngineBinding.projection.epoch,
+    previousFingerprint: contextEngineBinding.projection.fingerprint,
+  });
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {

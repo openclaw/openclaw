@@ -2136,9 +2136,24 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("keeps owning context-engine compaction primary for legacy Codex native sessions", async () => {
+    const successorSessionId = "engine-successor-session";
+    const successorSessionFile = "/tmp/engine-successor-session.jsonl";
     resolveAgentHarnessPolicyMock.mockReturnValue({
       runtime: "codex",
       runtimeSource: "model",
+    } as never);
+    contextEngineCompactMock.mockResolvedValue({
+      ok: true,
+      compacted: true,
+      reason: undefined,
+      result: {
+        summary: "engine-summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 333,
+        tokensAfter: 50,
+        sessionId: successorSessionId,
+        sessionFile: successorSessionFile,
+      },
     } as never);
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
       ok: true,
@@ -2170,6 +2185,14 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.result?.summary).toBe("engine-summary");
     expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: successorSessionId,
+        sessionFile: successorSessionFile,
+        trigger: "budget",
+        nativeCompactionRequest: "after_context_engine",
+      }),
+    );
     expect(contextEngineCompactMock.mock.invocationCallOrder[0]).toBeLessThan(
       maybeCompactAgentHarnessSessionMock.mock.invocationCallOrder[0],
     );

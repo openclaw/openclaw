@@ -78,6 +78,7 @@ export function createCodexAppServerAgentHarness(options?: {
       const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
       return maybeCompactCodexAppServerSession(params, {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        allowNonManualNativeRequest: params.nativeCompactionRequest === "after_context_engine",
       });
     },
     reset: async (params) => {

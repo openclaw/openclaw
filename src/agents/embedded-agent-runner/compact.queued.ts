@@ -535,9 +535,12 @@ export async function compactEmbeddedAgentSession(
               (compactAbortSignal) =>
                 maybeCompactAgentHarnessSession({
                   ...params,
+                  sessionId: postCompactionSessionId,
+                  sessionFile: postCompactionSessionFile,
                   contextEngine,
                   contextTokenBudget,
                   contextEngineRuntimeContext,
+                  nativeCompactionRequest: "after_context_engine",
                   abortSignal: compactAbortSignal,
                 }),
               resolveCompactionTimeoutMs(params.config),
