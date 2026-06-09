@@ -4978,6 +4978,50 @@ describe("runAgentTurnWithFallback", () => {
     expect(failMock).not.toHaveBeenCalled();
   });
 
+  it("silences abort errors after a reply operation abort signal is tripped", async () => {
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const abortController = new AbortController();
+    abortController.abort(new Error("superseded"));
+    Object.defineProperty(replyOperation, "abortSignal", {
+      value: abortController.signal,
+      configurable: true,
+    });
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      Object.assign(new Error("CLI run aborted"), { name: "AbortError" }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      replyOperation,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+    }
+    expect(failMock).not.toHaveBeenCalled();
+  });
+
   it("uses compact generic copy for raw external chat errors when verbose is off", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error("INVALID_ARGUMENT: some other failure"),
