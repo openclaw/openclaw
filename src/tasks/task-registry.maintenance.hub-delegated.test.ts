@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
+import {
+  readSessionStoreForTest,
+  writeSessionStoreForTest,
+} from "../config/sessions/test-helpers.js";
 import {
   resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
@@ -36,20 +40,17 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
       const sessionKey = "agent:codex:acp:expired-delegate";
       const createdAt = Date.now() - 8 * 24 * 60 * 60 * 1000;
-      fs.writeFileSync(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sess-expired",
-            updatedAt: createdAt,
-            label: "refactor",
-            hubDelegated: {
-              ownerSessionKey: "agent:main:main",
-              createdAt,
-            },
+      writeSessionStoreForTest(storePath, {
+        [sessionKey]: {
+          sessionId: "sess-expired",
+          updatedAt: createdAt,
+          label: "refactor",
+          hubDelegated: {
+            ownerSessionKey: "agent:main:main",
+            createdAt,
           },
-        }),
-      );
+        },
+      });
       runtimeConfigState.cfg = {
         session: { store: storePath },
         acp: { allowedAgents: ["codex"], delegate: { idleHours: 72, maxAgeHours: 168 } },
@@ -57,10 +58,7 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
 
       const closeAcpSession = vi.fn(async () => {});
       const repairAcpSessionMetadata = vi.fn(async () => {
-        const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
-          string,
-          { hubDelegated?: unknown }
-        >;
+        const persisted = readSessionStoreForTest(storePath);
         expect(persisted[sessionKey]?.hubDelegated).toBeDefined();
         throw new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "backend offline");
       });
@@ -76,8 +74,7 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
         }),
         repairAcpSessionMetadata,
         closeAcpSession,
-        loadSessionStore: (targetPath) =>
-          JSON.parse(fs.readFileSync(targetPath, "utf8")) as Record<string, SessionEntry>,
+        loadSessionStore,
         resolveStorePath: () => storePath,
         parseAgentSessionKey: () => ({ agentId: "codex" }) as never,
         isCronJobActive: () => false,
@@ -110,10 +107,7 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
       expect(repairAcpSessionMetadata).toHaveBeenCalledWith(
         expect.objectContaining({ sessionKey }),
       );
-      const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
-        string,
-        { hubDelegated?: unknown }
-      >;
+      const persisted = readSessionStoreForTest(storePath);
       expect(persisted[sessionKey]?.hubDelegated).toBeUndefined();
     } finally {
       fs.rmSync(home, { recursive: true, force: true });

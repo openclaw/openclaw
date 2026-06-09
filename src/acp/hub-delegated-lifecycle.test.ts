@@ -83,7 +83,7 @@ describe("hub-delegated lifecycle", () => {
         reason: "manual-delegate-close",
         closeRuntime: async () => {
           events.push("close");
-          const persisted = readSessionStoreForTest<SessionEntry>(storePath);
+          const persisted = readSessionStoreForTest(storePath);
           expect(persisted[sessionKey]?.hubDelegated).toBeUndefined();
         },
         unbind: async () => {
@@ -115,7 +115,7 @@ describe("hub-delegated lifecycle", () => {
         reason: "manual-delegate-close",
         prepareRuntime: async () => {
           events.push("prepare");
-          const persisted = readSessionStoreForTest<SessionEntry>(storePath);
+          const persisted = readSessionStoreForTest(storePath);
           expect(persisted[sessionKey]?.hubDelegated).toBeDefined();
         },
         closeRuntime: async () => {
@@ -156,7 +156,7 @@ describe("hub-delegated lifecycle", () => {
         }),
       ).rejects.toThrow("close failed");
 
-      const persisted = readSessionStoreForTest<SessionEntry>(storePath);
+      const persisted = readSessionStoreForTest(storePath);
       expect(persisted[sessionKey]?.hubDelegated).toEqual(marker);
     });
   });
@@ -261,7 +261,7 @@ describe("hub-delegated lifecycle", () => {
         },
       });
       await clearHubDelegatedSessionMarker({ storePath, storeSessionKey: sessionKey });
-      const persisted = readSessionStoreForTest<SessionEntry>(storePath);
+      const persisted = readSessionStoreForTest(storePath);
       expect(persisted[sessionKey]?.hubDelegated).toBeUndefined();
     });
   });
