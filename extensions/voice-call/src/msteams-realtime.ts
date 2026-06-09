@@ -37,6 +37,7 @@ import {
   type RealtimeVoiceTool,
   type RealtimeVoiceToolCallEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps } from "./core-bridge.js";
 import { inferEmotion } from "./expression.js";
@@ -170,12 +171,9 @@ const MSTEAMS_REALTIME_SHOW_SYSTEM_PROMPT =
 /** Max bytes for an agent-produced image we'll display (safety bound). */
 const MSTEAMS_MAX_DISPLAY_IMAGE_BYTES = 4_000_000;
 
-/** MIME for a local image file by extension, or null for non-images / remote URLs. */
-function mimeForImagePath(filePath: string): string | null {
-  if (/^[a-z]+:\/\//i.test(filePath)) {
-    return null; // remote URL — not a trusted local file; skip
-  }
-  const ext = filePath.toLowerCase().split(".").pop() ?? "";
+/** MIME for an image by file/URL extension (query string stripped), or null for non-images. */
+function mimeForImageExtension(pathOrUrl: string): string | null {
+  const ext = (pathOrUrl.split(/[?#]/)[0] ?? "").toLowerCase().split(".").pop() ?? "";
   switch (ext) {
     case "png":
       return "image/png";
@@ -750,25 +748,83 @@ export function createMsteamsRealtimeCall(params: {
     }
   }
 
-  /** Read agent-produced trusted-local image files and show them on the outbound tile (Phase 8). */
+  /** Load an agent-produced image — a local file (readFile) or a remote URL (SSRF-guarded fetch). */
+  async function loadDisplayImage(
+    pathOrUrl: string,
+  ): Promise<{ bytes: Buffer; mime: string } | null> {
+    if (/^https?:\/\//i.test(pathOrUrl)) {
+      // Remote URL (e.g. an uploaded screenshot). Public hosts only; the guard blocks private/loopback.
+      try {
+        const { response, release } = await fetchWithSsrFGuard({
+          url: pathOrUrl,
+          init: { method: "GET" },
+          policy: {},
+          timeoutMs: 15_000,
+        });
+        try {
+          if (!response.ok) {
+            return null;
+          }
+          const contentType =
+            (response.headers.get("content-type") ?? "").split(";")[0]?.trim() ?? "";
+          const mime = contentType.startsWith("image/")
+            ? contentType
+            : mimeForImageExtension(pathOrUrl);
+          if (!mime) {
+            return null;
+          }
+          const bytes = Buffer.from(await response.arrayBuffer());
+          if (bytes.length === 0 || bytes.length > MSTEAMS_MAX_DISPLAY_IMAGE_BYTES) {
+            return null;
+          }
+          return { bytes, mime };
+        } finally {
+          release?.();
+        }
+      } catch {
+        return null;
+      }
+    }
+    // Local file produced by the agent's own tool run.
+    const mime = mimeForImageExtension(pathOrUrl);
+    if (!mime) {
+      return null;
+    }
+    try {
+      const bytes = await readFile(pathOrUrl);
+      if (bytes.length === 0 || bytes.length > MSTEAMS_MAX_DISPLAY_IMAGE_BYTES) {
+        return null;
+      }
+      return { bytes, mime };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Show agent-produced images (local files or remote URLs) on the outbound tile (Phase 8). */
   async function forwardDisplayImages(mediaPaths: string[]): Promise<number> {
     let shown = 0;
-    for (const filePath of mediaPaths) {
-      const mime = mimeForImagePath(filePath);
-      if (!mime) {
-        continue; // not a local image file
+    for (const pathOrUrl of mediaPaths) {
+      const img = await loadDisplayImage(pathOrUrl);
+      if (!img) {
+        logger?.debug?.(
+          `MsteamsRealtime: skipped non-displayable media ${pathOrUrl} for ${callId}`,
+        );
+        continue;
       }
       try {
-        const bytes = await readFile(filePath);
-        if (bytes.length === 0 || bytes.length > MSTEAMS_MAX_DISPLAY_IMAGE_BYTES) {
-          continue;
-        }
-        logger?.debug?.(`MsteamsRealtime: display.image (${mime}, ${bytes.length}B) for ${callId}`);
-        session.send({ type: "display.image", dataBase64: bytes.toString("base64"), mime });
+        logger?.debug?.(
+          `MsteamsRealtime: display.image (${img.mime}, ${img.bytes.length}B) for ${callId}`,
+        );
+        session.send({
+          type: "display.image",
+          dataBase64: img.bytes.toString("base64"),
+          mime: img.mime,
+        });
         shown += 1;
       } catch (err) {
         logger?.debug?.(
-          `MsteamsRealtime: could not show image ${filePath} for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
+          `MsteamsRealtime: display.image send failed for ${callId} — ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
