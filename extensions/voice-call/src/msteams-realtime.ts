@@ -442,6 +442,7 @@ export function createMsteamsRealtimeCall(params: {
     images?: Array<{ type: "image"; data: string; mimeType: string }>;
     fastMode?: boolean;
     timeoutMs?: number;
+    trustLocalMedia?: boolean;
   }) => {
     const { provider: agentProvider, model } = resolveVoiceResponseModel({
       voiceConfig: opts.voiceConfig,
@@ -471,6 +472,7 @@ export function createMsteamsRealtimeCall(params: {
       thinkLevel,
       fastMode: opts.fastMode ?? opts.voiceConfig.realtime.consultFastMode,
       ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+      ...(opts.trustLocalMedia ? { trustLocalMedia: true } : {}),
       toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(opts.toolPolicy),
       extraSystemPrompt: opts.extraSystemPrompt,
     });
@@ -892,6 +894,9 @@ export function createMsteamsRealtimeCall(params: {
         extraSystemPrompt: MSTEAMS_REALTIME_SHOW_SYSTEM_PROMPT,
         toolPolicy: "owner", // needs the screenshot / image-generation tools
         timeoutMs: Math.max(voiceConfig.responseTimeoutMs, MSTEAMS_SHOW_TIMEOUT_MS),
+        // show is a controlled, single-image production run — trust the local image it produces
+        // (general consults leave this false, so an arbitrary local path is never displayed).
+        trustLocalMedia: true,
       });
       const shown = await forwardDisplayImages(result.mediaPaths ?? []);
       rtSession.submitToolResult(event.callId, {
@@ -1003,6 +1008,13 @@ export function createMsteamsRealtimeCall(params: {
   return {
     pushAudio: (pcm16k: Buffer) => {
       if (closed || pcm16k.length === 0) {
+        return;
+      }
+      // Recording gate: do not forward caller audio to the realtime provider until the
+      // call's recording status is active (Microsoft Media Access API obligation, matching
+      // the streaming path and every other media-derived path here). No-op when
+      // requireRecordingStatus is false.
+      if (recordingGateBlocks()) {
         return;
       }
       // Optional self-echo guard: drop caller-leg audio that arrives within a short

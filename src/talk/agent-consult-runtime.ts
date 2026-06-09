@@ -35,30 +35,48 @@ export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
  */
 export type RealtimeVoiceAgentConsultResult = { text: string; mediaPaths?: string[] };
 
+/** A media reference is "remote" (and SSRF-guarded downstream) when it is an http(s) URL. */
+function isRemoteMediaUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
+}
+
 /**
- * Collect produced media (file paths or URLs) from non-error, non-reasoning run payloads. We do NOT
- * require the `trustedLocalMedia` manifest flag — most image-producing tools (screenshot, image-gen)
- * don't set it, and requiring it silently dropped agent screenshots. Safety is enforced downstream by
- * the bridge (SSRF guard for URLs, local read for files, image-MIME-only display).
+ * Collect produced media (file paths or URLs) from non-error, non-reasoning run payloads, preserving
+ * the local-media trust boundary:
+ *
+ * - **Remote http(s) URLs** are always collected; the bridge SSRF-guards them before fetching.
+ * - **Local paths** are collected only when trusted — either the producing tool marked the payload
+ *   `trustedLocalMedia`, or the caller opts in via `trustLocalMedia` (a controlled image-production
+ *   run such as `show_to_caller`). An untrusted local path a tool happened to surface is dropped, so
+ *   an arbitrary local file can never be read and displayed back to the caller.
  */
-function collectRealtimeVoiceAgentConsultMediaPaths(
+export function collectRealtimeVoiceAgentConsultMediaPaths(
   payloads: Array<{
     mediaUrl?: string;
     mediaUrls?: string[];
     isError?: boolean;
     isReasoning?: boolean;
+    trustedLocalMedia?: boolean;
   }>,
+  trustLocalMedia = false,
 ): string[] {
   const paths: string[] = [];
   for (const payload of payloads) {
     if (payload.isError || payload.isReasoning) {
       continue;
     }
+    const localTrusted = trustLocalMedia || payload.trustedLocalMedia === true;
+    const candidates: string[] = [];
     if (payload.mediaUrl) {
-      paths.push(payload.mediaUrl);
+      candidates.push(payload.mediaUrl);
     }
     if (Array.isArray(payload.mediaUrls)) {
-      paths.push(...payload.mediaUrls);
+      candidates.push(...payload.mediaUrls);
+    }
+    for (const candidate of candidates) {
+      if (isRemoteMediaUrl(candidate) || localTrusted) {
+        paths.push(candidate);
+      }
     }
   }
   return paths;
@@ -274,6 +292,10 @@ export async function consultRealtimeVoiceAgent(params: {
   toolsAllow?: string[];
   extraSystemPrompt?: string;
   fallbackText?: string;
+  /** Trust local file paths this run produces (e.g. show_to_caller — a controlled, single-image
+   *  production run). Default false: only remote (SSRF-guarded) URLs or tool-flagged trusted local
+   *  media are surfaced for display. */
+  trustLocalMedia?: boolean;
 }): Promise<RealtimeVoiceAgentConsultResult> {
   const agentId = params.agentId ?? "main";
   const agentDir = params.agentRuntime.resolveAgentDir(params.cfg, agentId);
@@ -355,7 +377,10 @@ export async function consultRealtimeVoiceAgent(params: {
   });
 
   const text = collectRealtimeVoiceAgentConsultVisibleText(result.payloads ?? []);
-  const mediaPaths = collectRealtimeVoiceAgentConsultMediaPaths(result.payloads ?? []);
+  const mediaPaths = collectRealtimeVoiceAgentConsultMediaPaths(
+    result.payloads ?? [],
+    params.trustLocalMedia ?? false,
+  );
   if (!text && mediaPaths.length === 0) {
     const reason = result.meta?.aborted ? "agent run aborted" : "agent returned no speakable text";
     params.logger.warn(`[talk] agent consult produced no answer: ${reason}`);
