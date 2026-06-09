@@ -27,7 +27,7 @@ struct AgentProNodesDestination: View {
             }
             .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
         }
-        .navigationTitle("Nodes")
+        .navigationTitle("Instances")
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -36,7 +36,7 @@ struct AgentProNodesDestination: View {
             HStack(spacing: 12) {
                 ProIconBadge(systemName: "display", color: self.instancesColor)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Nodes")
+                    Text("Instances")
                         .font(.headline)
                     Text(self.instancesDetail)
                         .font(.caption)
@@ -70,16 +70,16 @@ struct AgentProNodesDestination: View {
 
     private var nodesList: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ProSectionHeader(title: "Connected Nodes")
+            ProSectionHeader(title: "Connected Instances")
             ProCard(padding: 0) {
                 let nodes = self.sortedPresenceEntries
                 if nodes.isEmpty {
                     self.emptyRow(
                         icon: "display",
-                        title: self.gatewayConnected ? "No nodes connected" : "Nodes unavailable",
+                        title: self.gatewayConnected ? "No instances connected" : "Instances unavailable",
                         detail: self.gatewayConnected
                             ? "The gateway did not report any system presence entries."
-                            : "Connect a gateway to inspect connected nodes.")
+                            : "Connect a gateway to inspect connected instances.")
                         .padding(14)
                 } else {
                     VStack(spacing: 0) {
@@ -114,7 +114,7 @@ struct AgentProNodesDestination: View {
         HStack(alignment: .top, spacing: 12) {
             ProIconBadge(systemName: Self.presenceIcon(entry), color: Self.presenceColor(entry))
             VStack(alignment: .leading, spacing: 4) {
-                Text(Self.presenceLabel(entry) ?? "Node")
+                Text(Self.presenceLabel(entry) ?? "Instance")
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                 Text(Self.presenceDetail(entry))
@@ -153,7 +153,7 @@ struct AgentProNodesDestination: View {
                         HStack(spacing: 12) {
                             ProIconBadge(systemName: Self.presenceIcon(entry), color: Self.presenceColor(entry))
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(Self.presenceLabel(entry) ?? "Node")
+                                Text(Self.presenceLabel(entry) ?? "Instance")
                                     .font(.headline)
                                 Text(Self.presenceDetail(entry))
                                     .font(.caption)
@@ -192,7 +192,7 @@ struct AgentProNodesDestination: View {
             }
             .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
         }
-        .navigationTitle(Self.presenceLabel(entry) ?? "Node")
+        .navigationTitle(Self.presenceLabel(entry) ?? "Instance")
         .navigationBarTitleDisplayMode(.inline)
     }
 

@@ -383,11 +383,14 @@ export function registerWorkboardGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "workboard.cards.dispatch",
-    async ({ respond }) => {
+    async ({ params: requestParams, respond }) => {
       try {
         const result = await dispatchAndStartWorkboardCards({
           store,
           subagent: api.runtime.subagent,
+          options: {
+            boardId: typeof requestParams.boardId === "string" ? requestParams.boardId : undefined,
+          },
         });
         respond(true, {
           ...result,

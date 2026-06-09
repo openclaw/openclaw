@@ -6,10 +6,12 @@ extension AgentProTab {
     @ViewBuilder
     func destination(for route: AgentRoute) -> some View {
         switch route {
+        case .agents:
+            self.agentsDestination
         case .skills:
             self.skillsDestination
-        case .nodes:
-            self.nodesDestination
+        case .instances:
+            self.instancesDestination
         case .cron:
             self.cronDestination
         case .usage:
@@ -17,6 +19,26 @@ extension AgentProTab {
         case .dreaming:
             self.dreamingDestination
         }
+    }
+
+    var agentsDestination: some View {
+        ZStack {
+            OpenClawProBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    self.rosterHeader
+                    self.agentFilters
+                    self.agentsSection
+                }
+                .padding(.vertical, 18)
+            }
+            .refreshable {
+                await self.refreshOverview(force: true)
+            }
+            .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
+        }
+        .navigationTitle("Agents")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     var skillsDestination: some View {
@@ -46,7 +68,7 @@ extension AgentProTab {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    var nodesDestination: some View {
+    var instancesDestination: some View {
         AgentProNodesDestination(
             overview: self.overview,
             gatewayConnected: self.gatewayConnected,

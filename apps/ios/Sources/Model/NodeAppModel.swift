@@ -116,6 +116,14 @@ final class NodeAppModel {
         self.operatorConnected
     }
 
+    var hasOperatorAdminScope: Bool {
+        let identity = DeviceIdentityStore.loadOrCreate()
+        return DeviceAuthStore
+            .loadToken(deviceId: identity.deviceId, role: "operator")?
+            .scopes
+            .contains("operator.admin") == true
+    }
+
     var gatewayServerName: String?
     var gatewayRemoteAddress: String?
     var connectedGatewayID: String?
