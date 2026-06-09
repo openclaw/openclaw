@@ -113,6 +113,8 @@ steps:
                     ref: sessionKey
                   note:
                     ref: wakeMarker
+                  replacePaths:
+                    - tools.deny
             - call: waitForGatewayHealthy
               args:
                 - ref: env
@@ -209,6 +211,8 @@ steps:
                     tools:
                       deny:
                         expr: "originalToolsDeny === undefined ? null : originalToolsDeny"
+                  replacePaths:
+                    - tools.deny
             - call: waitForGatewayHealthy
               args:
                 - ref: env

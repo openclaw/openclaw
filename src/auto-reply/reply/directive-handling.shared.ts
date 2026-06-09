@@ -1,6 +1,7 @@
+// Shared directive parsing helpers used by model and auth directive handlers.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 

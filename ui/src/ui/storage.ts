@@ -1,3 +1,4 @@
+// Control UI module implements storage behavior.
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
 const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
 const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
@@ -85,7 +86,6 @@ export type UiSettings = {
   lastActiveSessionKey: string;
   theme: ThemeName;
   themeMode: ThemeMode;
-  chatFocusMode: boolean;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
   chatAutoScroll?: ChatAutoScrollMode;
@@ -229,7 +229,6 @@ export function loadSettings(): UiSettings {
     lastActiveSessionKey: "main",
     theme: "claw",
     themeMode: "system",
-    chatFocusMode: false,
     chatShowThinking: true,
     chatShowToolCalls: true,
     chatAutoScroll: "near-bottom",
@@ -269,8 +268,6 @@ export function loadSettings(): UiSettings {
       lastActiveSessionKey: scopedSessionSelection.lastActiveSessionKey,
       theme: theme === "custom" && !customTheme ? "claw" : theme,
       themeMode: mode,
-      chatFocusMode:
-        typeof parsed.chatFocusMode === "boolean" ? parsed.chatFocusMode : defaults.chatFocusMode,
       chatShowThinking:
         typeof parsed.chatShowThinking === "boolean"
           ? parsed.chatShowThinking
@@ -418,7 +415,6 @@ function persistSettings(next: UiSettings) {
     gatewayUrl: next.gatewayUrl,
     theme: next.theme,
     themeMode: next.themeMode,
-    chatFocusMode: next.chatFocusMode,
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
     chatAutoScroll: normalizeChatAutoScrollMode(next.chatAutoScroll),

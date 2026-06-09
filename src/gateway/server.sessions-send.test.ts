@@ -1,3 +1,5 @@
+// sessions_send tests cover tool-driven agent-to-agent delivery, transcript
+// updates, gateway auth, plugin routing, and emitted agent events.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +15,7 @@ import {
   agentCommand,
   getFreePort,
   installGatewayTestHooks,
+  readSessionStore,
   startGatewayServer,
   setTestPluginRegistry,
   testState,
@@ -44,6 +47,20 @@ function getSessionsSendTool(): SessionSendTool {
   return cachedSessionsSendTool;
 }
 
+function expectSessionsSendDetails(
+  result: { details?: unknown },
+  expected: { reply: string; sessionKey: string },
+): void {
+  const details = result.details as {
+    status?: string;
+    reply?: string;
+    sessionKey?: string;
+  };
+  expect(details.status).toBe("ok");
+  expect(details.reply).toBe(expected.reply);
+  expect(details.sessionKey).toBe(expected.sessionKey);
+}
+
 async function emitLifecycleAssistantReply(params: {
   opts: unknown;
   defaultSessionId: string;
@@ -60,13 +77,7 @@ async function emitLifecycleAssistantReply(params: {
   const runId = commandParams.runId ?? sessionId;
   let sessionFile = resolveSessionTranscriptPath(sessionId);
   if (testState.sessionStorePath && commandParams.sessionKey) {
-    const rawStore = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
-      string,
-      {
-        sessionId?: string;
-        sessionFile?: string;
-      }
-    >;
+    const rawStore = readSessionStore(testState.sessionStorePath);
     const entry = rawStore[commandParams.sessionKey];
     if (entry?.sessionId === sessionId && entry.sessionFile) {
       sessionFile = entry.sessionFile;
@@ -159,14 +170,7 @@ describe("sessions_send gateway loopback", () => {
       message: "ping",
       timeoutSeconds: 5,
     });
-    const details = result.details as {
-      status?: string;
-      reply?: string;
-      sessionKey?: string;
-    };
-    expect(details.status).toBe("ok");
-    expect(details.reply).toBe("pong");
-    expect(details.sessionKey).toBe("main");
+    expectSessionsSendDetails(result, { reply: "pong", sessionKey: "main" });
 
     const firstCall = spy.mock.calls.at(0)?.[0] as
       | { lane?: string; inputProvenance?: { kind?: string; sourceTool?: string } }
@@ -338,14 +342,10 @@ describe("sessions_send label lookup", () => {
         message: "hello labeled session",
         timeoutSeconds: 5,
       });
-      const details = result.details as {
-        status?: string;
-        reply?: string;
-        sessionKey?: string;
-      };
-      expect(details.status).toBe("ok");
-      expect(details.reply).toBe("labeled response");
-      expect(details.sessionKey).toBe("agent:main:test-labeled-session");
+      expectSessionsSendDetails(result, {
+        reply: "labeled response",
+        sessionKey: "agent:main:test-labeled-session",
+      });
     },
   );
 });
@@ -411,14 +411,10 @@ describe("sessions_send agent targeting", () => {
           message: "hello orion",
           timeoutSeconds: 5,
         });
-        const details = result.details as {
-          status?: string;
-          reply?: string;
-          sessionKey?: string;
-        };
-        expect(details.status).toBe("ok");
-        expect(details.reply).toBe("orion response");
-        expect(details.sessionKey).toBe("agent:orion:main");
+        expectSessionsSendDetails(result, {
+          reply: "orion response",
+          sessionKey: "agent:orion:main",
+        });
 
         const orionCall = spy.mock.calls
           .map(([opts]) => opts as { sessionId?: string; sessionKey?: string })
@@ -426,14 +422,7 @@ describe("sessions_send agent targeting", () => {
         expect(orionCall).toBeDefined();
         expect(orionCall?.sessionId).toBeTypeOf("string");
 
-        const rawStore = JSON.parse(
-          await fs.readFile(testState.sessionStorePath, "utf-8"),
-        ) as Record<
-          string,
-          {
-            sessionId?: string;
-          }
-        >;
+        const rawStore = readSessionStore(testState.sessionStorePath);
         expect(rawStore["agent:orion:main"]?.sessionId).toBe(orionCall?.sessionId);
       } finally {
         testState.agentsConfig = undefined;

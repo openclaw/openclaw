@@ -1,3 +1,4 @@
+// Doctor health contribution helpers collect health checks from plugin manifests.
 import fs from "node:fs";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
@@ -40,6 +41,7 @@ type DoctorHealthFlowContext = {
   env?: NodeJS.ProcessEnv;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
+  gatewayHealthAuthenticated?: boolean;
   gatewayHealthSkipped?: boolean;
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
@@ -52,7 +54,7 @@ type DoctorHealthContribution = FlowContribution & {
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
 
-const LEGACY_POSITIONAL_REPAIR_CHECK_IDS = new Set(["core/doctor/shell-completion"]);
+const PRE_HEALTH_POSITIONAL_HEALTH_CHECK_IDS = new Set(["core/doctor/ui-protocol-freshness"]);
 
 const loadAgentDefaultsModule = async () => await import("../agents/defaults.js");
 const loadAgentScopeModule = async () => await import("../agents/agent-scope.js");
@@ -117,6 +119,19 @@ function createDoctorHealthContribution(params: {
     healthCheckIds: params.healthCheckIds ?? [],
     run: params.run,
   };
+}
+
+function resolvePositionalHealthCheckIds(): ReadonlySet<string> {
+  const ids = new Set(PRE_HEALTH_POSITIONAL_HEALTH_CHECK_IDS);
+  for (const contribution of resolveDoctorHealthContributions()) {
+    if (contribution.id === "doctor:structured-health-repairs") {
+      continue;
+    }
+    for (const checkId of contribution.healthCheckIds) {
+      ids.add(checkId);
+    }
+  }
+  return ids;
 }
 
 async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -314,9 +329,8 @@ async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise
   registerCoreHealthChecks();
   const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
   registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
-  const checks = listHealthChecks().filter(
-    (check) => !LEGACY_POSITIONAL_REPAIR_CHECK_IDS.has(check.id),
-  );
+  const positionalHealthCheckIds = resolvePositionalHealthCheckIds();
+  const checks = listHealthChecks().filter((check) => !positionalHealthCheckIds.has(check.id));
   const result = await runDoctorHealthRepairs(
     {
       mode: "fix",
@@ -362,6 +376,8 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
   const migrated = await runLegacyStateMigrations({
     detected: legacyState,
+    config: ctx.cfg,
+    recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
   });
   if (migrated.changes.length > 0) {
     note(migrated.changes.join("\n"), "Doctor changes");
@@ -433,6 +449,11 @@ async function runReleaseConfiguredPluginInstallsHealth(
   };
 }
 
+async function runDiskSpaceHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteDiskSpace } = await import("../commands/doctor-disk-space.js");
+  noteDiskSpace(ctx.cfg);
+}
+
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
@@ -471,7 +492,11 @@ async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promis
 
 async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionSnapshotHealth } = await import("../commands/doctor-session-snapshots.js");
-  await noteSessionSnapshotHealth({ cfg: ctx.cfg, env: ctx.env ?? process.env });
+  await noteSessionSnapshotHealth({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
 }
 
 async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -531,8 +556,10 @@ async function runStartupChannelMaintenanceHealth(ctx: DoctorHealthFlowContext):
 }
 
 async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteInstallPolicyHealth } = await import("../commands/doctor-install-policy.js");
   const { noteSecurityWarnings } = await import("../commands/doctor-security.js");
   await noteSecurityWarnings(ctx.cfg);
+  await noteInstallPolicyHealth(ctx.cfg, { deep: ctx.options.deep === true, env: ctx.env });
 }
 
 async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -679,7 +706,7 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
   const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
   const { note } = await loadNoteModule();
   const service = resolveGatewayService();
-  let loaded = false;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch {
@@ -700,9 +727,62 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
   });
 }
 
+async function hasActiveGatewayExecCredential(
+  ctx: DoctorHealthFlowContext,
+  mode: DoctorFlowMode = resolveDoctorMode(ctx.cfg),
+): Promise<boolean> {
+  const { resolveSecretInputRef } = await loadSecretTypesModule();
+  const { gatewaySecretInputPathCanWin } = await import("../gateway/credentials-secret-inputs.js");
+  const { ALL_GATEWAY_SECRET_INPUT_PATHS, readGatewaySecretInputValue } =
+    await import("../gateway/secret-input-paths.js");
+  return ALL_GATEWAY_SECRET_INPUT_PATHS.some((path) => {
+    if (
+      !gatewaySecretInputPathCanWin({
+        config: ctx.cfg,
+        env: process.env,
+        modeOverride: mode,
+        path,
+      })
+    ) {
+      return false;
+    }
+    const ref = resolveSecretInputRef({
+      value: readGatewaySecretInputValue(ctx.cfg, path),
+      defaults: ctx.cfg.secrets?.defaults,
+    }).ref;
+    return ref?.source === "exec";
+  });
+}
+
 async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  let pluginVersionDrift:
+    | import("../plugins/plugin-version-drift.js").PluginVersionDriftReport
+    | undefined;
+  if (ctx.cfg.gateway?.mode !== "remote") {
+    try {
+      const { gatherDaemonStatus } = await import("../cli/daemon-cli/status.gather.js");
+      const allowExecSecretRefs = ctx.options.allowExec === true;
+      const status = await gatherDaemonStatus({
+        rpc: {
+          timeout: ctx.options.nonInteractive === true ? "3000" : "10000",
+          json: true,
+        },
+        probe: true,
+        requireRpc: false,
+        deep: ctx.options.deep === true,
+        allowExecSecretRefs,
+      });
+      const hasProbedGatewayVersion =
+        typeof status.gateway?.version === "string" && status.gateway.version.trim() !== "";
+      if (status.pluginVersionDrift && hasProbedGatewayVersion && !status.rpc?.authWarning) {
+        pluginVersionDrift = status.pluginVersionDrift;
+      }
+    } catch {
+      // Best-effort diagnostic: doctor should keep running if daemon status is unavailable.
+    }
+  }
   const { noteWorkspaceStatus } = await import("../commands/doctor-workspace-status.js");
-  noteWorkspaceStatus(ctx.cfg);
+  noteWorkspaceStatus(ctx.cfg, { pluginVersionDrift });
 }
 
 async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -735,31 +815,8 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 }
 
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { resolveSecretInputRef } = await loadSecretTypesModule();
-  const { gatewaySecretInputPathCanWin } = await import("../gateway/credentials-secret-inputs.js");
-  const { readGatewaySecretInputValue } = await import("../gateway/secret-input-paths.js");
   const { note } = await loadNoteModule();
-  const credentialPaths = [
-    "gateway.auth.token",
-    "gateway.auth.password",
-    "gateway.remote.token",
-    "gateway.remote.password",
-  ] as const;
-  const activeSecretRefPaths = credentialPaths.filter((path) =>
-    gatewaySecretInputPathCanWin({
-      config: ctx.cfg,
-      env: process.env,
-      path,
-    }),
-  );
-  const hasActiveExecCredential = activeSecretRefPaths.some((path) => {
-    const ref = resolveSecretInputRef({
-      value: readGatewaySecretInputValue(ctx.cfg, path),
-      defaults: ctx.cfg.secrets?.defaults,
-    }).ref;
-    return ref?.source === "exec";
-  });
-  if (hasActiveExecCredential && ctx.options.allowExec !== true) {
+  if ((await hasActiveGatewayExecCredential(ctx)) && ctx.options.allowExec !== true) {
     note(
       "Gateway health probes skipped because gateway credentials use an exec SecretRef. Run `openclaw doctor --allow-exec` to verify Gateway health with exec SecretRefs.",
       "Gateway",
@@ -770,20 +827,21 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   }
   const { checkGatewayHealth, probeGatewayMemoryStatus } =
     await import("../commands/doctor-gateway-health.js");
-  const { healthOk, status } = await checkGatewayHealth({
+  const { healthOk, authenticated, status } = await checkGatewayHealth({
     runtime: ctx.runtime,
     cfg: ctx.cfg,
     timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
   });
   ctx.gatewayHealthSkipped = false;
   ctx.healthOk = healthOk;
+  ctx.gatewayHealthAuthenticated = authenticated;
   ctx.gatewayStatus = status;
-  ctx.gatewayMemoryProbe = healthOk
+  ctx.gatewayMemoryProbe = authenticated
     ? await probeGatewayMemoryStatus({
         cfg: ctx.cfg,
         timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
       })
-    : { checked: false, ready: false, skipped: false };
+    : { checked: false, ready: false, skipped: healthOk };
 }
 
 async function runWhatsappResponsivenessHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -922,7 +980,7 @@ async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Pro
   }
 }
 
-function formatRuntimeToolSchemaFindings(findings: readonly HealthFinding[]): string {
+function formatHealthFindings(findings: readonly HealthFinding[]): string {
   return findings
     .map((finding) => {
       const lines = [`- ${finding.message}`];
@@ -938,6 +996,31 @@ function formatRuntimeToolSchemaFindings(findings: readonly HealthFinding[]): st
       return lines.join("\n");
     })
     .join("\n");
+}
+
+async function runProviderCatalogProjectionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { registerCoreHealthChecks } = await loadDoctorCoreChecksModule();
+  const { getHealthCheck } = await loadHealthCheckRegistryModule();
+  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } = await loadAgentScopeModule();
+  const { note } = await loadNoteModule();
+
+  registerCoreHealthChecks();
+  const check = getHealthCheck("core/doctor/provider-catalog-projection");
+  if (!check) {
+    return;
+  }
+  const findings = await check.detect({
+    mode: "doctor",
+    runtime: ctx.runtime,
+    cfg: ctx.cfg,
+    cwd: resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg)),
+    configPath: ctx.configPath,
+  });
+  if (findings.length === 0) {
+    return;
+  }
+  ctx.healthOk = false;
+  note(formatHealthFindings(findings), "Doctor warnings");
 }
 
 async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -962,7 +1045,7 @@ async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promis
     return;
   }
   ctx.healthOk = false;
-  note(formatRuntimeToolSchemaFindings(findings), "Doctor warnings");
+  note(formatHealthFindings(findings), "Doctor warnings");
 }
 
 export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
@@ -1021,6 +1104,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:plugin-registry",
       label: "Plugin registry",
       run: runPluginRegistryHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:disk-space",
+      label: "Disk space",
+      run: runDiskSpaceHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",
@@ -1104,6 +1192,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runToolResultCapHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:provider-catalog-projection",
+      label: "Provider catalog projection",
+      healthCheckIds: ["core/doctor/provider-catalog-projection"],
+      run: runProviderCatalogProjectionHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:runtime-tool-schemas",
       label: "Runtime tool schemas",
       healthCheckIds: ["core/doctor/runtime-tool-schemas"],
@@ -1140,6 +1234,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:shell-completion",
       label: "Shell completion",
+      healthCheckIds: ["core/doctor/shell-completion"],
       run: runShellCompletionHealth,
     }),
     createDoctorHealthContribution({

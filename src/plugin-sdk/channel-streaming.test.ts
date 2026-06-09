@@ -1,3 +1,6 @@
+/**
+ * Tests channel streaming helper lifecycle and event forwarding.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildChannelProgressDraftLine,
@@ -358,6 +361,22 @@ describe("channel-streaming", () => {
     ).toBe("Shelling\n\n• I'm checking whether the generated video exists or if the…");
   });
 
+  it("falls back to plain commentary when compaction drops the closing italic marker", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: false, maxLineChars: 32 } } },
+        lines: [
+          {
+            kind: "item",
+            text: `_${"x".repeat(80)}_`,
+            label: "Commentary",
+            prefix: false,
+          },
+        ],
+      }),
+    ).toBe(`${"x".repeat(30)}…`);
+  });
+
   it("keeps compacted raw progress lines from leaking unmatched markdown backticks", () => {
     const line = buildChannelProgressDraftLine(
       {
@@ -377,7 +396,7 @@ describe("channel-streaming", () => {
     });
 
     expect(text).toBe(
-      "Shelling\n\n🛠️ run node script…enclaw/some/really/deep/path/that/keeps/going/and/going/index…",
+      "Shelling\n\n🛠️ run node script…e…y/deep/path/that/keeps/going/and/going/index.ts --flag value",
     );
     expect(text.match(/`/g) ?? []).toHaveLength(0);
   });
@@ -588,6 +607,103 @@ describe("channel-streaming", () => {
     expect(onStart).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(onStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report started when delayed progress startup rejects", async () => {
+    vi.useFakeTimers();
+    const onStart = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("draft unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    await expect(gate.noteWork()).resolves.toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(false);
+
+    await expect(gate.noteWork()).resolves.toBe(true);
+
+    expect(onStart).toHaveBeenCalledTimes(2);
+    expect(gate.hasStarted).toBe(true);
+  });
+
+  it("keeps concurrent progress startup single-flight until onStart resolves", async () => {
+    vi.useFakeTimers();
+    let resolveStart: (() => void) | undefined;
+    const onStart = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    await gate.noteWork();
+    const firstStart = gate.noteWork();
+    const secondStart = gate.startNow();
+    await Promise.resolve();
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(true);
+
+    resolveStart?.();
+    await expect(firstStart).resolves.toBe(true);
+    await expect(secondStart).resolves.toBeUndefined();
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(true);
+  });
+
+  it("does not report active when cancel wins the startup race", async () => {
+    vi.useFakeTimers();
+    let resolveStart: (() => void) | undefined;
+    const onStart = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    await gate.noteWork();
+    const startResult = gate.noteWork();
+    await Promise.resolve();
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    gate.cancel();
+
+    resolveStart?.();
+
+    await expect(startResult).resolves.toBe(false);
+    expect(gate.hasStarted).toBe(false);
+  });
+
+  it("joins explicit startup before applying the first-work delay", async () => {
+    vi.useFakeTimers();
+    let resolveStart: (() => void) | undefined;
+    const onStart = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    const explicitStart = gate.startNow();
+    await Promise.resolve();
+    const workDuringStart = gate.noteWork();
+
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(true);
+
+    resolveStart?.();
+
+    await expect(explicitStart).resolves.toBeUndefined();
+    await expect(workDuringStart).resolves.toBe(true);
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(gate.hasStarted).toBe(true);
   });
 
   it("ignores message-like tools for progress draft work", () => {

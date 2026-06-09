@@ -1,3 +1,4 @@
+// Release check tests cover release validation script behavior.
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, win32 } from "node:path";
@@ -41,6 +42,7 @@ import {
   LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
 } from "../src/infra/package-dist-inventory.ts";
+import { withEnv } from "../src/test-utils/env.js";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
   return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version></item>`;
@@ -48,6 +50,10 @@ function makeItem(shortVersion: string, sparkleVersion: string): string {
 
 function makePackResult(filename: string, unpackedSize: number) {
   return { filename, unpackedSize };
+}
+
+function withProcessEnv<T>(env: Record<string, string>, callback: () => T): T {
+  return withEnv(env, callback);
 }
 
 const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
@@ -198,6 +204,26 @@ describe("runReleaseCheckCommand", () => {
       ),
     ).toThrow();
   });
+
+  it("rejects malformed command limit environment values", () => {
+    withProcessEnv({ OPENCLAW_RELEASE_CHECK_COMMAND_TIMEOUT_MS: "1e3" }, () => {
+      expect(() =>
+        runReleaseCheckCommand(
+          { command: process.execPath, args: ["--eval", "process.stdout.write('ok')"] },
+          { stdio: ["ignore", "pipe", "pipe"] },
+        ),
+      ).toThrow("invalid OPENCLAW_RELEASE_CHECK_COMMAND_TIMEOUT_MS: 1e3");
+    });
+
+    withProcessEnv({ OPENCLAW_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES: "16mb" }, () => {
+      expect(() =>
+        runReleaseCheckCommand(
+          { command: process.execPath, args: ["--eval", "process.stdout.write('ok')"] },
+          { stdio: ["ignore", "pipe", "pipe"] },
+        ),
+      ).toThrow("invalid OPENCLAW_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES: 16mb");
+    });
+  });
 });
 
 describe("resolveReleaseNpmCommand", () => {
@@ -333,20 +359,6 @@ describe("collectBundledExtensionManifestErrors", () => {
 });
 
 describe("bundled plugin package dependency checks", () => {
-  function makeBundledSpecs() {
-    return new Map([
-      ["@larksuiteoapi/node-sdk", { conflicts: [], pluginIds: ["feishu"], spec: "^1.60.0" }],
-      [
-        "@matrix-org/matrix-sdk-crypto-nodejs",
-        { conflicts: [], pluginIds: ["matrix"], spec: "^0.4.0" },
-      ],
-      [
-        "@matrix-org/matrix-sdk-crypto-wasm",
-        { conflicts: [], pluginIds: ["matrix"], spec: "18.0.0" },
-      ],
-    ]);
-  }
-
   it("maps package names from import specifiers", () => {
     expect(packageNameFromSpecifier("@larksuiteoapi/node-sdk/subpath")).toBe(
       "@larksuiteoapi/node-sdk",

@@ -1,7 +1,15 @@
+// Copilot tests cover hooks bridge plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createHooksBridge, type CopilotHooksConfig } from "./hooks-bridge.js";
 
 describe("createHooksBridge", () => {
+  const hookBase = {
+    sessionId: "runtime-session",
+    timestamp: new Date(0),
+    cwd: "/",
+    workingDirectory: "/",
+  };
+
   it("returns undefined when no config is provided", () => {
     expect(createHooksBridge()).toBeUndefined();
   });
@@ -32,7 +40,13 @@ describe("createHooksBridge", () => {
       .fn()
       .mockResolvedValue({ permissionDecision: "allow" as const, additionalContext: "ok" });
     const hooks = createHooksBridge({ onPreToolUse })!;
-    const input = { timestamp: 1, cwd: "/tmp", toolName: "bash", toolArgs: { cmd: "ls" } };
+    const input = {
+      ...hookBase,
+      cwd: "/tmp",
+      workingDirectory: "/tmp",
+      toolName: "bash",
+      toolArgs: { cmd: "ls" },
+    };
     const result = await hooks.onPreToolUse!(input, { sessionId: "sess-1" });
     expect(result).toEqual({ permissionDecision: "allow", additionalContext: "ok" });
     expect(onPreToolUse).toHaveBeenCalledTimes(1);
@@ -48,7 +62,7 @@ describe("createHooksBridge", () => {
       onHookError,
     })!;
     const result = await hooks.onPostToolUse!(
-      { timestamp: 1, cwd: "/", toolName: "x", toolArgs: {}, toolResult: {} as never },
+      { ...hookBase, toolName: "x", toolArgs: {}, toolResult: {} as never },
       { sessionId: "s" },
     );
     expect(result).toBeUndefined();
@@ -57,7 +71,7 @@ describe("createHooksBridge", () => {
       hookName: "onPostToolUse",
       error: expect.any(Error),
     });
-    expect((onHookError.mock.calls[0]?.[0]?.error as Error).message).toBe("post boom");
+    expect((onHookError.mock.calls[0][0]!.error as Error).message).toBe("post boom");
   });
 
   it("isolates async rejections: returns undefined and notifies onHookError", async () => {
@@ -69,7 +83,7 @@ describe("createHooksBridge", () => {
       onHookError,
     })!;
     const result = await hooks.onUserPromptSubmitted!(
-      { timestamp: 1, cwd: "/", prompt: "hi" },
+      { ...hookBase, prompt: "hi" },
       { sessionId: "s" },
     );
     expect(result).toBeUndefined();
@@ -86,7 +100,7 @@ describe("createHooksBridge", () => {
         },
       })!;
       const result = await hooks.onErrorOccurred!(
-        { timestamp: 1, cwd: "/", error: "x", errorContext: "system", recoverable: true },
+        { ...hookBase, error: "x", errorContext: "system", recoverable: true },
         { sessionId: "s" },
       );
       expect(result).toBeUndefined();
@@ -107,7 +121,7 @@ describe("createHooksBridge", () => {
       },
     })!;
     await expect(
-      hooks.onSessionEnd!({ timestamp: 1, cwd: "/", reason: "complete" }, { sessionId: "s" }),
+      hooks.onSessionEnd!({ ...hookBase, reason: "complete" }, { sessionId: "s" }),
     ).resolves.toBeUndefined();
   });
 
@@ -133,10 +147,7 @@ describe("createHooksBridge", () => {
     const hooks = createHooksBridge({
       onSessionStart: () => undefined,
     })!;
-    const result = await hooks.onSessionStart!(
-      { timestamp: 1, cwd: "/", source: "new" },
-      { sessionId: "s" },
-    );
+    const result = await hooks.onSessionStart!({ ...hookBase, source: "new" }, { sessionId: "s" });
     expect(result).toBeUndefined();
   });
 

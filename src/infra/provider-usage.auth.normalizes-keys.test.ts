@@ -1,3 +1,4 @@
+// Covers provider usage auth profile key normalization.
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -164,6 +165,18 @@ const providerRuntimeMocks = vi.hoisted(() => ({
         return token ? { token } : null;
       }
 
+      if (params.provider === "anthropic") {
+        const oauth = await params.context.resolveOAuthToken();
+        if (oauth) {
+          return oauth;
+        }
+        const token = resolveToken({
+          providerIds: ["anthropic"],
+          envDirect: [params.context.env?.ANTHROPIC_API_KEY],
+        });
+        return token?.startsWith("sk-ant-oat01-") ? { token } : { handled: true };
+      }
+
       if (params.provider === "minimax") {
         const token = resolveToken({
           providerIds: ["minimax"],
@@ -260,6 +273,7 @@ describe("resolveProviderAuths key normalization", () => {
     MINIMAX_API_KEY: undefined,
     MINIMAX_CODE_PLAN_KEY: undefined,
     MINIMAX_CODING_API_KEY: undefined,
+    OPENAI_API_KEY: undefined,
     XIAOMI_API_KEY: undefined,
   } satisfies Record<string, string | undefined>;
 
@@ -600,6 +614,50 @@ describe("resolveProviderAuths key normalization", () => {
     });
   });
 
+  it("does not use OpenAI api keys for ChatGPT usage auth", async () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [createTestModelDefinition()],
+            apiKey: "cfg-openai-key", // pragma: allowlist secret
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["openai"],
+      env: {
+        OPENAI_API_KEY: "env-openai-key",
+      },
+      setup: async (home) => {
+        await writeConfig(home, config);
+        await writeAuthProfiles(home, {
+          "openai:default": { type: "api_key", provider: "openai", key: "profile-openai-key" },
+        });
+      },
+      config,
+      expected: [],
+    });
+  });
+
+  it("uses OpenAI oauth-compatible profiles for ChatGPT usage auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["openai"],
+      setup: async (home) => {
+        await writeAuthProfiles(home, {
+          "openai:default": {
+            type: "token",
+            provider: "openai",
+            token: "chatgpt-token",
+          },
+        });
+      },
+      expected: [{ provider: "openai", token: "chatgpt-token" }],
+    });
+  });
+
   it("discovers oauth provider from config but skips mismatched profile providers", async () => {
     await withSuiteHome(async (home) => {
       const config = {
@@ -678,6 +736,26 @@ describe("resolveProviderAuths key normalization", () => {
         env: buildSuiteEnv(home),
       });
       expect(auths).toEqual([{ provider: "anthropic", token: "token-1" }]);
+    });
+  });
+
+  it("does not use standard Anthropic API keys for provider usage auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["anthropic"],
+      env: {
+        ANTHROPIC_API_KEY: "sk-ant-api03-status-key", // pragma: allowlist secret
+      },
+      expected: [],
+    });
+  });
+
+  it("allows Anthropic setup tokens from API-key sources for provider usage auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["anthropic"],
+      env: {
+        ANTHROPIC_API_KEY: `sk-ant-oat01-${"a".repeat(80)}`,
+      },
+      expected: [{ provider: "anthropic", token: `sk-ant-oat01-${"a".repeat(80)}` }],
     });
   });
 

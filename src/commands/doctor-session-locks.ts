@@ -1,3 +1,4 @@
+/** Doctor diagnostics and cleanup for stale session write lock files. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import {
@@ -39,6 +40,7 @@ function formatLockLine(lock: SessionLockInspection): string {
   return `- ${shortenHomePath(lock.lockPath)} ${pidStatus} ${ageStatus} ${staleStatus}${removedStatus}`;
 }
 
+/** Reports session write locks and removes stale locks when doctor repair is enabled. */
 export async function noteSessionLockHealth(params?: {
   shouldRepair?: boolean;
   config?: SessionWriteLockAcquireTimeoutConfig;
@@ -48,7 +50,7 @@ export async function noteSessionLockHealth(params?: {
 }) {
   const shouldRepair = params?.shouldRepair === true;
   const staleMs = params?.staleMs ?? resolveSessionWriteLockStaleMs(params?.config, params?.env);
-  let sessionDirs: string[] = [];
+  let sessionDirs: string[];
   try {
     sessionDirs = await resolveAgentSessionDirs(resolveStateDir(process.env));
   } catch (err) {

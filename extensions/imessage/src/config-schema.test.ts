@@ -1,3 +1,4 @@
+// Imessage tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { IMessageConfigSchema } from "../config-api.js";
 
@@ -68,6 +69,31 @@ describe("imessage config schema", () => {
     expect(res.success).toBe(true);
     if (res.success) {
       expect(res.data.textChunkLimit).toBe(1111);
+    }
+  });
+
+  it("accepts nested delivery streaming config", () => {
+    const res = IMessageConfigSchema.safeParse({
+      enabled: true,
+      streaming: {
+        chunkMode: "newline",
+        block: {
+          enabled: true,
+          coalesce: { minChars: 200, idleMs: 50 },
+        },
+      },
+      accounts: {
+        personal: {
+          streaming: { chunkMode: "length", block: { enabled: false } },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.streaming?.chunkMode).toBe("newline");
+      expect(res.data.streaming?.block?.enabled).toBe(true);
+      expect(res.data.accounts?.personal?.streaming?.block?.enabled).toBe(false);
     }
   });
 

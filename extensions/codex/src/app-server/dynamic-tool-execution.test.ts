@@ -1,3 +1,4 @@
+// Codex tests cover dynamic tool execution plugin behavior.
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -8,6 +9,7 @@ import {
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
   resolveTerminalDynamicToolBatchAction,
+  shouldBlockTerminalReleaseForNonTerminalDynamicToolResult,
   shouldReleaseTurnAfterTerminalDynamicTool,
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
@@ -16,8 +18,8 @@ import type { CodexDynamicToolCallResponse } from "./protocol.js";
 
 describe("dynamic tool execution helpers", () => {
   afterEach(() => {
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("keeps explicit dynamic tool timeouts above the default bridge deadline", () => {
@@ -193,7 +195,7 @@ describe("dynamic tool execution helpers", () => {
       toolBridge: {
         handleToolCall: vi.fn((_call, options) => {
           capturedSignal = options?.signal;
-          return new Promise<never>(() => undefined);
+          return new Promise<never>(() => {});
         }),
       },
       signal: new AbortController().signal,
@@ -229,7 +231,7 @@ describe("dynamic tool execution helpers", () => {
         arguments: { action: "poll", sessionId: "process-session", timeout: 30_000 },
       },
       toolBridge: {
-        handleToolCall: vi.fn(() => new Promise<never>(() => undefined)),
+        handleToolCall: vi.fn(() => new Promise<never>(() => {})),
       },
       signal: new AbortController().signal,
       timeoutMs: 1,
@@ -362,5 +364,27 @@ describe("dynamic tool execution helpers", () => {
         hasPendingTerminalDynamicToolRelease: true,
       }),
     ).toBe("release-pending-terminal");
+  });
+
+  it("does not let async-start tool results block terminal side-effect batches", () => {
+    const asyncStartedResponse = {
+      contentItems: [{ type: "inputText" as const, text: "Background task started." }],
+      success: true,
+    };
+    Object.defineProperty(asyncStartedResponse, "asyncStarted", {
+      configurable: true,
+      enumerable: false,
+      value: true,
+    });
+
+    expect(shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(asyncStartedResponse)).toBe(
+      false,
+    );
+    expect(
+      shouldBlockTerminalReleaseForNonTerminalDynamicToolResult({
+        contentItems: [{ type: "inputText", text: "regular output" }],
+        success: true,
+      }),
+    ).toBe(true);
   });
 });

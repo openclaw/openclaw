@@ -1,3 +1,4 @@
+// Matrix tests cover inbound dedupe plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -163,7 +164,6 @@ describe("Matrix inbound event dedupe", () => {
     expect(first.claimEvent({ roomId: "!room:example.org", eventId: "$legacy" })).toBe(false);
 
     fs.rmSync(storagePath, { force: true });
-    resetPluginStateStoreForTests();
     const second = await createMatrixInboundEventDeduper({
       auth: auth as never,
       storagePath,

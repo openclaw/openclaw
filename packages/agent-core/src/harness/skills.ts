@@ -1,3 +1,4 @@
+// Agent Core module implements skills behavior.
 import ignore from "ignore";
 import {
   basenameEnvPath,
@@ -7,7 +8,7 @@ import {
   relativeEnvPath,
   resolveFileInfoKind as resolveKind,
 } from "./file-loader-utils.js";
-import { type ExecutionEnv, type Result, type Skill } from "./types.js";
+import type { ExecutionEnv, Result, Skill } from "./types.js";
 
 const MAX_NAME_LENGTH = 64;
 const MAX_DESCRIPTION_LENGTH = 1024;
@@ -346,10 +347,32 @@ async function loadSkillFromFile(
       description,
       content: body,
       filePath,
+      promptVersion: await computeSkillPromptVersion(rawContent.value),
       disableModelInvocation: frontmatter["disable-model-invocation"] === true,
     },
     diagnostics,
   };
+}
+
+async function computeSkillPromptVersion(content: string): Promise<string> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) {
+    return `hash:${computeStableFallbackHash(content)}`;
+  }
+  const digest = await subtle.digest("SHA-256", new TextEncoder().encode(content));
+  const hex = [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `sha256:${hex.slice(0, 16)}`;
+}
+
+function computeStableFallbackHash(content: string): string {
+  let hash = 0x811c9dc5;
+  for (const char of content) {
+    hash ^= char.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 function validateName(name: string, parentDirName: string): string[] {

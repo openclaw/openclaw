@@ -1,3 +1,4 @@
+// Check Extension Package Tsc Boundary tests cover check extension package tsc boundary script behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,6 +14,7 @@ import {
   formatStepFailure,
   installCanaryArtifactCleanup,
   isBoundaryCompileFresh,
+  resolveCompileConcurrency,
   resolveBoundaryCheckLockPath,
   resolveCanaryArtifactPaths,
   runNodeStepAsync,
@@ -103,6 +105,17 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(fs.existsSync(demoA.tsconfigPath)).toBe(false);
     expect(fs.existsSync(demoB.canaryPath)).toBe(false);
     expect(fs.existsSync(demoB.tsconfigPath)).toBe(false);
+  });
+
+  it("parses extension boundary compile concurrency strictly", () => {
+    expect(resolveCompileConcurrency({ OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: "4" }, 32)).toBe(4);
+    expect(resolveCompileConcurrency({}, 12)).toBe(6);
+    expect(resolveCompileConcurrency({}, 3)).toBe(1);
+    for (const value of ["4x", "0", "1e3"]) {
+      expect(() =>
+        resolveCompileConcurrency({ OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: value }, 32),
+      ).toThrow("OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY must be a positive integer");
+    }
   });
 
   it("blocks concurrent boundary checks in the same checkout", () => {
@@ -409,18 +422,17 @@ describe("check-extension-package-tsc-boundary", () => {
   }, 30_000);
 
   it("hard-kills timed out async node steps", async () => {
-    const signals: Array<NodeJS.Signals | number | undefined> = [];
+    const processSignals: Array<[number, NodeJS.Signals | number | undefined]> = [];
     const child = new EventEmitter() as EventEmitter & {
       kill: (signal?: NodeJS.Signals | number) => boolean;
+      pid: number;
       stderr: ReturnType<typeof createMockPipe>;
       stdout: ReturnType<typeof createMockPipe>;
     };
+    child.pid = 1234;
     child.stdout = createMockPipe();
     child.stderr = createMockPipe();
-    child.kill = (signal) => {
-      signals.push(signal);
-      return true;
-    };
+    child.kill = () => true;
 
     const failure = await runNodeStepAsync(
       "hung-plugin",
@@ -432,6 +444,11 @@ describe("check-extension-package-tsc-boundary", () => {
           expect(args).toEqual(["--eval", "setTimeout(() => {}, 60_000)"]);
           return child;
         },
+        killProcess(pid: number, signal?: NodeJS.Signals | number) {
+          processSignals.push([pid, signal]);
+          return true;
+        },
+        platform: "darwin",
       },
     ).then(
       () => {
@@ -440,7 +457,7 @@ describe("check-extension-package-tsc-boundary", () => {
       (error: unknown) => error,
     );
 
-    expect(signals).toEqual(["SIGKILL"]);
+    expect(processSignals).toEqual([[-1234, "SIGKILL"]]);
     expect(failure).toBeInstanceOf(Error);
     if (!(failure instanceof Error)) {
       throw new Error("expected timeout failure to reject with an Error");

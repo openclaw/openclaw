@@ -1,3 +1,4 @@
+// Extension package boundary tests cover package/project boundaries for bundled extensions.
 import fs from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -195,8 +196,11 @@ describe("opt-in extension package boundaries", () => {
     expect(tsconfig.compilerOptions?.rootDir).toBe("../..");
     expect(tsconfig.include).toEqual([
       "../../packages/markdown-core/src/**/*.ts",
+      "../../packages/media-core/src/**/*.ts",
       "../../packages/media-generation-core/src/**/*.ts",
       "../../packages/model-catalog-core/src/**/*.ts",
+      "../../packages/normalization-core/src/**/*.ts",
+      "../../packages/acp-core/src/**/*.ts",
       "../../packages/terminal-core/src/**/*.ts",
       "../../src/plugin-sdk/**/*.ts",
       "../../src/video-generation/dashscope-compatible.ts",

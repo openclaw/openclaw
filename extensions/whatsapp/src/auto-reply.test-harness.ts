@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements auto reply harness behavior.
 import "./test-helpers.js";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
@@ -29,6 +30,9 @@ type MockWebListener = {
   signalClose: () => void;
   sendMessage: () => Promise<WhatsAppSendResult>;
   sendPoll: () => Promise<WhatsAppSendResult>;
+  sendContact: () => Promise<WhatsAppSendResult>;
+  sendLocation: () => Promise<WhatsAppSendResult>;
+  sendSticker: () => Promise<WhatsAppSendResult>;
   sendReaction: () => Promise<WhatsAppSendResult>;
   sendComposingTo: () => Promise<void>;
 };
@@ -136,7 +140,6 @@ async function rmDirWithRetries(
       maxRetries: attempts,
       retryDelay: delayMs,
     });
-    return;
   } catch {
     // Fall back for older Node implementations (or unexpected retry behavior).
     for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -149,7 +152,9 @@ async function rmDirWithRetries(
             ? String((retryErr as { code?: unknown }).code)
             : null;
         if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
           continue;
         }
         throw retryErr;
@@ -262,6 +267,9 @@ export function createMockWebListener(): MockWebListener {
     signalClose: vi.fn(),
     sendMessage: vi.fn(async () => createAcceptedWhatsAppSendResult("text", "msg-1")),
     sendPoll: vi.fn(async () => createAcceptedWhatsAppSendResult("poll", "poll-1")),
+    sendContact: vi.fn(async () => createAcceptedWhatsAppSendResult("contact", "contact-1")),
+    sendLocation: vi.fn(async () => createAcceptedWhatsAppSendResult("location", "location-1")),
+    sendSticker: vi.fn(async () => createAcceptedWhatsAppSendResult("sticker", "sticker-1")),
     sendReaction: vi.fn(async () => createAcceptedWhatsAppSendResult("reaction", "reaction-1")),
     sendComposingTo: vi.fn(async () => undefined),
   };

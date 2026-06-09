@@ -1,3 +1,4 @@
+// Stuck session recovery integration tests cover end-to-end recovery diagnostics.
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {
@@ -21,7 +22,9 @@ import {
 } from "./diagnostic-stuck-session-recovery.runtime.js";
 
 function delay(ms: number): Promise<"blocked"> {
-  return new Promise((resolve) => setTimeout(() => resolve("blocked"), ms));
+  return new Promise((resolve) => {
+    setTimeout(() => resolve("blocked"), ms);
+  });
 }
 
 describe("stuck session recovery integration", () => {

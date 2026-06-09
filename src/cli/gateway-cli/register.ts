@@ -1,3 +1,4 @@
+// Commander registration for gateway status, health, diagnostics, discovery, and run commands.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -8,9 +9,9 @@ import type {
   DiagnosticStabilityBundle,
   ReadDiagnosticStabilityBundleResult,
 } from "../../logging/diagnostic-stability-bundle.js";
-import {
-  type DiagnosticStabilityEventRecord,
-  type DiagnosticStabilitySnapshot,
+import type {
+  DiagnosticStabilityEventRecord,
+  DiagnosticStabilitySnapshot,
 } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -107,6 +108,7 @@ async function runGatewayCommand(
   label?: string,
   opts?: { json?: boolean },
 ) {
+  // JSON mode preserves structured gateway transport errors for automation callers.
   try {
     await action();
   } catch (err) {

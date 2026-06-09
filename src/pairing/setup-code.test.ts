@@ -1,5 +1,7 @@
+// Tests setup code generation and environment-derived defaults.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecretInput } from "../config/types.secrets.js";
+import { captureEnv } from "../test-utils/env.js";
 
 vi.mock("../infra/device-bootstrap.js", () => ({
   issueDeviceBootstrapToken: vi.fn(async () => ({
@@ -53,6 +55,14 @@ describe("pairing setup code", () => {
     return vi.fn(async () => ({
       code: 0,
       stdout: '{"Self":{"DNSName":"mb-server.tailnet.ts.net."}}',
+      stderr: "",
+    }));
+  }
+
+  function createTailnetIpRunner() {
+    return vi.fn(async () => ({
+      code: 0,
+      stdout: '{"Self":{"TailscaleIPs":["100.64.0.9"]}}',
       stderr: "",
     }));
   }
@@ -173,10 +183,17 @@ describe("pairing setup code", () => {
     expectResolvedSetupOk(resolved, { authLabel: params.expectedAuthLabel });
   }
 
+  let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
+
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
-    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
-    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
+    gatewayEnvSnapshot = captureEnv([
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_GATEWAY_PASSWORD",
+      "OPENCLAW_GATEWAY_PORT",
+    ]);
+    process.env.OPENCLAW_GATEWAY_TOKEN = "";
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "";
+    process.env.OPENCLAW_GATEWAY_PORT = "";
   });
 
   beforeEach(() => {
@@ -184,7 +201,8 @@ describe("pairing setup code", () => {
   });
 
   afterEach(() => {
-    vi.unstubAllEnvs();
+    gatewayEnvSnapshot?.restore();
+    gatewayEnvSnapshot = undefined;
   });
 
   it.each([
@@ -633,6 +651,30 @@ describe("pairing setup code", () => {
       },
     },
     {
+      name: "uses configured Tailscale Service DNS when available",
+      createOptions: () => {
+        const runCommandWithTimeout = createTailnetDnsRunner();
+        return {
+          options: {
+            runCommandWithTimeout,
+          } satisfies ResolveSetupOptions,
+          runCommandWithTimeout,
+          expectedRunCommandCalls: 1,
+        };
+      },
+      config: {
+        gateway: {
+          tailscale: { mode: "serve", serviceName: "svc:openclaw" },
+          auth: { mode: "password", password: "secret" },
+        },
+      } satisfies ResolveSetupConfig,
+      expected: {
+        authLabel: "password",
+        url: "wss://openclaw.tailnet.ts.net",
+        urlSource: "gateway.tailscale.mode=serve",
+      },
+    },
+    {
       name: "prefers gateway.remote.url over tailscale when requested",
       createOptions: () => {
         const runCommandWithTimeout = createTailnetDnsRunner();
@@ -666,6 +708,21 @@ describe("pairing setup code", () => {
       expected,
       runCommandWithTimeout,
       expectedRunCommandCalls,
+    });
+  });
+
+  it("does not advertise a node-IP URL for named Tailscale Services", async () => {
+    await expectResolvedSetupFailureCase({
+      config: {
+        gateway: {
+          tailscale: { mode: "serve", serviceName: "svc:openclaw" },
+          auth: { mode: "password", password: "secret" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: {
+        runCommandWithTimeout: createTailnetIpRunner(),
+      } satisfies ResolveSetupOptions,
+      expectedError: "Service MagicDNS could not be derived",
     });
   });
 });

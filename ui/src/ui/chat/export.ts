@@ -1,4 +1,5 @@
-import { timestampMsToIsoString } from "../../../../src/shared/number-coercion.js";
+// Control UI chat module implements export behavior.
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { extractTextCached } from "./message-extract.ts";
 
 /**

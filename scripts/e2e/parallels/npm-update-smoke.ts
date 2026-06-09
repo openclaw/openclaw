@@ -1,12 +1,14 @@
 #!/usr/bin/env -S pnpm tsx
+// Npm Update Smoke script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   die,
   ensureValue,
+  extractLastOpenClawVersionFromLog,
   makeTempDir,
   packOpenClaw,
   parsePlatformList,
@@ -22,6 +24,7 @@ import {
   say,
   shellQuote,
   startHostServer,
+  withProgressOnStderr,
   writeSummaryMarkdown,
   writeJson,
   type HostServer,
@@ -64,6 +67,13 @@ interface Job {
 interface UpdateJobContext {
   append(chunk: string | Uint8Array): void;
   logPath: string;
+  signal: AbortSignal;
+}
+
+interface SpawnLoggedOptions {
+  timeoutKillGraceMs?: number;
+  timeoutLabel?: string;
+  timeoutMs?: number;
 }
 
 interface NpmUpdateSummary {
@@ -103,6 +113,173 @@ const windowsVm = "Windows 11";
 const linuxVmDefault = "Ubuntu 26.04";
 const updateTimeoutSeconds = readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 1200);
 const updateCleanupBackstopMs = 60_000;
+const freshLaneTimeoutKillGraceMs = readPositiveIntEnv(
+  "OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_KILL_GRACE_MS",
+  2_000,
+);
+const activeLoggedChildren = new Set<ReturnType<typeof spawn>>();
+const loggedParentSignalHandlers = new Map<NodeJS.Signals, () => void>();
+let loggedExitCleanupInstalled = false;
+
+export function freshLaneTimeoutMs(platform: Platform): number {
+  const defaultSeconds = platform === "windows" ? 90 * 60 : 75 * 60;
+  return readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S", defaultSeconds) * 1000;
+}
+
+export function spawnLoggedCommand(
+  command: string,
+  args: string[],
+  logPath: string,
+  env: NodeJS.ProcessEnv = {},
+  onOutput: (text: string) => void = () => undefined,
+  options: SpawnLoggedOptions = {},
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    writeFileSync(logPath, "", "utf8");
+    const child = spawn(command, args, {
+      cwd: repoRoot,
+      detached: process.platform !== "win32",
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    trackLoggedChild(child);
+    let timedOut = false;
+    let settled = false;
+    let forceKillTimer: NodeJS.Timeout | undefined;
+    const append = (text: string) => {
+      appendFileSync(logPath, text, "utf8");
+      onOutput(text);
+    };
+    const timeoutMs = options.timeoutMs ?? 0;
+    const timeoutTimer =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            append(
+              `\n[${options.timeoutLabel ?? `${command} ${args.join(" ")}`} timed out after ${timeoutMs}ms]\n`,
+            );
+            signalLoggedChild(child, "SIGTERM");
+            forceKillTimer = setTimeout(
+              () => signalLoggedChild(child, "SIGKILL"),
+              options.timeoutKillGraceMs ?? freshLaneTimeoutKillGraceMs,
+            );
+          }, timeoutMs)
+        : undefined;
+    child.stdout.on("data", (chunk: Buffer) => {
+      append(chunk.toString("utf8"));
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      append(chunk.toString("utf8"));
+    });
+    child.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeoutTimer);
+      clearTimeout(forceKillTimer);
+      untrackLoggedChild(child);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeoutTimer);
+      clearTimeout(forceKillTimer);
+      if (timedOut && loggedProcessTreeIsAlive(child)) {
+        signalLoggedChild(child, "SIGKILL");
+      }
+      untrackLoggedChild(child);
+      resolve(timedOut ? 124 : (code ?? 1));
+    });
+  });
+}
+
+function trackLoggedChild(child: ReturnType<typeof spawn>) {
+  activeLoggedChildren.add(child);
+  child.once("close", () => {
+    if (!loggedProcessTreeIsAlive(child)) {
+      activeLoggedChildren.delete(child);
+    }
+  });
+  child.once("error", () => {
+    if (!loggedProcessTreeIsAlive(child)) {
+      activeLoggedChildren.delete(child);
+    }
+  });
+  installLoggedParentCleanup();
+}
+
+function untrackLoggedChild(child: ReturnType<typeof spawn>) {
+  if (!loggedProcessTreeIsAlive(child)) {
+    activeLoggedChildren.delete(child);
+  }
+}
+
+function installLoggedParentCleanup() {
+  if (!loggedExitCleanupInstalled) {
+    loggedExitCleanupInstalled = true;
+    process.once("exit", () => cleanupActiveLoggedChildren("SIGTERM"));
+  }
+  for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"] as const) {
+    if (loggedParentSignalHandlers.has(signal)) {
+      continue;
+    }
+    const handler = () => {
+      cleanupActiveLoggedChildren(signal);
+      for (const [registeredSignal, registeredHandler] of loggedParentSignalHandlers) {
+        process.off(registeredSignal, registeredHandler);
+      }
+      loggedParentSignalHandlers.clear();
+      process.kill(process.pid, signal);
+    };
+    loggedParentSignalHandlers.set(signal, handler);
+    process.once(signal, handler);
+  }
+}
+
+function cleanupActiveLoggedChildren(signal: NodeJS.Signals) {
+  for (const child of activeLoggedChildren) {
+    signalLoggedChild(child, signal);
+    if (process.platform !== "win32") {
+      signalLoggedChild(child, "SIGKILL");
+    }
+  }
+}
+
+function loggedProcessTreeIsAlive(child: ReturnType<typeof spawn>): boolean {
+  if (process.platform === "win32" || typeof child.pid !== "number") {
+    return child.exitCode === null && child.signalCode === null;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
+}
+
+function signalLoggedChild(child: ReturnType<typeof spawn>, signal: NodeJS.Signals) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ESRCH") {
+        return;
+      }
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) {
+      throw error;
+    }
+  }
+}
 
 function usage(): string {
   return `Usage: bash scripts/e2e/parallels-npm-update-smoke.sh [options]
@@ -237,7 +414,7 @@ function parseOpenClawPackageSpecVersion(spec: string): string {
   return resolveOpenClawRegistryVersion(value) || "";
 }
 
-class NpmUpdateSmoke {
+export class NpmUpdateSmoke {
   private auth: ProviderAuth;
   private windowsAuth: ProviderAuth;
   private runDir = "";
@@ -249,7 +426,7 @@ class NpmUpdateSmoke {
   private harnessCheckoutVersion = "";
   private harnessTargetFamily = "";
   private hostIp = "";
-  private server: HostServer | null = null;
+  protected server: HostServer | null = null;
   private artifact: PackageArtifact | null = null;
   private freshTargetSpec = "";
   private startedAt = Date.now();
@@ -281,49 +458,57 @@ class NpmUpdateSmoke {
 
   async run(): Promise<void> {
     this.startedAt = Date.now();
-    this.runDir = await makeTempDir("openclaw-parallels-npm-update.");
-    this.tgzDir = await makeTempDir("openclaw-parallels-npm-update-tgz.");
+    this.runDir = await this.makeRunTempDir("openclaw-parallels-npm-update.");
+    this.tgzDir = await this.makeRunTempDir("openclaw-parallels-npm-update-tgz.");
     try {
-      this.latestVersion = resolveLatestVersion();
-      this.packageSpec = this.options.packageSpec || `openclaw@${this.latestVersion}`;
-      this.currentHead = run("git", ["rev-parse", "HEAD"], { quiet: true }).stdout.trim();
-      this.currentHeadShort = run("git", ["rev-parse", "--short=7", "HEAD"], {
-        quiet: true,
-      }).stdout.trim();
-      this.harnessCheckoutVersion = readHarnessCheckoutVersion();
-      this.hostIp = resolveHostIp(this.options.hostIp ?? "");
-      this.configurePublishedTargets();
-      this.assertPublishedTargetMatchesHarnessCheckout();
-
-      if (this.options.platforms.has("linux")) {
-        this.linuxVm = resolveUbuntuVmName(linuxVmDefault);
-      }
-      this.preflightRegistryUpdateTarget();
-
-      say(`Run fresh npm baseline: ${this.packageSpec}`);
-      say(`Platforms: ${[...this.options.platforms].join(",")}`);
-      say(`Run dir: ${this.runDir}`);
-      await this.runFreshBaselines();
-
-      await this.prepareUpdateTarget();
-      say(`Run same-guest openclaw update to ${this.updateTargetEffective}`);
-      await this.runSameGuestUpdates();
-
-      if (this.freshTargetSpec) {
-        say(`Run fresh target npm install: ${this.freshTargetSpec}`);
-        await this.runFreshTargetInstalls();
-      }
-
-      const summaryPath = await this.writeSummary();
-      if (this.options.json) {
-        process.stdout.write(await readFile(summaryPath, "utf8"));
-      } else {
-        say(`Run dir: ${this.runDir}`);
-        process.stdout.write(await readFile(summaryPath, "utf8"));
-      }
+      await this.runSteps();
     } finally {
       await this.server?.stop().catch(() => undefined);
       await rm(this.tgzDir, { force: true, recursive: true }).catch(() => undefined);
+    }
+  }
+
+  protected async makeRunTempDir(prefix: string): Promise<string> {
+    return await makeTempDir(prefix);
+  }
+
+  protected async runSteps(): Promise<void> {
+    this.latestVersion = resolveLatestVersion();
+    this.packageSpec = this.options.packageSpec || `openclaw@${this.latestVersion}`;
+    this.currentHead = run("git", ["rev-parse", "HEAD"], { quiet: true }).stdout.trim();
+    this.currentHeadShort = run("git", ["rev-parse", "--short=7", "HEAD"], {
+      quiet: true,
+    }).stdout.trim();
+    this.harnessCheckoutVersion = readHarnessCheckoutVersion();
+    this.hostIp = resolveHostIp(this.options.hostIp ?? "");
+    this.configurePublishedTargets();
+    this.assertPublishedTargetMatchesHarnessCheckout();
+
+    if (this.options.platforms.has("linux")) {
+      this.linuxVm = resolveUbuntuVmName(linuxVmDefault);
+    }
+    this.preflightRegistryUpdateTarget();
+
+    say(`Run fresh npm baseline: ${this.packageSpec}`);
+    say(`Platforms: ${[...this.options.platforms].join(",")}`);
+    say(`Run dir: ${this.runDir}`);
+    await this.runFreshBaselines();
+
+    await this.prepareUpdateTarget();
+    say(`Run same-guest openclaw update to ${this.updateTargetEffective}`);
+    await this.runSameGuestUpdates();
+
+    if (this.freshTargetSpec) {
+      say(`Run fresh target npm install: ${this.freshTargetSpec}`);
+      await this.runFreshTargetInstalls();
+    }
+
+    const summaryPath = await this.writeSummary();
+    if (this.options.json) {
+      process.stdout.write(await readFile(summaryPath, "utf8"));
+    } else {
+      say(`Run dir: ${this.runDir}`);
+      process.stdout.write(await readFile(summaryPath, "utf8"));
     }
   }
 
@@ -431,8 +616,16 @@ class NpmUpdateSmoke {
       rerunCommand: this.formatRerun("bash", args, env),
       startedAt,
     };
-    job.promise = this.spawnLogged("bash", args, logPath, env, (text) =>
-      this.noteJobOutput(job, text),
+    job.promise = this.spawnLogged(
+      "bash",
+      args,
+      logPath,
+      env,
+      (text) => this.noteJobOutput(job, text),
+      {
+        timeoutLabel: `${label} ${phase}`,
+        timeoutMs: freshLaneTimeoutMs(platform),
+      },
     ).finally(() => {
       job.durationMs = Date.now() - job.startedAt;
       job.done = true;
@@ -575,19 +768,19 @@ class NpmUpdateSmoke {
       startedAt,
     };
     job.promise = (async () => {
-      let log = "";
+      writeFileSync(logPath, "", "utf8");
       const append = (chunk: string | Uint8Array): void => {
         const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-        log += text;
+        appendFileSync(logPath, text, "utf8");
         this.noteJobOutput(job, text);
       };
       return await runTimedUpdateJob({
         append,
         label,
-        run: () => fn({ append, logPath }),
+        run: ({ signal }) => fn({ append, logPath, signal }),
         timeoutDescription: `${updateTimeoutSeconds}s plus cleanup backstop`,
         timeoutMs: updateTimeoutSeconds * 1000 + updateCleanupBackstopMs,
-        writeLog: () => writeFile(logPath, log, "utf8"),
+        writeLog: async () => undefined,
       });
     })().finally(() => {
       job.durationMs = Date.now() - job.startedAt;
@@ -635,36 +828,17 @@ class NpmUpdateSmoke {
     logPath: string,
     env: NodeJS.ProcessEnv = {},
     onOutput: (text: string) => void = () => undefined,
+    options: SpawnLoggedOptions = {},
   ): Promise<number> {
-    return new Promise((resolve, reject) => {
-      const child = spawn(command, args, {
-        cwd: repoRoot,
-        env: { ...process.env, ...env },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let log = "";
-      child.stdout.on("data", (chunk: Buffer) => {
-        const text = chunk.toString("utf8");
-        log += text;
-        onOutput(text);
-      });
-      child.stderr.on("data", (chunk: Buffer) => {
-        const text = chunk.toString("utf8");
-        log += text;
-        onOutput(text);
-      });
-      child.on("error", reject);
-      child.on("close", async (code) => {
-        await writeFile(logPath, log, "utf8");
-        resolve(code ?? 1);
-      });
-    });
+    return spawnLoggedCommand(command, args, logPath, env, onOutput, options);
   }
 
   private async monitorJobs(label: string, jobs: Job[]): Promise<void> {
     const pending = new Set(jobs.map((job) => job.label));
     while (pending.size > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 15_000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 15_000);
+      });
       for (const job of jobs) {
         if (!pending.has(job.label)) {
           continue;
@@ -894,6 +1068,7 @@ class NpmUpdateSmoke {
     return await new Promise((resolve, reject) => {
       const child = spawn(command, args, {
         cwd: repoRoot,
+        detached: process.platform !== "win32",
         env: process.env,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -902,16 +1077,54 @@ class NpmUpdateSmoke {
       child.stderr.on("data", (chunk: Buffer) => ctx.append(chunk));
 
       let timedOut = false;
-      const timer = setTimeout(() => {
+      let killTimer: NodeJS.Timeout | undefined;
+      const signalChild = (signal: NodeJS.Signals): void => {
+        if (!child.pid) {
+          return;
+        }
+        try {
+          if (process.platform === "win32") {
+            child.kill(signal);
+          } else {
+            process.kill(-child.pid, signal);
+          }
+        } catch {
+          child.kill(signal);
+        }
+      };
+      const abort = (): void => {
+        if (timedOut) {
+          return;
+        }
         timedOut = true;
-        child.kill("SIGTERM");
-        setTimeout(() => child.kill("SIGKILL"), 2_000).unref();
+        signalChild("SIGTERM");
+        killTimer = setTimeout(() => signalChild("SIGKILL"), 2_000);
+        killTimer.unref();
+      };
+      if (ctx.signal.aborted) {
+        abort();
+      } else {
+        ctx.signal.addEventListener("abort", abort, { once: true });
+      }
+      const timer = setTimeout(() => {
+        abort();
       }, timeoutMs);
 
-      child.on("error", reject);
+      child.on("error", (error) => {
+        ctx.signal.removeEventListener("abort", abort);
+        if (killTimer) {
+          clearTimeout(killTimer);
+        }
+        reject(error);
+      });
       child.on("close", (code, signal) => {
+        ctx.signal.removeEventListener("abort", abort);
         clearTimeout(timer);
+        if (killTimer) {
+          clearTimeout(killTimer);
+        }
         if (timedOut) {
+          signalChild("SIGKILL");
           resolve(124);
           return;
         }
@@ -953,9 +1166,7 @@ class NpmUpdateSmoke {
   }
 
   private async extractLastVersion(logPath: string): Promise<string> {
-    const log = await readFile(logPath, "utf8").catch(() => "");
-    const matches = [...log.matchAll(/OpenClaw\s+([0-9][^\s]*)/gi)];
-    return matches.at(-1)?.[1] ?? "";
+    return await extractLastOpenClawVersionFromLog(logPath);
   }
 
   private dumpLogTail(logPath: string): void {
@@ -1097,7 +1308,10 @@ class NpmUpdateSmoke {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  await new NpmUpdateSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
+  const options = parseArgs(process.argv.slice(2));
+  const runSmoke = () => new NpmUpdateSmoke(options).run();
+  const runPromise = options.json ? withProgressOnStderr(runSmoke) : runSmoke();
+  await runPromise.catch((error: unknown) => {
     die(error instanceof Error ? error.message : String(error));
   });
 }

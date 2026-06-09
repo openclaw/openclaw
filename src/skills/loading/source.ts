@@ -1,4 +1,5 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+// Skill source helpers normalize source metadata for loaded skill records.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SkillTelemetrySource } from "../types.js";
 import type { Skill } from "./skill-contract.js";
 
@@ -8,6 +9,7 @@ type SkillSourceCompat = Skill & {
   };
 };
 
+/** Returns the stable source label attached to a loaded skill. */
 export function resolveSkillSource(skill: Skill): string {
   const compatSkill = skill as SkillSourceCompat;
   const canonical = normalizeOptionalString(compatSkill.source) ?? "";

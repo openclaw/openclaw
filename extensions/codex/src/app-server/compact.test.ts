@@ -1,3 +1,4 @@
+// Codex tests cover compact plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -114,7 +115,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     );
 
     expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
-    expect(fake.client.addNotificationHandler).not.toHaveBeenCalled();
+    expect(fake.client["addNotificationHandler"]).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(false);
     expect(result.result?.tokensBefore).toBe(123);
@@ -251,11 +252,11 @@ describe("maybeCompactCodexAppServerSession", () => {
       seenAuthProfileId = authProfileId;
       return fake.client;
     });
-    const sessionFile = await writeTestBinding({ authProfileId: "openai-codex:work" });
+    const sessionFile = await writeTestBinding({ authProfileId: "openai:work" });
 
     const result = requireCompactResult(await startCompaction(sessionFile));
 
-    expect(seenAuthProfileId).toBe("openai-codex:work");
+    expect(seenAuthProfileId).toBe("openai:work");
     expect(result.ok).toBe(true);
   });
 
@@ -278,7 +279,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     fake.request.mockRejectedValueOnce(new Error("thread not found: thread-1"));
     setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding({
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       model: "gpt-5.5-mini",
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
@@ -292,7 +293,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
     const preservedBinding = await readCodexAppServerBinding(sessionFile);
     expect(preservedBinding?.threadId).toBe("thread-1");
-    expect(preservedBinding?.authProfileId).toBe("openai-codex:work");
+    expect(preservedBinding?.authProfileId).toBe("openai:work");
     expect(preservedBinding?.model).toBe("gpt-5.5-mini");
     expect(preservedBinding?.approvalPolicy).toBe("on-request");
     expect(preservedBinding?.sandbox).toBe("workspace-write");
@@ -568,7 +569,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-1",
       cwd: tempDir,
-      authProfileId: "openai-codex:binding",
+      authProfileId: "openai:binding",
     });
 
     const result = await maybeCompactCodexAppServerSession({
@@ -577,7 +578,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       sessionFile,
       workspaceDir: tempDir,
       trigger: "manual",
-      authProfileId: "openai-codex:runtime",
+      authProfileId: "openai:runtime",
     });
 
     expect(result).toEqual({

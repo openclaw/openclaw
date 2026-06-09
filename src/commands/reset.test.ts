@@ -1,7 +1,10 @@
+// Reset command tests cover cleanup runtime behavior, workspace attestations, and reset prompts.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   cleanupCommandLogMessages,
   createCleanupCommandRuntime,
+  clearExistingSqliteSessionStore,
+  removeWorkspaceAttestationPaths,
   resetCleanupCommandMocks,
   silenceCleanupCommandRuntime,
 } from "./cleanup-command.test-support.js";
@@ -47,5 +50,33 @@ describe("resetCommand", () => {
         message.includes("openclaw backup create"),
       ),
     ).toBe(false);
+  });
+
+  it("clears SQLite-backed session metadata before removing session directories", async () => {
+    await resetCommand(runtime, {
+      scope: "config+creds+sessions",
+      yes: true,
+      nonInteractive: true,
+    });
+
+    expect(clearExistingSqliteSessionStore).toHaveBeenCalledWith(
+      "/tmp/.openclaw/agents/main/sessions/sessions.json",
+      { compact: true },
+    );
+  });
+
+  it("removes workspace attestations during full reset", async () => {
+    await resetCommand(runtime, {
+      scope: "full",
+      yes: true,
+      nonInteractive: true,
+      dryRun: true,
+    });
+
+    expect(removeWorkspaceAttestationPaths).toHaveBeenCalledWith(
+      ["/tmp/.openclaw/workspace"],
+      runtime,
+      { dryRun: true },
+    );
   });
 });

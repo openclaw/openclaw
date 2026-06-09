@@ -1,3 +1,4 @@
+// Doctor config preflight tests cover state migration preflight behavior before config repair.
 import { describe, expect, it, vi } from "vitest";
 
 const autoMigrateLegacyStateDir = vi.hoisted(() =>
@@ -8,6 +9,9 @@ const autoMigrateLegacyState = vi.hoisted(() =>
 );
 const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
   vi.fn(async () => ({ migrated: true, skipped: false, changes: ["task-imported"], warnings: [] })),
+);
+const repairLegacyCronStoreWithoutPrompt = vi.hoisted(() =>
+  vi.fn(async () => ({ changes: ["cron-imported"], warnings: [] })),
 );
 const readConfigFileSnapshot = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -26,6 +30,10 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyState,
   autoMigrateLegacyStateDir,
   autoMigrateLegacyTaskStateSidecars,
+}));
+
+vi.mock("./doctor/cron/index.js", () => ({
+  repairLegacyCronStoreWithoutPrompt,
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -47,11 +55,32 @@ describe("runDoctorConfigPreflight state migration", () => {
 
     expect(autoMigrateLegacyStateDir).toHaveBeenCalledOnce();
     expect(readConfigFileSnapshot).toHaveBeenCalledOnce();
+    expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
+      cfg: { gateway: { mode: "local", port: 19091 } },
+    });
     expect(autoMigrateLegacyState).toHaveBeenCalledWith({
       cfg: { gateway: { mode: "local", port: 19091 } },
       env: process.env,
+      recoverCorruptTargetStore: undefined,
     });
+    expect(note).toHaveBeenCalledWith("- cron-imported", "Doctor changes");
     expect(note).toHaveBeenCalledWith("- imported", "Doctor changes");
+  });
+
+  it("passes explicit corrupt-target recovery to state migrations", async () => {
+    vi.clearAllMocks();
+
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      recoverCorruptTargetStore: true,
+    });
+
+    expect(autoMigrateLegacyState).toHaveBeenCalledWith({
+      cfg: { gateway: { mode: "local", port: 19091 } },
+      env: process.env,
+      recoverCorruptTargetStore: true,
+    });
   });
 
   it("limits invalid-config preflight to task sidecar migration", async () => {
@@ -72,6 +101,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
 
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
+    expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
     expect(autoMigrateLegacyTaskStateSidecars).toHaveBeenCalledWith({ env: process.env });
     expect(note).toHaveBeenCalledWith("- task-imported", "Doctor changes");
   });

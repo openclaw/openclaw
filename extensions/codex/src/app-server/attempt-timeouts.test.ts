@@ -1,3 +1,4 @@
+// Codex tests cover attempt timeouts plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -147,7 +148,7 @@ describe("Codex app-server attempt timeouts", () => {
           }, 5);
         });
       },
-      operation: async () => new Promise<never>(() => undefined),
+      operation: async () => new Promise<never>(() => {}),
     });
     const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
 
@@ -164,7 +165,7 @@ describe("Codex app-server attempt timeouts", () => {
     const run = withCodexStartupTimeout({
       timeoutMs: 1_000,
       signal: controller.signal,
-      operation: async () => new Promise<never>(() => undefined),
+      operation: async () => new Promise<never>(() => {}),
     });
     const rejected = expect(run).rejects.toThrow("codex app-server startup aborted");
 

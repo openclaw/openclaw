@@ -1,5 +1,7 @@
+// Defines gateway runtime and networking configuration types.
 import type { SecretInput } from "./types.secrets.js";
 
+/** Gateway bind-address policy for local server startup. */
 export type GatewayBindMode = "auto" | "lan" | "loopback" | "custom" | "tailnet";
 
 export type GatewayTlsConfig = {
@@ -16,11 +18,13 @@ export type GatewayTlsConfig = {
 };
 
 export type WideAreaDiscoveryConfig = {
+  /** Enable DNS-SD style wide-area discovery. */
   enabled?: boolean;
   /** Optional unicast DNS-SD domain (e.g. "openclaw.internal"). */
   domain?: string;
 };
 
+/** mDNS/Bonjour metadata exposure level for local gateway discovery. */
 export type MdnsDiscoveryMode = "off" | "minimal" | "full";
 
 export type MdnsDiscoveryConfig = {
@@ -34,7 +38,9 @@ export type MdnsDiscoveryConfig = {
 };
 
 export type DiscoveryConfig = {
+  /** Wide-area DNS-SD discovery settings. */
   wideArea?: WideAreaDiscoveryConfig;
+  /** Local mDNS/Bonjour discovery settings. */
   mdns?: MdnsDiscoveryConfig;
 };
 
@@ -147,6 +153,7 @@ export type GatewayControlUiConfig = {
   dangerouslyDisableDeviceAuth?: boolean;
 };
 
+/** Gateway authentication strategy for WebSocket and HTTP clients. */
 export type GatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
 
 /**
@@ -209,6 +216,7 @@ export type GatewayAuthRateLimitConfig = {
   exemptLoopback?: boolean;
 };
 
+/** Tailscale exposure mode for gateway HTTP/WebSocket surfaces. */
 export type GatewayTailscaleMode = "off" | "serve" | "funnel";
 
 export type GatewayTailscaleConfig = {
@@ -216,6 +224,8 @@ export type GatewayTailscaleConfig = {
   mode?: GatewayTailscaleMode;
   /** Reset serve/funnel configuration on shutdown. */
   resetOnExit?: boolean;
+  /** Optional Tailscale Service name, such as `svc:openclaw`, for Serve mode. */
+  serviceName?: string;
   /**
    * When `mode="serve"` and an externally configured Tailscale Funnel route
    * already covers the gateway port, skip re-applying `tailscale serve` on
@@ -246,6 +256,7 @@ export type GatewayRemoteConfig = {
   sshIdentity?: string;
 };
 
+/** Gateway config reload strategy for managed installs. */
 export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
 
 export type GatewayReloadConfig = {
@@ -378,7 +389,9 @@ export type GatewayHttpResponsesImagesConfig = {
 };
 
 export type GatewayHttpEndpointsConfig = {
+  /** OpenAI-compatible chat completions endpoint controls. */
   chatCompletions?: GatewayHttpChatCompletionsConfig;
+  /** OpenResponses-compatible responses endpoint controls. */
   responses?: GatewayHttpResponsesConfig;
 };
 
@@ -393,7 +406,9 @@ export type GatewayHttpSecurityHeadersConfig = {
 };
 
 export type GatewayHttpConfig = {
+  /** Per-endpoint HTTP API controls. */
   endpoints?: GatewayHttpEndpointsConfig;
+  /** HTTP security header overrides. */
   securityHeaders?: GatewayHttpSecurityHeadersConfig;
 };
 
@@ -405,10 +420,12 @@ export type GatewayPushApnsRelayConfig = {
 };
 
 export type GatewayPushApnsConfig = {
+  /** External APNs relay used by iOS/mobile notification flows. */
   relay?: GatewayPushApnsRelayConfig;
 };
 
 export type GatewayPushConfig = {
+  /** Apple Push Notification Service settings. */
   apns?: GatewayPushApnsConfig;
 };
 
@@ -442,11 +459,6 @@ export type GatewayToolsConfig = {
   deny?: string[];
   /** Tools to explicitly allow (removes from default deny list). */
   allow?: string[];
-};
-
-export type GatewayWebchatConfig = {
-  /** Max characters per text field in chat.history responses before truncation (default: 12000). */
-  chatHistoryMaxChars?: number;
 };
 
 export type GatewayConfig = {
@@ -492,8 +504,6 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
-  /** WebChat display/history settings. */
-  webchat?: GatewayWebchatConfig;
   /**
    * Pre-auth Gateway WebSocket handshake timeout in milliseconds.
    * Env var OPENCLAW_HANDSHAKE_TIMEOUT_MS takes precedence. Default: 15000.

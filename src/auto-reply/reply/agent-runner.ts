@@ -1,5 +1,7 @@
+// Orchestrates reply agent execution, payload building, and delivery callbacks.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
@@ -8,6 +10,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { hasVisibleAgentPayload } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
@@ -40,7 +43,6 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
@@ -87,6 +89,11 @@ import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-usage-l
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
+import {
+  createCompactionNoticePayload,
+  shouldNotifyUserAboutCompaction,
+  type CompactionNoticePhase,
+} from "./compaction-notice.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
@@ -94,6 +101,10 @@ import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-r
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
+import {
+  shouldWarnAboutPrivateMessageToolFinal,
+  warnPrivateMessageToolFinal,
+} from "./private-message-tool-final.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
   enqueueFollowupRun,
@@ -106,6 +117,7 @@ import { createReplyMediaContext } from "./reply-media-paths.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -231,13 +243,25 @@ function hasSuccessfulSideEffectDelivery(params: {
   didSendDeterministicApprovalPrompt?: boolean;
 }): boolean {
   return (
+    hasSuccessfulSourceReplyDelivery(params) ||
+    (params.successfulCronAdds ?? 0) > 0 ||
+    params.didSendDeterministicApprovalPrompt === true
+  );
+}
+
+function hasSuccessfulSourceReplyDelivery(params: {
+  blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
+  directlySentBlockKeys?: Set<string>;
+  messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
+  messagingToolSentTargets?: unknown[];
+}): boolean {
+  return (
     (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
     hasNonEmptyStringArray(params.messagingToolSentTexts) ||
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
-    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets) ||
-    (params.successfulCronAdds ?? 0) > 0 ||
-    params.didSendDeterministicApprovalPrompt === true
+    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
   );
 }
 
@@ -993,7 +1017,7 @@ function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
   const text = payloads
     .filter((payload) => payload.isReasoning !== true)
     .map((payload) => payload.text)
-    .filter((text): text is string => Boolean(text))
+    .filter((textLocal): textLocal is string => Boolean(textLocal))
     .join("\n\n");
   return sanitizePendingFinalDeliveryText(text);
 }
@@ -1315,6 +1339,24 @@ export async function runReplyAgent(params: {
     requesterSenderUsername: followupRun.run.senderUsername,
     requesterSenderE164: followupRun.run.senderE164,
   });
+  const compactionNoticeMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+  const sendDirectCompactionNotice = shouldNotifyUserAboutCompaction(cfg)
+    ? async (phase: CompactionNoticePhase) => {
+        if (!opts?.onBlockReply) {
+          return;
+        }
+        const noticePayload = createCompactionNoticePayload({
+          phase,
+          currentMessageId: compactionNoticeMessageId,
+          applyReplyToMode,
+        });
+        try {
+          await opts.onBlockReply(noticePayload);
+        } catch (err) {
+          logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
+        }
+      }
+    : undefined;
   const blockReplyCoalescing =
     blockStreamingEnabled && opts?.onBlockReply
       ? resolveEffectiveBlockStreamingConfig({
@@ -1335,6 +1377,10 @@ export async function runReplyAgent(params: {
       : null;
 
   const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
+  const replyRouteThreadId = resolveRoutedDeliveryThreadId({
+    ctx: sessionCtx,
+    sessionKey: replySessionKey,
+  });
   let replyOperation: ReplyOperation;
   if (providedReplyOperation) {
     replyOperation = providedReplyOperation;
@@ -1345,6 +1391,7 @@ export async function runReplyAgent(params: {
       sessionKey: replySessionKey ?? "",
       kind: replyTurnKind,
       resetTriggered: effectiveResetTriggered,
+      routeThreadId: replyRouteThreadId,
       upstreamAbortSignal: opts?.abortSignal,
     });
     if (admission.status === "skipped") {
@@ -1453,7 +1500,7 @@ export async function runReplyAgent(params: {
     }
   };
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
-  let preflightCompactionApplied = false;
+  let preflightCompactionApplied;
 
   try {
     await typingSignals.signalRunStart();
@@ -1472,6 +1519,7 @@ export async function runReplyAgent(params: {
         storePath,
         isHeartbeat,
         replyOperation,
+        onCompactionNotice: sendDirectCompactionNotice,
       }),
     );
     preflightCompactionApplied =
@@ -1640,7 +1688,8 @@ export async function runReplyAgent(params: {
       fallbackAttempts,
       directlySentBlockKeys,
     } = runOutcome;
-    let { didLogHeartbeatStrip, autoCompactionCount } = runOutcome;
+    const { autoCompactionCount } = runOutcome;
+    let { didLogHeartbeatStrip } = runOutcome;
 
     if (
       shouldInjectGroupIntro &&
@@ -1788,6 +1837,22 @@ export async function runReplyAgent(params: {
       successfulCronAdds: runResult.successfulCronAdds,
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
     });
+    const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
+      blockReplyPipeline,
+      directlySentBlockKeys,
+      messagingToolSentTexts: runResult.messagingToolSentTexts,
+      messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+      messagingToolSentTargets: runResult.messagingToolSentTargets,
+    });
+    const committedMessagingToolSourceReplyDelivery =
+      runResult.didDeliverSourceReplyViaMessageTool === true ||
+      hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
+    if (
+      opts?.sourceReplyDeliveryMode === "message_tool_only" &&
+      committedMessagingToolSourceReplyDelivery
+    ) {
+      await opts.onObservedReplyDelivery?.();
+    }
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
       const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
         fallbackTransition,
@@ -2269,9 +2334,30 @@ export async function runReplyAgent(params: {
         runtimePolicySessionKey,
         opts,
       });
-      const pendingText = sourceReplyPolicy.suppressDelivery
-        ? ""
-        : buildPendingFinalDeliveryText(finalPayloads);
+      const finalDeliveryText = buildPendingFinalDeliveryText(finalPayloads);
+      // #85714: warn only for unusually substantive private final text. In
+      // message_tool_only, no tool call can be intentional silence, and
+      // finalDeliveryText also includes verbose/status/usage metadata.
+      const assistantFinalText = rawAssistantText ?? "";
+      if (
+        shouldWarnAboutPrivateMessageToolFinal({
+          sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+          sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+          successfulSourceReplyDelivery,
+          finalText: assistantFinalText,
+        })
+      ) {
+        warnPrivateMessageToolFinal({
+          sessionKey,
+          channel:
+            sessionCtx.OriginatingChannel ??
+            sessionCtx.Surface ??
+            sessionCtx.Provider ??
+            activeSessionEntry?.channel,
+          finalTextLength: assistantFinalText.trim().length,
+        });
+      }
+      const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
       const agentId = followupRun.run.agentId;
       const heartbeatAgentCfg = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
       const heartbeatAckMaxChars = Math.max(

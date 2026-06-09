@@ -1,3 +1,4 @@
+// Status summary tests cover aggregate status text for channels, sessions, tasks, and audit findings.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
 import type { TaskRegistrySummary } from "../tasks/task-registry.types.js";
@@ -49,6 +50,11 @@ const statusSummaryMocks = vi.hoisted(() => ({
     },
   ] as TaskAuditFinding[],
   getInspectableTaskAuditFindings: vi.fn(() => statusSummaryMocks.taskAuditFindings),
+  ensureSessionStateMigratedForCommand: vi.fn(async () => undefined),
+}));
+
+vi.mock("./session-state-migration.js", () => ({
+  ensureSessionStateMigratedForCommand: statusSummaryMocks.ensureSessionStateMigratedForCommand,
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -438,14 +444,14 @@ describe("getStatusSummary", () => {
       model: "gpt-5.5-codex",
     });
     vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.5-codex",
     });
     statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
       "agent:main:main": {
         sessionId: "session-1",
         updatedAt: Date.now(),
-        providerOverride: "openai-codex",
+        providerOverride: "openai",
         modelOverride: "gpt-5.5-codex",
         modelOverrideSource: "user",
       },
@@ -454,7 +460,7 @@ describe("getStatusSummary", () => {
     const summary = await getStatusSummary();
 
     expect(summary.sessions.recent[0]?.configuredModel).toBe("openai/gpt-5.5-codex");
-    expect(summary.sessions.recent[0]?.selectedModel).toBe("openai-codex/gpt-5.5-codex");
+    expect(summary.sessions.recent[0]?.selectedModel).toBe("openai/gpt-5.5-codex");
     expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
   });
 });

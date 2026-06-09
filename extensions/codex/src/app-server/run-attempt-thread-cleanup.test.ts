@@ -1,3 +1,4 @@
+// Codex tests cover run attempt thread cleanup plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -84,6 +85,7 @@ function turnStartResult(turnId = "turn-1") {
 
 describe("Codex app-server main thread cleanup", () => {
   beforeEach(async () => {
+    vi.useRealTimers();
     resetAgentEventsForTest();
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
     vi.stubEnv("CODEX_API_KEY", "");
@@ -92,6 +94,7 @@ describe("Codex app-server main thread cleanup", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     resetAgentEventsForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();

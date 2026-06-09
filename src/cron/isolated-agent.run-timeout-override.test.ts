@@ -1,5 +1,6 @@
+// Isolated agent timeout tests cover per-run timeout override propagation.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { resolveCronRunTimeoutOverrideMs } from "./isolated-agent/run-timeout.js";
 
 describe("resolveCronRunTimeoutOverrideMs", () => {

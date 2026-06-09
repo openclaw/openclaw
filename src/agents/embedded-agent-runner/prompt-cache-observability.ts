@@ -1,3 +1,6 @@
+/**
+ * Tracks prompt-cache snapshot changes for observability diagnostics.
+ */
 import crypto from "node:crypto";
 import type { NormalizedUsage } from "../usage.js";
 
@@ -137,8 +140,19 @@ function diffSnapshots(
   return changes.length > 0 ? changes : null;
 }
 
-export function collectPromptCacheToolNames(tools: Array<{ name?: string }>): string[] {
-  return tools.map((tool) => tool.name?.trim()).filter((name): name is string => Boolean(name));
+export function collectPromptCacheToolNames(tools: readonly { name?: string }[]): string[] {
+  const names: string[] = [];
+  for (const tool of tools) {
+    try {
+      const name = tool.name?.trim();
+      if (name) {
+        names.push(name);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return names;
 }
 
 export function beginPromptCacheObservation(params: {

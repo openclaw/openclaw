@@ -1,3 +1,4 @@
+// Gateway register option collision tests cover gateway command option registration.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerGatewayCli } from "./register.js";
@@ -131,7 +132,7 @@ function firstGatewayStatusCall() {
 }
 
 describe("gateway register option collisions", () => {
-  let sharedProgram: Command = new Command();
+  const sharedProgram: Command = new Command();
 
   if (sharedProgram.commands.length === 0) {
     sharedProgram.exitOverride();

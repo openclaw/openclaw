@@ -1,3 +1,8 @@
+/**
+ * Tool binary manager for agent-side helper commands.
+ *
+ * Locates or downloads pinned helper binaries such as fd and ripgrep.
+ */
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -376,10 +381,7 @@ const TERMUX_PACKAGES: Record<string, string> = {
 
 // Ensure a tool is available, downloading if necessary
 // Returns the path to the tool, or null if unavailable
-export async function ensureTool(
-  tool: "fd" | "rg",
-  silent: boolean = false,
-): Promise<string | undefined> {
+export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<string | undefined> {
   const existingPath = getToolPath(tool);
   if (existingPath) {
     return existingPath;

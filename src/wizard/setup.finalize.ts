@@ -1,3 +1,4 @@
+// Setup finalize helpers write onboarding output and follow-up state.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
@@ -124,7 +125,7 @@ export async function finalizeSetupWizard(
 
   const withWizardProgress = async <T>(
     label: string,
-    options: { doneMessage?: string | (() => string | undefined) },
+    optionsLocal: { doneMessage?: string | (() => string | undefined) },
     work: (progress: { update: (message: string) => void }) => Promise<T>,
   ): Promise<T> => {
     const progress = prompter.progress(label);
@@ -132,7 +133,9 @@ export async function finalizeSetupWizard(
       return await work(progress);
     } finally {
       progress.stop(
-        typeof options.doneMessage === "function" ? options.doneMessage() : options.doneMessage,
+        typeof optionsLocal.doneMessage === "function"
+          ? optionsLocal.doneMessage()
+          : optionsLocal.doneMessage,
       );
     }
   };
@@ -264,7 +267,9 @@ export async function finalizeSetupWizard(
               env: process.env,
               port: settings.port,
               runtime: daemonRuntime,
-              warn: (message, title) => prompter.note(message, title),
+              warn: (message, title) => {
+                void prompter.note(message, title);
+              },
               config: nextConfig,
             },
           );
@@ -474,7 +479,7 @@ export async function finalizeSetupWizard(
   );
 
   let controlUiOpened = false;
-  let seededInBackground = false;
+  const seededInBackground = false;
   let hatchChoice: "tui" | "web" | "later" | null = null;
   let launchedTui = false;
 

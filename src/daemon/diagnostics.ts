@@ -1,6 +1,8 @@
+/** Reads recent gateway service logs for actionable daemon restart diagnostics. */
 import fs from "node:fs/promises";
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
+// Error patterns worth surfacing from gateway service logs after failed starts.
 const GATEWAY_LOG_ERROR_PATTERNS = [
   /refusing to bind gateway/i,
   /gateway auth mode/i,
@@ -30,6 +32,8 @@ export async function readLastGatewayErrorLine(
 ): Promise<string | null> {
   const platform = options?.platform ?? process.platform;
   const readStderr = platform !== "darwin";
+  // launchd supervisor mode combines child stderr into stdout; other platforms
+  // keep stderr as the strongest failure signal.
   const { stdoutPath, stderrPath } =
     platform === "darwin"
       ? resolveGatewaySupervisorLogPaths(env, { platform })

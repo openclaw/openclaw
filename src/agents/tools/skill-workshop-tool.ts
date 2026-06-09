@@ -1,3 +1,8 @@
+/**
+ * Skill Workshop built-in tool.
+ *
+ * Exposes proposal create/update/review/apply actions while the workshop service owns persistence.
+ */
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -13,6 +18,7 @@ import {
 } from "../../skills/workshop/service.js";
 import type {
   SkillProposalManifestEntry,
+  SkillProposalOrigin,
   SkillProposalReadResult,
   SkillProposalRecord,
   SkillProposalStatus,
@@ -122,8 +128,10 @@ export type SkillWorkshopToolOptions = {
   workspaceDir: string;
   config?: OpenClawConfig;
   agentId?: string;
+  origin?: SkillProposalOrigin;
 };
 
+/** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
 export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyAgentTool {
   return {
     label: "Skill Workshop",
@@ -212,6 +220,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           content: proposalContent,
           supportFiles,
           createdBy: "skill-workshop",
+          ...(options.origin ? { origin: options.origin } : {}),
           goal,
           evidence,
         });
@@ -229,6 +238,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           content: proposalContent,
           supportFiles,
           createdBy: "skill-workshop",
+          ...(options.origin ? { origin: options.origin } : {}),
           goal,
           evidence,
         });
@@ -369,6 +379,8 @@ function listProposalEntries(params: {
   const query = params.query?.trim().toLowerCase();
   const normalizedQuery = query ? normalizeProposalSearchText(query) : undefined;
   const limit = Math.min(Math.max(params.limit, 1), 50);
+  // Pending proposals sort first so the model sees actionable work before
+  // historical applied/rejected records.
   return params.proposals
     .filter((proposal) => !params.status || proposal.status === params.status)
     .filter((proposal) => {
@@ -385,7 +397,9 @@ function listProposalEntries(params: {
         const lower = value.toLowerCase();
         return (
           lower.includes(query) ||
-          (!!normalizedQuery && normalizeProposalSearchText(lower).includes(normalizedQuery))
+          (normalizedQuery !== undefined &&
+            normalizedQuery.length > 0 &&
+            normalizeProposalSearchText(lower).includes(normalizedQuery))
         );
       });
     })

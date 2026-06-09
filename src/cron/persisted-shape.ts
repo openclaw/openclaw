@@ -1,5 +1,7 @@
+/** Validates persisted cron job records before loading them from disk/state. */
 import { parseAbsoluteTimeMs } from "./parse.js";
 
+/** Structural rejection code for persisted cron jobs that cannot be loaded safely. */
 export type InvalidPersistedCronJobReason =
   | "missing-id"
   | "missing-schedule"
@@ -7,6 +9,7 @@ export type InvalidPersistedCronJobReason =
   | "missing-payload"
   | "invalid-payload";
 
+/** Returns the first structural reason a persisted cron job cannot be loaded safely. */
 export function getInvalidPersistedCronJobReason(
   candidate: Record<string, unknown>,
 ): InvalidPersistedCronJobReason | null {
@@ -19,6 +22,8 @@ export function getInvalidPersistedCronJobReason(
     return "missing-schedule";
   }
   if (typeof schedule === "string") {
+    // Legacy shorthand schedules are normalized later by the full cron parser;
+    // this guard only rejects shapes that cannot be persisted or quarantined.
     return null;
   }
   if (typeof schedule !== "object") {
@@ -53,7 +58,7 @@ export function getInvalidPersistedCronJobReason(
   }
   const payloadRecord = payload as Record<string, unknown>;
   const payloadKind = payloadRecord.kind;
-  if (payloadKind !== "systemEvent" && payloadKind !== "agentTurn") {
+  if (payloadKind !== "systemEvent" && payloadKind !== "agentTurn" && payloadKind !== "command") {
     return "invalid-payload";
   }
   if (payloadKind === "systemEvent") {
@@ -65,6 +70,16 @@ export function getInvalidPersistedCronJobReason(
   if (payloadKind === "agentTurn") {
     const message = payloadRecord.message;
     if (typeof message !== "string" || message.trim().length === 0) {
+      return "invalid-payload";
+    }
+  }
+  if (payloadKind === "command") {
+    const argv = payloadRecord.argv;
+    if (
+      !Array.isArray(argv) ||
+      argv.length === 0 ||
+      argv.some((value) => typeof value !== "string" || value.length === 0)
+    ) {
       return "invalid-payload";
     }
   }

@@ -1,3 +1,4 @@
+// Agent command test mocks replace logging and runtime-heavy modules shared by agent command suites.
 import { vi } from "vitest";
 
 vi.mock("../logging/subsystem.js", () => {
@@ -81,12 +82,13 @@ vi.mock("../agents/model-selection.js", () => {
     return { provider: defaultProvider, model: value };
   };
   const parseModelRef = vi.fn(parseModelRefImpl);
+  const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
   const normalizeModelRef = (provider: string, model: string): ModelRef => ({
-    provider: provider.trim().toLowerCase(),
+    provider: normalizeProviderId(provider),
     model: model.trim(),
   });
   const modelKey = (provider: string, model: string) =>
-    `${provider.trim().toLowerCase()}/${model.trim().toLowerCase()}`;
+    `${normalizeProviderId(provider)}/${model.trim().toLowerCase()}`;
   const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {
     if (allowedKeys.has(key)) {
       return true;
@@ -180,10 +182,13 @@ vi.mock("../agents/model-selection.js", () => {
       },
     ),
     buildConfiguredModelCatalog: vi.fn(() => []),
+    buildModelAliasIndex: vi.fn(() => new Map()),
     isModelKeyAllowedBySet,
     isCliProvider: vi.fn(() => false),
     modelKey,
     normalizeModelRef,
+    normalizeProviderId,
+    normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef,
     resolveConfiguredModelRef: vi.fn(
       ({ cfg }: { cfg?: ConfigWithModels; defaultProvider?: string; defaultModel?: string }) =>
@@ -191,6 +196,12 @@ vi.mock("../agents/model-selection.js", () => {
     ),
     resolveDefaultModelForAgent: vi.fn(({ cfg }: { cfg?: ConfigWithModels }) =>
       resolveDefaultRef(cfg),
+    ),
+    resolveModelRefFromString: vi.fn(
+      ({ raw, defaultProvider }: { raw: string; defaultProvider?: string }) => {
+        const ref = parseModelRef(raw, defaultProvider ?? "openai");
+        return ref ? { ref, source: "parsed" } : null;
+      },
     ),
     resolveThinkingDefault: vi.fn(
       ({

@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot message context behavior.
 import type { ReactionTypeEmoji } from "grammy/types";
 import {
   resolveAckReaction,
@@ -242,7 +243,7 @@ export const buildTelegramMessageContext = async ({
   const freshCfg =
     loadFreshConfig?.() ??
     (runtime?.getRuntimeConfig ?? (await loadTelegramMessageContextRuntime()).getRuntimeConfig)();
-  let { route, bindingMode } = resolveTelegramConversationRoute({
+  const conversationRoute = resolveTelegramConversationRoute({
     cfg: freshCfg,
     accountId: account.accountId,
     chatId,
@@ -252,6 +253,8 @@ export const buildTelegramMessageContext = async ({
     senderId,
     topicAgentId: topicConfig?.agentId,
   });
+  const { bindingMode } = conversationRoute;
+  let { route } = conversationRoute;
   const requiresExplicitAccountBinding = (
     candidate: ReturnType<typeof resolveTelegramConversationRoute>["route"],
   ): boolean =>
@@ -259,9 +262,8 @@ export const buildTelegramMessageContext = async ({
       normalizeAccountId(resolveDefaultTelegramAccountId(freshCfg)) &&
     candidate.matchedBy === "default";
   const isNamedAccountFallback = requiresExplicitAccountBinding(route);
-  // Named-account groups still require an explicit binding; DMs get a
-  // per-account fallback session key below to preserve isolation.
-  if (isNamedAccountFallback && isGroup) {
+  const hasExplicitTopicRoute = isGroup && Boolean(topicConfig?.agentId?.trim());
+  if (isNamedAccountFallback && isGroup && !hasExplicitTopicRoute) {
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",
@@ -426,7 +428,7 @@ export const buildTelegramMessageContext = async ({
   const activationOverride = resolveGroupActivation({
     chatId,
     messageThreadId: resolvedThreadId,
-    sessionKey: sessionKey,
+    sessionKey,
     agentId: route.agentId,
   });
   const baseRequireMention = resolveGroupRequireMention(chatId);
@@ -469,6 +471,7 @@ export const buildTelegramMessageContext = async ({
     effectiveDmAllow: dmAllow.effectiveAllow,
     groupConfig,
     topicConfig,
+    providerMentionPatterns: cfg.channels?.telegram?.accounts?.[account.accountId]?.mentionPatterns,
     requireMention,
     options,
     groupHistories,
@@ -487,7 +490,7 @@ export const buildTelegramMessageContext = async ({
   // expensive context/session construction without showing typing for dropped turns.
   if (!isGroup) {
     initialTypingCueSent = true;
-    void sendTyping().catch((err) => {
+    void sendTyping().catch((err: unknown) => {
       logVerbose(`telegram early direct typing cue failed for chat ${chatId}: ${String(err)}`);
     });
   }
@@ -582,7 +585,7 @@ export const buildTelegramMessageContext = async ({
                     chat: msg.chat,
                     chatId,
                     getChat: getChatApi ?? undefined,
-                  }).catch((err) => {
+                  }).catch((err: unknown) => {
                     logVerbose(
                       `telegram status-reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
                     );
@@ -627,7 +630,7 @@ export const buildTelegramMessageContext = async ({
             reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReactionEmoji }]),
         }).then(
           () => true,
-          (err) => {
+          (err: unknown) => {
             logVerbose(`telegram react failed for chat ${chatId}: ${String(err)}`);
             return false;
           },

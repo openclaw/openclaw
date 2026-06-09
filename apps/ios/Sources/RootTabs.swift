@@ -32,6 +32,7 @@ struct RootTabs: View {
     @State private var didAutoOpenSettings: Bool = false
     @State private var didApplyInitialAppearance: Bool = false
     @State private var didApplyInitialChatSession: Bool = false
+    @State private var handledGatewaySetupRequestID: Int = 0
 
     private enum AppTab: Hashable {
         case control
@@ -199,6 +200,36 @@ struct RootTabs: View {
                     RootCameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
                 }
             }
+            .overlay {
+                if self.appModel.screen.isCanvasPresented {
+                    self.canvasPresentationOverlay
+                        .transition(.opacity)
+                        .zIndex(20)
+                }
+            }
+    }
+
+    private var canvasPresentationOverlay: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+            ScreenWebView(controller: self.appModel.screen)
+                .ignoresSafeArea()
+            Button {
+                self.appModel.screen.hideCanvas()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 30, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.32), radius: 8, y: 2)
+                    .frame(width: 48, height: 48)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close canvas")
+            .safeAreaPadding(.top, 8)
+            .padding(.trailing, 12)
+        }
     }
 
     private func rootLifecycle(_ content: some View) -> some View {
@@ -237,6 +268,7 @@ struct RootTabs: View {
             .onAppear { self.updateCanvasState() }
             .onAppear { self.evaluateOnboardingPresentation(force: false) }
             .onAppear { self.maybeAutoOpenSettings() }
+            .onAppear { self.maybeOpenSettingsForGatewaySetup() }
             .onAppear { self.maybeShowQuickSetup() }
             .onAppear { self.applyInitialAppearanceIfNeeded() }
             .onAppear { self.applyInitialChatSessionIfNeeded() }
@@ -266,7 +298,6 @@ struct RootTabs: View {
             .onChange(of: self.gatewayController.gateways.count) { _, _ in self.maybeShowQuickSetup() }
             .onChange(of: self.appModel.gatewayServerName) { _, newValue in
                 if newValue != nil {
-                    self.showOnboarding = false
                     self.onboardingComplete = true
                     self.hasConnectedOnce = true
                     OnboardingStateStore.markCompleted(mode: nil)
@@ -295,6 +326,9 @@ struct RootTabs: View {
             }
             .onChange(of: self.appModel.openChatRequestID) { _, _ in
                 self.selectedTab = .chat
+            }
+            .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
+                self.maybeOpenSettingsForGatewaySetup()
             }
     }
 
@@ -556,6 +590,16 @@ struct RootTabs: View {
             hasExistingGatewayConfig: self.hasExistingGatewayConfig(),
             shouldPresentOnLaunch: false)
         guard route == .settings else { return }
+        self.didAutoOpenSettings = true
+        self.selectedTab = .settings
+    }
+
+    private func maybeOpenSettingsForGatewaySetup() {
+        let requestID = self.appModel.gatewaySetupRequestID
+        guard requestID != 0, requestID != self.handledGatewaySetupRequestID else { return }
+        self.handledGatewaySetupRequestID = requestID
+        self.showOnboarding = false
+        self.presentedSheet = nil
         self.didAutoOpenSettings = true
         self.selectedTab = .settings
     }

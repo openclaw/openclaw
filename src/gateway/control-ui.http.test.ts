@@ -1,4 +1,7 @@
+// Control UI HTTP tests cover static asset serving, bootstrap config, avatar and
+// assistant media routes, pairing helpers, and session-generation metadata.
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
@@ -11,6 +14,7 @@ import {
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
 import {
@@ -290,43 +294,43 @@ describe("handleControlUiHttpRequest", () => {
     fn: (token: string) => Promise<T>;
   }) {
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-device-token-"));
-    vi.stubEnv("OPENCLAW_HOME", tempHome);
     try {
-      const deviceId = "control-ui-device";
-      const requested = await requestDevicePairing({
-        deviceId,
-        publicKey: "test-public-key",
-        role: "operator",
-        scopes: ["operator.read"],
-        ...(params.browserMetadata
-          ? {
-              clientId: "openclaw-control-ui",
-              clientMode: "webchat",
-            }
-          : {}),
-      });
-      const approved = await approveDevicePairing(requested.request.requestId, {
-        callerScopes: ["operator.read"],
-      });
-      expect(approved?.status).toBe("approved");
-      let operatorToken =
-        approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
-      if (params.issuerGeneration) {
-        const issued = await ensureDeviceToken({
+      return await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+        const deviceId = "control-ui-device";
+        const requested = await requestDevicePairing({
           deviceId,
+          publicKey: "test-public-key",
           role: "operator",
           scopes: ["operator.read"],
-          issuer: {
-            kind: "shared-gateway-auth",
-            generation: params.issuerGeneration,
-          },
+          ...(params.browserMetadata
+            ? {
+                clientId: "openclaw-control-ui",
+                clientMode: "webchat",
+              }
+            : {}),
         });
-        operatorToken = issued?.token;
-      }
-      expect(typeof operatorToken).toBe("string");
-      return await params.fn(operatorToken ?? "");
+        const approved = await approveDevicePairing(requested.request.requestId, {
+          callerScopes: ["operator.read"],
+        });
+        expect(approved?.status).toBe("approved");
+        let operatorToken =
+          approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
+        if (params.issuerGeneration) {
+          const issued = await ensureDeviceToken({
+            deviceId,
+            role: "operator",
+            scopes: ["operator.read"],
+            issuer: {
+              kind: "shared-gateway-auth",
+              generation: params.issuerGeneration,
+            },
+          });
+          operatorToken = issued?.token;
+        }
+        expect(typeof operatorToken).toBe("string");
+        return await params.fn(operatorToken ?? "");
+      });
     } finally {
-      vi.unstubAllEnvs();
       await fs.rm(tempHome, { recursive: true, force: true });
     }
   }
@@ -1100,6 +1104,30 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("serves static assets without synchronous file reads", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
+        const readFileSync = vi.spyOn(fsSync, "readFileSync").mockImplementation(() => {
+          throw new Error("readFileSync should not run on Control UI request path");
+        });
+        try {
+          const { res, end, handled } = await runControlUiRequest({
+            url: "/assets/actual.txt",
+            method: "GET",
+            rootPath: tmp,
+          });
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          expect(responseBody(end)).toBe("inside-ok\n");
+        } finally {
+          readFileSync.mockRestore();
+        }
+      },
+    });
+  });
+
   it("serves HEAD for in-root assets without writing a body", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -1223,7 +1251,7 @@ describe("handleControlUiHttpRequest", () => {
 
           expect(handled, `expected ${url} to be handled`).toBe(true);
           expect(res.statusCode, `expected ${url} to be served`).toBe(200);
-          expect(res.setHeader).toHaveBeenCalledWith("Content-Type", expectedType);
+          expect(res["setHeader"]).toHaveBeenCalledWith("Content-Type", expectedType);
           expect(end, `expected ${url} to write a body`).toHaveBeenCalled();
         }
       },

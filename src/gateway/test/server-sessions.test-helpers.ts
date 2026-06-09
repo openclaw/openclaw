@@ -1,3 +1,6 @@
+/**
+ * HTTP server session fixtures shared by gateway session tests.
+ */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -5,6 +8,7 @@ import path from "node:path";
 import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { writeSessionStoreForTestAsync } from "../../config/sessions/test-helpers.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "../server.e2e-ws-harness.js";
@@ -320,6 +324,112 @@ export function setupGatewaySessionsTestHarness() {
     return { dir, storePath };
   }
 
+  async function createSelectedGlobalSessionStore() {
+    const { dir } = await createSessionStoreDir();
+    const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+    testState.sessionStorePath = storeTemplate;
+    testState.sessionConfig = { scope: "global" };
+    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    return {
+      dir,
+      storeTemplate,
+      mainStorePath: storeTemplate.replace("{agentId}", "main"),
+      workStorePath: storeTemplate.replace("{agentId}", "work"),
+    };
+  }
+
+  async function createConfiguredGlobalAgentSessionStore({
+    writePrimeStore = false,
+    withTranscripts = false,
+  }: {
+    writePrimeStore?: boolean;
+    withTranscripts?: boolean;
+  } = {}) {
+    const { dir } = await createSessionStoreDir();
+    const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+    testState.sessionStorePath = storeTemplate;
+    testState.sessionConfig = { scope: "global" };
+    if (writePrimeStore) {
+      await writeSessionStore({
+        entries: {},
+        storePath: path.join(dir, "prime-sessions.json"),
+      });
+    }
+
+    const mainStorePath = storeTemplate.replace("{agentId}", "main");
+    const workStorePath = storeTemplate.replace("{agentId}", "work");
+    const mainTranscript = path.join(path.dirname(mainStorePath), "sess-main-global.jsonl");
+    const workTranscript = path.join(path.dirname(workStorePath), "sess-work-global.jsonl");
+    await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
+    await fs.mkdir(path.dirname(workStorePath), { recursive: true });
+    if (withTranscripts) {
+      await fs.writeFile(mainTranscript, "main one\nmain two\n", "utf-8");
+      await fs.writeFile(workTranscript, "work one\nwork two\n", "utf-8");
+    }
+    await writeSessionStoreForTestAsync(mainStorePath, {
+      global: sessionStoreEntry(
+        "sess-main-global",
+        withTranscripts ? { sessionFile: mainTranscript } : undefined,
+      ),
+    });
+    await writeSessionStoreForTestAsync(workStorePath, {
+      global: sessionStoreEntry(
+        "sess-work-global",
+        withTranscripts
+          ? { authProfileOverride: "github-copilot:work", sessionFile: workTranscript }
+          : undefined,
+      ),
+    });
+
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is required");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          session: { scope: "global", store: storeTemplate },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    const { clearConfigCache, clearRuntimeConfigSnapshot, getRuntimeConfig } =
+      await getGatewayConfigModule();
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+
+    return {
+      clearConfigCache,
+      clearRuntimeConfigSnapshot,
+      configPath,
+      getRuntimeConfig,
+      mainStorePath,
+      mainTranscript,
+      workStorePath,
+      workTranscript,
+    };
+  }
+
+  async function resetConfiguredGlobalAgentSessionStore({
+    clearConfigCache,
+    clearRuntimeConfigSnapshot,
+    configPath,
+  }: {
+    clearConfigCache: () => void;
+    clearRuntimeConfigSnapshot: () => void;
+    configPath: string;
+  }) {
+    testState.sessionStorePath = undefined;
+    testState.sessionConfig = undefined;
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+  }
+
   async function seedActiveMainSession() {
     const { dir, storePath } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
@@ -332,9 +442,12 @@ export function setupGatewaySessionsTestHarness() {
   }
 
   return {
+    createConfiguredGlobalAgentSessionStore,
     createSessionStoreDir,
+    createSelectedGlobalSessionStore,
     getHarness: requireHarness,
     openClient,
+    resetConfiguredGlobalAgentSessionStore,
     seedActiveMainSession,
   };
 }
@@ -496,7 +609,7 @@ export async function directSessionReq<TPayload = unknown>(
       broadcastToConnIds: vi.fn(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
       loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
-      getRuntimeConfig: getRuntimeConfig,
+      getRuntimeConfig,
       ...opts?.context,
     } as never,
     client: opts?.client ?? null,

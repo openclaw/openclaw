@@ -1,3 +1,4 @@
+// Feishu tests cover async plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { raceWithTimeoutAndAbort, waitForAbortableDelay } from "./async.js";
@@ -47,6 +48,21 @@ describe("waitForAbortableDelay", () => {
     const delay = waitForAbortableDelay(500);
     await vi.advanceTimersByTimeAsync(500);
 
+    await expect(delay).resolves.toBe(true);
+  });
+
+  it("normalizes oversized delays before arming the timer", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback: () => void) => {
+        queueMicrotask(callback);
+        return 1 as unknown as ReturnType<typeof setTimeout>;
+      });
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+
+    const delay = waitForAbortableDelay(Number.MAX_SAFE_INTEGER);
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     await expect(delay).resolves.toBe(true);
   });
 });

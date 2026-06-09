@@ -1,3 +1,5 @@
+// Runtime implementations for `openclaw plugins` subcommands. Heavy plugin modules stay
+// lazy-loaded so the base CLI can start without activating the plugin registry.
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
@@ -176,7 +178,9 @@ function collectConfiguredRuntimePluginWarnings(params: {
   });
 }
 
-export async function runPluginsEnableCommand(id: string): Promise<void> {
+/** Enable a plugin in config and refresh the registry snapshot for the changed policy. */
+export async function runPluginsEnableCommand(idInput: string): Promise<void> {
+  let id = idInput;
   assertConfigWriteAllowedInCurrentMode();
 
   const { enablePluginInConfig } = await import("../plugins/enable.js");
@@ -204,6 +208,7 @@ export async function runPluginsEnableCommand(id: string): Promise<void> {
   await refreshPluginRegistryAfterConfigMutation({
     config: next,
     reason: "policy-changed",
+    invalidateRuntimeCache: false,
     policyPluginIds: [enableResult.pluginId],
     logger: {
       warn: (message) => defaultRuntime.log(theme.warn(message)),
@@ -219,7 +224,9 @@ export async function runPluginsEnableCommand(id: string): Promise<void> {
   );
 }
 
-export async function runPluginsDisableCommand(id: string): Promise<void> {
+/** Disable a plugin in config and refresh the registry snapshot for the changed policy. */
+export async function runPluginsDisableCommand(idInput: string): Promise<void> {
+  let id = idInput;
   assertConfigWriteAllowedInCurrentMode();
 
   const { normalizePluginId } = await loadPluginsConfigState();
@@ -243,6 +250,7 @@ export async function runPluginsDisableCommand(id: string): Promise<void> {
   await refreshPluginRegistryAfterConfigMutation({
     config: next,
     reason: "policy-changed",
+    invalidateRuntimeCache: false,
     policyPluginIds: [id],
     logger: {
       warn: (message) => defaultRuntime.log(theme.warn(message)),
@@ -259,12 +267,13 @@ export async function runPluginsInstallAction(
     "install command",
     async () => {
       const { runPluginInstallCommand } = await import("./plugins-install-command.js");
-      await runPluginInstallCommand({ raw, opts });
+      await runPluginInstallCommand({ raw, opts, invalidateRuntimeCache: false });
     },
     { command: "install" },
   );
 }
 
+/** Inspect or refresh the persisted plugin registry index. */
 export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Promise<void> {
   const { inspectPluginRegistry, refreshPluginRegistry } =
     await import("../plugins/plugin-registry.js");
@@ -317,6 +326,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
   defaultRuntime.log(lines.join("\n"));
 }
 
+/** Print plugin install-tree, compatibility, and plugin-owned config diagnostics. */
 export async function runPluginsDoctorCommand(): Promise<void> {
   const {
     buildPluginCompatibilityNotices,
@@ -432,6 +442,7 @@ export async function runPluginsDoctorCommand(): Promise<void> {
   defaultRuntime.log(lines.join("\n"));
 }
 
+/** List plugins from a configured marketplace manifest. */
 export async function runPluginMarketplaceListCommand(
   source: string,
   opts: PluginMarketplaceListOptions,

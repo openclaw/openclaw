@@ -1,7 +1,9 @@
+// Main CLI entry orchestration: fast paths, env setup, plugin aliases, and Commander dispatch.
 import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
@@ -10,7 +12,6 @@ import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { normalizeGeneratedHelpCommandArgv, normalizeRootHelpTargetArgv } from "./argv.js";
 import {
@@ -79,6 +80,7 @@ const loadCrestodianModule = async () => await import("../crestodian/crestodian.
 const loadProgressModule = async () => await import("./progress.js");
 
 function createGatewayCliMainStartupTrace(argv: string[]) {
+  // Startup trace is scoped to gateway invocations to avoid routine CLI stderr noise.
   const enabled =
     isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) &&
     argv.slice(2).includes("gateway");
@@ -109,6 +111,10 @@ function createGatewayCliMainStartupTrace(argv: string[]) {
       }
     },
   };
+}
+
+function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
+  return primary === "agent" && !argv.includes("--local");
 }
 
 export function isGatewayRunFastPathArgv(argv: string[]): boolean {
@@ -493,15 +499,20 @@ export async function runCli(argv: string[] = process.argv) {
     }
     return;
   }
-  let normalizedArgv = normalizeRootHelpTargetArgv(parsedProfile.argv);
+  const normalizedArgv = normalizeRootHelpTargetArgv(parsedProfile.argv);
   const normalizedInvocation = resolveCliArgvInvocation(normalizedArgv);
   const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
   startupTrace.mark("argv");
 
   if (!isHelpOrVersionInvocation && shouldLoadCliDotEnv()) {
     await startupTrace.measure("dotenv", async () => {
-      const { loadCliDotEnv } = await import("./dotenv.js");
-      loadCliDotEnv({ quiet: true });
+      if (isRemoteAgentDispatchInvocation(normalizedArgv, normalizedInvocation.primary)) {
+        const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
+        await loadGatewayDispatchCliDotEnv({ quiet: true });
+      } else {
+        const { loadCliDotEnv } = await import("./dotenv.js");
+        loadCliDotEnv({ quiet: true });
+      }
     });
   }
   normalizeEnv();
@@ -742,11 +753,14 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
+    const parseArgv = normalizeGeneratedHelpCommandArgv(rewriteUpdateFlagArgv(normalizedArgv));
+    const suppressStartupProgress = hasJsonOutputFlag(parseArgv);
     const { createCliProgress } = await loadProgressModule();
     const startupProgress = createCliProgress({
       label: "Loading OpenClaw CLI…",
       indeterminate: true,
       delayMs: 0,
+      ...(suppressStartupProgress ? { enabled: false } : {}),
     });
     let startupProgressStopped = false;
     const stopStartupProgress = () => {
@@ -814,7 +828,6 @@ export async function runCli(argv: string[] = process.argv) {
         process.exit(1);
       });
 
-      const parseArgv = normalizeGeneratedHelpCommandArgv(rewriteUpdateFlagArgv(normalizedArgv));
       const invocation = resolveCliArgvInvocation(parseArgv);
       // Register the primary command (builtin or subcli) so help and command parsing
       // are correct even with lazy command registration.

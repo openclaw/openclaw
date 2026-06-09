@@ -1,3 +1,14 @@
+/**
+ * Subagent completion announcement delivery.
+ *
+ * Routes completion payloads through gateway/channel/session paths and records delivery evidence.
+ */
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded-read.js";
@@ -17,9 +28,6 @@ import {
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
-import { clampTimerTimeoutMs } from "../shared/number-coercion.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -28,6 +36,7 @@ import {
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import {
   collectDeliveredMediaUrls,
   collectMessagingToolDeliveredMediaUrls,
@@ -40,7 +49,7 @@ import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/r
 import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import type { AgentInternalEvent } from "./internal-events.js";
-import { isSessionWriteLockTimeoutError } from "./session-write-lock-error.js";
+import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 import {
   callGateway,
   createBoundDeliveryRouter,
@@ -395,12 +404,13 @@ function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
 }
 
 function isSessionWriteLockAnnounceAgentError(error: unknown): boolean {
-  if (isSessionWriteLockTimeoutError(error)) {
+  if (isSessionWriteLockAcquireError(error)) {
     return true;
   }
   const message = summarizeDeliveryError(error);
   return (
-    /\bSessionWriteLockTimeoutError\b/.test(message) || /\bsession file locked\b/i.test(message)
+    /\bSessionWriteLock(?:Timeout|Stale)Error\b/.test(message) ||
+    /\bsession file lock(?:ed| stale)\b/i.test(message)
   );
 }
 
@@ -422,7 +432,9 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
     return;
   }
   if (!signal) {
-    await new Promise<void>((resolve) => setTimeout(resolve, ms));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, ms);
+    });
     return;
   }
   if (signal.aborted) {
@@ -448,16 +460,14 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
   run: () => Promise<T>;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectAnnounceTransientRetryDelaysMs();
-  let retryIndex = 0;
-  for (;;) {
+  for (const [retryIndex, delayMs] of retryDelaysMs.entries()) {
     if (params.signal?.aborted) {
       throw new Error("announce delivery aborted");
     }
     try {
       return await params.run();
     } catch (err) {
-      const delayMs = retryDelaysMs[retryIndex];
-      if (delayMs == null || !isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
+      if (!isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
         throw err;
       }
       const nextAttempt = retryIndex + 2;
@@ -465,10 +475,13 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
       defaultRuntime.log(
         `[warn] Subagent announce ${params.operation} transient failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDeliveryError(err)}`,
       );
-      retryIndex += 1;
       await waitForAnnounceRetryDelay(delayMs, params.signal);
     }
   }
+  if (params.signal?.aborted) {
+    throw new Error("announce delivery aborted");
+  }
+  return await params.run();
 }
 
 export async function resolveSubagentCompletionOrigin(params: {
@@ -647,37 +660,56 @@ function hasGatewayAgentMessagingToolDeliveryEvidence(response: unknown): boolea
   return Boolean(result && hasMessagingToolDeliveryEvidence(result));
 }
 
+function hasGatewayAgentCompletionSideEffectEvidence(response: unknown): boolean {
+  const result = getGatewayAgentResult(response);
+  if (!result) {
+    return false;
+  }
+  return (
+    hasMessagingToolDeliveryEvidence(result) ||
+    (Array.isArray(result.acceptedSessionSpawns) &&
+      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
+    hasPositiveDeliveryCount(result.successfulCronAdds)
+  );
+}
+
 function hasIntentionalSilentGatewayAgentPayload(response: unknown): boolean {
   const result = getGatewayAgentResult(response);
   if (!result || !Array.isArray(result.payloads)) {
     return false;
   }
-  return result.payloads.some((payload) => {
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-      return false;
-    }
-    const record = payload as {
-      text?: unknown;
-      mediaUrl?: unknown;
-      mediaUrls?: unknown;
-      presentation?: unknown;
-      interactive?: unknown;
-      channelData?: unknown;
-    };
-    if (
-      typeof record.text !== "string" ||
-      !isSilentReplyPayloadText(record.text, SILENT_REPLY_TOKEN)
-    ) {
-      return false;
-    }
-    return !(
-      record.mediaUrl ||
-      (Array.isArray(record.mediaUrls) && record.mediaUrls.length > 0) ||
-      record.presentation ||
-      record.interactive ||
-      record.channelData
-    );
-  });
+  return result.payloads.some(isIntentionalSilentGatewayAgentPayload);
+}
+
+function isIntentionalSilentGatewayAgentPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const record = payload as {
+    text?: unknown;
+    mediaUrl?: unknown;
+    mediaUrls?: unknown;
+    presentation?: unknown;
+    interactive?: unknown;
+    channelData?: unknown;
+  };
+  if (
+    typeof record.text !== "string" ||
+    !isSilentReplyPayloadText(record.text, SILENT_REPLY_TOKEN)
+  ) {
+    return false;
+  }
+  return !(
+    record.mediaUrl ||
+    (Array.isArray(record.mediaUrls) && record.mediaUrls.length > 0) ||
+    record.presentation ||
+    record.interactive ||
+    record.channelData
+  );
+}
+
+function hasPositiveDeliveryCount(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 function requiresAgentMediatedCompletionDelivery(params: {
@@ -1104,15 +1136,30 @@ function collectMessagingToolDeliveredMediaUrlsForTarget(
     const targetMediaUrls = collectMessagingToolDeliveredMediaUrls({
       messagingToolSentTargets: [target],
     });
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      continue;
+    }
+    const targetRecord = target as Record<string, unknown>;
+    const targetTo = typeof targetRecord.to === "string" ? targetRecord.to.trim() : "";
+    if (!targetTo) {
+      if (
+        !deliveryTarget.to ||
+        !sourceDeliveryTargetsMatch({ ...targetRecord, to: deliveryTarget.to }, deliveryTarget)
+      ) {
+        for (const url of targetMediaUrls) {
+          targetedUrls.add(url);
+        }
+        continue;
+      }
+      for (const url of targetMediaUrls) {
+        urls.add(url);
+      }
+      continue;
+    }
     for (const url of targetMediaUrls) {
       targetedUrls.add(url);
     }
-    if (
-      !target ||
-      typeof target !== "object" ||
-      Array.isArray(target) ||
-      !sourceDeliveryTargetsMatch(target as Record<string, unknown>, deliveryTarget)
-    ) {
+    if (!sourceDeliveryTargetsMatch(targetRecord, deliveryTarget)) {
       continue;
     }
     for (const url of targetMediaUrls) {
@@ -1469,22 +1516,21 @@ async function sendSubagentAnnounceDirectly(params: {
       shouldDeliverAgentFinal || requiresMessageToolDelivery
         ? getGatewayAgentCommandDeliveryFailure(directAnnounceResponse)
         : undefined;
-    const missingExpectedMediaUrls =
-      agentMediatedCompletion && expectedMediaUrls.length > 0
-        ? resolveGeneratedMediaDirectFallbackUrls({
-            expectedMediaUrls,
-            announceResponse: directAnnounceResponse,
-            requiresMessageToolDelivery,
-            automaticDeliveryRequested: shouldDeliverAgentFinal,
-            automaticDeliveryFailed: !requiresMessageToolDelivery && Boolean(directDeliveryFailure),
-            deliveryTarget,
-          })
-        : [];
-    if (
+    const shouldRequireGeneratedMediaDelivery =
       agentMediatedCompletion &&
       expectedMediaUrls.length > 0 &&
-      missingExpectedMediaUrls.length > 0
-    ) {
+      (params.requesterIsSubagent || shouldDeliverAgentFinal || requiresMessageToolDelivery);
+    const missingExpectedMediaUrls = shouldRequireGeneratedMediaDelivery
+      ? resolveGeneratedMediaDirectFallbackUrls({
+          expectedMediaUrls,
+          announceResponse: directAnnounceResponse,
+          requiresMessageToolDelivery,
+          automaticDeliveryRequested: shouldDeliverAgentFinal,
+          automaticDeliveryFailed: !requiresMessageToolDelivery && Boolean(directDeliveryFailure),
+          deliveryTarget,
+        })
+      : [];
+    if (shouldRequireGeneratedMediaDelivery && missingExpectedMediaUrls.length > 0) {
       const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery(
         directAnnounceResponse,
         missingExpectedMediaUrls,
@@ -1564,6 +1610,21 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "direct",
         reason: "message_tool_delivery_missing",
         error: "completion agent did not use the message tool for message-tool-only delivery",
+      };
+    }
+    if (
+      params.expectsCompletionMessage &&
+      !shouldDeliverAgentFinal &&
+      !requiresMessageToolDelivery &&
+      !hasVisibleGatewayAgentPayload(directAnnounceResponse) &&
+      !hasGatewayAgentCompletionSideEffectEvidence(directAnnounceResponse) &&
+      !hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse)
+    ) {
+      return {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
       };
     }
     if (

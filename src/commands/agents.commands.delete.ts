@@ -1,12 +1,19 @@
+// Implements agent deletion with gateway delegation and local cleanup fallback.
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import {
+  resolveWorkspaceAttestationPaths,
+  shouldRemoveWorkspaceAttestation,
+} from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import {
   purgeAgentSessionStoreEntries,
   resolveSessionTranscriptsDirForAgent,
+  resolveStorePath,
 } from "../config/sessions.js";
+import { closeSqliteSessionStoreDatabase } from "../config/sessions/store-sqlite.js";
 import {
   callGateway,
   isGatewayCredentialsRequiredError,
@@ -20,6 +27,7 @@ import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { createQuietRuntime, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
 import { moveToTrash } from "./onboard-helpers.js";
+import { ensureSessionStateMigratedForCommand } from "./session-state-migration.js";
 
 type AgentsDeleteOptions = {
   id: string;
@@ -56,6 +64,7 @@ async function maybeDeleteAgentThroughGateway(params: {
   }
 }
 
+/** Delete an agent, pruning config plus workspace/session state when it is safe to do so. */
 export async function agentsDeleteCommand(
   opts: AgentsDeleteOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -142,6 +151,8 @@ export async function agentsDeleteCommand(
     return;
   }
 
+  await ensureSessionStateMigratedForCommand(cfg);
+
   await replaceConfigFile({
     nextConfig: result.config,
     ...(baseHash !== undefined ? { baseHash } : {}),
@@ -152,7 +163,9 @@ export async function agentsDeleteCommand(
   }
 
   // Purge session store entries for this agent so orphaned sessions cannot be targeted (#65524).
+  const sessionStorePath = resolveStorePath(cfg.session?.store, { agentId });
   await purgeAgentSessionStoreEntries(cfg, agentId);
+  closeSqliteSessionStoreDatabase(sessionStorePath);
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   // Only trash the workspace if no other agent can depend on that path (#70890).
@@ -164,6 +177,13 @@ export async function agentsDeleteCommand(
     );
   } else {
     await moveToTrash(workspaceDir, quietRuntime);
+    for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
+      workspaceDir,
+    ).entries()) {
+      if (await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })) {
+        await moveToTrash(attestationPath, quietRuntime);
+      }
+    }
   }
   await moveToTrash(agentDir, quietRuntime);
   await moveToTrash(sessionsDir, quietRuntime);

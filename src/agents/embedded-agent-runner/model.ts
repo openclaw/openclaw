@@ -1,3 +1,7 @@
+/**
+ * Resolves embedded-agent provider/model selections from config, registry, and catalogs.
+ */
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registry.js";
@@ -12,7 +16,6 @@ import {
   normalizeProviderResolvedModelWithPlugin,
   shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
-import { finiteSecondsToTimerSafeMilliseconds } from "../../shared/number-coercion.js";
 import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profiles.js";
@@ -27,7 +30,7 @@ import {
   shouldSuppressBuiltInModel,
   shouldUnconditionallySuppress,
 } from "../model-suppression.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-codex-routing.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
   attachModelProviderRequestTransport,
@@ -77,6 +80,7 @@ type ProviderRuntimeHooks = {
 type StaticCatalogFallbackModel = Model & {
   compat?: ModelCompatConfig;
   contextTokens?: number;
+  params?: Record<string, unknown>;
   mediaInput?: ModelMediaInputConfig;
 };
 
@@ -162,7 +166,7 @@ function discoverCachedAgentStoresForAgent(
 
 function canonicalizeLegacyResolvedModel(params: { provider: string; model: Model }): Model {
   if (
-    !["openai", "openai-codex"].includes(normalizeProviderId(params.provider)) ||
+    normalizeProviderId(params.provider) !== "openai" ||
     params.model.id.trim().toLowerCase() !== "gpt-5.4-codex"
   ) {
     return params.model;
@@ -186,10 +190,12 @@ function applyResolvedTransportFallback(params: {
     provider: params.provider,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
+    modelId: params.model.id,
     context: {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       provider: params.provider,
+      modelId: params.model.id,
       api: params.model.api,
       baseUrl: params.model.baseUrl,
     },
@@ -308,6 +314,7 @@ function normalizeResolvedModel(params: {
 
 function resolveProviderTransport(params: {
   provider: string;
+  modelId?: string;
   api?: Api | null;
   baseUrl?: string;
   cfg?: OpenClawConfig;
@@ -320,12 +327,14 @@ function resolveProviderTransport(params: {
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const normalized = runtimeHooks.normalizeProviderTransportWithPlugin({
     provider: params.provider,
+    ...(params.modelId ? { modelId: params.modelId } : {}),
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     context: {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       provider: params.provider,
+      ...(params.modelId ? { modelId: params.modelId } : {}),
       api: params.api,
       baseUrl: params.baseUrl,
     },
@@ -337,14 +346,30 @@ function resolveProviderTransport(params: {
   };
 }
 
-function resolveConfiguredProviderDefaultApi(
-  providerConfig: InlineProviderConfig | undefined,
-): Api | undefined {
+function resolveConfiguredProviderDefaultApi(params: {
+  provider: string;
+  providerConfig: InlineProviderConfig | undefined;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  runtimeHooks?: ProviderRuntimeHooks;
+}): Api | undefined {
+  const { providerConfig } = params;
   const explicit = normalizeResolvedTransportApi(providerConfig?.api);
   if (explicit) {
     return explicit;
   }
-  return providerConfig?.baseUrl ? "openai-completions" : undefined;
+  if (!providerConfig?.baseUrl) {
+    return undefined;
+  }
+  const normalized = resolveProviderTransport({
+    provider: params.provider,
+    api: undefined,
+    baseUrl: providerConfig.baseUrl,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    runtimeHooks: params.runtimeHooks,
+  });
+  return normalized.api ?? "openai-completions";
 }
 
 function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
@@ -557,6 +582,7 @@ function applyConfiguredProviderOverrides(params: {
   cfg?: OpenClawConfig;
   runtimeHooks?: ProviderRuntimeHooks;
   preferDiscoveredModelMetadata?: boolean;
+  preferDiscoveredTransport?: boolean;
   workspaceDir?: string;
 }): ProviderRuntimeModel {
   const { discoveredModel, providerConfig, modelId } = params;
@@ -658,15 +684,29 @@ function applyConfiguredProviderOverrides(params: {
     input: metadataOverrideModel?.input,
     fallbackInput: discoveredModel.input,
   });
+  const providerDefaultApi = resolveConfiguredProviderDefaultApi({
+    provider: params.provider,
+    providerConfig,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    runtimeHooks: params.runtimeHooks,
+  });
+  const resolvedTransportApi =
+    metadataOverrideModel?.api ??
+    (params.preferDiscoveredTransport
+      ? (discoveredModel.api ?? providerConfig.api ?? providerDefaultApi)
+      : (providerConfig.api ?? discoveredModel.api ?? providerDefaultApi));
+  const resolvedTransportBaseUrl =
+    metadataOverrideModel?.baseUrl ??
+    (params.preferDiscoveredTransport
+      ? (discoveredModel.baseUrl ?? providerConfig.baseUrl)
+      : (providerConfig.baseUrl ?? discoveredModel.baseUrl));
 
   const resolvedTransport = resolveProviderTransport({
     provider: params.provider,
-    api:
-      metadataOverrideModel?.api ??
-      providerConfig.api ??
-      discoveredModel.api ??
-      resolveConfiguredProviderDefaultApi(providerConfig),
-    baseUrl: metadataOverrideModel?.baseUrl ?? providerConfig.baseUrl ?? discoveredModel.baseUrl,
+    modelId: discoveredModel.id,
+    api: resolvedTransportApi,
+    baseUrl: resolvedTransportBaseUrl,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     runtimeHooks: params.runtimeHooks,
@@ -688,7 +728,7 @@ function applyConfiguredProviderOverrides(params: {
     api:
       resolvedTransport.api ??
       normalizeResolvedTransportApi(discoveredModel.api) ??
-      resolveConfiguredProviderDefaultApi(providerConfig) ??
+      providerDefaultApi ??
       "openai-responses",
     baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
     discoveredHeaders,
@@ -754,7 +794,14 @@ function resolveExplicitModelWithRegistry(params: {
     // Conditional suppressions (e.g. baseUrlHosts-gated qwen restrictions) are
     // intentionally bypassable when the user has explicitly configured the model.
     // (#74451)
-    if (shouldUnconditionallySuppress({ provider, id: modelId, config: cfg })) {
+    if (
+      shouldUnconditionallySuppress({
+        provider,
+        id: modelId,
+        ...(cfg ? { config: cfg } : {}),
+        ...(workspaceDir ? { workspaceDir } : {}),
+      })
+    ) {
       return { kind: "suppressed" };
     }
     const resolvedParams = mergeConfiguredRuntimeModelParams({
@@ -789,8 +836,9 @@ function resolveExplicitModelWithRegistry(params: {
     shouldSuppressBuiltInModel({
       provider,
       id: modelId,
-      baseUrl: providerConfig?.baseUrl,
-      config: cfg,
+      ...(cfg ? { config: cfg } : {}),
+      ...(providerConfig?.baseUrl ? { baseUrl: providerConfig.baseUrl } : {}),
+      ...(workspaceDir ? { workspaceDir } : {}),
     })
   ) {
     return { kind: "suppressed" };
@@ -1017,13 +1065,20 @@ function resolveConfiguredFallbackModel(params: {
     provider,
     modelId,
     providerParams: providerConfig?.params,
-    configuredParams: configuredModel?.params,
+    configuredParams: metadataModel?.params,
   });
   const fallbackTransport = resolveProviderTransport({
     provider,
+    modelId,
     api:
       normalizeResolvedTransportApi(configuredModel?.api) ??
-      resolveConfiguredProviderDefaultApi(providerConfig) ??
+      resolveConfiguredProviderDefaultApi({
+        provider,
+        providerConfig,
+        cfg,
+        workspaceDir,
+        runtimeHooks,
+      }) ??
       normalizeResolvedTransportApi(staticCatalogModel?.api) ??
       "openai-responses",
     baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl ?? staticCatalogModel?.baseUrl,
@@ -1164,10 +1219,7 @@ function resolveMergedConfiguredModelReasoning(params: {
   );
 }
 
-function isVllmQwenThinkingCompat(params: {
-  provider: string;
-  compat?: unknown;
-}): boolean {
+function isVllmQwenThinkingCompat(params: { provider: string; compat?: unknown }): boolean {
   const thinkingFormat = readCompatThinkingFormat(params.compat);
   return (
     normalizeProviderId(params.provider) === "vllm" &&
@@ -1233,6 +1285,7 @@ export function resolveModelWithRegistry(params: {
   authProfileId?: string;
   preferredProfile?: string;
   runtimeHooks?: ProviderRuntimeHooks;
+  skipConfiguredFallback?: boolean;
 }): Model | undefined {
   const workspaceDir = params.workspaceDir ?? params.cfg?.agents?.defaults?.workspace;
   const normalizedRef = normalizeProviderModelRef({ ...params, workspaceDir });
@@ -1274,7 +1327,7 @@ export function resolveModelWithRegistry(params: {
     return pluginDynamicModel;
   }
 
-  return resolveConfiguredFallbackModel(scopedParams);
+  return params.skipConfiguredFallback ? undefined : resolveConfiguredFallbackModel(scopedParams);
 }
 
 export function resolveModel(
@@ -1349,6 +1402,7 @@ export async function resolveModelAsync(
     authStorage?: AuthStorage;
     modelRegistry?: ModelRegistry;
     allowBundledStaticCatalogFallback?: boolean;
+    preferBundledStaticCatalogTransport?: boolean;
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ProviderRuntimeHooks;
     skipProviderRuntimeHooks?: boolean;
@@ -1416,6 +1470,48 @@ export async function resolveModelAsync(
     authProfileId: options?.authProfileId,
     preferredProfile: options?.preferredProfile,
   });
+  let staticCatalogLookupComplete = false;
+  let staticCatalogModel: ReturnType<typeof resolveBundledStaticCatalogModel> | undefined;
+  const resolveStaticCatalogModel = () => {
+    if (!options?.allowBundledStaticCatalogFallback) {
+      return undefined;
+    }
+    if (!staticCatalogLookupComplete) {
+      staticCatalogLookupComplete = true;
+      staticCatalogModel = resolveBundledStaticCatalogModel({
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
+        cfg,
+        workspaceDir,
+      });
+    }
+    return staticCatalogModel;
+  };
+  const resolveStaticCatalogFallbackModel = () => {
+    const catalogModel = resolveStaticCatalogModel();
+    if (!catalogModel) {
+      return undefined;
+    }
+    const overriddenStaticCatalogModel = applyConfiguredProviderOverrides({
+      provider: normalizedRef.provider,
+      discoveredModel: catalogModel,
+      providerConfig,
+      modelId: normalizedRef.model,
+      cfg,
+      runtimeHooks,
+      workspaceDir,
+      preferDiscoveredModelMetadata: true,
+      preferDiscoveredTransport: options?.preferBundledStaticCatalogTransport,
+    });
+    return normalizeResolvedModel({
+      provider: normalizedRef.provider,
+      cfg,
+      agentDir: resolvedAgentDir,
+      workspaceDir,
+      model: overriddenStaticCatalogModel,
+      runtimeHooks,
+    });
+  };
   const resolveDynamicAttempt = async () => {
     await runtimeHooks.prepareProviderDynamicModel({
       provider: normalizedRef.provider,
@@ -1442,20 +1538,22 @@ export async function resolveModelAsync(
       authProfileId: options?.authProfileId,
       preferredProfile: options?.preferredProfile,
       runtimeHooks,
+      ...(options?.allowBundledStaticCatalogFallback ? { skipConfiguredFallback: true } : {}),
     });
   };
+  const providerRuntimeMetadataShouldWin = shouldCompareProviderRuntimeResolvedModel({
+    provider: normalizedRef.provider,
+    modelId: normalizedRef.model,
+    cfg,
+    agentDir: resolvedAgentDir,
+    workspaceDir,
+    runtimeHooks,
+  });
   let model =
-    explicitModel?.kind === "resolved" &&
-    !shouldCompareProviderRuntimeResolvedModel({
-      provider: normalizedRef.provider,
-      modelId: normalizedRef.model,
-      cfg,
-      agentDir: resolvedAgentDir,
-      workspaceDir,
-      runtimeHooks,
-    })
+    explicitModel?.kind === "resolved" && !providerRuntimeMetadataShouldWin
       ? explicitModel.model
-      : await resolveDynamicAttempt();
+      : undefined;
+  model ??= await resolveDynamicAttempt();
   if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
     // Startup can race the first provider-runtime snapshot load on a fresh
     // gateway boot. Retry once before surfacing a user-visible "Unknown model"
@@ -1463,41 +1561,20 @@ export async function resolveModelAsync(
     model = await resolveDynamicAttempt();
   }
   if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
-    const staticCatalogModel = resolveBundledStaticCatalogModel({
+    model = resolveStaticCatalogFallbackModel();
+  }
+  if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
+    model = resolveConfiguredFallbackModel({
       provider: normalizedRef.provider,
       modelId: normalizedRef.model,
       cfg,
+      agentDir: resolvedAgentDir,
       workspaceDir,
+      runtimeHooks,
     });
-    if (staticCatalogModel) {
-      const overriddenStaticCatalogModel = applyConfiguredProviderOverrides({
-        provider: normalizedRef.provider,
-        discoveredModel: staticCatalogModel,
-        providerConfig,
-        modelId: normalizedRef.model,
-        cfg,
-        runtimeHooks,
-        workspaceDir,
-        preferDiscoveredModelMetadata: true,
-      });
-      model = normalizeResolvedModel({
-        provider: normalizedRef.provider,
-        cfg,
-        agentDir: resolvedAgentDir,
-        workspaceDir,
-        model: overriddenStaticCatalogModel,
-        runtimeHooks,
-      });
-    }
   }
   if (model && options?.allowBundledStaticCatalogFallback) {
-    const staticCatalogModel = resolveBundledStaticCatalogModel({
-      provider: normalizedRef.provider,
-      modelId: normalizedRef.model,
-      cfg,
-      workspaceDir,
-    });
-    const staticMediaInput = staticCatalogModel?.mediaInput;
+    const staticMediaInput = resolveStaticCatalogModel()?.mediaInput;
     const resolvedMediaInput = (model as ProviderRuntimeModel).mediaInput;
     const mediaInput = mergeModelMediaInput(staticMediaInput, resolvedMediaInput);
     if (mediaInput) {
@@ -1543,7 +1620,8 @@ function buildUnknownModelError(params: {
   const suppressed = buildSuppressedBuiltInModelError({
     provider: params.provider,
     id: params.modelId,
-    config: params.cfg,
+    ...(params.cfg ? { config: params.cfg } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   if (suppressed) {
     return suppressed;

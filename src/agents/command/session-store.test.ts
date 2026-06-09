@@ -1,3 +1,5 @@
+// Covers command-session store updates after agent runs, CLI compaction, and
+// runtime metadata persistence.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore } from "../../config/sessions.js";
+import { writeSessionStoreForTestAsync } from "../../config/sessions/test-helpers.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import {
   clearCliSessionInStore,
@@ -70,19 +73,14 @@ vi.mock("../../utils/usage-format.js", () => ({
 }));
 
 vi.mock("../../config/sessions.js", async () => {
-  const fsSync = await import("node:fs");
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
+  const pathLocal = await import("node:path");
+  const { readSessionStoreForTest, writeSessionStoreForTestAsync: writeSessionStoreForMockAsync } =
+    await import("../../config/sessions/test-helpers.js");
   const readStore = async (storePath: string): Promise<Record<string, SessionEntry>> => {
-    try {
-      return JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, SessionEntry>;
-    } catch {
-      return {};
-    }
+    return readSessionStoreForTest(storePath);
   };
   const writeStore = async (storePath: string, store: Record<string, SessionEntry>) => {
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
+    await writeSessionStoreForMockAsync(storePath, store);
   };
   sessionStoreMocks.updateSessionStore.mockImplementation(
     async <T>(
@@ -99,6 +97,8 @@ vi.mock("../../config/sessions.js", async () => {
           .map(([key, entry]) => [key, entry.acp]),
       );
       const result = await mutator(store);
+      // The mocked store keeps ACP metadata sticky to preserve the production
+      // merge behavior that protects persistent ACP session handles.
       for (const [key, acp] of previousAcpByKey) {
         const next = store[key];
         if (next && !next.acp) {
@@ -123,13 +123,9 @@ vi.mock("../../config/sessions.js", async () => {
     },
     updateSessionStore: sessionStoreMocks.updateSessionStore,
     loadSessionStore: (storePath: string) => {
-      try {
-        return JSON.parse(fsSync.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
-      } catch {
-        return {};
-      }
+      return readSessionStoreForTest(storePath);
     },
-    canonicalizeAbsoluteSessionFilePath: (filePath: string) => path.resolve(filePath),
+    canonicalizeAbsoluteSessionFilePath: (filePath: string) => pathLocal.resolve(filePath),
     rewriteSessionFileForNewSessionId: (params: {
       sessionFile?: string;
       previousSessionId: string;
@@ -137,7 +133,7 @@ vi.mock("../../config/sessions.js", async () => {
     }) => params.sessionFile?.replace(params.previousSessionId, params.nextSessionId),
     resolveSessionFilePathOptions: (params: unknown) => params,
     resolveSessionFilePath: (sessionId: string, entry?: SessionEntry) =>
-      entry?.sessionFile ?? path.join("/tmp", `${sessionId}.jsonl`),
+      entry?.sessionFile ?? pathLocal.join("/tmp", `${sessionId}.jsonl`),
   };
 });
 
@@ -155,12 +151,21 @@ function acpMeta() {
 async function withTempSessionStore<T>(
   run: (params: { dir: string; storePath: string }) => Promise<T>,
 ): Promise<T> {
+  // Session-store tests exercise real persistence, but each case gets an
+  // isolated file so mutation order remains deterministic.
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
   try {
     return await run({ dir, storePath: path.join(dir, "sessions.json") });
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
+}
+
+async function writeSessionStoreSeed(
+  storePath: string,
+  store: Record<string, SessionEntry>,
+): Promise<void> {
+  await writeSessionStoreForTestAsync(storePath, store);
 }
 
 describe("updateSessionStoreAfterAgentRun", () => {
@@ -183,7 +188,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
       const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 1,
@@ -206,6 +211,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
         result,
       });
 
+      // The gateway write takes cache ownership and supplies single-entry
+      // persistence so large stores are not rewritten unnecessarily.
       const updateOptions = sessionStoreMocks.updateSessionStore.mock.calls.at(-1)?.[2];
       expect(updateOptions).toMatchObject({
         takeCacheOwnership: true,
@@ -241,7 +248,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
       const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 1,
@@ -284,7 +291,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -330,14 +337,14 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 1,
           agentMeta: {
             sessionId,
-            provider: "openai-codex",
+            provider: "openai",
             model: "gpt-5.5",
             contextTokens: 400_000,
           },
@@ -350,7 +357,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey,
         storePath,
         sessionStore,
-        defaultProvider: "openai-codex",
+        defaultProvider: "openai",
         defaultModel: "gpt-5.5",
         result,
       });
@@ -382,7 +389,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           agentHarnessId: "codex",
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -433,7 +440,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -513,7 +520,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           claudeCliSessionId: "stale-cli-session",
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -564,7 +571,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         updatedAt: Date.now(),
         acp: acpMeta(),
       };
-      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: existing }, null, 2), "utf8");
+      await writeSessionStoreSeed(storePath, { [sessionKey]: existing });
 
       const staleInMemory: Record<string, SessionEntry> = {
         [sessionKey]: {
@@ -617,7 +624,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         endedAt: 1_900,
         runtimeMs: 900,
       };
-      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: terminalEntry }, null, 2));
+      await writeSessionStoreSeed(storePath, { [sessionKey]: terminalEntry });
 
       const staleInMemory: Record<string, SessionEntry> = {
         [sessionKey]: {
@@ -670,7 +677,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: Date.now(),
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       const report = {
         source: "run" as const,
@@ -793,23 +800,16 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const sessionKey = "agent:main:explicit:terminal-cli-session";
       const existingSessionId = "terminal-cli-session-old";
       const now = Date.now();
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [sessionKey]: {
-              sessionId: existingSessionId,
-              updatedAt: now,
-              status: "done",
-              startedAt: now - 1_000,
-              endedAt: now - 100,
-              runtimeMs: 900,
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      await writeSessionStoreSeed(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: now,
+          status: "done",
+          startedAt: now - 1_000,
+          endedAt: now - 100,
+          runtimeMs: 900,
+        },
+      });
 
       const result = resolveSession({
         cfg: {
@@ -843,7 +843,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           totalTokensFresh: true,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -889,7 +889,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           totalTokensFresh: true,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -977,7 +977,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           },
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -1031,7 +1031,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           totalTokensFresh: true,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1086,7 +1086,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1140,7 +1140,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -1193,7 +1193,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           cacheWrite: 33_047,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1251,7 +1251,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           totalTokensFresh: true,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1329,7 +1329,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           },
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1377,7 +1377,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           totalTokensFresh: true,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1436,7 +1436,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       // Simulate a run with 10k input + 5k output tokens
       // Cost = (10000 * 10 + 5000 * 30) / 1e6 = $0.25
@@ -1506,7 +1506,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           lastInteractionAt,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1548,7 +1548,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           lastInteractionAt,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       await updateSessionStoreAfterAgentRun({
         cfg,
@@ -1607,7 +1607,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           },
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       // Heartbeat turn uses a different model
       const result: EmbeddedAgentRunResult = {
@@ -1704,7 +1704,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           compactionCount: 7,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
       const freshVisibleEntry: SessionEntry = {
         sessionId: "fresh-visible-session-id",
         updatedAt: 2,
@@ -1726,7 +1726,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
         compactionCount: 9,
       };
-      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: freshVisibleEntry }, null, 2));
+      await writeSessionStoreSeed(storePath, { [sessionKey]: freshVisibleEntry });
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -1797,7 +1797,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           // contextTokens intentionally missing — older session without cached context
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       // Heartbeat turn uses a different, smaller model
       const result: EmbeddedAgentRunResult = {
@@ -1843,7 +1843,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -1889,7 +1889,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           // modelProvider intentionally missing
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       // Heartbeat turn uses a different provider
       const result: EmbeddedAgentRunResult = {
@@ -1940,7 +1940,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
           contextTokens: 1_000_000,
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       const result: EmbeddedAgentRunResult = {
         meta: {
@@ -2017,7 +2017,7 @@ describe("recordCliCompactionInStore", () => {
           },
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       await recordCliCompactionInStore({
         provider: "codex",
@@ -2079,7 +2079,7 @@ describe("recordCliCompactionInStore", () => {
           },
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       await recordCliCompactionInStore({
         provider: "codex",
@@ -2116,7 +2116,7 @@ describe("recordCliCompactionInStore", () => {
           sessionFile: path.join(dir, `${sessionId}.jsonl`),
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       await recordCliCompactionInStore({
         provider: "codex",
@@ -2162,7 +2162,7 @@ describe("clearCliSessionInStore", () => {
         claudeCliSessionId: "claude-session-1",
       };
       const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       const cleared = await clearCliSessionInStore({
         provider: "claude-cli",
@@ -2201,7 +2201,7 @@ describe("clearCliSessionInStore", () => {
           claudeCliSessionId: "claude-session-1",
         },
       };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+      await writeSessionStoreSeed(storePath, sessionStore);
 
       const cleared = await clearCliSessionInStore({
         provider: "claude-cli",

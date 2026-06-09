@@ -1,4 +1,6 @@
+/** Implementation of `openclaw models status`. */
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentDir,
@@ -12,7 +14,11 @@ import {
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
-import { resolveAuthProfileOrder } from "../../agents/auth-profiles/order.js";
+import { evaluateStoredCredentialEligibility } from "../../agents/auth-profiles/credential-state.js";
+import {
+  resolveAuthProfileEligibility,
+  resolveAuthProfileOrder,
+} from "../../agents/auth-profiles/order.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
@@ -34,7 +40,7 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
   OPENAI_PROVIDER_ID,
   openAIProviderUsesCodexRuntimeByDefault,
-} from "../../agents/openai-codex-routing.js";
+} from "../../agents/openai-routing.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { createConfigIO } from "../../config/config.js";
@@ -60,11 +66,10 @@ import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-r
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
-import { type AuthProbeSummary } from "./list.probe.js";
+import type { AuthProbeSummary } from "./list.probe.js";
 import type { ProviderAuthOverview } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
@@ -235,6 +240,7 @@ function syntheticAuthCredential(
   };
 }
 
+/** Prints model default, auth, provider, and optional probe status. */
 export async function modelsStatusCommand(
   opts: {
     json?: boolean;
@@ -442,7 +448,7 @@ export async function modelsStatusCommand(
       if (!syntheticAuthProviderRefs.has(normalized)) {
         continue;
       }
-      const resolved = resolveProviderSyntheticAuthWithPlugin({
+      const resolvedLocal = resolveProviderSyntheticAuthWithPlugin({
         provider: normalized,
         config: cfg,
         context: {
@@ -451,15 +457,15 @@ export async function modelsStatusCommand(
           providerConfig: resolveProviderConfigForStatus(cfg, normalized),
         },
       });
-      if (!resolved) {
+      if (!resolvedLocal) {
         continue;
       }
       const syntheticAuth: StatusSyntheticAuth = {
         value: "plugin-owned",
-        source: resolved.source,
-        credential: resolved.apiKey,
-        mode: resolved.mode,
-        expiresAt: resolved.expiresAt,
+        source: resolvedLocal.source,
+        credential: resolvedLocal.apiKey,
+        mode: resolvedLocal.mode,
+        expiresAt: resolvedLocal.expiresAt,
       };
       syntheticAuthByProvider.set(normalized, syntheticAuth);
       if (normalized === "codex" || normalized === codexProviderAlias) {
@@ -512,8 +518,46 @@ export async function modelsStatusCommand(
       kind: "missing",
       detail: "missing",
     };
+    const authHealth = buildAuthHealthSummary({
+      store,
+      cfg,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+      runtimeCredentialsByProvider,
+      allowKeychainPrompt: false,
+    });
+    const authProfileHealthById = new Map(
+      authHealth.profiles.map((profile) => [profile.profileId, profile]),
+    );
+    const hasUsableAuthProfile = (
+      profileId: string,
+      credential: AuthProfileCredential,
+    ): boolean => {
+      if (credential.type === "api_key") {
+        return evaluateStoredCredentialEligibility({ credential }).eligible;
+      }
+      const health = authProfileHealthById.get(profileId);
+      if (health) {
+        return health.status === "ok" || health.status === "expiring" || health.status === "static";
+      }
+      return evaluateStoredCredentialEligibility({ credential }).eligible;
+    };
     const resolveProviderAuthHealthId = (provider: string): string =>
       resolveProviderIdForAuth(provider, envLookupParams);
+    const resolveStatusAuthOrder = (
+      order: Record<string, string[]> | undefined,
+      provider: string,
+    ): string[] | undefined => {
+      if (!order) {
+        return undefined;
+      }
+      const providerKey = normalizeProviderId(provider);
+      for (const [key, value] of Object.entries(order)) {
+        if (normalizeProviderId(key) === providerKey) {
+          return value;
+        }
+      }
+      return undefined;
+    };
     const listRuntimeAuthProviderCandidates = (
       provider: string,
       options?: { includeLegacyOpenAICodex?: boolean },
@@ -531,6 +575,70 @@ export async function modelsStatusCommand(
       }
       return Array.from(new Set(candidates));
     };
+    const listProviderProfileCandidates = (provider: string): string[] => {
+      const orderedProfiles = resolveAuthProfileOrder({
+        cfg,
+        store,
+        provider,
+      });
+      const providerKey = normalizeProviderId(provider);
+      const providerAuthKey = resolveProviderAuthHealthId(providerKey);
+      const explicitOrder =
+        resolveStatusAuthOrder(store.order, providerAuthKey) ??
+        resolveStatusAuthOrder(store.order, providerKey) ??
+        resolveStatusAuthOrder(cfg.auth?.order, providerAuthKey) ??
+        resolveStatusAuthOrder(cfg.auth?.order, providerKey);
+      const isEligibleOrHealthRescued = (profileId: string): boolean => {
+        const credential = store.profiles[profileId];
+        if (!credential) {
+          return false;
+        }
+        const eligibility = resolveAuthProfileEligibility({
+          cfg,
+          store,
+          provider,
+          profileId,
+        });
+        if (eligibility.eligible) {
+          return true;
+        }
+        return (
+          eligibility.reasonCode === "missing_credential" &&
+          credential.type !== "api_key" &&
+          hasUsableAuthProfile(profileId, credential)
+        );
+      };
+      if (explicitOrder !== undefined) {
+        return Array.from(
+          new Set([...orderedProfiles, ...explicitOrder.filter(isEligibleOrHealthRescued)]),
+        );
+      }
+      const configuredProfiles = Object.entries(cfg.auth?.profiles ?? {})
+        .filter(([, profile]) => {
+          const profileProvider = normalizeProviderId(profile.provider);
+          return (
+            profileProvider === providerKey ||
+            resolveProviderAuthHealthId(profileProvider) === providerAuthKey
+          );
+        })
+        .map(([profileId]) => profileId);
+      if (configuredProfiles.length > 0) {
+        return Array.from(
+          new Set([...orderedProfiles, ...configuredProfiles.filter(isEligibleOrHealthRescued)]),
+        );
+      }
+      const sameProviderProfiles = Object.entries(store.profiles)
+        .filter(([, credential]) => {
+          const credentialProvider = normalizeProviderId(credential.provider);
+          return (
+            credentialProvider === providerKey ||
+            resolveProviderAuthHealthId(credentialProvider) === providerAuthKey
+          );
+        })
+        .map(([profileId]) => profileId)
+        .filter(isEligibleOrHealthRescued);
+      return Array.from(new Set([...orderedProfiles, ...sameProviderProfiles]));
+    };
     const resolveRuntimeAuthRouteEffective = (
       provider: string,
     ): ProviderAuthOverview["effective"] => {
@@ -539,17 +647,21 @@ export async function modelsStatusCommand(
       });
       for (const candidate of candidates) {
         const direct = providerAuthMap.get(candidate)?.effective;
-        if (direct && direct.kind !== "missing") {
+        if (
+          direct &&
+          direct.kind !== "missing" &&
+          (direct.kind !== "profiles" || hasUsableProviderAuth(candidate))
+        ) {
           return direct;
         }
       }
       for (const candidate of candidates) {
-        const orderedProfiles = resolveAuthProfileOrder({
-          cfg,
-          store,
-          provider: candidate,
+        const profileId = listProviderProfileCandidates(candidate).find((candidateProfileId) => {
+          const candidateCredential = store.profiles[candidateProfileId];
+          return candidateCredential
+            ? hasUsableAuthProfile(candidateProfileId, candidateCredential)
+            : false;
         });
-        const profileId = orderedProfiles[0];
         const credential = profileId ? store.profiles[profileId] : undefined;
         if (profileId && credential) {
           const sourceProvider = resolveProviderAuthHealthId(credential.provider);
@@ -562,7 +674,10 @@ export async function modelsStatusCommand(
               };
         }
       }
-      return providerAuthMap.get(provider)?.effective ?? missingProviderAuthEffective;
+      const direct = providerAuthMap.get(provider)?.effective;
+      return direct?.kind === "profiles"
+        ? missingProviderAuthEffective
+        : (direct ?? missingProviderAuthEffective);
     };
     const hasUsableNonProfileAuth = (
       provider: string,
@@ -586,12 +701,11 @@ export async function modelsStatusCommand(
       options?: { includeLegacyOpenAICodex?: boolean },
     ): boolean => {
       for (const candidate of listRuntimeAuthProviderCandidates(provider, options)) {
-        const orderedProfiles = resolveAuthProfileOrder({
-          cfg,
-          store,
-          provider: candidate,
+        const hasUsableProfile = listProviderProfileCandidates(candidate).some((profileId) => {
+          const credential = store.profiles[profileId];
+          return credential ? hasUsableAuthProfile(profileId, credential) : false;
         });
-        if (orderedProfiles.length > 0 || hasUsableNonProfileAuth(candidate)) {
+        if (hasUsableProfile || hasUsableNonProfileAuth(candidate)) {
           return true;
         }
       }
@@ -738,12 +852,6 @@ export async function modelsStatusCommand(
         return `${entry.provider} (${count})`;
       });
 
-    const authHealth = buildAuthHealthSummary({
-      store,
-      cfg,
-      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
-      runtimeCredentialsByProvider,
-    });
     const oauthProfiles = authHealth.profiles.filter(
       (profile) => profile.type === "oauth" || profile.type === "token",
     );
@@ -1055,7 +1163,8 @@ export async function modelsStatusCommand(
     }
 
     if (missingProvidersInUse.length > 0) {
-      const { buildProviderAuthRecoveryHint } = await import("../provider-auth-guidance.js");
+      const { buildProviderAuthRecoveryHint } =
+        await import("../../agents/provider-auth-recovery-hint.js");
       runtime.log("");
       runtime.log(colorize(rich, theme.heading, "Missing auth"));
       for (const provider of missingProvidersInUse) {
@@ -1145,7 +1254,7 @@ export async function modelsStatusCommand(
         runtime.log(`- ${colorize(rich, theme.heading, provider)}${usageSuffix}`);
         for (const profile of profiles) {
           const labelText = profile.label || profile.profileId;
-          const label = colorize(rich, theme.accent, labelText);
+          const labelLocal = colorize(rich, theme.accent, labelText);
           const status = formatStatus(profile.status);
           const expiry =
             profile.status === "static"
@@ -1153,7 +1262,7 @@ export async function modelsStatusCommand(
               : profile.expiresAt
                 ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
                 : " expires unknown";
-          runtime.log(`  - ${label} ${status}${expiry}`);
+          runtime.log(`  - ${labelLocal} ${status}${expiry}`);
         }
       }
     }

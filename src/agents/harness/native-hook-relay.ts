@@ -1,3 +1,6 @@
+/**
+ * Bridges native harness hook events through registered relay processes.
+ */
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -17,16 +20,16 @@ import {
 } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "../../shared/number-coercion.js";
 import {
   cancelDeferredPluginToolApproval,
   hasBeforeToolCallPolicy,
@@ -108,7 +111,10 @@ export type NativeHookRelayRegistration = {
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
   generation?: string;
   shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
-  commandForEvent: (event: NativeHookRelayEvent) => string;
+  commandForEvent: (
+    event: NativeHookRelayEvent,
+    options?: NativeHookRelayCommandForEventOptions,
+  ) => string;
   renew: (ttlMs?: number) => void;
   unregister: () => void;
 };
@@ -134,6 +140,10 @@ export type NativeHookRelayCommandOptions = {
   executable?: string;
   nice?: number | false;
   nodeExecutable?: string;
+  timeoutMs?: number;
+};
+
+export type NativeHookRelayCommandForEventOptions = {
   timeoutMs?: number;
 };
 
@@ -433,14 +443,21 @@ export function registerNativeHookRelay(
   const handle: ActiveNativeHookRelayRegistrationHandle = {
     ...registration,
     shouldRelayEvent: (event) => nativeHookRelayEventHasLocalWork(registration, event),
-    commandForEvent: (event) =>
+    commandForEvent: (event, options) =>
       buildNativeHookRelayCommand({
         provider: params.provider,
         relayId,
         generation: registration.generation,
         event,
+        preToolUseUnavailable:
+          event === "pre_tool_use" && !nativeHookRelayEventHasLocalWork(registration, event)
+            ? "noop"
+            : undefined,
         nice: params.command?.nice,
-        timeoutMs: params.command?.timeoutMs,
+        timeoutMs: resolveNativeHookRelayCommandTimeoutMs(
+          params.command?.timeoutMs,
+          options?.timeoutMs,
+        ),
         executable: params.command?.executable,
         nodeExecutable: params.command?.nodeExecutable,
       }),
@@ -512,11 +529,27 @@ function resolveNativeHookRelayNicePrefix(value: number | false | undefined): st
   return ["nice", "-n", String(nice)];
 }
 
+function resolveNativeHookRelayCommandTimeoutMs(
+  configuredTimeoutMs: number | undefined,
+  overrideTimeoutMs: number | undefined,
+): number | undefined {
+  const configured = normalizeOptionalPositiveInteger(configuredTimeoutMs);
+  const override = normalizeOptionalPositiveInteger(overrideTimeoutMs);
+  if (configured === undefined) {
+    return override;
+  }
+  if (override === undefined) {
+    return configured;
+  }
+  return Math.min(configured, override);
+}
+
 export function buildNativeHookRelayCommand(params: {
   provider: NativeHookRelayProvider;
   relayId: string;
   generation?: string;
   event: NativeHookRelayEvent;
+  preToolUseUnavailable?: "noop";
   timeoutMs?: number;
   executable?: string;
   nice?: number | false;
@@ -541,6 +574,9 @@ export function buildNativeHookRelayCommand(params: {
     ...(params.generation ? ["--generation", params.generation] : []),
     "--event",
     params.event,
+    ...(params.event === "pre_tool_use" && params.preToolUseUnavailable
+      ? ["--pre-tool-use-unavailable", params.preToolUseUnavailable]
+      : []),
     "--timeout",
     String(timeoutMs),
   ]);
@@ -752,6 +788,7 @@ export async function invokeNativeHookRelayBridge(
 export function renderNativeHookRelayUnavailableResponse(params: {
   provider: unknown;
   event: unknown;
+  preToolUseUnavailable?: unknown;
   message?: string;
 }): NativeHookRelayProcessResponse {
   const provider = readNativeHookRelayProvider(params.provider);
@@ -759,6 +796,12 @@ export function renderNativeHookRelayUnavailableResponse(params: {
   const adapter = getNativeHookRelayProviderAdapter(provider);
   const message = params.message?.trim() || "Native hook relay unavailable";
   if (event === "pre_tool_use") {
+    // The standalone CLI cannot reconstruct the originating registration after
+    // relay lookup fails, so unavailable PreToolUse must fail closed unless the
+    // generated command explicitly recorded that no before-tool policy existed.
+    if (params.preToolUseUnavailable === "noop") {
+      return adapter.renderNoopResponse(event);
+    }
     return adapter.renderPreToolUseBlockResponse(message);
   }
   if (event === "permission_request") {
@@ -1192,7 +1235,7 @@ function postNativeHookRelayBridgeRecord(params: {
     const rejectOnce = (error: unknown) => {
       if (!settled) {
         settled = true;
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
       }
     };
     const req = httpRequest(
@@ -1316,7 +1359,9 @@ function nativeHookRelayBridgeKey(relayId: string): string {
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.max(0, ms));
+  });
 }
 
 async function processNativeHookRelayInvocation(params: {
@@ -1521,12 +1566,12 @@ async function startNativeHookRelayPermissionApprovalWithBudget(params: {
     );
     return "defer";
   }
-  let approval!: Promise<NativeHookRelayPermissionApprovalResult>;
-  approval = nativeHookRelayPermissionApprovalRequester(params.request).finally(() => {
-    if (pendingPermissionApprovals.get(params.approvalKey) === approval) {
-      pendingPermissionApprovals.delete(params.approvalKey);
-    }
-  });
+  const approval: Promise<NativeHookRelayPermissionApprovalResult> =
+    nativeHookRelayPermissionApprovalRequester(params.request).finally(() => {
+      if (pendingPermissionApprovals.get(params.approvalKey) === approval) {
+        pendingPermissionApprovals.delete(params.approvalKey);
+      }
+    });
   pendingPermissionApprovals.set(params.approvalKey, approval);
   return approval;
 }
@@ -1643,7 +1688,7 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
     const sortedKeySet = new Set(keys);
     hash.update("#object-tail:");
     for (const key in value) {
-      if (!Object.prototype.hasOwnProperty.call(value, key) || sortedKeySet.has(key)) {
+      if (!Object.hasOwn(value, key) || sortedKeySet.has(key)) {
         continue;
       }
       hash.update(JSON.stringify(key));
@@ -1662,7 +1707,7 @@ function readBoundedOwnKeys(
   const keys: string[] = [];
   let truncated = false;
   for (const key in value) {
-    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+    if (!Object.hasOwn(value, key)) {
       continue;
     }
     if (keys.length >= maxKeys) {
@@ -1976,7 +2021,7 @@ async function requestNativeHookRelayPermissionApproval(
     return "defer";
   }
   let decision: string | null | undefined;
-  if (Object.prototype.hasOwnProperty.call(requestResult ?? {}, "decision")) {
+  if (Object.hasOwn(requestResult ?? {}, "decision")) {
     decision = requestResult.decision;
   } else {
     const waitResult = await waitForNativeHookRelayApprovalDecision({
@@ -2015,10 +2060,10 @@ async function waitForNativeHookRelayApprovalDecision(params: {
   let onAbort: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
     if (params.signal!.aborted) {
-      reject(params.signal!.reason);
+      reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
       return;
     }
-    onAbort = () => reject(params.signal!.reason);
+    onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
     params.signal!.addEventListener("abort", onAbort, { once: true });
   });
   try {
@@ -2137,6 +2182,12 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
     : fallback;
 }
 
+function normalizeOptionalPositiveInteger(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
 function shellQuoteArgs(args: readonly string[]): string {
   return args.map((arg) => shellQuoteArg(arg, process.platform)).join(" ");
 }
@@ -2221,11 +2272,11 @@ function isJsonValue(value: unknown): value is JsonValue {
       continue;
     }
     if (Array.isArray(current.value)) {
-      for (let index = 0; index < current.value.length; index += 1) {
+      for (const valueLocal of current.value) {
         if (nodes + stack.length + 1 > MAX_NATIVE_HOOK_RELAY_JSON_NODES) {
           return false;
         }
-        stack.push({ value: current.value[index], depth: current.depth + 1 });
+        stack.push({ value: valueLocal, depth: current.depth + 1 });
       }
       continue;
     }
@@ -2234,7 +2285,7 @@ function isJsonValue(value: unknown): value is JsonValue {
     }
     try {
       for (const key in current.value) {
-        if (!Object.prototype.hasOwnProperty.call(current.value, key)) {
+        if (!Object.hasOwn(current.value, key)) {
           continue;
         }
         if (key.length > MAX_NATIVE_HOOK_RELAY_STRING_LENGTH) {
@@ -2329,3 +2380,17 @@ export const testing = {
   },
 } as const;
 export { testing as __testing };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

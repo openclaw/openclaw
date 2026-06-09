@@ -1,3 +1,4 @@
+// Broad helper coverage for runEmbeddedAttempt prompt, stream, and tool seams.
 import { describe, expect, it, vi } from "vitest";
 import { streamSimple } from "../../../llm/stream.js";
 
@@ -47,6 +48,8 @@ function createFakeStream(params: {
   events: unknown[];
   resultMessage: unknown;
 }): FakeWrappedStream {
+  // Minimal stream compatible with wrappers that decorate result and iteration
+  // without needing a real provider stream.
   return {
     async result() {
       return params.resultMessage;
@@ -67,6 +70,7 @@ async function invokeWrappedTestStream(
   ) => (...args: never[]) => FakeWrappedStream | Promise<FakeWrappedStream>,
   baseFn: (...args: never[]) => unknown,
 ): Promise<FakeWrappedStream> {
+  // Helper keeps wrapper tests focused on mutated stream behavior.
   const wrappedFn = wrap(baseFn);
   return await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
 }
@@ -78,10 +82,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function requireContentItem(
-  content: Array<{ type?: string; text?: string; name?: string }> | unknown[],
-  index = 0,
-) {
+function requireContentItem(content: unknown[], index = 0) {
   return requireRecord(content[index], `content item ${index}`);
 }
 
@@ -89,20 +90,14 @@ function wrappedPluginSystemContext(text: string): string {
   return wrapPluginSystemContextSection(text) ?? "";
 }
 
-function expectSingleTextContent(
-  content: Array<{ type?: string; text?: string }> | unknown[],
-  textFragment: string,
-) {
+function expectSingleTextContent(content: unknown[], textFragment: string) {
   expect(content).toHaveLength(1);
   const item = requireContentItem(content);
   expect(item.type).toBe("text");
   expect(item.text).toContain(textFragment);
 }
 
-function expectSingleToolCallContent(
-  content: Array<{ type?: string; name?: string }> | unknown[],
-  name: string,
-) {
+function expectSingleToolCallContent(content: unknown[], name: string) {
   expect(content).toHaveLength(1);
   const item = requireContentItem(content);
   expect(item.type).toBe("toolCall");
@@ -110,6 +105,7 @@ function expectSingleToolCallContent(
 }
 
 function firstBaseContext(baseFn: ReturnType<typeof vi.fn>): { messages: unknown[] } {
+  // Wrapper tests assert the context passed to the underlying stream function.
   const call = baseFn.mock.calls.at(0);
   if (!call) {
     throw new Error("expected base stream call");
@@ -187,6 +183,8 @@ describe("resolvePromptBuildHookResult", () => {
   });
 
   it("merges prompt-build and before_agent_start context fields in deterministic order", async () => {
+    // Prompt-build hook context comes before before_agent_start context so plugin
+    // injections are replayed in stable order.
     const hookRunner = {
       hasHooks: vi.fn(() => true),
       runBeforePromptBuild: vi.fn(async () => ({
@@ -951,7 +949,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of secondStream) {
+    for await (const ignoredItem of secondStream) {
+      void ignoredItem;
       // drain
     }
     const secondResult = (await secondStream.result()) as {
@@ -986,7 +985,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of secondStream) {
+    for await (const ignoredItem of secondStream) {
+      void ignoredItem;
       // drain
     }
     const secondResult = (await secondStream.result()) as {
@@ -1033,7 +1033,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
 
     const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of firstStream) {
+    for await (const ignoredItem of firstStream) {
+      void ignoredItem;
       // drain
     }
     await firstStream.result();
@@ -1083,7 +1084,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
 
     const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of firstStream) {
+    for await (const ignoredItem of firstStream) {
+      void ignoredItem;
       // drain
     }
     await firstStream.result();
@@ -1147,7 +1149,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const item of secondStream) {
+    for await (const ignoredItem of secondStream) {
+      void ignoredItem;
       // drain
     }
     await secondStream.result();
@@ -3291,7 +3294,7 @@ describe("buildAfterTurnRuntimeContext", () => {
           sessionId: "session-123",
           config: {} as OpenClawConfig,
           skillsSnapshot: undefined,
-          provider: "openai-codex",
+          provider: "openai",
           modelId: "gpt-5.4",
           thinkLevel: "off",
           reasoningLevel: "on",
@@ -3329,7 +3332,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
@@ -3341,7 +3344,7 @@ describe("buildAfterTurnRuntimeContext", () => {
       agentDir: "/tmp/agent",
     });
 
-    expect(legacy.provider).toBe("openai-codex");
+    expect(legacy.provider).toBe("openai");
     expect(legacy.model).toBe("gpt-5.4");
   });
 
@@ -3363,7 +3366,7 @@ describe("buildAfterTurnRuntimeContext", () => {
           },
         } as OpenClawConfig,
         skillsSnapshot: undefined,
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
@@ -3380,7 +3383,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     // compaction model in the runtime context.
     expect(legacy.provider).toBe("openrouter");
     expect(legacy.model).toBe("anthropic/claude-sonnet-4-5");
-    // Auth profile dropped because provider changed from openai-codex to openrouter.
+    // Auth profile dropped because provider changed from openai to openrouter.
     expect(legacy.authProfileId).toBeUndefined();
   });
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
@@ -3402,7 +3405,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
         skillsSnapshot: undefined,
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
@@ -3418,7 +3421,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
 
     expect(legacy.authProfileId).toBe("openai:p1");
-    expect(legacy.provider).toBe("openai-codex");
+    expect(legacy.provider).toBe("openai");
     expect(legacy.model).toBe("gpt-5.4");
     expect(legacy.workspaceDir).toBe("/tmp/workspace");
     expect(legacy.cwd).toBe("/tmp/task-repo");
@@ -3446,7 +3449,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
         skillsSnapshot: undefined,
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
@@ -3478,7 +3481,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
         senderId: "user-123",
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",

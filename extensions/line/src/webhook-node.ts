@@ -1,3 +1,4 @@
+// Line plugin module implements webhook node behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { webhook } from "@line/bot-sdk";
 import {
@@ -128,7 +129,7 @@ export function createLineNodeWebhookHandler(params: {
         logVerbose(`line: received ${body.events.length} webhook events`);
         void Promise.resolve()
           .then(() => params.bot.handleWebhook(body))
-          .catch((err) => logLineWebhookDispatchError(params.runtime, err));
+          .catch((err: unknown) => logLineWebhookDispatchError(params.runtime, err));
       }
     } catch (err) {
       await receiveContext?.nack(err);

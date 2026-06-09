@@ -34,10 +34,15 @@ export {
   upsertSessionEntry,
 } from "../config/sessions/store.js";
 export {
+  resolveAllAgentSessionStoreTargetsSync,
+  type SessionStoreTarget,
+} from "../config/sessions/targets.js";
+export {
   evaluateSessionFreshness,
   resolveChannelResetConfig,
   resolveSessionResetPolicy,
   resolveSessionResetType,
   resolveThreadFlag,
 } from "../config/sessions/reset.js";
+export { resolveSendPolicy } from "../sessions/send-policy.js";
 export type { SessionEntry, SessionScope } from "../config/sessions/types.js";

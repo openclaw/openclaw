@@ -1,3 +1,4 @@
+// Agent Core type module defines shared TypeScript contracts.
 import type { Static, TSchema } from "typebox";
 import type {
   AssistantMessage,
@@ -11,12 +12,6 @@ import type {
   Tool,
   ToolResultMessage,
 } from "../../llm-core/src/index.js";
-import type {
-  BashExecutionMessage,
-  BranchSummaryMessage,
-  CompactionSummaryMessage,
-  CustomMessage,
-} from "./harness/message-types.js";
 
 /**
  * Stream function used by the agent loop.
@@ -293,21 +288,75 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
  */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+export interface BashExecutionMessage {
+  /** Harness role for shell command transcripts. */
+  role: "bashExecution";
+  /** Command line that was executed. */
+  command: string;
+  /** Captured command output, usually already truncated for context. */
+  output: string;
+  /** Process exit code when the command reached process exit. */
+  exitCode: number | undefined;
+  /** True when the command was interrupted before normal completion. */
+  cancelled: boolean;
+  /** True when output was shortened for transcript/context storage. */
+  truncated: boolean;
+  /** Optional path containing the complete output when truncation occurred. */
+  fullOutputPath?: string;
+  /** Millisecond timestamp for transcript ordering. */
+  timestamp: number;
+  /** Exclude this command transcript from model context while keeping it in session history. */
+  excludeFromContext?: boolean;
+}
+
+export interface CustomMessage<T = unknown> {
+  /** Harness role for application-defined transcript content. */
+  role: "custom";
+  /** Application-defined discriminator for rendering or handling this message. */
+  customType: string;
+  /** Content replayed into model context when this message is included. */
+  content: string | (TextContent | ImageContent)[];
+  /** Whether UI surfaces should display this message. */
+  display: boolean;
+  /** Optional application-specific metadata. */
+  details?: T;
+  /** Millisecond timestamp for transcript ordering. */
+  timestamp: number;
+}
+
+export interface BranchSummaryMessage {
+  /** Harness role for summaries produced when returning from another branch. */
+  role: "branchSummary";
+  /** Summary text inserted back into model context. */
+  summary: string;
+  /** Entry id of the branch root or source leaf being summarized. */
+  fromId: string;
+  /** Millisecond timestamp for transcript ordering. */
+  timestamp: number;
+}
+
+export interface CompactionSummaryMessage {
+  /** Harness role for summaries that replace compacted transcript history. */
+  role: "compactionSummary";
+  /** Summary text inserted back into model context. */
+  summary: string;
+  /** Estimated context tokens before compaction. */
+  tokensBefore: number;
+  /** Timestamp may be numeric in memory or string when loaded from older persisted rows. */
+  timestamp: number | string;
+  /** Optional estimated context tokens after compaction. */
+  tokensAfter?: number;
+  /** Optional first retained entry id from the compaction range. */
+  firstKeptEntryId?: string;
+  /** Optional implementation-specific compaction metadata. */
+  details?: unknown;
+}
+
 /**
- * Extensible interface for custom app messages.
- * Apps can extend via declaration merging:
- *
- * @example
- * ```typescript
- * declare module "@mariozechner/agent" {
- *   interface CustomAgentMessages {
- *     artifact: ArtifactMessage;
- *     notification: NotificationMessage;
- *   }
- * }
- * ```
+ * Extensible interface for custom app and harness messages.
+ * Apps can extend via declaration merging.
  */
-export interface CustomAgentMessages extends Record<never, never> {
+export interface CustomAgentMessages {
   bashExecution: BashExecutionMessage;
   custom: CustomMessage;
   branchSummary: BranchSummaryMessage;

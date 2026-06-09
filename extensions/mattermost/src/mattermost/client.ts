@@ -1,3 +1,4 @@
+// Mattermost plugin module implements client behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -158,7 +159,6 @@ export function createMattermostClient(params: {
     if (contentType.includes("application/json")) {
       return (await res.json()) as T;
     }
-
     return (await res.text()) as T;
   };
 
@@ -593,7 +593,6 @@ export async function uploadMattermostFile(
     const detail = await readMattermostError(res);
     throw new Error(`Mattermost API ${res.status} ${res.statusText}: ${detail || "unknown error"}`);
   }
-
   const data = (await res.json()) as { file_infos?: MattermostFileInfo[] };
   const info = data.file_infos?.[0];
   if (!info?.id) {

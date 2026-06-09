@@ -1,3 +1,4 @@
+// Telegram User Credential Io script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 import { readBoundedResponseText } from "../lib/bounded-response.ts";
 
@@ -20,7 +21,65 @@ type RunCommandOptions = {
 
 const DEFAULT_OUTPUT_LIMIT = 128 * 1024;
 const DEFAULT_FETCH_BODY_LIMIT = 1024 * 1024;
-const KILL_GRACE_MS = 5_000;
+const KILL_GRACE_MS = readKillGraceMs();
+const SIGNAL_EXIT_CODES = {
+  SIGHUP: 129,
+  SIGINT: 130,
+  SIGTERM: 143,
+};
+const ACTIVE_CHILD_TREE_KILLERS = new Set<(signal: NodeJS.Signals) => void>();
+let forwardedSignalExitCode: number | undefined;
+let forwardedSignalForceKillTimer: NodeJS.Timeout | undefined;
+
+function readKillGraceMs() {
+  const raw = process.env.OPENCLAW_QA_CREDENTIAL_KILL_GRACE_MS?.trim();
+  if (!raw) {
+    return 5_000;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(
+      `OPENCLAW_QA_CREDENTIAL_KILL_GRACE_MS must be a non-negative integer; got: ${raw}`,
+    );
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(
+      `OPENCLAW_QA_CREDENTIAL_KILL_GRACE_MS must be a non-negative integer; got: ${raw}`,
+    );
+  }
+  return parsed;
+}
+
+function finishForwardedSignalIfIdle() {
+  if (forwardedSignalExitCode === undefined || ACTIVE_CHILD_TREE_KILLERS.size > 0) {
+    return;
+  }
+  if (forwardedSignalForceKillTimer) {
+    clearTimeout(forwardedSignalForceKillTimer);
+    forwardedSignalForceKillTimer = undefined;
+  }
+  process.exit(forwardedSignalExitCode);
+}
+
+for (const signal of Object.keys(SIGNAL_EXIT_CODES) as Array<keyof typeof SIGNAL_EXIT_CODES>) {
+  process.on(signal, () => {
+    forwardedSignalExitCode ??= SIGNAL_EXIT_CODES[signal];
+    if (ACTIVE_CHILD_TREE_KILLERS.size === 0) {
+      finishForwardedSignalIfIdle();
+      return;
+    }
+    const activeKillers = Array.from(ACTIVE_CHILD_TREE_KILLERS);
+    for (const killChildTree of activeKillers) {
+      killChildTree(signal);
+    }
+    forwardedSignalForceKillTimer ??= setTimeout(() => {
+      for (const killChildTree of activeKillers) {
+        killChildTree("SIGKILL");
+      }
+      process.exit(forwardedSignalExitCode);
+    }, KILL_GRACE_MS);
+  });
+}
 
 function timeoutError(message: string) {
   return Object.assign(new Error(message), { code: "ETIMEDOUT" });
@@ -70,16 +129,19 @@ export function runCommand(
   options: RunCommandOptions,
 ) {
   return new Promise<void>((resolve, reject) => {
+    const useProcessGroup = process.platform !== "win32";
     const child = spawn(command, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: useProcessGroup,
     });
+    const activeChildTree = registerActiveChildProcessTree(child);
     const outputLimit = options.outputLimit ?? DEFAULT_OUTPUT_LIMIT;
     let stdout = "";
     let stderr = "";
     let settled = false;
-    let timeout: NodeJS.Timeout;
     let killTimer: NodeJS.Timeout | undefined;
+    let pendingTimeoutReject: (() => void) | undefined;
     let timedOutError: Error | undefined;
     const timeoutMs = Math.max(1, options.timeoutMs);
     const timeoutKillGraceMs = Math.max(0, options.timeoutKillGraceMs ?? KILL_GRACE_MS);
@@ -95,20 +157,22 @@ export function runCommand(
       }
       settled = true;
       clearTimers();
+      activeChildTree.unregister();
       reject(error);
     };
-    timeout = setTimeout(() => {
+    const timeout: NodeJS.Timeout = setTimeout(() => {
       if (settled) {
         return;
       }
       timedOutError = timeoutError(
         `${command} ${args.join(" ")} timed out after ${timeoutMs}ms\n${stdout}${stderr}`,
       );
-      child.kill("SIGTERM");
+      activeChildTree.killChildTree("SIGTERM");
       killTimer = setTimeout(() => {
-        child.kill("SIGKILL");
+        killTimer = undefined;
+        activeChildTree.killChildTree("SIGKILL");
+        pendingTimeoutReject?.();
       }, timeoutKillGraceMs);
-      killTimer.unref?.();
     }, timeoutMs);
     timeout.unref?.();
 
@@ -123,8 +187,28 @@ export function runCommand(
       if (settled) {
         return;
       }
+      if (forwardedSignalExitCode !== undefined) {
+        activeChildTree.unregister({
+          finishForwardedSignal: !childProcessTreeMayStillExist(child),
+        });
+        return;
+      }
+      if (timedOutError && killTimer && childProcessTreeMayStillExist(child)) {
+        const error = timedOutError;
+        pendingTimeoutReject = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimers();
+          activeChildTree.unregister();
+          reject(error);
+        };
+        return;
+      }
       settled = true;
       clearTimers();
+      activeChildTree.unregister();
       if (timedOutError) {
         reject(timedOutError);
         return;
@@ -137,6 +221,44 @@ export function runCommand(
       reject(new Error(`${command} ${args.join(" ")} failed with ${detail}\n${stdout}${stderr}`));
     });
   });
+}
+
+function signalChildProcessTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals) {
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The process group can disappear between timeout and cleanup.
+    }
+  }
+  child.kill(signal);
+}
+
+function childProcessTreeMayStillExist(child: ReturnType<typeof spawn>) {
+  if (process.platform === "win32" || !child.pid) {
+    return false;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function registerActiveChildProcessTree(child: ReturnType<typeof spawn>) {
+  const killChildTree = (signal: NodeJS.Signals) => signalChildProcessTree(child, signal);
+  ACTIVE_CHILD_TREE_KILLERS.add(killChildTree);
+  return {
+    killChildTree,
+    unregister: (options: { finishForwardedSignal?: boolean } = {}) => {
+      ACTIVE_CHILD_TREE_KILLERS.delete(killChildTree);
+      if (options.finishForwardedSignal ?? true) {
+        finishForwardedSignalIfIdle();
+      }
+    },
+  };
 }
 
 export async function fetchJsonWithTimeout(params: FetchJsonParams) {

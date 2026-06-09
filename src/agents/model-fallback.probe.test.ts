@@ -1,3 +1,4 @@
+// Verifies fallback cooldown probe decisions and diagnostic records.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,8 @@ import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagno
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
-// Mock auth-profile submodules — must be before importing model-fallback
+// Mock auth-profile submodules before importing model-fallback so the module
+// captures probe-specific auth behavior instead of real profile stores.
 vi.mock("./auth-profiles/store.js", () => ({
   ensureAuthProfileStore: vi.fn(),
   loadAuthProfileStoreForRuntime: vi.fn(),
@@ -190,6 +192,8 @@ async function expectProbeFailureFallsBack({
   reason: "rate_limit" | "overloaded";
   probeError: Error & { status: number };
 }) {
+  // Shared expectation for transient primary probe failures: probe the primary
+  // once, then move to the first fallback with transient probing still allowed.
   const cfg = makeCfg({
     agents: {
       defaults: {
@@ -354,6 +358,44 @@ describe("runWithModelFallback – probe logic", () => {
 
   it("uses inferred unavailable reason when skipping a cooldowned primary model", async () => {
     await expectPrimarySkippedAfterLongCooldown("billing");
+  });
+
+  it("re-probes a single-provider primary blocked by a far-future subscription_limit (#90702)", () => {
+    // fallbacks:[] + a multi-day subscription_limit reset must still re-probe on
+    // the throttle instead of suspending until blockedUntil literally arrives,
+    // since the rolling cap usually recovers earlier. Multi-fallback setups keep
+    // preferring the fallback chain (covered above).
+    const sixDays = 6 * 24 * 60 * 60 * 1000;
+    const usageStats = {
+      "openai-profile-1": {
+        blockedUntil: NOW + sixDays,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+      },
+    } satisfies AuthProfileStore["usageStats"];
+
+    expect(
+      resolveOpenAiCooldownDecision({
+        reason: "rate_limit",
+        soonest: NOW + sixDays,
+        hasFallbackCandidates: false,
+        usageStats,
+      }),
+    ).toEqual({ type: "attempt", reason: "rate_limit", markProbe: true });
+
+    // The 30s probe throttle is still honored so recovery probing cannot hammer
+    // the upstream: a recent probe on the same key suspends until the slot opens.
+    probeThrottleInternals.lastProbeAttempt.set("recent-openai", NOW - 10_000);
+    expectOpenAiProbeSuspension(
+      resolveOpenAiCooldownDecision({
+        reason: "rate_limit",
+        soonest: NOW + sixDays,
+        hasFallbackCandidates: false,
+        throttleKey: "recent-openai",
+        usageStats,
+      }),
+      "rate_limit",
+    );
   });
 
   it("decides when cooldowned primary probes are allowed", () => {
@@ -670,7 +712,7 @@ describe("runWithModelFallback – probe logic", () => {
     }
   });
 
-  it("single candidate skips with rate_limit and exhausts candidates", async () => {
+  it("re-probes a single-provider rate-limited primary instead of suspending", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -682,22 +724,26 @@ describe("runWithModelFallback – probe logic", () => {
       },
     } as Partial<OpenClawConfig>);
 
-    const almostExpired = NOW + 30 * 1000;
-    mockedGetSoonestCooldownExpiry.mockReturnValue(almostExpired);
+    // Far-future cooldown with no fallback chain: the primary must still be
+    // probed so a recovered rolling cap resumes work instead of staying silent
+    // until blockedUntil arrives. See #90702.
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 6 * 24 * 60 * 60 * 1000);
 
-    const run = vi.fn().mockResolvedValue("unreachable");
+    const run = vi.fn().mockResolvedValue("probed-ok");
 
-    await expect(
-      runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-4.1-mini",
-        fallbacksOverride: [],
-        run,
-      }),
-    ).rejects.toThrow("All models failed");
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      fallbacksOverride: [],
+      run,
+    });
 
-    expect(run).not.toHaveBeenCalled();
+    expect(result.result).toBe("probed-ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
   });
 
   it("scopes probe throttling by agentDir to avoid cross-agent suppression", () => {

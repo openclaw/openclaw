@@ -1,3 +1,8 @@
+/**
+ * External CLI OAuth synchronization.
+ * Reads supported CLI credential stores, decides whether those credentials can
+ * safely bootstrap local auth profiles, and returns runtime/persisted overlays.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   readClaudeCliCredentialsCached,
@@ -66,6 +71,7 @@ function normalizeAuthEmailToken(value: string | undefined): string | undefined 
 }
 
 // Keep this gate aligned with the canonical identity-copy rule in oauth.ts.
+/** Return true when imported CLI credentials match an existing profile identity. */
 export function isSafeToUseExternalCliCredential(
   existing: OAuthCredential | undefined,
   imported: OAuthCredential,
@@ -99,9 +105,9 @@ export function isSafeToUseExternalCliCredential(
 const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
     profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
-    profileAliases: ["openai-codex:default"],
+    profileAliases: ["openai:default"],
     provider: "openai",
-    aliases: ["openai-codex", "codex", "codex-cli", "codex-app-server"],
+    aliases: ["openai", "codex", "codex-cli", "codex-app-server"],
     readCredentials: (options) =>
       readCodexCliCredentialsCached({
         ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
@@ -184,7 +190,7 @@ function externalCliProfileIdMatches(
     return false;
   }
   const normalizedPrefix = normalizeProviderId(getAuthProfileProviderPrefix(profileId));
-  return normalizedPrefix === "openai-codex";
+  return normalizedPrefix === "openai";
 }
 
 function hasInlineOAuthTokenMaterial(credential: OAuthCredential): boolean {
@@ -193,6 +199,7 @@ function hasInlineOAuthTokenMaterial(credential: OAuthCredential): boolean {
   );
 }
 
+/** Read a CLI credential only for safe bootstrap of an unusable local profile. */
 export function readExternalCliBootstrapCredential(params: {
   profileId: string;
   credential: OAuthCredential;
@@ -218,6 +225,7 @@ export function readExternalCliBootstrapCredential(params: {
 
 export const readManagedExternalCliCredential = readExternalCliBootstrapCredential;
 
+/** Read a CLI credential as a fallback for refresh/runtime auth recovery. */
 export function readExternalCliFallbackCredential(params: {
   profileId: string;
   credential: OAuthCredential;
@@ -318,6 +326,7 @@ function listScopedExternalCliProfileIds(params: {
   return options?.providerIds ? [providerConfig.profileId] : [];
 }
 
+/** Resolve scoped external CLI auth profiles available to overlay or persist. */
 export function resolveExternalCliAuthProfiles(
   store: AuthProfileStore,
   options?: ExternalCliAuthProfileOptions,

@@ -1,3 +1,8 @@
+// Main CLI startup policy helpers for fast paths, proxy startup, aliases, and missing commands.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import {
@@ -7,10 +12,6 @@ import {
   type PluginManifestCommandAliasRegistry,
   type PluginManifestToolOwnerRecord,
 } from "../plugins/manifest-command-aliases.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { hasFlag } from "./argv.js";
 import {
@@ -82,6 +83,7 @@ function isBareParentDefaultHelpArgv(argv: string[]): boolean {
 }
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
+  // Preserve the old root --update spelling by rewriting before Commander registration.
   const index = argv.indexOf("--update");
   if (index === -1) {
     return argv;

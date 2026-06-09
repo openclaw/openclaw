@@ -1,3 +1,4 @@
+// Auth-choice option tests cover provider wizard options, grouping, and onboarding scope filters.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
@@ -587,7 +588,7 @@ describe("buildAuthChoiceOptions", () => {
         assistantPriority: 5,
       },
       {
-        value: "openai-codex",
+        value: "openai",
         label: "ChatGPT/Codex Browser Login",
         groupId: "openai",
         groupLabel: "OpenAI",
@@ -595,7 +596,7 @@ describe("buildAuthChoiceOptions", () => {
         onboardingFeatured: true,
       },
       {
-        value: "openai-codex-device-code",
+        value: "openai-chatgpt-device-code",
         label: "ChatGPT/Codex Device Pairing",
         groupId: "openai",
         groupLabel: "OpenAI",
@@ -610,8 +611,8 @@ describe("buildAuthChoiceOptions", () => {
     const openAIGroup = requireChoiceGroup(groups, "openai");
 
     expect(openAIGroup.options.map((option) => option.value)).toEqual([
-      "openai-codex",
-      "openai-codex-device-code",
+      "openai",
+      "openai-chatgpt-device-code",
       "openai-api-key",
     ]);
     expect(openAIGroup.options[0]?.onboardingFeatured).toBe(true);

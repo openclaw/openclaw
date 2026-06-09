@@ -1,3 +1,4 @@
+/** Parses cron schedule timestamps from user-facing absolute time strings. */
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 
 const ISO_TZ_RE = /(Z|[+-]\d{2}:?\d{2})$/i;
@@ -17,6 +18,7 @@ function normalizeUtcIso(raw: string) {
   return raw;
 }
 
+/** Parses absolute cron timestamps from epoch milliseconds or ISO-like strings normalized to UTC. */
 export function parseAbsoluteTimeMs(input: string): number | null {
   const raw = input.trim();
   if (!raw) {

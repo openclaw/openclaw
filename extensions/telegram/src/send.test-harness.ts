@@ -1,3 +1,4 @@
+// Telegram plugin module implements send harness behavior.
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   buildOutboundMediaLoadOptions,
@@ -13,6 +14,7 @@ const { botApi, botConfigUseSpy, botCtorSpy } = vi.hoisted(() => ({
   botApi: {
     deleteMessage: vi.fn(),
     editForumTopic: vi.fn(),
+    editMessageCaption: vi.fn(),
     editMessageText: vi.fn(),
     editMessageReplyMarkup: vi.fn(),
     pinChatMessage: vi.fn(),

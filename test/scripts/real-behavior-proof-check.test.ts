@@ -1,3 +1,4 @@
+// Real Behavior Proof Check tests cover real behavior proof check script behavior.
 import { describe, expect, it, vi } from "vitest";
 import { fetchProofComments } from "../../scripts/github/real-behavior-proof-check.mjs";
 
@@ -62,7 +63,9 @@ describe("real-behavior-proof-check GitHub lookups", () => {
   it("aborts stalled proof comment fetches", async () => {
     const fetch = vi.fn((_url: URL, init: RequestInit) => {
       return new Promise((_resolve, reject) => {
-        init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        init.signal?.addEventListener("abort", () =>
+          reject(toLintErrorObject(init.signal?.reason, "Non-Error rejection")),
+        );
       });
     });
 
@@ -177,3 +180,17 @@ describe("real-behavior-proof-check GitHub lookups", () => {
     ).toEqual(["100:1", "1:1", "1:2", "1:3"]);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

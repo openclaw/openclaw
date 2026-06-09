@@ -1,7 +1,8 @@
-import fs from "node:fs/promises";
+// Covers heartbeat handling of queued reminder system events.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   seedMainSessionStore,
@@ -83,17 +84,14 @@ describe("Ghost reminder bug (issue #13317)", () => {
     sessionKey: string,
     overrides: Record<string, unknown>,
   ): Promise<void> => {
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "sid",
-          updatedAt: Date.now(),
-          lastChannel: "telegram",
-          ...overrides,
-        },
-      }),
-    );
+    await writeSessionStoreForTestAsync(storePath, {
+      [sessionKey]: {
+        sessionId: "sid",
+        updatedAt: Date.now(),
+        lastChannel: "telegram",
+        ...overrides,
+      },
+    });
   };
 
   const expectCronEventPrompt = (
@@ -469,15 +467,12 @@ describe("Ghost reminder bug (issue #13317)", () => {
         session: { store: storePath },
       };
       const sessionKey = resolveMainSessionKey(cfg);
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-          },
-        }),
-      );
+      await writeSessionStoreForTestAsync(storePath, {
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+        },
+      });
 
       const sendTelegram = vi.fn().mockResolvedValue({
         messageId: "m1",
@@ -570,18 +565,10 @@ describe("Ghost reminder bug (issue #13317)", () => {
         session: { store: storePath },
       };
       const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-            lastChannel: "telegram",
-            lastTo: "telegram:-1003774691294:topic:2175",
-            lastThreadId: 2175,
-          },
-        }),
-      );
+      await writeTelegramSessionStore(storePath, sessionKey, {
+        lastTo: "telegram:-1003774691294:topic:2175",
+        lastThreadId: 2175,
+      });
 
       const sendTelegram = vi.fn().mockResolvedValue({
         messageId: "m1",
@@ -635,18 +622,10 @@ describe("Ghost reminder bug (issue #13317)", () => {
         session: { store: storePath },
       };
       const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-            lastChannel: "telegram",
-            lastTo: "telegram:-1003774691294:topic:2175",
-            lastThreadId: 2175,
-          },
-        }),
-      );
+      await writeTelegramSessionStore(storePath, sessionKey, {
+        lastTo: "telegram:-1003774691294:topic:2175",
+        lastThreadId: 2175,
+      });
 
       const sendTelegram = vi.fn();
       const getReplySpy = vi.fn().mockResolvedValue({

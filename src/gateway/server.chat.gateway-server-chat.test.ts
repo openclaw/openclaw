@@ -1,3 +1,5 @@
+// Gateway server chat tests cover WebSocket chat flow, history construction,
+// NO_REPLY handling, agent events, and connected control-UI delivery.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,13 +8,13 @@ import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { testing as agentJobTesting } from "./server-methods/agent-job.js";
 import {
   connectOk,
   dispatchInboundMessageMock,
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
   onceMessage,
+  readSessionStore,
   rpcReq,
   testState,
   trackConnectChallengeNonce,
@@ -182,11 +184,6 @@ describe("gateway server chat", () => {
     expect(res.payload?.status).toBe("ok");
     return res;
   };
-
-  const waitForLifecycleWaiter = async (runId: string) => {
-    await vi.waitFor(() => expect(agentJobTesting.getWaiterCount(runId)).toBeGreaterThan(0));
-  };
-
   const abortChatRun = async (runId: string) => {
     const res = await rpcReq(ws, "chat.abort", {
       sessionKey: "main",
@@ -269,12 +266,7 @@ describe("gateway server chat", () => {
       expect(res.ok).toBe(true);
       expect(res.payload?.runId).toBe("idem-sessions-send-orion");
 
-      const rawStore = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
-        string,
-        {
-          sessionId?: string;
-        }
-      >;
+      const rawStore = readSessionStore(testState.sessionStorePath);
       expect(rawStore["agent:orion:main"]?.sessionId).toBeTypeOf("string");
     } finally {
       testState.agentsConfig = undefined;
@@ -448,7 +440,9 @@ describe("gateway server chat", () => {
         headers: { origin: `http://127.0.0.1:${port}` },
       });
       trackConnectChallengeNonce(webchatWs);
-      await new Promise<void>((resolve) => webchatWs?.once("open", resolve));
+      await new Promise<void>((resolve) => {
+        webchatWs?.once("open", resolve);
+      });
       await connectOk(webchatWs, {
         client: {
           id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -746,6 +740,246 @@ describe("gateway server chat", () => {
         return entry.role === "assistant" && Boolean(entry.openclawMessageToolMirror);
       }),
     ).toBe(true);
+  });
+
+  test("chat.history hides raw delivery-mirror rows but keeps message-tool mirrors", async () => {
+    const replyText = "One visible send.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "send once" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-transcript-only",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-transcript-only",
+        content: { ok: true, messageId: "24271", chatId: "current-run" },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: replyText }],
+        timestamp: 4,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 5,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["send once", replyText]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(true);
+    expect(historyMessages).not.toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+  });
+
+  test("chat.history keeps message-tool mirrors before silent completion rows", async () => {
+    const replyText = "Visible before completion.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-before-completion",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-before-completion",
+        content: { ok: true, messageId: "24272", chatId: "current-run" },
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: replyText }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual([replyText]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(true);
+    expect(historyMessages).not.toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+  });
+
+  test("chat.history hides delivery mirrors that precede successful tool results", async () => {
+    const replyText = "Visible after result.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-before-result",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: replyText }],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-before-result",
+        content: { ok: true, messageId: "24273", chatId: "current-run" },
+        timestamp: 3,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual([replyText]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(true);
+    expect(historyMessages).not.toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+  });
+
+  test("chat.history preserves other pending message-tool mirrors while deduping one send", async () => {
+    const firstText = "First visible send.";
+    const secondText = "Second visible send.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-first",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: firstText,
+            },
+          },
+          {
+            type: "toolCall",
+            id: "call-message-second",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: secondText,
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-first",
+        content: { ok: true, messageId: "24274", chatId: "current-run" },
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: firstText }],
+        timestamp: 3,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-second",
+        content: { ok: true, messageId: "24275", chatId: "current-run" },
+        timestamp: 4,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: secondText }],
+        timestamp: 5,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual([firstText, secondText]);
+    expect(
+      historyMessages.filter(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toHaveLength(2);
+    expect(historyMessages).not.toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+  });
+
+  test("chat.history keeps standalone delivery-mirror rows", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "standalone delivered reply" }],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["standalone delivered reply"]);
   });
 
   test("chat.history mirrors current-session message tool sends with channel hints", async () => {
@@ -1334,12 +1568,14 @@ describe("gateway server chat", () => {
         },
       });
 
-      const historyRes = await rpcReq<{ thinkingLevel?: string }>(ws, "chat.history", {
-        sessionKey: "agent:alpha:main",
-      });
+      const historyRes = await rpcReq<{
+        thinkingLevel?: string;
+        sessionInfo?: { thinkingLevel?: string };
+      }>(ws, "chat.history", { sessionKey: "agent:alpha:main" });
 
       expect(historyRes.ok).toBe(true);
       expect(historyRes.payload?.thinkingLevel).toBe("minimal");
+      expect(historyRes.payload?.sessionInfo?.thinkingLevel).toBeUndefined();
     } finally {
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
@@ -1349,14 +1585,16 @@ describe("gateway server chat", () => {
   });
 
   test("chat.send does not persist verboseLevel for operator.write callers", async () => {
-    await withGatewayServer(async ({ port }) => {
+    await withGatewayServer(async ({ port: portValue }) => {
       await withMainSessionStore(async () => {
         let scopedWs: WebSocket | undefined;
 
         try {
-          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          scopedWs = new WebSocket(`ws://127.0.0.1:${portValue}`);
           trackConnectChallengeNonce(scopedWs);
-          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await new Promise<void>((resolve) => {
+            scopedWs?.once("open", resolve);
+          });
           await connectOk(scopedWs, {
             scopes: ["operator.write"],
           });
@@ -1375,12 +1613,11 @@ describe("gateway server chat", () => {
           expect(waitRes.ok).toBe(true);
           expect(waitRes.payload?.status).toBe("ok");
 
-          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
-          const stored = JSON.parse(raw) as {
-            "agent:main:main"?: {
-              verboseLevel?: string;
-            };
-          };
+          const sessionStorePath = testState.sessionStorePath;
+          if (!sessionStorePath) {
+            throw new Error("session store path was not initialized");
+          }
+          const stored = readSessionStore(sessionStorePath);
           expect(stored["agent:main:main"]?.verboseLevel).toBeUndefined();
         } finally {
           scopedWs?.close();
@@ -1390,14 +1627,16 @@ describe("gateway server chat", () => {
   });
 
   test("chat.send does not rotate sessions for operator.write reset triggers", async () => {
-    await withGatewayServer(async ({ port }) => {
+    await withGatewayServer(async ({ port: portLocal }) => {
       await withMainSessionStore(async () => {
         let scopedWs: WebSocket | undefined;
 
         try {
-          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          scopedWs = new WebSocket(`ws://127.0.0.1:${portLocal}`);
           trackConnectChallengeNonce(scopedWs);
-          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await new Promise<void>((resolve) => {
+            scopedWs?.once("open", resolve);
+          });
           await connectOk(scopedWs, {
             scopes: ["operator.write"],
           });
@@ -1416,12 +1655,11 @@ describe("gateway server chat", () => {
           expect(waitRes.ok).toBe(true);
           expect(waitRes.payload?.status).toBe("ok");
 
-          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
-          const stored = JSON.parse(raw) as {
-            "agent:main:main"?: {
-              sessionId?: string;
-            };
-          };
+          const sessionStorePath = testState.sessionStorePath;
+          if (!sessionStorePath) {
+            throw new Error("session store path was not initialized");
+          }
+          const stored = readSessionStore(sessionStorePath);
           expect(stored["agent:main:main"]?.sessionId).toBe("sess-main");
         } finally {
           scopedWs?.close();
@@ -1524,7 +1762,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("agent.wait keeps lifecycle wait active while same-runId chat.send is active", async () => {
+  test("agent.wait ignores lifecycle completion while same-runId chat.send is active", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-active-with-agent-lifecycle";
       const releaseBlockedReply = mockBlockedChatReply();
@@ -1532,12 +1770,6 @@ describe("gateway server chat", () => {
       try {
         await sendChatAndExpectStarted(runId, "hold chat run open");
 
-        const waitP = rpcReq(ws, "agent.wait", {
-          runId,
-          timeoutMs: 1_000,
-        });
-
-        await waitForLifecycleWaiter(runId);
         emitAgentEvent({
           runId,
           stream: "lifecycle",
@@ -1549,11 +1781,14 @@ describe("gateway server chat", () => {
           data: { phase: "end", startedAt: 1, endedAt: 2 },
         });
 
-        const waitRes = await waitP;
-        expect(waitRes.ok).toBe(true);
-        expect(waitRes.payload?.status).toBe("ok");
+        const waitWhileChatActive = await rpcReq(ws, "agent.wait", {
+          runId,
+          timeoutMs: 40,
+        });
+        expectAgentWaitTimeout(waitWhileChatActive);
 
-        await abortChatRun(runId);
+        releaseBlockedReply();
+        await waitForAgentRunOk(runId);
       } finally {
         releaseBlockedReply();
       }
@@ -1577,7 +1812,9 @@ describe("gateway server chat", () => {
       headers: { origin: `http://127.0.0.1:${port}` },
     });
     trackConnectChallengeNonce(webchatWs);
-    await new Promise<void>((resolve) => webchatWs.once("open", resolve));
+    await new Promise<void>((resolve) => {
+      webchatWs.once("open", resolve);
+    });
     await connectOk(webchatWs, {
       client: {
         id: GATEWAY_CLIENT_NAMES.WEBCHAT,

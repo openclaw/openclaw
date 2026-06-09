@@ -1,6 +1,8 @@
+// Workshop types define generated skill draft, policy, and config contracts.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillScanFinding } from "../security/scanner.js";
 
+/** Schema id for persisted skill workshop proposal records. */
 export const SKILL_WORKSHOP_SCHEMA = "openclaw.skill-workshop.proposal.v1" as const;
 export const SKILL_WORKSHOP_MANIFEST_SCHEMA =
   "openclaw.skill-workshop.proposals-manifest.v1" as const;
@@ -10,6 +12,13 @@ export type SkillProposalKind = "create" | "update";
 export type SkillProposalStatus = "pending" | "applied" | "rejected" | "quarantined" | "stale";
 export type SkillProposalScannerState = "pending" | "clean" | "failed" | "quarantined";
 export type SkillProposalSource = "skill-workshop" | "cli" | "gateway";
+
+export type SkillProposalOrigin = {
+  agentId?: string;
+  sessionKey?: string;
+  runId?: string;
+  messageId?: string;
+};
 
 export type SkillProposalScan = {
   state: SkillProposalScannerState;
@@ -47,6 +56,7 @@ export type SkillProposalRecord = {
   createdAt: string;
   updatedAt: string;
   createdBy: SkillProposalSource;
+  origin?: SkillProposalOrigin;
   proposedVersion: string;
   draftFile: "PROPOSAL.md";
   draftHash: string;
@@ -110,6 +120,7 @@ export type SkillProposalCreateInput = {
   content: string;
   supportFiles?: SkillProposalSupportFileInput[];
   createdBy?: SkillProposalSource;
+  origin?: SkillProposalOrigin;
   goal?: string;
   evidence?: string;
 };
@@ -122,6 +133,7 @@ export type SkillProposalUpdateInput = {
   content: string;
   supportFiles?: SkillProposalSupportFileInput[];
   createdBy?: SkillProposalSource;
+  origin?: SkillProposalOrigin;
   goal?: string;
   evidence?: string;
 };

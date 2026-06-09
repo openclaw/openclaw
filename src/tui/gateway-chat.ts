@@ -1,3 +1,4 @@
+// Bridges TUI chat requests to gateway session APIs.
 import { randomUUID } from "node:crypto";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -36,6 +37,7 @@ import type {
   TuiEvent,
   TuiModelChoice,
   TuiSessionList,
+  TuiSessionMutationResult,
 } from "./tui-backend.js";
 
 export type GatewayConnectionOptions = {
@@ -93,7 +95,9 @@ function resolveStartupRetryDelayMs(err: GatewayClientRequestError): number {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export type GatewaySessionList = TuiSessionList;
@@ -242,8 +246,12 @@ export class GatewayChatClient implements TuiBackend {
     return await this.client.request<SessionsPatchResult>("sessions.patch", opts);
   }
 
-  async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
-    return await this.client.request("sessions.reset", {
+  async resetSession(
+    key: string,
+    reason?: "new" | "reset",
+    opts?: { agentId?: string },
+  ): Promise<TuiSessionMutationResult> {
+    return await this.client.request<TuiSessionMutationResult>("sessions.reset", {
       key,
       ...(opts?.agentId ? { agentId: opts.agentId } : {}),
       ...(reason ? { reason } : {}),

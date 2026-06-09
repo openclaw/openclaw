@@ -1,3 +1,4 @@
+// Session config tests cover session creation, updates, and persistence.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
@@ -18,8 +19,14 @@ import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js"
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { readSessionStoreCache, writeSessionStoreCache } from "./store-cache.js";
 import {
+  clearExistingSqliteSessionStore,
+  resolveSqliteSessionStoreDatabasePath,
+} from "./store-sqlite.js";
+import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
+  readSessionUpdatedAt,
+  saveSessionStore,
   updateSessionStore,
   updateSessionStoreEntry,
 } from "./store.js";
@@ -27,17 +34,6 @@ import { useTempSessionsFixture } from "./test-helpers.js";
 import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
 
 type WriteTextAtomicCall = Parameters<typeof jsonFiles.writeTextAtomic>;
-
-function requireWriteTextAtomicCall(
-  spy: { mock: { calls: WriteTextAtomicCall[] } },
-  callIndex = 0,
-): WriteTextAtomicCall {
-  const call = spy.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected writeTextAtomic call ${callIndex}`);
-  }
-  return call;
-}
 
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
@@ -301,6 +297,42 @@ describe("session lifecycle timestamps", () => {
       await fsPromises.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("ignores out-of-range lifecycle timestamps before header fallback", async () => {
+    const dir = await fsPromises.mkdtemp("/tmp/openclaw-lifecycle-test-");
+    try {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionFile = path.join(dir, "legacy-session.jsonl");
+      const headerTimestamp = "2026-04-20T04:30:00.000Z";
+      await fsPromises.writeFile(
+        sessionFile,
+        `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "legacy-session",
+          timestamp: headerTimestamp,
+          cwd: dir,
+        })}\n`,
+        "utf8",
+      );
+
+      const timestamps = resolveSessionLifecycleTimestamps({
+        storePath,
+        entry: {
+          sessionId: "legacy-session",
+          sessionFile,
+          sessionStartedAt: Number.MAX_SAFE_INTEGER,
+          lastInteractionAt: Number.MAX_SAFE_INTEGER,
+          updatedAt: Date.parse("2026-04-25T08:00:00.000Z"),
+        },
+      });
+
+      expect(timestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+      expect(timestamps.lastInteractionAt).toBeUndefined();
+    } finally {
+      await fsPromises.rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("session store writer queue", () => {
@@ -312,7 +344,9 @@ describe("session store writer queue", () => {
     const dir = await writerFixtureRootTracker.make("case");
     const storePath = path.join(dir, "sessions.json");
     if (Object.keys(initial).length > 0) {
-      await fsPromises.writeFile(storePath, JSON.stringify(initial, null, 2), "utf-8");
+      await saveSessionStore(storePath, initial as Record<string, SessionEntry>, {
+        skipMaintenance: true,
+      });
     }
     return { dir, storePath };
   }
@@ -672,6 +706,57 @@ describe("session store writer queue", () => {
     }
   });
 
+  it("skips SQLite rewrites for unchanged entry saves", async () => {
+    const now = Date.now();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    const key = "agent:main:no-op-sqlite-entry-save";
+    try {
+      const { storePath } = await makeTmpStore({
+        [key]: {
+          sessionId: "s-noop-sqlite-entry",
+          updatedAt: now,
+          displayName: "entry",
+        },
+      });
+      const databasePath = resolveSqliteSessionStoreDatabasePath(storePath);
+      const before = fs.statSync(databasePath).mtimeMs;
+
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      await updateSessionStoreEntry({
+        storePath,
+        sessionKey: key,
+        update: async (entry) => ({
+          displayName: entry.displayName,
+          updatedAt: entry.updatedAt,
+        }),
+        skipMaintenance: true,
+      });
+
+      expect(fs.statSync(databasePath).mtimeMs).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears existing SQLite session stores without creating missing databases", async () => {
+    const key = "agent:main:sqlite-clear";
+    const { dir, storePath } = await makeTmpStore({
+      [key]: { sessionId: "s-sqlite-clear", updatedAt: Date.now() },
+    });
+
+    expect(loadSessionStore(storePath, { skipCache: true })[key]?.sessionId).toBe("s-sqlite-clear");
+    expect(clearExistingSqliteSessionStore(storePath, { compact: true })).toBe(true);
+    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({});
+
+    const missingStorePath = path.join(dir, "missing", "sessions.json");
+    const missingDatabasePath = resolveSqliteSessionStoreDatabasePath(missingStorePath);
+    expect(clearExistingSqliteSessionStore(missingStorePath)).toBe(false);
+    expect(fs.existsSync(missingDatabasePath)).toBe(false);
+  });
+
   it("caches unchanged session stores from persisted JSON shape", async () => {
     const key = "agent:main:no-op-cache";
     const { storePath } = await makeTmpStore({
@@ -751,13 +836,12 @@ describe("session store writer queue", () => {
     }
   });
 
-  it("keeps session store writes atomic while skipping durable fsync inside the writer lock", async () => {
+  it("persists session store updates through SQLite", async () => {
     const key = "agent:main:no-fsync";
     const { storePath } = await makeTmpStore({
       [key]: { sessionId: "s-no-fsync", updatedAt: Date.now(), counter: 0 },
     });
 
-    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
     await updateSessionStore(
       storePath,
       async (store) => {
@@ -767,21 +851,49 @@ describe("session store writer queue", () => {
       { skipMaintenance: true },
     );
 
-    expect(writeSpy).toHaveBeenCalledTimes(1);
-    const [writtenPath, writtenText, writeOptions] = requireWriteTextAtomicCall(writeSpy);
-    expect(writtenPath).toBe(storePath);
-    expect(writtenText).toBeTypeOf("string");
-    expect(writeOptions?.durable).toBe(false);
-    expect(writeOptions?.mode).toBe(0o600);
-    expect(writeOptions?.beforeRename).toBeTypeOf("function");
-    writeSpy.mockRestore();
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect((persisted[key] as Record<string, unknown> | undefined)?.counter).toBe(1);
   });
 
-  it("can persist a known single entry without touching hydrated prompts from other sessions", async () => {
+  it("keeps distinct custom store paths isolated in SQLite", async () => {
+    const dir = await writerFixtureRootTracker.make("custom-stores");
+    const mainStorePath = path.join(dir, "sessions-main.json");
+    const workStorePath = path.join(dir, "sessions-work.json");
+
+    await saveSessionStore(
+      mainStorePath,
+      { "agent:main:main": { sessionId: "main-session", updatedAt: 1 } },
+      { skipMaintenance: true },
+    );
+    await saveSessionStore(
+      workStorePath,
+      { "agent:work:main": { sessionId: "work-session", updatedAt: 2 } },
+      { skipMaintenance: true },
+    );
+
+    expect(loadSessionStore(mainStorePath, { skipCache: true })["agent:main:main"]?.sessionId).toBe(
+      "main-session",
+    );
+    expect(loadSessionStore(workStorePath, { skipCache: true })["agent:work:main"]?.sessionId).toBe(
+      "work-session",
+    );
+  });
+
+  it("resolves updatedAt through legacy session-key aliases", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:webchat:dm:mixed-user": { sessionId: "main-session", updatedAt: 1234 },
+    });
+
+    expect(
+      readSessionUpdatedAt({ storePath, sessionKey: "Agent:Main:WebChat:DM:MiXeD-User" }),
+    ).toBe(1234);
+  });
+
+  it("persists a known single entry through the canonical SQLite store", async () => {
     const key = "agent:main:single-entry";
     const otherKey = "agent:main:other-entry";
     const otherPrompt = `<available_skills>\n${"other prompt\n".repeat(200)}</available_skills>`;
-    const { dir, storePath } = await makeTmpStore({
+    const { storePath } = await makeTmpStore({
       [key]: { sessionId: "s-single-entry", updatedAt: Date.now(), counter: 0 },
       [otherKey]: {
         sessionId: "s-other-entry",
@@ -795,7 +907,7 @@ describe("session store writer queue", () => {
     });
     loadSessionStore(storePath);
     await updateSessionStore(storePath, () => undefined, { skipMaintenance: true });
-    const before = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+    const before = loadSessionStore(storePath, { skipCache: true });
     const beforeOtherEntry = before[otherKey];
 
     await updateSessionStore(
@@ -811,13 +923,9 @@ describe("session store writer queue", () => {
       },
     );
 
-    const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
-      string,
-      SessionEntry
-    >;
+    const persisted = loadSessionStore(storePath, { skipCache: true });
     expect((persisted[key] as Record<string, unknown> | undefined)?.counter).toBe(1);
     expect(persisted[otherKey]).toStrictEqual(beforeOtherEntry);
-    expect(fs.existsSync(path.join(dir, "skills-prompts"))).toBe(true);
   });
 
   it("multiple consecutive errors do not permanently poison the queue", async () => {
@@ -859,6 +967,60 @@ describe("session store writer queue", () => {
     );
     expect(merged.model).toBe("gpt-5.4");
     expect(merged.modelProvider).toBeUndefined();
+  });
+
+  it("rewrites generated sessionFile paths when session id changes", () => {
+    const previousSessionId = "11111111-1111-4111-8111-111111111111";
+    const nextSessionId = "22222222-2222-4222-8222-222222222222";
+    const merged = mergeSessionEntry(
+      {
+        sessionId: previousSessionId,
+        updatedAt: 100,
+        sessionFile: `/tmp/openclaw/sessions/${previousSessionId}.jsonl`,
+      },
+      {
+        sessionId: nextSessionId,
+        updatedAt: 200,
+      },
+    );
+
+    expect(merged.sessionFile).toBe(`/tmp/openclaw/sessions/${nextSessionId}.jsonl`);
+  });
+
+  it("rewrites stale generated sessionFile patches during session rollover", () => {
+    const previousSessionId = "11111111-1111-4111-8111-111111111111";
+    const nextSessionId = "22222222-2222-4222-8222-222222222222";
+    const previousSessionFile = `/tmp/openclaw/sessions/${previousSessionId}-topic-456.jsonl`;
+    const merged = mergeSessionEntry(
+      {
+        sessionId: previousSessionId,
+        updatedAt: 100,
+        sessionFile: previousSessionFile,
+      },
+      {
+        sessionId: nextSessionId,
+        updatedAt: 200,
+        sessionFile: previousSessionFile,
+      },
+    );
+
+    expect(merged.sessionFile).toBe(`/tmp/openclaw/sessions/${nextSessionId}-topic-456.jsonl`);
+  });
+
+  it("preserves custom sessionFile paths when session id changes", () => {
+    const merged = mergeSessionEntry(
+      {
+        sessionId: "previous-session",
+        updatedAt: 100,
+        sessionFile: "/tmp/openclaw/sessions/custom-transcript.jsonl",
+      },
+      {
+        sessionId: "next-session",
+        updatedAt: 200,
+      },
+    );
+
+    expect(merged.sessionFile).toBe("/tmp/openclaw/sessions/custom-transcript.jsonl");
   });
 
   it("caps future updatedAt values at the session merge boundary", () => {
@@ -911,7 +1073,7 @@ describe("session store writer queue", () => {
     expect(store[key]?.model).toBeUndefined();
   });
 
-  it("preserves ACP metadata when replacing a session entry wholesale", async () => {
+  it("does not preserve legacy ACP metadata when replacing a session entry wholesale", async () => {
     const key = "agent:codex:acp:binding:discord:default:feedface";
     const acp = {
       backend: "acpx",
@@ -933,18 +1095,18 @@ describe("session store writer queue", () => {
       store[key] = {
         sessionId: "sess-acp",
         updatedAt: Date.now(),
-        modelProvider: "openai-codex",
+        modelProvider: "openai",
         model: "gpt-5.4",
       };
     });
 
     const store = loadSessionStore(storePath);
-    expect(store[key]?.acp).toEqual(acp);
-    expect(store[key]?.modelProvider).toBe("openai-codex");
+    expect(store[key]?.acp).toBeUndefined();
+    expect(store[key]?.modelProvider).toBe("openai");
     expect(store[key]?.model).toBe("gpt-5.4");
   });
 
-  it("allows explicit ACP metadata removal through the ACP session helper", async () => {
+  it("removes legacy ACP metadata when the SQLite metadata row is cleared", async () => {
     const key = "agent:codex:acp:binding:discord:default:deadbeef";
     const { storePath } = await makeTmpStore({
       [key]: {

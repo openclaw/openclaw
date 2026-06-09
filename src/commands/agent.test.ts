@@ -1,4 +1,4 @@
-import fs from "node:fs";
+// Agent command tests cover local agent runs, session routing, and command runtime behavior.
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
@@ -12,7 +12,7 @@ import * as modelSelectionModule from "../agents/model-selection.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { clearSessionStoreCacheForTest, saveSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitAgentEvent,
@@ -245,7 +245,11 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
             sessionFile,
           };
           params.sessionStore[params.sessionKey] = sessionEntry;
-          fs.writeFileSync(params.storePath, JSON.stringify(params.sessionStore));
+          const { saveSessionStore: saveSessionStoreRuntime } =
+            await import("../config/sessions/store.js");
+          await saveSessionStoreRuntime(params.storePath, params.sessionStore as never, {
+            skipMaintenance: true,
+          });
         }
         return { sessionFile, sessionEntry };
       },
@@ -289,12 +293,11 @@ function mockConfig(
   return cfg;
 }
 
-function writeSessionStoreSeed(
+async function writeSessionStoreSeed(
   storePath: string,
   sessions: Record<string, Record<string, unknown>>,
 ) {
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(sessions));
+  await saveSessionStore(storePath, sessions as never, { skipMaintenance: true });
 }
 
 function createDefaultAgentResult(params?: {
@@ -322,7 +325,7 @@ function expectLastRunProviderModel(provider: string, model: string): void {
 }
 
 function readSessionStore<T>(storePath: string): Record<string, T> {
-  return JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, T>;
+  return loadSessionStore(storePath, { skipCache: true }) as unknown as Record<string, T>;
 }
 
 async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
@@ -512,10 +515,7 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
-        string,
-        { thinkingLevel?: string; verboseLevel?: string }
-      >;
+      const saved = readSessionStore<{ thinkingLevel?: string; verboseLevel?: string }>(store);
       const entry = Object.values(saved)[0];
       expect(entry.thinkingLevel).toBe("high");
       expect(entry.verboseLevel).toBe("on");
@@ -675,7 +675,7 @@ describe("agentCommand", () => {
       const store = path.join(home, "sessions.json");
       const sessionKey = "agent:main:main";
       mockConfig(home, store, { models: {} });
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "acp-backed-session",
           updatedAt: Date.now(),
@@ -724,7 +724,7 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       const sessionKey = "agent:main:cache-borrow";
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "session-cache-borrow",
           updatedAt: Date.now(),
@@ -756,7 +756,7 @@ describe("agentCommand", () => {
   it("passes resolved session-id resume files to embedded runs", async () => {
     await withTempHome(async (home) => {
       const resumeStore = path.join(home, "sessions-resume.json");
-      writeSessionStoreSeed(resumeStore, {
+      await writeSessionStoreSeed(resumeStore, {
         foo: {
           sessionId: "session-123",
           updatedAt: Date.now(),
@@ -855,16 +855,18 @@ describe("agentCommand", () => {
     });
   });
 
-  it("uses default fallback list for auto session model overrides", async () => {
+  it("probes the configured primary first for origin-backed auto session model overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         "agent:main:subagent:test": {
           sessionId: "session-subagent",
           updatedAt: Date.now(),
           providerOverride: "anthropic",
           modelOverride: "claude-opus-4-6",
           modelOverrideSource: "auto",
+          modelOverrideFallbackOriginProvider: "openai",
+          modelOverrideFallbackOriginModel: "gpt-4.1-mini",
         },
       });
 
@@ -907,16 +909,72 @@ describe("agentCommand", () => {
         .mocked(runEmbeddedAgent)
         .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
       expect(attempts).toEqual([
-        { provider: "anthropic", model: "claude-opus-4-6" },
+        { provider: "openai", model: "gpt-4.1-mini" },
         { provider: "openai", model: "gpt-5.4" },
       ]);
+    });
+  });
+
+  it("clears legacy auto session model overrides without origin metadata", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions-legacy-auto-override.json");
+      await writeSessionStoreSeed(store, {
+        "agent:main:subagent:legacy-auto": {
+          sessionId: "session-legacy-auto",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-6",
+          modelOverrideSource: "auto",
+        },
+      });
+
+      mockConfig(home, store, {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["openai/gpt-5.4"],
+        },
+        models: {
+          "anthropic/claude-opus-4-6": {},
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.4": {},
+        },
+      });
+
+      mockModelCatalogOnce([
+        { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+      ]);
+
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:subagent:legacy-auto",
+        },
+        runtime,
+      );
+
+      const attempts = vi
+        .mocked(runEmbeddedAgent)
+        .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
+      expect(attempts).toEqual([{ provider: "openai", model: "gpt-4.1-mini" }]);
+
+      const cleared = readSessionStore<{
+        providerOverride?: string;
+        modelOverride?: string;
+        modelOverrideSource?: string;
+      }>(store);
+      const entry = cleared["agent:main:subagent:legacy-auto"];
+      expect(entry?.providerOverride).toBeUndefined();
+      expect(entry?.modelOverride).toBeUndefined();
+      expect(entry?.modelOverrideSource).toBeUndefined();
     });
   });
 
   it("does not use fallback list for user session model overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-user-override.json");
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         "agent:main:subagent:user-override": {
           sessionId: "session-user-override",
           updatedAt: Date.now(),
@@ -965,7 +1023,7 @@ describe("agentCommand", () => {
   it("clears disallowed stored override fields", async () => {
     await withTempHome(async (home) => {
       const clearStore = path.join(home, "sessions-clear-overrides.json");
-      writeSessionStoreSeed(clearStore, {
+      await writeSessionStoreSeed(clearStore, {
         "agent:main:subagent:clear-overrides": {
           sessionId: "session-clear-overrides",
           updatedAt: Date.now(),
@@ -1047,7 +1105,7 @@ describe("agentCommand", () => {
       expect(saved["agent:main:subagent:run-override"]?.providerOverride).toBeUndefined();
       expect(saved["agent:main:subagent:run-override"]?.modelOverride).toBeUndefined();
 
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         "agent:main:subagent:temp-openai-run": {
           sessionId: "session-temp-openai-run",
           updatedAt: Date.now(),
@@ -1217,7 +1275,8 @@ describe("agentCommand", () => {
 
       callArgs = getLastEmbeddedCall();
       expect(callArgs?.agentId).toBe("ops");
-      expect(callArgs?.sessionKey).toBe("global");
+      expect(callArgs?.sessionKey).toBe("agent:ops:global");
+      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
     });
   });
 

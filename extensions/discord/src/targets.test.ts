@@ -1,3 +1,4 @@
+// Discord tests cover targets plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -137,7 +138,7 @@ describe("resolveDiscordTarget", () => {
 
   it("treats bare numeric ids in allowFrom as users even when channels are the default", async () => {
     const listPeers = vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive");
-    const cfg = {
+    const cfgCandidate = {
       channels: {
         discord: {
           accounts: {
@@ -150,14 +151,18 @@ describe("resolveDiscordTarget", () => {
     } as OpenClawConfig;
 
     expectTargetFields(
-      await resolveDiscordTarget("123", { cfg, accountId: "default" }, { defaultKind: "channel" }),
+      await resolveDiscordTarget(
+        "123",
+        { cfg: cfgCandidate, accountId: "default" },
+        { defaultKind: "channel" },
+      ),
       { kind: "user", id: "123", normalized: "user:123" },
     );
     expect(listPeers).not.toHaveBeenCalled();
   });
 
   it("uses legacy dm.allowFrom when disambiguating bare numeric ids", async () => {
-    const cfg = {
+    const cfgEntry = {
       channels: {
         discord: {
           accounts: {
@@ -170,13 +175,17 @@ describe("resolveDiscordTarget", () => {
     } as OpenClawConfig;
 
     expectTargetFields(
-      await resolveDiscordTarget("456", { cfg, accountId: "default" }, { defaultKind: "channel" }),
+      await resolveDiscordTarget(
+        "456",
+        { cfg: cfgEntry, accountId: "default" },
+        { defaultKind: "channel" },
+      ),
       { kind: "user", id: "456", normalized: "user:456" },
     );
   });
 
   it("prefers top-level allowFrom over legacy dm.allowFrom for bare numeric ids", async () => {
-    const cfg = {
+    const cfgResult = {
       channels: {
         discord: {
           accounts: {
@@ -190,13 +199,17 @@ describe("resolveDiscordTarget", () => {
     } as OpenClawConfig;
 
     expectTargetFields(
-      await resolveDiscordTarget("456", { cfg, accountId: "default" }, { defaultKind: "channel" }),
+      await resolveDiscordTarget(
+        "456",
+        { cfg: cfgResult, accountId: "default" },
+        { defaultKind: "channel" },
+      ),
       { kind: "channel", id: "456", normalized: "channel:456" },
     );
   });
 
   it("uses account legacy dm.allowFrom before inherited root allowFrom for bare numeric ids", async () => {
-    const cfg = {
+    const cfgValue = {
       channels: {
         discord: {
           allowFrom: ["123"],
@@ -210,17 +223,25 @@ describe("resolveDiscordTarget", () => {
     } as OpenClawConfig;
 
     expectTargetFields(
-      await resolveDiscordTarget("456", { cfg, accountId: "work" }, { defaultKind: "channel" }),
+      await resolveDiscordTarget(
+        "456",
+        { cfg: cfgValue, accountId: "work" },
+        { defaultKind: "channel" },
+      ),
       { kind: "user", id: "456", normalized: "user:456" },
     );
     expectTargetFields(
-      await resolveDiscordTarget("123", { cfg, accountId: "work" }, { defaultKind: "channel" }),
+      await resolveDiscordTarget(
+        "123",
+        { cfg: cfgValue, accountId: "work" },
+        { defaultKind: "channel" },
+      ),
       { kind: "channel", id: "123", normalized: "channel:123" },
     );
   });
 
   it("caches username lookups under the configured default account when accountId is omitted", async () => {
-    const cfg = {
+    const cfgLocal = {
       channels: {
         discord: {
           defaultAccount: "work",
@@ -237,7 +258,7 @@ describe("resolveDiscordTarget", () => {
       { kind: "user", id: "user:999", name: "Jane" } as const,
     ]);
 
-    expectTargetFields(await resolveDiscordTarget("jane", { cfg }), {
+    expectTargetFields(await resolveDiscordTarget("jane", { cfg: cfgLocal }), {
       kind: "user",
       id: "999",
       normalized: "user:999",

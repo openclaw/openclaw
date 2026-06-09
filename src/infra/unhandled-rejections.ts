@@ -1,6 +1,7 @@
+// Installs fatal and transient unhandled rejection/exception handlers.
 import process from "node:process";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,

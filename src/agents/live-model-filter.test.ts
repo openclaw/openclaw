@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for live model sweep filtering.
+ * Verifies provider exclusions, explicit filters, and high-signal model caps.
+ */
 import { describe, expect, it } from "vitest";
 import {
   resolveHighSignalLiveModelLimit,
@@ -5,7 +9,7 @@ import {
 } from "./live-model-filter.js";
 
 function resolveProviderOwners(provider: string): readonly string[] | undefined {
-  if (provider === "openai" || provider === "openai-codex") {
+  if (provider === "openai") {
     return ["openai"];
   }
   if (provider === "codex" || provider === "codex-cli") {
@@ -66,7 +70,7 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
     ).toBe(false);
     expect(
       shouldExcludeProviderFromDefaultHighSignalLiveSweep({
-        provider: "openai-codex",
+        provider: "openai",
         useExplicitModels: false,
         providerFilter: null,
         resolveProviderOwners,

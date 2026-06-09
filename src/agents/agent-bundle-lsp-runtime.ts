@@ -1,4 +1,6 @@
+/** Session-scoped embedded LSP runtime and tool materialization for agent bundles. */
 import { spawn, type ChildProcess } from "node:child_process";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { logDebug, logWarn } from "../logger.js";
@@ -8,7 +10,6 @@ import {
 } from "../plugin-sdk/windows-spawn.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { killProcessTree } from "../process/kill-tree.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { loadEmbeddedAgentLspConfig } from "./embedded-agent-lsp.js";
 import {
   resolveStdioMcpServerLaunchConfig,
@@ -46,6 +47,7 @@ type LspServerCapabilities = {
   [key: string]: unknown;
 };
 
+/** Materialized LSP tools plus session capabilities and cleanup handle. */
 export type BundleLspToolRuntime = {
   tools: AnyAgentTool[];
   sessions: Array<{ serverName: string; capabilities: LspServerCapabilities }>;
@@ -69,6 +71,7 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+/** Spawns one LSP server process using sanitized host env and Windows shim handling. */
 export function spawnLspServerProcess(config: StdioMcpServerLaunchConfig): ChildProcess {
   const mergedEnv = sanitizeHostExecEnv({ baseEnv: process.env, overrides: config.env ?? null });
   const program = resolveWindowsSpawnProgram({

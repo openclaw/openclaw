@@ -1,8 +1,14 @@
+/**
+ * Simple completion transport preparation.
+ *
+ * Registers provider-specific stream functions and rewrites models that need OpenClaw-managed transport semantics.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getApiProvider } from "../llm/api-registry.js";
 import type { Api, Model } from "../llm/types.js";
 import { createAnthropicVertexStreamFnForModel } from "./anthropic-vertex-stream.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
+import { prepareGoogleSimpleCompletionModel } from "./google-simple-completion-stream.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import {
   buildTransportAwareSimpleStreamFn,
@@ -52,7 +58,7 @@ function prepareCodexSimpleTransportModel<TApi extends Api>(
   model: Model<TApi>,
   cfg?: OpenClawConfig,
 ): Model | undefined {
-  if (model.provider !== "openai" || model.api !== "openai-codex-responses") {
+  if (model.provider !== "openai" || model.api !== "openai-chatgpt-responses") {
     return undefined;
   }
 
@@ -97,6 +103,10 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
       ensureCustomApiRegistered(transportAwareModel.api, streamFn);
       return transportAwareModel;
     }
+  }
+
+  if (model.api === "google-generative-ai") {
+    return prepareGoogleSimpleCompletionModel(model);
   }
 
   if (model.provider === "anthropic-vertex") {

@@ -1,6 +1,13 @@
+/**
+ * Loads bundled, manifest, and discovered model catalog entries.
+ */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -14,13 +21,14 @@ import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapsh
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
+import {
+  buildAgentModelCatalogCacheKey,
+  readCachedAgentModelCatalog,
+  writeCachedAgentModelCatalog,
+} from "./model-catalog-state-cache.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { resolveModelWorkspaceDir } from "./model-discovery-context.js";
 import {
@@ -32,7 +40,10 @@ import {
   buildConfiguredModelCatalog,
   hasConfiguredProviderModelRows,
 } from "./model-selection-shared.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import {
+  buildModelsJsonSourceFingerprint,
+  prepareOpenClawModelsJsonSource,
+} from "./models-config.js";
 import {
   filterGeneratedPluginModelCatalogProviders,
   listPluginModelCatalogFiles,
@@ -70,6 +81,25 @@ type ManifestModelCatalogCacheEntry = {
   rows: ModelCatalogEntry[];
 };
 let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
+
+function buildLoadModelCatalogStateCacheKey(params: {
+  agentDir: string;
+  config: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot;
+  sourceFingerprint: string;
+  workspaceDir?: string;
+}): string {
+  return buildAgentModelCatalogCacheKey({
+    agentDir: params.agentDir,
+    cacheScope: {
+      source: "load-model-catalog",
+      sourceFingerprint: params.sourceFingerprint,
+    },
+    config: params.config,
+    metadataSnapshot: params.metadataSnapshot,
+    workspaceDir: params.workspaceDir,
+  });
+}
 const defaultImportAgentDiscovery = () => import("./agent-model-discovery.js");
 let importAgentDiscovery = defaultImportAgentDiscovery;
 const modelSuppressionLoader = createLazyImportLoader(
@@ -116,21 +146,6 @@ function catalogEntryDedupeKey(provider: string, id: string): string {
   return normalizeLowercaseStringOrEmpty(modelKey(normalizedProvider, id));
 }
 
-function appendCatalogEntriesIfAbsent(
-  models: ModelCatalogEntry[],
-  entries: ModelCatalogEntry[],
-): void {
-  const seen = new Set(models.map((entry) => catalogEntryDedupeKey(entry.provider, entry.id)));
-  for (const entry of entries) {
-    const key = catalogEntryDedupeKey(entry.provider, entry.id);
-    if (seen.has(key)) {
-      continue;
-    }
-    models.push(entry);
-    seen.add(key);
-  }
-}
-
 function mergeCatalogCompat(
   base: ModelCatalogEntry["compat"] | undefined,
   override: ModelCatalogEntry["compat"] | undefined,
@@ -144,24 +159,21 @@ function mergeCatalogCompat(
   return { ...base, ...override };
 }
 
-function overlayConfiguredCatalogMetadata(
+function overlayCatalogMetadata(
   base: ModelCatalogEntry,
-  configured: ModelCatalogEntry,
+  overlay: ModelCatalogEntry,
 ): ModelCatalogEntry {
   return {
     ...base,
-    ...(configured.contextWindow !== undefined ? { contextWindow: configured.contextWindow } : {}),
-    ...(configured.contextTokens !== undefined ? { contextTokens: configured.contextTokens } : {}),
-    ...(configured.reasoning !== undefined ? { reasoning: configured.reasoning } : {}),
-    ...(configured.input !== undefined ? { input: configured.input } : {}),
-    compat: mergeCatalogCompat(base.compat, configured.compat),
+    ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
+    ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
+    ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),
+    ...(overlay.input !== undefined ? { input: overlay.input } : {}),
+    compat: mergeCatalogCompat(base.compat, overlay.compat),
   };
 }
 
-function mergeConfiguredCatalogEntries(
-  models: ModelCatalogEntry[],
-  entries: ModelCatalogEntry[],
-): void {
+function mergeCatalogEntries(models: ModelCatalogEntry[], entries: ModelCatalogEntry[]): void {
   const indexByKey = new Map(
     models.map((entry, index) => [catalogEntryDedupeKey(entry.provider, entry.id), index]),
   );
@@ -173,7 +185,7 @@ function mergeConfiguredCatalogEntries(
       indexByKey.set(key, models.length - 1);
       continue;
     }
-    models[existingIndex] = overlayConfiguredCatalogMetadata(models[existingIndex], entry);
+    models[existingIndex] = overlayCatalogMetadata(models[existingIndex], entry);
   }
 }
 
@@ -408,12 +420,25 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
   if (models.length === 0) {
     throw new Error("persisted model catalog has no usable model rows");
   }
+  try {
+    mergeCatalogEntries(
+      models,
+      loadManifestModelCatalog({
+        config: cfg,
+        env: process.env,
+        fallbackToMetadataScan: false,
+        metadataSnapshot: getMetadataSnapshot(),
+      }),
+    );
+  } catch {
+    // Persisted rows are still valid when manifest metadata is temporarily unavailable.
+  }
   const configuredModels = buildConfiguredModelCatalog({
     cfg,
     manifestPlugins: hasConfiguredProviderModelRows(cfg) ? getManifestPlugins() : undefined,
   });
   if (configuredModels.length > 0) {
-    mergeConfiguredCatalogEntries(models, configuredModels);
+    mergeCatalogEntries(models, configuredModels);
   }
   return sortModelCatalogEntries(models);
 }
@@ -436,7 +461,7 @@ function loadReadOnlyStaticModelCatalog(params?: {
   const cfg = params?.config ?? getRuntimeConfig();
   const models: ModelCatalogEntry[] = [];
   try {
-    appendCatalogEntriesIfAbsent(
+    mergeCatalogEntries(
       models,
       loadManifestModelCatalog({
         config: cfg,
@@ -465,7 +490,7 @@ function loadReadOnlyStaticModelCatalog(params?: {
     manifestPlugins: configuredManifestPlugins,
   });
   if (configuredModels.length > 0) {
-    mergeConfiguredCatalogEntries(models, configuredModels);
+    mergeCatalogEntries(models, configuredModels);
   }
   return sortModelCatalogEntries(models);
 }
@@ -525,15 +550,57 @@ export async function loadModelCatalog(params?: {
         manifestPlugins ??= getManifestMetadataSnapshot().plugins;
         return manifestPlugins;
       };
+      const agentDir = resolveDefaultAgentDir(cfg);
+      const sourceFingerprint = await buildModelsJsonSourceFingerprint(cfg, agentDir, {
+        pluginMetadataSnapshot: params?.metadataSnapshot,
+        workspaceDir,
+      });
+      let catalogKey = buildLoadModelCatalogStateCacheKey({
+        agentDir,
+        config: cfg,
+        metadataSnapshot: params?.metadataSnapshot,
+        sourceFingerprint: sourceFingerprint.fingerprint,
+        workspaceDir,
+      });
+      if (!readOnly && params?.useCache !== false) {
+        const cached = readCachedAgentModelCatalog({ agentDir, catalogKey }) as
+          | ModelCatalogEntry[]
+          | undefined;
+        if (cached?.length) {
+          logStage("state-cache-hit", `entries=${cached.length}`);
+          return cached;
+        }
+      }
       if (!readOnly) {
-        await ensureOpenClawModelsJson(cfg);
+        const preparedSource = await prepareOpenClawModelsJsonSource(cfg, agentDir, {
+          pluginMetadataSnapshot: params?.metadataSnapshot,
+          workspaceDir,
+        });
+        const preparedCatalogKey = buildLoadModelCatalogStateCacheKey({
+          agentDir,
+          config: cfg,
+          metadataSnapshot: params?.metadataSnapshot,
+          sourceFingerprint: preparedSource.fingerprint,
+          workspaceDir: preparedSource.workspaceDir ?? workspaceDir,
+        });
         logStage("models-json-ready");
+        if (preparedCatalogKey !== catalogKey) {
+          catalogKey = preparedCatalogKey;
+          if (params?.useCache !== false) {
+            const cached = readCachedAgentModelCatalog({ agentDir, catalogKey }) as
+              | ModelCatalogEntry[]
+              | undefined;
+            if (cached?.length) {
+              logStage("state-cache-hit", `entries=${cached.length}`);
+              return cached;
+            }
+          }
+        }
       }
       // Keep discovery inside try/catch so transient filesystem/config failures do not poison
       // the shared catalog cache until restart.
       const agentDiscovery = await importAgentDiscovery();
       logStage("agent-discovery-imported");
-      const agentDir = resolveDefaultAgentDir(cfg);
       const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
       logStage("catalog-deps-ready");
       const authStorage = agentDiscovery.discoverAuthStorage(
@@ -590,7 +657,7 @@ export async function loadModelCatalog(params?: {
           compat,
         });
       }
-      appendCatalogEntriesIfAbsent(
+      mergeCatalogEntries(
         models,
         loadManifestModelCatalog({
           config: cfg,
@@ -599,6 +666,18 @@ export async function loadModelCatalog(params?: {
         }),
       );
       logStage("manifest-models-merged", `entries=${models.length}`);
+      const configuredModels = buildConfiguredModelCatalog({
+        cfg,
+        manifestPlugins: hasConfiguredProviderModelRows(cfg) ? getManifestPlugins() : undefined,
+      });
+      let augmentEntries: ModelCatalogEntry[] | undefined;
+      if (configuredModels.length > 0) {
+        const entriesForAugment = [...models];
+        mergeCatalogEntries(entriesForAugment, configuredModels);
+        augmentEntries = entriesForAugment;
+      }
+      logStage("configured-models-prepared", `entries=${models.length}`);
+
       if (!readOnly) {
         const { createProviderApiKeyResolver } = await loadProviderApiKeyResolver();
         let authStore: ReturnType<typeof ensureAuthProfileStoreWithoutExternalProfiles> | undefined;
@@ -622,7 +701,7 @@ export async function loadModelCatalog(params?: {
             agentDir,
             env: process.env,
             resolveProviderApiKey,
-            entries: [...models],
+            entries: augmentEntries ?? [...models],
           },
         });
         if (supplemental.length > 0) {
@@ -635,19 +714,15 @@ export async function loadModelCatalog(params?: {
               }),
             });
           }
-          appendCatalogEntriesIfAbsent(models, normalizedSupplemental);
+          mergeCatalogEntries(models, normalizedSupplemental);
         }
       }
       logStage("plugin-models-merged", `entries=${models.length}`);
 
-      const configuredModels = buildConfiguredModelCatalog({
-        cfg,
-        manifestPlugins: hasConfiguredProviderModelRows(cfg) ? getManifestPlugins() : undefined,
-      });
       if (configuredModels.length > 0) {
-        mergeConfiguredCatalogEntries(models, configuredModels);
+        mergeCatalogEntries(models, configuredModels);
       }
-      logStage("configured-models-merged", `entries=${models.length}`);
+      logStage("configured-models-finalized", `entries=${models.length}`);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
@@ -657,6 +732,13 @@ export async function loadModelCatalog(params?: {
       }
 
       const sorted = sortModels(models);
+      if (!readOnly) {
+        writeCachedAgentModelCatalog({
+          agentDir,
+          catalogKey,
+          entries: sorted,
+        });
+      }
       logStage("complete", `entries=${sorted.length}`);
       return sorted;
     } catch (error) {

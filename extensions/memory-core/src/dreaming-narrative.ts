@@ -1,3 +1,4 @@
+// Memory Core plugin module implements dreaming narrative behavior.
 import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
@@ -13,12 +14,13 @@ import {
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { pathExists, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
   loadSessionStore,
   resolveStorePath,
   updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { updateDreamsFile } from "./dreaming-dreams-file.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -101,26 +103,18 @@ const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
 const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
 const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
 const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
-const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
 const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
 const BACKFILL_ENTRY_MARKER = "openclaw:dreaming:backfill-entry";
-const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
 const NARRATIVE_SESSION_LOCKS_KEY = Symbol.for(
   "openclaw.memoryCore.dreamingNarrative.sessionLocks",
 );
-
-type DreamsFileLockEntry = {
-  withLock: ReturnType<typeof createAsyncLock>;
-  refs: number;
-};
 
 type NarrativeSessionLockEntry = {
   withLock: ReturnType<typeof createAsyncLock>;
   refs: number;
 };
 
-const dreamsFileLocks = resolveGlobalMap<string, DreamsFileLockEntry>(DREAMS_FILE_LOCKS_KEY);
 const narrativeSessionLocks = resolveGlobalMap<string, NarrativeSessionLockEntry>(
   NARRATIVE_SESSION_LOCKS_KEY,
 );
@@ -149,12 +143,13 @@ function formatFallbackWriteFailure(err: unknown): string {
   return "unknown error";
 }
 
-function buildRequestScopedFallbackNarrative(data: NarrativePhaseData): string {
-  return (
-    data.snippets.map((value) => value.trim()).find((value) => value.length > 0) ??
-    (data.promotions ?? []).map((value) => value.trim()).find((value) => value.length > 0) ??
-    "A memory trace surfaced, but details were unavailable in this run."
-  );
+// Raw snippets and promotions are pre-processing memory staging fragments
+// (session metadata, conversation summaries, operational logs). They must never
+// be persisted to the human-readable dream diary. When narrative generation
+// fails, always fall back to a generic placeholder so no staging content leaks
+// into DREAMS.md.
+function buildRequestScopedFallbackNarrative(_data: NarrativePhaseData): string {
+  return "A memory trace surfaced, but details were unavailable in this run.";
 }
 
 async function appendFallbackNarrativeEntry(params: {
@@ -369,32 +364,6 @@ export function formatNarrativeDate(epochMs: number, timezone?: string): string 
 
 // ── DREAMS.md file I/O ─────────────────────────────────────────────────
 
-async function resolveDreamsPath(workspaceDir: string): Promise<string> {
-  for (const name of DREAMS_FILENAMES) {
-    const target = path.join(workspaceDir, name);
-    try {
-      await fs.access(target);
-      return target;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        throw err;
-      }
-    }
-  }
-  return path.join(workspaceDir, DREAMS_FILENAMES[0]);
-}
-
-async function readDreamsFile(dreamsPath: string): Promise<string> {
-  try {
-    return await fs.readFile(dreamsPath, "utf-8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return "";
-    }
-    throw err;
-  }
-}
-
 function ensureDiarySection(existing: string): string {
   if (existing.includes(DIARY_START_MARKER) && existing.includes(DIARY_END_MARKER)) {
     return existing;
@@ -496,74 +465,6 @@ export function formatBackfillDiaryDate(isoDay: string, _timezone?: string): str
   };
   const epochMs = Date.UTC(Number(year), Number(month) - 1, Number(day), 12);
   return new Intl.DateTimeFormat("en-US", opts).format(new Date(epochMs));
-}
-
-async function assertSafeDreamsPath(dreamsPath: string): Promise<void> {
-  const stat = await fs.lstat(dreamsPath).catch((err: NodeJS.ErrnoException) => {
-    if (err.code === "ENOENT") {
-      return null;
-    }
-    throw err;
-  });
-  if (!stat) {
-    return;
-  }
-  if (stat.isSymbolicLink()) {
-    throw new Error("Refusing to write symlinked DREAMS.md");
-  }
-  if (!stat.isFile()) {
-    throw new Error("Refusing to write non-file DREAMS.md");
-  }
-}
-
-async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promise<void> {
-  await assertSafeDreamsPath(dreamsPath);
-  await replaceFileAtomic({
-    filePath: dreamsPath,
-    content,
-    mode: 0o600,
-    preserveExistingMode: true,
-    tempPrefix: `${path.basename(dreamsPath)}.dreams`,
-    throwOnCleanupError: true,
-  });
-}
-
-async function updateDreamsFile<T>(params: {
-  workspaceDir: string;
-  updater: (
-    existing: string,
-    dreamsPath: string,
-  ) =>
-    | Promise<{ content: string; result: T; shouldWrite?: boolean }>
-    | {
-        content: string;
-        result: T;
-        shouldWrite?: boolean;
-      };
-}): Promise<T> {
-  const dreamsPath = await resolveDreamsPath(params.workspaceDir);
-  await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
-  let lockEntry = dreamsFileLocks.get(dreamsPath);
-  if (!lockEntry) {
-    lockEntry = { withLock: createAsyncLock(), refs: 0 };
-    dreamsFileLocks.set(dreamsPath, lockEntry);
-  }
-  lockEntry.refs += 1;
-  try {
-    return await lockEntry.withLock(async () => {
-      const existing = await readDreamsFile(dreamsPath);
-      const { content, result, shouldWrite = true } = await params.updater(existing, dreamsPath);
-      if (shouldWrite) {
-        await writeDreamsFileAtomic(dreamsPath, content.endsWith("\n") ? content : `${content}\n`);
-      }
-      return result;
-    });
-  } finally {
-    lockEntry.refs -= 1;
-    if (lockEntry.refs <= 0 && dreamsFileLocks.get(dreamsPath) === lockEntry) {
-      dreamsFileLocks.delete(dreamsPath);
-    }
-  }
 }
 
 async function withNarrativeSessionLock<T>(sessionKey: string, fn: () => Promise<T>): Promise<T> {
@@ -772,6 +673,28 @@ function isDreamingSessionStoreKey(sessionKey: string): boolean {
   return sessionSegment.startsWith(DREAMING_SESSION_KEY_PREFIX);
 }
 
+// A dreaming store row is reclaimable once its narrative run is finished. The
+// happy path deletes the session in `finally`, but when `deleteSession` throws
+// (e.g. request-scoped subagent runtime) the row is left behind referencing a
+// still-present transcript, so the missing-transcript check alone never reaps
+// it and the session lingers in the sidebar forever (issue #88322). Reclaim a
+// dreaming row when its transcript is missing, or when the transcript has aged
+// past the orphan threshold (a live narrative refreshes its transcript well
+// within that window, so active runs are never reaped).
+async function isReclaimableDreamingStoreEntry(
+  normalizedSessionFile: string | null,
+): Promise<boolean> {
+  if (!normalizedSessionFile || !(await pathExists(normalizedSessionFile))) {
+    return true;
+  }
+  try {
+    const stat = await fs.stat(normalizedSessionFile);
+    return Date.now() - stat.mtimeMs >= DREAMING_ORPHAN_MIN_AGE_MS;
+  } catch {
+    return true;
+  }
+}
+
 async function normalizeSessionEntryPathForComparison(params: {
   sessionsDir: string;
   entry: { sessionFile?: string; sessionId?: string } | undefined;
@@ -797,7 +720,7 @@ async function normalizeSessionEntryPathForComparison(params: {
 async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
   const cfg = getRuntimeConfig();
   const agentsDir = path.join(resolveStateDir(), "agents");
-  let agentEntries: Dirent[] = [];
+  let agentEntries: Dirent[];
   try {
     agentEntries = await fs.readdir(agentsDir, { withFileTypes: true });
   } catch {
@@ -837,7 +760,7 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       if (!isDreamingSessionStoreKey(key)) {
         continue;
       }
-      if (!normalizedSessionFile || !(await pathExists(normalizedSessionFile))) {
+      if (await isReclaimableDreamingStoreEntry(normalizedSessionFile)) {
         needsStoreUpdate = true;
       }
     }
@@ -851,22 +774,28 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
             sessionsDir,
             entry,
           });
-          if (normalizedSessionFile) {
-            referencedSessionFiles.add(normalizedSessionFile);
-          }
           if (!isDreamingSessionStoreKey(key)) {
+            if (normalizedSessionFile) {
+              referencedSessionFiles.add(normalizedSessionFile);
+            }
             continue;
           }
-          if (!normalizedSessionFile || !(await pathExists(normalizedSessionFile))) {
+          if (await isReclaimableDreamingStoreEntry(normalizedSessionFile)) {
+            // Drop the row and leave the transcript unreferenced so the orphan
+            // transcript pass below archives the aged-out (or missing) file.
             delete lockedStore[key];
             prunedForAgent += 1;
+            continue;
+          }
+          if (normalizedSessionFile) {
+            referencedSessionFiles.add(normalizedSessionFile);
           }
         }
         return prunedForAgent;
       });
     }
 
-    let sessionFiles: Dirent[] = [];
+    let sessionFiles: Dirent[];
     try {
       sessionFiles = await fs.readdir(sessionsDir, { withFileTypes: true });
     } catch {
@@ -895,7 +824,7 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       if (Date.now() - stat.mtimeMs < DREAMING_ORPHAN_MIN_AGE_MS) {
         continue;
       }
-      let content = "";
+      let content;
       try {
         content = await fs.readFile(transcriptPath, "utf-8");
       } catch {

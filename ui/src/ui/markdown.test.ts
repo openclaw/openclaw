@@ -1,13 +1,32 @@
+// Control UI tests cover markdown behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { md, toSanitizedMarkdownHtml } from "./markdown.ts";
+import {
+  md,
+  toSanitizedMarkdownHtml,
+  toStreamingMarkdownHtml,
+  toStreamingPlainTextHtml,
+} from "./markdown.ts";
 import { renderMarkdownSidebar } from "./views/markdown-sidebar.ts";
 
 function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");
   container.innerHTML = html;
   return container;
+}
+
+function withControlUiBasePath<T>(basePath: string, fn: () => T): T {
+  Object.defineProperty(window, "__OPENCLAW_CONTROL_UI_BASE_PATH__", {
+    value: basePath,
+    writable: true,
+    configurable: true,
+  });
+  try {
+    return fn();
+  } finally {
+    delete window["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
+  }
 }
 
 describe("toSanitizedMarkdownHtml", () => {
@@ -500,7 +519,7 @@ PY
     });
 
     it("renders tables surrounded by text", () => {
-      const md = [
+      const mdLocal = [
         "Text before.",
         "",
         "| A | B |",
@@ -509,7 +528,7 @@ PY
         "",
         "Text after.",
       ].join("\n");
-      const html = toSanitizedMarkdownHtml(md);
+      const html = toSanitizedMarkdownHtml(mdLocal);
       expect(html).toBe(
         "<p>Text before.</p>\n<table>\n<thead>\n<tr>\n<th>A</th>\n<th>B</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>1</td>\n<td>2</td>\n</tr>\n</tbody>\n</table>\n<p>Text after.</p>\n",
       );
@@ -581,6 +600,26 @@ PY
       const html = toSanitizedMarkdownHtml("[usage](/usage)");
       expect(html).toBe(
         '<p><a href="/usage" rel="noreferrer noopener" target="_blank">usage</a></p>\n',
+      );
+    });
+
+    it("rewrites docs-root links to the public docs host", () => {
+      const html = toSanitizedMarkdownHtml(
+        "[workspace](/concepts/agent-workspace) [hooks](/automation/hooks#session-memory) [telegram](/channels/telegram?tab=setup) [shortlink](/telegram) [openai](/openai) [images](/images) [groups](/groups) [camera](/nodes/camera) [macOS](/platforms/macos) [cliSessions](/cli/sessions) [toolSkills](/tools/skills) [pluginDocs](/plugins/reference/diffs) [prose](/prose) [refactor](/refactor/ingress-core)",
+      );
+      expect(html).toBe(
+        '<p><a href="https://docs.openclaw.ai/concepts/agent-workspace" rel="noreferrer noopener" target="_blank">workspace</a> <a href="https://docs.openclaw.ai/automation/hooks#session-memory" rel="noreferrer noopener" target="_blank">hooks</a> <a href="https://docs.openclaw.ai/channels/telegram?tab=setup" rel="noreferrer noopener" target="_blank">telegram</a> <a href="https://docs.openclaw.ai/telegram" rel="noreferrer noopener" target="_blank">shortlink</a> <a href="https://docs.openclaw.ai/openai" rel="noreferrer noopener" target="_blank">openai</a> <a href="https://docs.openclaw.ai/images" rel="noreferrer noopener" target="_blank">images</a> <a href="https://docs.openclaw.ai/groups" rel="noreferrer noopener" target="_blank">groups</a> <a href="https://docs.openclaw.ai/nodes/camera" rel="noreferrer noopener" target="_blank">camera</a> <a href="https://docs.openclaw.ai/platforms/macos" rel="noreferrer noopener" target="_blank">macOS</a> <a href="https://docs.openclaw.ai/cli/sessions" rel="noreferrer noopener" target="_blank">cliSessions</a> <a href="https://docs.openclaw.ai/tools/skills" rel="noreferrer noopener" target="_blank">toolSkills</a> <a href="https://docs.openclaw.ai/plugins/reference/diffs" rel="noreferrer noopener" target="_blank">pluginDocs</a> <a href="https://docs.openclaw.ai/prose" rel="noreferrer noopener" target="_blank">prose</a> <a href="https://docs.openclaw.ai/refactor/ingress-core" rel="noreferrer noopener" target="_blank">refactor</a></p>\n',
+      );
+    });
+
+    it("keeps app and resource routes instead of treating them as docs roots", () => {
+      const html = withControlUiBasePath("/control", () =>
+        toSanitizedMarkdownHtml(
+          "[channels](/channels) [automation](/automation) [workshop](/skills/workshop) [chat](/chat) [baseChat](/control/chat?session=abc) [baseSessions](/control/sessions) [health](/healthz) [pluginDynamic](/googlechat) [asset](/api/files/1) [baseApi](/control/api/files/1) [baseAvatar](/control/avatar/main) [plugin](/plugins/diffs/view/id/token) [basePlugin](/control/plugins/diffs/view/id/token) [artifact](/__openclaw__/canvas/documents/x/index.html) [baseArtifact](/control/__openclaw__/canvas/x)",
+        ),
+      );
+      expect(html).toBe(
+        '<p><a href="/channels" rel="noreferrer noopener" target="_blank">channels</a> <a href="/automation" rel="noreferrer noopener" target="_blank">automation</a> <a href="/skills/workshop" rel="noreferrer noopener" target="_blank">workshop</a> <a href="/chat" rel="noreferrer noopener" target="_blank">chat</a> <a href="/control/chat?session=abc" rel="noreferrer noopener" target="_blank">baseChat</a> <a href="/control/sessions" rel="noreferrer noopener" target="_blank">baseSessions</a> <a href="/healthz" rel="noreferrer noopener" target="_blank">health</a> <a href="/googlechat" rel="noreferrer noopener" target="_blank">pluginDynamic</a> <a href="/api/files/1" rel="noreferrer noopener" target="_blank">asset</a> <a href="/control/api/files/1" rel="noreferrer noopener" target="_blank">baseApi</a> <a href="/control/avatar/main" rel="noreferrer noopener" target="_blank">baseAvatar</a> <a href="/plugins/diffs/view/id/token" rel="noreferrer noopener" target="_blank">plugin</a> <a href="/control/plugins/diffs/view/id/token" rel="noreferrer noopener" target="_blank">basePlugin</a> <a href="/__openclaw__/canvas/documents/x/index.html" rel="noreferrer noopener" target="_blank">artifact</a> <a href="/control/__openclaw__/canvas/x" rel="noreferrer noopener" target="_blank">baseArtifact</a></p>\n',
       );
     });
   });
@@ -685,6 +724,96 @@ PY
   });
 });
 
+describe("toStreamingPlainTextHtml", () => {
+  it("strips unsupported citation control markers before escaping streaming text", () => {
+    const html = toStreamingPlainTextHtml(
+      "v2026.5.20 release note citeturn2view0\n\nStill readable.",
+    );
+
+    expect(html).toBe(
+      '<div class="markdown-plain-text-fallback">v2026.5.20 release note\n\nStill readable.</div>',
+    );
+    expect(html).not.toContain("cite");
+    expect(html).not.toContain("turn2view0");
+  });
+});
+
+describe("toStreamingMarkdownHtml", () => {
+  it("renders completed block prefixes as markdown and keeps the open tail plain", () => {
+    const html = toStreamingMarkdownHtml("## Done\n\nworking **tail");
+
+    expect(html).toBe(
+      '<h2>Done</h2>\n<div class="markdown-plain-text-fallback">working **tail</div>',
+    );
+  });
+
+  it("keeps a single open paragraph as escaped text", () => {
+    const html = toStreamingMarkdownHtml("**still streaming");
+
+    expect(html).toBe('<div class="markdown-plain-text-fallback">**still streaming</div>');
+  });
+
+  it("does not invoke the markdown parser before a stable block boundary exists", () => {
+    const renderSpy = vi.spyOn(md, "render");
+    try {
+      const html = toStreamingMarkdownHtml("**still streaming parser sentinel");
+
+      expect(html).toBe(
+        '<div class="markdown-plain-text-fallback">**still streaming parser sentinel</div>',
+      );
+      expect(renderSpy).not.toHaveBeenCalled();
+    } finally {
+      renderSpy.mockRestore();
+    }
+  });
+
+  it("reuses the rendered stable prefix while only the streaming tail changes", () => {
+    const renderSpy = vi.spyOn(md, "render");
+    try {
+      const first = toStreamingMarkdownHtml("## Streaming cache sentinel\n\nfirst **tail");
+      const second = toStreamingMarkdownHtml("## Streaming cache sentinel\n\nsecond **tail");
+
+      expect(first).toContain("<h2>Streaming cache sentinel</h2>");
+      expect(second).toContain("<h2>Streaming cache sentinel</h2>");
+      expect(renderSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      renderSpy.mockRestore();
+    }
+  });
+
+  it("does not parse an open code fence while streaming", () => {
+    const html = toStreamingMarkdownHtml("Intro\n\n```ts\nconst x = 1 < 2");
+
+    expect(html).toBe(
+      '<p>Intro</p>\n<div class="markdown-plain-text-fallback">```ts\nconst x = 1 &lt; 2</div>',
+    );
+  });
+
+  it("keeps an open list code fence streaming through blank lines", () => {
+    const html = toStreamingMarkdownHtml("- ```ts\n  const x = 1;\n\n  const y = 2;");
+
+    expect(html).toBe(
+      '<div class="markdown-plain-text-fallback">- ```ts\n  const x = 1;\n\n  const y = 2;</div>',
+    );
+  });
+
+  it("keeps an open blockquote code fence streaming through blank lines", () => {
+    const html = toStreamingMarkdownHtml("> ```ts\n> const x = 1;\n>\n> const y = 2;");
+
+    expect(html).toBe(
+      '<div class="markdown-plain-text-fallback">&gt; ```ts\n&gt; const x = 1;\n&gt;\n&gt; const y = 2;</div>',
+    );
+  });
+
+  it("renders a completed code fence once the closing fence arrives", () => {
+    const html = toStreamingMarkdownHtml("```ts\nconst x = 1;\n```");
+
+    expect(html).toContain('<code class="hljs language-ts"');
+    expect(html).toContain("const x = 1;");
+    expect(html).not.toContain("markdown-plain-text-fallback");
+  });
+});
+
 describe("renderMarkdownSidebar", () => {
   it("renders sanitized markdown content", () => {
     const container = document.createElement("div");
@@ -707,5 +836,24 @@ describe("renderMarkdownSidebar", () => {
     expect(
       Array.from(container.querySelectorAll("button")).map((button) => button.textContent?.trim()),
     ).toEqual(["", "View Raw Text"]);
+  });
+
+  it("renders a quiet empty state for blank markdown previews", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderMarkdownSidebar({
+        content: { kind: "markdown", content: "   " },
+        error: null,
+        onClose: () => undefined,
+        onViewRawText: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".sidebar-markdown-reader")).toBeNull();
+    expect(container.querySelector(".sidebar-markdown-empty")?.textContent?.trim()).toBe(
+      "No previewable markdown content.",
+    );
   });
 });

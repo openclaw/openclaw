@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements suite runtime agent tools behavior.
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -56,7 +57,7 @@ async function callPluginToolsMcp(params: {
       path.join(params.env.repoRoot, "src/mcp/plugin-tools-serve.ts"),
     ],
     stderr: "pipe",
-    cwd: params.env.gateway.tempRoot,
+    cwd: params.env.repoRoot,
     env: transportEnv,
   });
   const stderrTail = createQaChildOutputTail(MCP_STDERR_TAIL_LIMIT);
@@ -80,22 +81,20 @@ async function callPluginToolsMcp(params: {
         `MCP tool missing: ${params.toolName}; available tools: ${availableTools.join(", ") || "<none>"}`,
       );
     }
-    try {
-      return await client.callTool(
-        {
-          name: params.toolName,
-          arguments: params.args,
-        },
-        undefined,
-        { timeout: MCP_REQUEST_TIMEOUT_MS },
-      );
-    } catch (error) {
-      const tail = formatQaChildOutputTail(stderrTail, "MCP stderr").trim();
-      if (!tail || !(error instanceof Error)) {
-        throw error;
-      }
-      throw new Error(`${error.message}\nMCP stderr tail:\n${tail}`, { cause: error });
+    return await client.callTool(
+      {
+        name: params.toolName,
+        arguments: params.args,
+      },
+      undefined,
+      { timeout: MCP_REQUEST_TIMEOUT_MS },
+    );
+  } catch (error) {
+    const tail = formatQaChildOutputTail(stderrTail, "MCP stderr").trim();
+    if (!tail || !(error instanceof Error)) {
+      throw error;
     }
+    throw new Error(`${error.message}\nMCP stderr tail:\n${tail}`, { cause: error });
   } finally {
     await client.close().catch(() => {});
   }

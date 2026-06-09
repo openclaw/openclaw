@@ -1,3 +1,4 @@
+// Codex plugin module implements event projector behavior.
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
@@ -23,6 +24,7 @@ import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runti
 import { generatedImageAssetFromBase64 } from "openclaw/plugin-sdk/image-generation";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import {
   readCodexNotificationThreadId,
@@ -108,6 +110,8 @@ const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 12_000;
+const MISSING_TOOL_RESULT_ERROR =
+  "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
 const BYTES_PER_MB = 1024 * 1024;
 // Match OpenClaw's default image media cap for generated image tool outputs.
@@ -171,6 +175,11 @@ export class CodexAppServerEventProjector {
   private readonly toolTranscriptMessages: AgentMessage[] = [];
   private readonly toolTranscriptCallIds = new Set<string>();
   private readonly toolTranscriptResultIds = new Set<string>();
+  private readonly toolTranscriptNamesById = new Map<string, string>();
+  private readonly toolTrajectoryCallIds = new Set<string>();
+  private readonly toolTrajectoryResultIds = new Set<string>();
+  private readonly toolTrajectoryNamesById = new Map<string, string>();
+  private readonly toolTrajectoryItemsById = new Map<string, CodexThreadItem>();
   private readonly transcriptToolProgressCallIds = new Set<string>();
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
   private readonly nativeGeneratedMediaUrls = new Set<string>();
@@ -184,6 +193,7 @@ export class CodexAppServerEventProjector {
   private completedTurn: CodexTurn | undefined;
   private promptError: unknown;
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
+  private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
   private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
@@ -199,6 +209,11 @@ export class CodexAppServerEventProjector {
 
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
     return this.completedTurn?.status;
+  }
+
+  hasCompletedTerminalAssistantText(): boolean {
+    const finalItem = this.resolveFinalAssistantTextItem();
+    return finalItem !== undefined && this.completedItemIds.has(finalItem.itemId);
   }
 
   async handleNotification(notification: CodexServerNotification): Promise<void> {
@@ -284,6 +299,16 @@ export class CodexAppServerEventProjector {
       this.reasoningItemOrder,
     ).join("\n\n");
     const planText = collectTextValues(this.planTextByItem).join("\n\n");
+    const hasAssistantItemText = this.hasAssistantItemTextForSynthesis();
+    const legacyFailClosed =
+      !this.completedTurn || this.completedTurn.status !== "completed" || hasAssistantItemText;
+    const hasDeliverableAssistantOnCompletedTurn =
+      this.completedTurn?.status === "completed" &&
+      assistantTexts.some((text) => text.trim().length > 0);
+    this.synthesizeMissingToolResults({
+      synthesize: legacyFailClosed,
+      recordPromptError: legacyFailClosed && !hasDeliverableAssistantOnCompletedTurn,
+    });
     const lastAssistant =
       assistantTexts.length > 0
         ? this.createAssistantMessage(assistantTexts.join("\n\n"))
@@ -327,6 +352,7 @@ export class CodexAppServerEventProjector {
     const turnFailed = this.completedTurn?.status === "failed";
     const promptError =
       this.promptError ??
+      this.synthesizedMissingToolResultError ??
       (turnFailed ? (this.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
     const agentHarnessResultClassification = classifyAgentHarnessTerminalOutcome({
       assistantTexts,
@@ -446,6 +472,11 @@ export class CodexAppServerEventProjector {
     if (!delta) {
       return;
     }
+    this.rememberAssistantPhase(readItem(params.item));
+    const phase = readString(params, "phase");
+    if (phase) {
+      this.assistantPhaseByItem.set(itemId, phase);
+    }
     if (!this.assistantStarted) {
       this.assistantStarted = true;
       await this.params.onAssistantMessageStart?.();
@@ -455,10 +486,13 @@ export class CodexAppServerEventProjector {
     this.assistantTextByItem.set(itemId, text);
     if (this.isCommentaryAssistantItem(itemId)) {
       this.emitCommentaryProgress({ itemId, text });
+    } else if (this.shouldStreamAssistantPartial(itemId)) {
+      await this.params.onPartialReply?.({ text, delta });
     }
     // Codex app-server can emit multiple agentMessage items per turn, including
     // intermediate coordination/progress prose. Keep those deltas internal until
-    // turn completion chooses the last assistant item as the user-visible reply.
+    // their phase identifies terminal answer text or turn completion chooses the
+    // last assistant item as the user-visible reply.
   }
 
   private async handleReasoningDelta(
@@ -969,6 +1003,10 @@ export class CodexAppServerEventProjector {
     return this.assistantPhaseByItem.get(itemId) === "commentary";
   }
 
+  private shouldStreamAssistantPartial(itemId: string): boolean {
+    return this.assistantPhaseByItem.get(itemId) === "final_answer";
+  }
+
   private emitCommentaryProgress(params: { itemId: string; text: string }): void {
     const progressText = params.text.replace(/\s+/g, " ").trim();
     if (
@@ -1112,6 +1150,9 @@ export class CodexAppServerEventProjector {
     status: ReturnType<typeof itemStatus>;
   }): void {
     if (params.phase === "start") {
+      this.toolTrajectoryCallIds.add(params.item.id);
+      this.toolTrajectoryNamesById.set(params.item.id, params.name);
+      this.toolTrajectoryItemsById.set(params.item.id, params.item);
       this.options.trajectoryRecorder?.recordEvent("tool.call", {
         threadId: this.threadId,
         turnId: this.turnId,
@@ -1122,6 +1163,7 @@ export class CodexAppServerEventProjector {
       });
       return;
     }
+    this.toolTrajectoryResultIds.add(params.item.id);
     const toolResult = itemToolResult(params.item).result;
     const output = itemOutputText(params.item, this.toolResultOutputTextByItem);
     this.options.trajectoryRecorder?.recordEvent("tool.result", {
@@ -1200,8 +1242,7 @@ export class CodexAppServerEventProjector {
     this.afterToolCallObservedItemIds.add(item.id);
     const result = itemToolResult(item).result;
     const error = itemToolError(item, status, this.toolResultOutputTextByItem);
-    const startedAt =
-      typeof item.durationMs === "number" ? Date.now() - Math.max(0, item.durationMs) : undefined;
+    const startedAt = resolveStartedAtFromDurationMs(item.durationMs);
     const hookParams = {
       toolName: name,
       toolCallId: item.id,
@@ -1384,6 +1425,7 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.toolTranscriptCallIds.add(params.id);
+    this.toolTranscriptNamesById.set(params.id, params.name);
     this.toolTranscriptArgumentsById.set(params.id, params.arguments);
     if (!shouldEmitTranscriptToolProgress(params.name, params.arguments)) {
       this.transcriptToolProgressSuppressedIds.add(params.id);
@@ -1411,6 +1453,95 @@ export class CodexAppServerEventProjector {
         `${this.turnId}:tool:${params.id}:result`,
       ),
     );
+  }
+
+  private synthesizeMissingToolResults(params: {
+    synthesize: boolean;
+    recordPromptError: boolean;
+  }): void {
+    if (!params.synthesize) {
+      return;
+    }
+    const missingTranscriptIds = [...this.toolTranscriptCallIds].filter(
+      (id) => !this.toolTranscriptResultIds.has(id),
+    );
+    const missingTrajectoryIds = [...this.toolTrajectoryCallIds].filter(
+      (id) => !this.toolTrajectoryResultIds.has(id),
+    );
+    if (missingTranscriptIds.length === 0 && missingTrajectoryIds.length === 0) {
+      return;
+    }
+
+    for (const id of missingTranscriptIds) {
+      const name = this.toolTranscriptNamesById.get(id) ?? this.toolTrajectoryNamesById.get(id);
+      if (!name) {
+        continue;
+      }
+      this.recordToolTranscriptResult({
+        id,
+        name,
+        text: formatMissingToolResultError({ id, name }),
+        isError: true,
+      });
+    }
+
+    for (const id of missingTrajectoryIds) {
+      const name = this.toolTrajectoryNamesById.get(id) ?? this.toolTranscriptNamesById.get(id);
+      if (!name) {
+        continue;
+      }
+      this.toolTrajectoryResultIds.add(id);
+      const text = formatMissingToolResultError({ id, name });
+      this.options.trajectoryRecorder?.recordEvent("tool.result", {
+        threadId: this.threadId,
+        turnId: this.turnId,
+        itemId: id,
+        toolCallId: id,
+        name,
+        status: "failed",
+        isError: true,
+        result: { status: "failed", reason: "missing_tool_result" },
+        output: text,
+      });
+    }
+
+    if (!params.recordPromptError) {
+      const firstMissingId =
+        missingTranscriptIds.find((id) => {
+          const name = this.toolTranscriptNamesById.get(id) ?? this.toolTrajectoryNamesById.get(id);
+          return Boolean(name);
+        }) ??
+        missingTrajectoryIds.find((id) => {
+          const name = this.toolTrajectoryNamesById.get(id) ?? this.toolTranscriptNamesById.get(id);
+          return Boolean(name);
+        });
+      if (firstMissingId) {
+        const name =
+          this.toolTranscriptNamesById.get(firstMissingId) ??
+          this.toolTrajectoryNamesById.get(firstMissingId);
+        if (name) {
+          const item = this.toolTrajectoryItemsById.get(firstMissingId);
+          const meta = item
+            ? itemMeta(item, this.toolProgressDetailMode())
+            : this.toolMetas.get(firstMissingId)?.meta;
+          const actionFingerprint = item ? nativeToolActionFingerprint(item) : undefined;
+          this.lastNativeToolError = {
+            toolName: name,
+            ...(meta ? { meta } : {}),
+            error: formatMissingToolResultError({ id: firstMissingId, name }),
+            ...(item && isMutatingNativeToolItem(item) ? { mutatingAction: true } : {}),
+            ...(actionFingerprint ? { actionFingerprint } : {}),
+          };
+        }
+      }
+      return;
+    }
+    const missingCount = new Set([...missingTranscriptIds, ...missingTrajectoryIds]).size;
+    this.synthesizedMissingToolResultError =
+      missingCount === 1
+        ? MISSING_TOOL_RESULT_ERROR
+        : `${MISSING_TOOL_RESULT_ERROR} missingToolResultCount=${missingCount}`;
+    this.promptErrorSource = this.promptErrorSource ?? "prompt";
   }
 
   private emitTranscriptToolCallProgress(params: ToolTranscriptCallInput): void {
@@ -1514,7 +1645,28 @@ export class CodexAppServerEventProjector {
     return finalText ? [finalText] : [];
   }
 
+  private hasAssistantItemTextForSynthesis(): boolean {
+    for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
+      const itemId = this.assistantItemOrder[i];
+      if (!itemId) {
+        continue;
+      }
+      if (this.assistantPhaseByItem.get(itemId) === "commentary") {
+        continue;
+      }
+      const text = this.assistantTextByItem.get(itemId);
+      if (text && text.length > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private resolveFinalAssistantText(): string | undefined {
+    return this.resolveFinalAssistantTextItem()?.text;
+  }
+
+  private resolveFinalAssistantTextItem(): { itemId: string; text: string } | undefined {
     for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
       const itemId = this.assistantItemOrder[i];
       if (!itemId) {
@@ -1525,7 +1677,7 @@ export class CodexAppServerEventProjector {
         continue;
       }
       if (text && !this.toolProgressTexts.has(text)) {
-        return text;
+        return { itemId, text };
       }
     }
     return undefined;
@@ -1562,7 +1714,7 @@ export class CodexAppServerEventProjector {
     return {
       role: "assistant",
       content: [{ type: "text", text }],
-      api: attribution.api ?? "openai-codex-responses",
+      api: attribution.api ?? "openai-chatgpt-responses",
       provider: attribution.provider,
       model: this.params.modelId,
       usage,
@@ -1577,7 +1729,7 @@ export class CodexAppServerEventProjector {
     return {
       role: "assistant",
       content: [{ type: "text", text: `${title}:\n${text}` }],
-      api: attribution.api ?? "openai-codex-responses",
+      api: attribution.api ?? "openai-chatgpt-responses",
       provider: attribution.provider,
       model: this.params.modelId,
       usage: ZERO_USAGE,
@@ -1600,7 +1752,7 @@ export class CodexAppServerEventProjector {
           input: args,
         },
       ],
-      api: attribution.api ?? "openai-codex-responses",
+      api: attribution.api ?? "openai-chatgpt-responses",
       provider: attribution.provider,
       model: this.params.modelId,
       usage: ZERO_USAGE,
@@ -1729,6 +1881,13 @@ function readNullableString(record: JsonObject, key: string): string | null | un
 function readNumber(record: JsonObject, key: string): number | undefined {
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function resolveStartedAtFromDurationMs(durationMs: unknown): number | undefined {
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs)) {
+    return undefined;
+  }
+  return asDateTimestampMs(Date.now() - Math.max(0, durationMs));
 }
 
 function readNonNegativeInteger(record: JsonObject, key: string): number | undefined {
@@ -1933,6 +2092,10 @@ function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" |
     return "running";
   }
   return "completed";
+}
+
+function formatMissingToolResultError(params: { id: string; name: string }): string {
+  return `${MISSING_TOOL_RESULT_ERROR} toolCallId=${params.id}; toolName=${params.name}`;
 }
 
 function isNonSuccessItemStatus(status: ReturnType<typeof itemStatus>): boolean {

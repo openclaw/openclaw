@@ -1,3 +1,4 @@
+// Copilot tests cover tool bridge plugin behavior.
 import type { Tool as SdkTool, ToolInvocation, ToolResultObject } from "@github/copilot-sdk";
 import type { AnyAgentTool, SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -66,6 +67,13 @@ function makeTool(
 
 function getError(result: ToolResultObject): string | undefined {
   return result.error;
+}
+
+function runSdkTool(tool: SdkTool, args: unknown, invocation = makeInvocation()) {
+  if (!tool.handler) {
+    throw new Error(`SDK tool '${tool.name}' has no handler`);
+  }
+  return tool.handler(args, invocation);
 }
 
 afterEach(() => {
@@ -1109,7 +1117,7 @@ describe("convertOpenClawToolToSdkTool", () => {
     const sourceTool = makeTool();
     const sdkTool = convertOpenClawToolToSdkTool(sourceTool, { abortSignal: controller.signal });
 
-    const result = await sdkTool.handler({}, makeInvocation());
+    const result = await runSdkTool(sdkTool, {});
 
     expect(sourceTool.execute).toHaveBeenCalledTimes(0);
     expect(result).toMatchObject({
@@ -1128,7 +1136,7 @@ describe("convertOpenClawToolToSdkTool", () => {
     const invocation = makeInvocation({ toolCallId: "call-42" });
     const args = { value: "input" };
 
-    await sdkTool.handler(args, invocation);
+    await runSdkTool(sdkTool, args, invocation);
 
     expect(beforeExecute).toHaveBeenCalledTimes(1);
     expect(beforeExecute).toHaveBeenCalledWith({
@@ -1152,7 +1160,7 @@ describe("convertOpenClawToolToSdkTool", () => {
       }),
     });
 
-    const result = await sdkTool.handler({}, makeInvocation());
+    const result = await runSdkTool(sdkTool, {});
 
     expect(sourceTool.execute).toHaveBeenCalledTimes(0);
     expect(result).toMatchObject({
@@ -1169,7 +1177,7 @@ describe("convertOpenClawToolToSdkTool", () => {
     const sourceTool = makeTool({ prepareArguments });
     const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {});
 
-    await sdkTool.handler({ value: "raw" }, makeInvocation({ toolCallId: "call-99" }));
+    await runSdkTool(sdkTool, { value: "raw" }, makeInvocation({ toolCallId: "call-99" }));
 
     expect(prepareArguments).toHaveBeenCalledTimes(1);
     expect(prepareArguments).toHaveBeenCalledWith({ value: "raw" });
@@ -1185,7 +1193,7 @@ describe("convertOpenClawToolToSdkTool", () => {
     });
     const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {});
 
-    const result = await sdkTool.handler({}, makeInvocation());
+    const result = await runSdkTool(sdkTool, {});
 
     expect(sourceTool.execute).toHaveBeenCalledTimes(0);
     expect(result).toMatchObject({
@@ -1199,7 +1207,7 @@ describe("convertOpenClawToolToSdkTool", () => {
     const sourceTool = makeTool({}, { details: null });
     const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {});
 
-    const result = await sdkTool.handler({}, makeInvocation());
+    const result = await runSdkTool(sdkTool, {});
 
     expect(result).toEqual({ resultType: "success", textResultForLlm: "" });
   });
@@ -1210,7 +1218,7 @@ describe("convertOpenClawToolToSdkTool", () => {
       {},
     );
 
-    const result = await sdkTool.handler({}, makeInvocation());
+    const result = await runSdkTool(sdkTool, {});
 
     expect(result).toEqual({ resultType: "success", textResultForLlm: "hello" });
   });
@@ -1231,7 +1239,7 @@ describe("convertOpenClawToolToSdkTool", () => {
       {},
     );
 
-    const result = await sdkTool.handler({}, makeInvocation());
+    const result = await runSdkTool(sdkTool, {});
 
     expect(result).toEqual({ resultType: "success", textResultForLlm: "first\nsecond\nthird" });
   });
@@ -1251,7 +1259,7 @@ describe("convertOpenClawToolToSdkTool", () => {
       {},
     );
 
-    const result = await sdkTool.handler({}, makeInvocation());
+    const result = await runSdkTool(sdkTool, {});
 
     expect(result).toEqual({
       binaryResultsForLlm: [
@@ -1279,7 +1287,7 @@ describe("convertOpenClawToolToSdkTool", () => {
       {},
     );
 
-    const result = await sdkTool.handler({}, makeInvocation());
+    const result = await runSdkTool(sdkTool, {});
 
     expect(result).toMatchObject({
       resultType: "failure",
@@ -1299,7 +1307,7 @@ describe("convertOpenClawToolToSdkTool", () => {
     });
     const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {});
 
-    const result = await sdkTool.handler({}, makeInvocation());
+    const result = await runSdkTool(sdkTool, {});
 
     expect(result).toMatchObject({
       resultType: "failure",
@@ -1324,8 +1332,8 @@ describe("convertOpenClawToolToSdkTool", () => {
     const sourceTool = makeTool({ execute });
     const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {});
 
-    const firstRun = sdkTool.handler({}, makeInvocation({ toolCallId: "call-1" }));
-    const secondRun = sdkTool.handler({}, makeInvocation({ toolCallId: "call-2" }));
+    const firstRun = runSdkTool(sdkTool, {}, makeInvocation({ toolCallId: "call-1" }));
+    const secondRun = runSdkTool(sdkTool, {}, makeInvocation({ toolCallId: "call-2" }));
     await flushAsync();
 
     expect(execute).toHaveBeenCalledTimes(2);
@@ -1354,8 +1362,8 @@ describe("convertOpenClawToolToSdkTool", () => {
     const sourceTool = makeTool({ execute, executionMode: "sequential" });
     const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {});
 
-    const firstRun = sdkTool.handler({}, makeInvocation({ toolCallId: "call-1" }));
-    const secondRun = sdkTool.handler({}, makeInvocation({ toolCallId: "call-2" }));
+    const firstRun = runSdkTool(sdkTool, {}, makeInvocation({ toolCallId: "call-1" }));
+    const secondRun = runSdkTool(sdkTool, {}, makeInvocation({ toolCallId: "call-2" }));
     await flushAsync();
 
     expect(execute).toHaveBeenCalledTimes(1);
@@ -1389,7 +1397,7 @@ describe("convertOpenClawToolToSdkTool", () => {
     });
     const sdkTool = convertOpenClawToolToSdkTool(sourceTool, { abortSignal: controller.signal });
 
-    const resultPromise = sdkTool.handler({}, makeInvocation());
+    const resultPromise = runSdkTool(sdkTool, {});
     await flushAsync();
     controller.abort();
     const result = await resultPromise;

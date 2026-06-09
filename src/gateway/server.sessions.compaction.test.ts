@@ -1,12 +1,18 @@
+/**
+ * Gateway session compaction RPC tests.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import type { SessionCompactionCheckpoint } from "../config/sessions.js";
+import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
   onceMessage,
   agentDiscoveryMock,
+  readSessionStore,
   rpcReq,
   startConnectedServerWithClient,
   testState,
@@ -21,7 +27,68 @@ import {
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
+  setupGatewaySessionsTestHarness();
+
+type CheckpointFixture = Awaited<ReturnType<typeof createCheckpointFixture>>;
+
+function compactionCheckpointEntry(
+  fixture: CheckpointFixture,
+  options: {
+    checkpointId: string;
+    sessionKey: string;
+    createdAt: number;
+    reason: SessionCompactionCheckpoint["reason"];
+    summary: string;
+    tokensBefore?: number;
+    tokensAfter?: number;
+  },
+) {
+  return {
+    checkpointId: options.checkpointId,
+    sessionKey: options.sessionKey,
+    sessionId: fixture.sessionId,
+    createdAt: options.createdAt,
+    reason: options.reason,
+    summary: options.summary,
+    ...(options.tokensBefore === undefined ? {} : { tokensBefore: options.tokensBefore }),
+    ...(options.tokensAfter === undefined ? {} : { tokensAfter: options.tokensAfter }),
+    firstKeptEntryId: fixture.preCompactionLeafId,
+    preCompaction: {
+      sessionId: fixture.sessionId,
+      leafId: fixture.preCompactionLeafId,
+    },
+    postCompaction: {
+      sessionId: fixture.sessionId,
+      sessionFile: fixture.sessionFile,
+      leafId: fixture.postCompactionLeafId,
+      entryId: fixture.postCompactionLeafId,
+    },
+  };
+}
+
+function isCompactOperationEvent(message: unknown, phase: "start" | "end") {
+  const candidate = message as {
+    event?: unknown;
+    payload?: { operation?: unknown; phase?: unknown };
+    type?: unknown;
+  };
+  return (
+    candidate.type === "event" &&
+    candidate.event === "session.operation" &&
+    candidate.payload?.operation === "compact" &&
+    candidate.payload?.phase === phase
+  );
+}
+
+function expectMainCompactionResult(
+  compacted: { ok?: boolean; payload?: { compacted?: boolean; key?: string } | null },
+  expectedCompacted: boolean,
+) {
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.key).toBe("agent:main:main");
+  expect(compacted.payload?.compacted).toBe(expectedCompacted);
+}
 
 test("sessions.compaction.* lists checkpoints and branches or restores from compacted transcripts", async () => {
   const { dir, storePath } = await createSessionStoreDir();
@@ -29,34 +96,21 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   expect((await fs.readdir(dir)).some((file) => file.includes(".checkpoint."))).toBe(false);
   const checkpointEntryCount = fixture.session.getEntries().length;
   const checkpointCreatedAt = Date.now();
+  const checkpointEntry = compactionCheckpointEntry(fixture, {
+    checkpointId: "checkpoint-1",
+    sessionKey: "agent:main:main",
+    createdAt: checkpointCreatedAt,
+    reason: "manual",
+    summary: "checkpoint summary",
+    tokensBefore: 123,
+    tokensAfter: 45,
+  });
   const { SessionManager } = await getSessionManagerModule();
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(fixture.sessionId, {
         sessionFile: fixture.sessionFile,
-        compactionCheckpoints: [
-          {
-            checkpointId: "checkpoint-1",
-            sessionKey: "agent:main:main",
-            sessionId: fixture.sessionId,
-            createdAt: checkpointCreatedAt,
-            reason: "manual",
-            tokensBefore: 123,
-            tokensAfter: 45,
-            summary: "checkpoint summary",
-            firstKeptEntryId: fixture.preCompactionLeafId,
-            preCompaction: {
-              sessionId: fixture.sessionId,
-              leafId: fixture.preCompactionLeafId,
-            },
-            postCompaction: {
-              sessionId: fixture.sessionId,
-              sessionFile: fixture.sessionFile,
-              leafId: fixture.postCompactionLeafId,
-              entryId: fixture.postCompactionLeafId,
-            },
-          },
-        ],
+        compactionCheckpoints: [checkpointEntry],
       }),
     },
   });
@@ -101,27 +155,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   expect(listedCheckpoints.ok).toBe(true);
   expect(listedCheckpoints.payload?.key).toBe("agent:main:main");
   expect(listedCheckpoints.payload?.checkpoints).toHaveLength(1);
-  expect(listedCheckpoints.payload?.checkpoints[0]).toEqual({
-    checkpointId: "checkpoint-1",
-    sessionKey: "agent:main:main",
-    sessionId: fixture.sessionId,
-    createdAt: checkpointCreatedAt,
-    reason: "manual",
-    summary: "checkpoint summary",
-    tokensBefore: 123,
-    tokensAfter: 45,
-    firstKeptEntryId: fixture.preCompactionLeafId,
-    preCompaction: {
-      sessionId: fixture.sessionId,
-      leafId: fixture.preCompactionLeafId,
-    },
-    postCompaction: {
-      sessionId: fixture.sessionId,
-      sessionFile: fixture.sessionFile,
-      leafId: fixture.postCompactionLeafId,
-      entryId: fixture.postCompactionLeafId,
-    },
-  });
+  expect(listedCheckpoints.payload?.checkpoints[0]).toEqual(checkpointEntry);
 
   const checkpoint = await rpcReq<{
     ok: true;
@@ -194,14 +228,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
       ),
   ).toBe(false);
 
-  const storeAfterBranch = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    {
-      parentSessionKey?: string;
-      compactionCheckpoints?: unknown[];
-      sessionId?: string;
-    }
-  >;
+  const storeAfterBranch = readSessionStore(storePath);
   const branchedEntry = storeAfterBranch[branched.payload!.key];
   expect(branchedEntry?.parentSessionKey).toBe("agent:main:main");
   expect(branchedEntry?.compactionCheckpoints).toBeUndefined();
@@ -266,10 +293,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
       ),
   ).toBe(false);
 
-  const storeAfterRestore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { compactionCheckpoints?: unknown[]; sessionId?: string }
-  >;
+  const storeAfterRestore = readSessionStore(storePath);
   expect(storeAfterRestore["agent:main:main"]?.sessionId).toBe(restored.payload?.sessionId);
   expect(storeAfterRestore["agent:main:main"]?.compactionCheckpoints).toHaveLength(1);
 
@@ -277,13 +301,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
 });
 
 test("sessions.compaction.* scopes selected global checkpoints to the requested agent", async () => {
-  const { dir } = await createSessionStoreDir();
-  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-  testState.sessionStorePath = storeTemplate;
-  testState.sessionConfig = { scope: "global" };
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
-  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
   const workDir = path.dirname(workStorePath);
   await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
   await fs.mkdir(workDir, { recursive: true });
@@ -291,47 +309,22 @@ test("sessions.compaction.* scopes selected global checkpoints to the requested 
   await fs.writeFile(mainSessionFile, `${JSON.stringify({ role: "user", content: "main" })}\n`);
   const fixture = await createCheckpointFixture(workDir, { legacyPreCompactionSnapshot: false });
   const checkpointCreatedAt = Date.now();
-  await fs.writeFile(
-    mainStorePath,
-    JSON.stringify(
-      { global: sessionStoreEntry("sess-main-global", { sessionFile: mainSessionFile }) },
-      null,
-      2,
-    ),
-  );
-  await fs.writeFile(
-    workStorePath,
-    JSON.stringify(
-      {
-        global: sessionStoreEntry(fixture.sessionId, {
-          sessionFile: fixture.sessionFile,
-          compactionCheckpoints: [
-            {
-              checkpointId: "checkpoint-work",
-              sessionKey: "global",
-              sessionId: fixture.sessionId,
-              createdAt: checkpointCreatedAt,
-              reason: "manual",
-              summary: "work checkpoint",
-              firstKeptEntryId: fixture.preCompactionLeafId,
-              preCompaction: {
-                sessionId: fixture.sessionId,
-                leafId: fixture.preCompactionLeafId,
-              },
-              postCompaction: {
-                sessionId: fixture.sessionId,
-                sessionFile: fixture.sessionFile,
-                leafId: fixture.postCompactionLeafId,
-                entryId: fixture.postCompactionLeafId,
-              },
-            },
-          ],
-        }),
-      },
-      null,
-      2,
-    ),
-  );
+  const checkpointEntry = compactionCheckpointEntry(fixture, {
+    checkpointId: "checkpoint-work",
+    sessionKey: "global",
+    createdAt: checkpointCreatedAt,
+    reason: "manual",
+    summary: "work checkpoint",
+  });
+  await writeSessionStoreForTestAsync(mainStorePath, {
+    global: sessionStoreEntry("sess-main-global", { sessionFile: mainSessionFile }),
+  });
+  await writeSessionStoreForTestAsync(workStorePath, {
+    global: sessionStoreEntry(fixture.sessionId, {
+      sessionFile: fixture.sessionFile,
+      compactionCheckpoints: [checkpointEntry],
+    }),
+  });
 
   const listed = await directSessionReq<{
     checkpoints: Array<{ checkpointId: string; summary?: string }>;
@@ -357,14 +350,8 @@ test("sessions.compaction.* scopes selected global checkpoints to the requested 
   );
   expect(restored.ok).toBe(true);
   expect(restored.payload?.key).toBe("global");
-  const mainStore = JSON.parse(await fs.readFile(mainStorePath, "utf-8")) as Record<
-    string,
-    { sessionId?: string }
-  >;
-  const workStore = JSON.parse(await fs.readFile(workStorePath, "utf-8")) as Record<
-    string,
-    { sessionId?: string }
-  >;
+  const mainStore = readSessionStore(mainStorePath);
+  const workStore = readSessionStore(workStorePath);
   expect(mainStore.global?.sessionId).toBe("sess-main-global");
   expect(workStore.global?.sessionId).toBe(restored.payload?.sessionId);
   testState.sessionStorePath = undefined;
@@ -410,22 +397,8 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
 
   const { ws } = await openClient();
   await rpcReq(ws, "sessions.subscribe", {});
-  const startEventPromise = onceMessage(
-    ws,
-    (message) =>
-      message.type === "event" &&
-      message.event === "session.operation" &&
-      (message.payload as { operation?: unknown; phase?: unknown })?.operation === "compact" &&
-      (message.payload as { operation?: unknown; phase?: unknown })?.phase === "start",
-  );
-  const endEventPromise = onceMessage(
-    ws,
-    (message) =>
-      message.type === "event" &&
-      message.event === "session.operation" &&
-      (message.payload as { operation?: unknown; phase?: unknown })?.operation === "compact" &&
-      (message.payload as { operation?: unknown; phase?: unknown })?.phase === "end",
-  );
+  const startEventPromise = onceMessage(ws, (message) => isCompactOperationEvent(message, "start"));
+  const endEventPromise = onceMessage(ws, (message) => isCompactOperationEvent(message, "end"));
   const compacted = await rpcReq<{
     ok: true;
     key: string;
@@ -435,9 +408,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     key: "main",
   });
 
-  expect(compacted.ok).toBe(true);
-  expect(compacted.payload?.key).toBe("agent:main:main");
-  expect(compacted.payload?.compacted).toBe(true);
+  expectMainCompactionResult(compacted, true);
   const startEvent = await startEventPromise;
   const endEvent = await endEventPromise;
   const startPayload = startEvent.payload as {
@@ -516,15 +487,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   });
   expect(compactionCall.trigger).toBe("manual");
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    {
-      compactionCount?: number;
-      contextBudgetStatus?: unknown;
-      totalTokens?: number;
-      totalTokensFresh?: boolean;
-    }
-  >;
+  const store = readSessionStore(storePath);
   expect(store["agent:main:main"]?.compactionCount).toBe(1);
   expect(store["agent:main:main"]?.contextBudgetStatus).toBeUndefined();
   expect(store["agent:main:main"]?.totalTokens).toBe(80);
@@ -568,14 +531,7 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
 
   const { ws } = await openClient();
   await rpcReq(ws, "sessions.subscribe", {});
-  const endEventPromise = onceMessage(
-    ws,
-    (message) =>
-      message.type === "event" &&
-      message.event === "session.operation" &&
-      (message.payload as { operation?: unknown; phase?: unknown })?.operation === "compact" &&
-      (message.payload as { operation?: unknown; phase?: unknown })?.phase === "end",
-  );
+  const endEventPromise = onceMessage(ws, (message) => isCompactOperationEvent(message, "end"));
 
   const compacted = await rpcReq<{
     ok: true;
@@ -586,9 +542,7 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
     key: "main",
   });
 
-  expect(compacted.ok).toBe(true);
-  expect(compacted.payload?.key).toBe("agent:main:main");
-  expect(compacted.payload?.compacted).toBe(false);
+  expectMainCompactionResult(compacted, false);
   expect(compacted.payload?.result?.details).toMatchObject({
     backend: "codex-app-server",
     threadId: "thread-1",
@@ -603,14 +557,7 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
     completed: false,
   });
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    {
-      compactionCount?: number;
-      totalTokens?: number;
-      totalTokensFresh?: boolean;
-    }
-  >;
+  const store = readSessionStore(storePath);
   expect(store["agent:main:main"]?.compactionCount).toBe(2);
   expect(store["agent:main:main"]?.totalTokens).toBe(54_321);
   expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
@@ -621,13 +568,9 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
 test("sessions.patch preserves nested model ids under provider overrides", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-sessions-nested-"));
   const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(
-    storePath,
-    JSON.stringify({
-      "agent:main:main": sessionStoreEntry("sess-main"),
-    }),
-    "utf-8",
-  );
+  await writeSessionStoreForTestAsync(storePath, {
+    "agent:main:main": sessionStoreEntry("sess-main"),
+  });
 
   await withEnvAsync({ OPENCLAW_CONFIG_PATH: undefined }, async () => {
     const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();

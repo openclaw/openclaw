@@ -1,3 +1,6 @@
+/**
+ * Public barrel for gateway integration test helpers.
+ */
 export {
   agentCommand,
   cronIsolatedRun,
@@ -29,6 +32,7 @@ export {
   startServerWithClient,
   trackConnectChallengeNonce,
   waitForSystemEvent,
+  readSessionStore,
   withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.server.js";

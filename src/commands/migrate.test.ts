@@ -1,3 +1,4 @@
+// Top-level migrate command tests cover provider planning, interactive selection, apply flow, and JSON output.
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
@@ -768,8 +769,8 @@ describe("migrateApplyCommand", () => {
         (
           (
             (
-              appliedPlan.items.find((item) => item.id === "config:codex-plugins")?.details
-                ?.value as Record<string, unknown>
+              appliedPlan.items.find((item) => item.id === "config:codex-plugins")!.details!
+                .value as Record<string, unknown>
             ).config as Record<string, unknown>
           ).codexPlugins as Record<string, unknown>
         ).plugins as Record<string, unknown>,
@@ -1055,7 +1056,7 @@ describe("migrateApplyCommand", () => {
 
     await migrateDefaultCommand(runtime, { provider: "codex" });
 
-    let appliedPlan = firstAppliedPlan();
+    const appliedPlan = firstAppliedPlan();
     expect(appliedPlan.summary.planned).toBe(3);
     expect(appliedPlan.summary.skipped).toBe(0);
     expect(appliedPlan.summary.conflicts).toBe(0);

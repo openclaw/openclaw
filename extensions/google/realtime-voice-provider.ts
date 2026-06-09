@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import { randomUUID } from "node:crypto";
 import type {
   ActivityHandling,
@@ -750,7 +751,6 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       );
     }
 
-    let emittedAssistantText = false;
     for (const part of content.modelTurn?.parts ?? []) {
       if (part.inlineData?.data) {
         const pcm = Buffer.from(part.inlineData.data, "base64");
@@ -766,13 +766,8 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         continue;
       }
       if (!content.outputTranscription?.text && typeof part.text === "string" && part.text.trim()) {
-        emittedAssistantText = true;
         this.config.onTranscript?.("assistant", part.text, content.turnComplete ?? false);
       }
-    }
-
-    if (!emittedAssistantText && content.turnComplete && content.waitingForInput === false) {
-      return;
     }
   }
 

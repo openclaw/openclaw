@@ -1,3 +1,5 @@
+// Server chat agent-event tests protect event fanout, heartbeat visibility,
+// session lifecycle persistence, and subscriber registry behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
@@ -411,6 +413,89 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("emits the first assistant chat.send timing event to the originating Control UI", () => {
+    const { broadcastToConnIds, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    chatRunState.registry.add("run-1", {
+      sessionKey: "session-1",
+      clientRunId: "client-1",
+      chatSendTiming: {
+        ackedAtMs: 0,
+        connId: "conn-control-ui",
+        dispatchStartedAtMs: 0,
+        receivedAtMs: 0,
+      },
+    });
+
+    handler({
+      runId: "run-1",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world" },
+    });
+    handler({
+      runId: "run-1",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world again" },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "chat.send_timing",
+      expect.objectContaining({
+        phase: "first-assistant-event",
+        runId: "client-1",
+        sessionKey: "session-1",
+        ackToPhaseMs: expect.any(Number),
+        dispatchStartedToPhaseMs: expect.any(Number),
+        receivedToPhaseMs: expect.any(Number),
+      }),
+      new Set(["conn-control-ui"]),
+      { dropIfSlow: true },
+    );
+    nowSpy?.mockRestore();
+  });
+
+  it("emits first assistant chat.send timing when text first flushes on final", () => {
+    const { broadcastToConnIds, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    chatRunState.registry.add("run-final-only", {
+      sessionKey: "session-1",
+      clientRunId: "client-final",
+      chatSendTiming: {
+        ackedAtMs: 0,
+        connId: "conn-control-ui",
+        dispatchStartedAtMs: 0,
+        receivedAtMs: 0,
+      },
+    });
+    chatRunState.buffers.set("client-final", "Final only reply");
+
+    handler({
+      runId: "run-final-only",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "chat.send_timing",
+      expect.objectContaining({
+        phase: "first-assistant-event",
+        runId: "client-final",
+        sessionKey: "session-1",
+        ackToPhaseMs: expect.any(Number),
+        dispatchStartedToPhaseMs: expect.any(Number),
+        receivedToPhaseMs: expect.any(Number),
+      }),
+      new Set(["conn-control-ui"]),
+      { dropIfSlow: true },
+    );
+    nowSpy?.mockRestore();
+  });
+
   it("coalesces assistant agent events under the chat delta throttle", () => {
     let now = 10_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -436,7 +521,7 @@ describe("agent event handler", () => {
     expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(1);
     expect(chatBroadcastCalls(broadcast)).toHaveLength(1);
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
-    expect((agentCalls[0]?.[1] as { data?: { text?: string } }).data?.text).toBe("x");
+    expect((agentCalls[0][1] as { data?: { text?: string } }).data?.text).toBe("x");
     nowSpy.mockRestore();
   });
 
@@ -482,14 +567,14 @@ describe("agent event handler", () => {
 
     const agentCalls = agentBroadcastCalls(broadcast);
     expect(agentCalls).toHaveLength(3);
-    expect((agentCalls[0]?.[1] as { data?: { text?: string } }).data?.text).toBe("Hello");
-    expect((agentCalls[1]?.[1] as { data?: { delta?: string } }).data?.delta).toBe(" world!");
-    expect((agentCalls[1]?.[1] as { data?: { text?: string } }).data?.text).toBe("Hello world!");
-    expect((agentCalls[1]?.[1] as { seq?: number }).seq).toBe(3);
-    expect((agentCalls[2]?.[1] as { stream?: string; data?: { phase?: string } }).stream).toBe(
+    expect((agentCalls[0][1] as { data?: { text?: string } }).data?.text).toBe("Hello");
+    expect((agentCalls[1][1] as { data?: { delta?: string } }).data?.delta).toBe(" world!");
+    expect((agentCalls[1][1] as { data?: { text?: string } }).data?.text).toBe("Hello world!");
+    expect((agentCalls[1][1] as { seq?: number }).seq).toBe(3);
+    expect((agentCalls[2][1] as { stream?: string; data?: { phase?: string } }).stream).toBe(
       "lifecycle",
     );
-    expect((agentCalls[2]?.[1] as { data?: { phase?: string } }).data?.phase).toBe("end");
+    expect((agentCalls[2][1] as { data?: { phase?: string } }).data?.phase).toBe("end");
     expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(3);
     nowSpy.mockRestore();
   });
@@ -529,11 +614,11 @@ describe("agent event handler", () => {
 
     const agentCalls = agentBroadcastCalls(broadcast);
     expect(agentCalls).toHaveLength(3);
-    expect((agentCalls[0]?.[1] as { data?: { delta?: string } }).data?.delta).toBe("Hel");
-    expect((agentCalls[1]?.[1] as { data?: { delta?: string } }).data?.delta).toBe("lo");
-    expect((agentCalls[1]?.[1] as { seq?: number }).seq).toBe(2);
-    expect((agentCalls[2]?.[1] as { data?: { delta?: string } }).data?.delta).toBe("!");
-    expect((agentCalls[2]?.[1] as { seq?: number }).seq).toBe(3);
+    expect((agentCalls[0][1] as { data?: { delta?: string } }).data?.delta).toBe("Hel");
+    expect((agentCalls[1][1] as { data?: { delta?: string } }).data?.delta).toBe("lo");
+    expect((agentCalls[1][1] as { seq?: number }).seq).toBe(2);
+    expect((agentCalls[2][1] as { data?: { delta?: string } }).data?.delta).toBe("!");
+    expect((agentCalls[2][1] as { seq?: number }).seq).toBe(3);
     expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(3);
     nowSpy.mockRestore();
   });
@@ -578,7 +663,7 @@ describe("agent event handler", () => {
       "thinking",
       "assistant",
     ]);
-    expect((agentCalls[1]?.[1] as { data?: { delta?: string } }).data?.delta).toBe("ing");
+    expect((agentCalls[1][1] as { data?: { delta?: string } }).data?.delta).toBe("ing");
     expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(3);
     nowSpy.mockRestore();
   });
@@ -610,8 +695,8 @@ describe("agent event handler", () => {
 
     const agentCalls = agentBroadcastCalls(broadcast);
     expect(agentCalls).toHaveLength(2);
-    expect((agentCalls[0]?.[1] as { stream?: string }).stream).toBe("lifecycle");
-    expect((agentCalls[1]?.[1] as { data?: { text?: string } }).data?.text).toBe("Hello");
+    expect((agentCalls[0][1] as { stream?: string }).stream).toBe("lifecycle");
+    expect((agentCalls[1][1] as { data?: { text?: string } }).data?.text).toBe("Hello");
     expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(2);
     nowSpy.mockRestore();
   });
@@ -639,8 +724,8 @@ describe("agent event handler", () => {
     const agentCalls = agentBroadcastCalls(broadcast);
     expect(agentCalls).toHaveLength(1);
     expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(1);
-    expect((agentCalls[0]?.[1] as { stream?: string }).stream).toBe("thinking");
-    expect((agentCalls[0]?.[1] as { data?: { text?: string } }).data?.text).toBe("t");
+    expect((agentCalls[0][1] as { stream?: string }).stream).toBe("thinking");
+    expect((agentCalls[0][1] as { data?: { text?: string } }).data?.text).toBe("t");
     nowSpy.mockRestore();
   });
 
@@ -694,11 +779,11 @@ describe("agent event handler", () => {
 
     const agentCalls = agentBroadcastCalls(broadcast);
     expect(agentCalls).toHaveLength(5);
-    expect((agentCalls[1]?.[1] as { data?: { mediaUrls?: string[] } }).data?.mediaUrls).toEqual([
+    expect((agentCalls[1][1] as { data?: { mediaUrls?: string[] } }).data?.mediaUrls).toEqual([
       "https://example.test/image.png",
     ]);
-    expect((agentCalls[2]?.[1] as { data?: { replace?: boolean } }).data?.replace).toBe(true);
-    expect((agentCalls[3]?.[1] as { data?: { text?: string } }).data?.text).toBe(
+    expect((agentCalls[2][1] as { data?: { replace?: boolean } }).data?.replace).toBe(true);
+    expect((agentCalls[3][1] as { data?: { text?: string } }).data?.text).toBe(
       "Look elsewhere now",
     );
     expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(5);
@@ -1201,7 +1286,7 @@ describe("agent event handler", () => {
     expect(replacementPayload.deltaText).toBe("Hi");
     expect(replacementPayload.replace).toBe(true);
     expect(replacementPayload.message?.content?.[0]?.text).toBe("Hi");
-    expect((chatCalls[2]?.[1] as { state?: string }).state).toBe("final");
+    expect((chatCalls[2][1] as { state?: string }).state).toBe("final");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
     nowSpy.mockRestore();
   });
@@ -1900,6 +1985,75 @@ describe("agent event handler", () => {
     const persistEvent = requireRecord(persistParams.event, "persist lifecycle event");
     expect(persistEvent.runId).toBe("run-finished");
     expect(requireRecord(persistEvent.data, "persist lifecycle event data").phase).toBe("end");
+    resetAgentRunContextForTest();
+  });
+
+  it("does not project stale pre-reset lifecycle events into session subscriber snapshots", () => {
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-reset",
+      kind: "direct",
+      sessionId: "new-session",
+      updatedAt: 2_000,
+      status: "done",
+      startedAt: 1_000,
+      endedAt: 1_500,
+      runtimeMs: 500,
+      abortedLastRun: false,
+    });
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+
+    handler({
+      runId: "old-run",
+      seq: 1,
+      stream: "lifecycle",
+      sessionKey: "session-reset",
+      sessionId: "old-session",
+      ts: 2_100,
+      data: {
+        phase: "start",
+        startedAt: 2_100,
+      },
+    });
+    handler({
+      runId: "old-run",
+      seq: 2,
+      stream: "lifecycle",
+      sessionKey: "session-reset",
+      sessionId: "old-session",
+      ts: 2_200,
+      data: {
+        phase: "error",
+        endedAt: 2_200,
+        error: "old run failed",
+      },
+    });
+
+    const sessionsChangedCalls = broadcastToConnIds.mock.calls.filter(
+      ([event]) => event === "sessions.changed",
+    );
+    expect(sessionsChangedCalls).toHaveLength(2);
+    for (const [, payload] of sessionsChangedCalls) {
+      expectPayloadFields(payload, {
+        sessionKey: "session-reset",
+        sessionId: "new-session",
+        status: "done",
+        startedAt: 1_000,
+        endedAt: 1_500,
+        runtimeMs: 500,
+        updatedAt: 2_000,
+        abortedLastRun: false,
+      });
+      expectRecordFields(requireRecord(requireRecord(payload, "payload").session, "session"), {
+        sessionId: "new-session",
+        status: "done",
+        startedAt: 1_000,
+        endedAt: 1_500,
+        runtimeMs: 500,
+      });
+    }
     resetAgentRunContextForTest();
   });
 

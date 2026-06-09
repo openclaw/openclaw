@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Re-exports the OpenClaw CLI entry point for package execution.
+// Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { formatCliFailureLines } from "./cli/failure-output.js";
@@ -115,7 +117,7 @@ if (isMain) {
     process.exit(1);
   });
 
-  void runLegacyCliEntry(process.argv).catch((err) => {
+  void runLegacyCliEntry(process.argv).catch((err: unknown) => {
     for (const line of formatCliFailureLines({
       title: "The CLI command failed.",
       error: err,

@@ -1,3 +1,4 @@
+// Install Cli tests cover install cli script behavior.
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -974,7 +975,7 @@ describe("install-cli.sh", () => {
     writeNpmFreshnessConflictFixture(join(nodeBin, "npm"), argsLog);
 
     let result: ReturnType<typeof runInstallCliShell> | undefined;
-    let argsOutput = "";
+    let argsOutput;
     try {
       result = runInstallCliShell(
         [
@@ -1012,7 +1013,7 @@ describe("install-cli.sh", () => {
     writeNpmBeforePolicyFixture(join(nodeBin, "npm"), argsLog);
 
     let result: ReturnType<typeof runInstallCliShell> | undefined;
-    let argsOutput = "";
+    let argsOutput;
     try {
       result = runInstallCliShell(
         [

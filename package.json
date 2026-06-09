@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.5.30",
+  "version": "2026.6.2",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -91,6 +91,7 @@
     "!dist/extensions/google-meet/**",
     "!dist/extensions/googlechat/**",
     "!dist/extensions/line/**",
+    "!dist/extensions/llama-cpp/**",
     "!dist/extensions/lobster/**",
     "!dist/extensions/memory-lancedb/**",
     "!dist/extensions/matrix/**",
@@ -805,6 +806,10 @@
       "types": "./dist/plugin-sdk/bundled-channel-config-schema.d.ts",
       "default": "./dist/plugin-sdk/bundled-channel-config-schema.js"
     },
+    "./plugin-sdk/chat-channel-ids": {
+      "types": "./dist/plugin-sdk/chat-channel-ids.d.ts",
+      "default": "./dist/plugin-sdk/chat-channel-ids.js"
+    },
     "./plugin-sdk/channel-config-schema-legacy": {
       "types": "./dist/plugin-sdk/channel-config-schema-legacy.d.ts",
       "default": "./dist/plugin-sdk/channel-config-schema-legacy.js"
@@ -1085,6 +1090,10 @@
       "types": "./dist/plugin-sdk/memory-core-engine-runtime.d.ts",
       "default": "./dist/plugin-sdk/memory-core-engine-runtime.js"
     },
+    "./plugin-sdk/memory-core-host-embedding-registry": {
+      "types": "./dist/plugin-sdk/memory-core-host-embedding-registry.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-embedding-registry.js"
+    },
     "./plugin-sdk/memory-core-host-engine-embeddings": {
       "types": "./dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-embeddings.js"
@@ -1204,6 +1213,10 @@
     "./plugin-sdk/plugin-entry": {
       "types": "./dist/plugin-sdk/plugin-entry.d.ts",
       "default": "./dist/plugin-sdk/plugin-entry.js"
+    },
+    "./plugin-sdk/provider-catalog-live-runtime": {
+      "types": "./dist/plugin-sdk/provider-catalog-live-runtime.d.ts",
+      "default": "./dist/plugin-sdk/provider-catalog-live-runtime.js"
     },
     "./plugin-sdk/provider-catalog-runtime": {
       "types": "./dist/plugin-sdk/provider-catalog-runtime.d.ts",
@@ -1409,19 +1422,19 @@
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
-    "android:assemble": "cd apps/android && ./gradlew :app:assemblePlayDebug",
-    "android:assemble:third-party": "cd apps/android && ./gradlew :app:assembleThirdPartyDebug",
+    "android:assemble": "node scripts/run-android-gradle.mjs :app:assemblePlayDebug",
+    "android:assemble:third-party": "node scripts/run-android-gradle.mjs :app:assembleThirdPartyDebug",
     "android:bundle:release": "bun apps/android/scripts/build-release-aab.ts",
     "android:format": "cd apps/android && ./gradlew :app:ktlintFormat :benchmark:ktlintFormat",
-    "android:install": "cd apps/android && ./gradlew :app:installPlayDebug",
-    "android:install:third-party": "cd apps/android && ./gradlew :app:installThirdPartyDebug",
+    "android:install": "node scripts/run-android-gradle.mjs :app:installPlayDebug",
+    "android:install:third-party": "node scripts/run-android-gradle.mjs :app:installThirdPartyDebug",
     "android:lint": "cd apps/android && ./gradlew :app:ktlintCheck :benchmark:ktlintCheck",
-    "android:lint:android": "cd apps/android && ./gradlew :app:lintDebug",
-    "android:run": "cd apps/android && ./gradlew :app:installPlayDebug && adb shell am start -n ai.openclaw.app/.MainActivity",
-    "android:run:third-party": "cd apps/android && ./gradlew :app:installThirdPartyDebug && adb shell am start -n ai.openclaw.app/.MainActivity",
-    "android:test": "cd apps/android && ./gradlew :app:testPlayDebugUnitTest",
+    "android:lint:android": "node scripts/run-android-gradle.mjs :app:lintDebug",
+    "android:run": "node scripts/run-android-gradle.mjs :app:installPlayDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
+    "android:run:third-party": "node scripts/run-android-gradle.mjs :app:installThirdPartyDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
+    "android:test": "node scripts/run-android-gradle.mjs :app:testPlayDebugUnitTest",
     "android:test:integration": "node scripts/run-with-env.mjs OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
-    "android:test:third-party": "cd apps/android && ./gradlew :app:testThirdPartyDebugUnitTest",
+    "android:test:third-party": "node scripts/run-android-gradle.mjs :app:testThirdPartyDebugUnitTest",
     "audit:seams": "node scripts/audit-seams.mjs",
     "build": "node scripts/build-all.mjs",
     "build:ci-artifacts": "node scripts/build-all.mjs ciArtifacts",
@@ -1474,8 +1487,8 @@
     "crabbox:stop": "node scripts/crabbox-wrapper.mjs stop",
     "crabbox:warmup": "node scripts/crabbox-wrapper.mjs warmup",
     "deadcode:ci": "pnpm deadcode:report:ci:knip && pnpm deadcode:report:ci:ts-unused",
-    "deadcode:dependencies": "pnpm --config.minimum-release-age=0 dlx knip@6.8.0 --config config/knip.config.ts --production --no-progress --reporter compact --dependencies --no-config-hints",
-    "deadcode:knip": "pnpm dlx knip --config config/knip.config.ts --production --no-progress --reporter compact --files --dependencies",
+    "deadcode:dependencies": "pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --dependencies --no-config-hints",
+    "deadcode:knip": "pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --files --dependencies",
     "deadcode:report": "pnpm deadcode:knip; pnpm deadcode:ts-prune; pnpm deadcode:ts-unused",
     "deadcode:report:ci:knip": "mkdir -p .artifacts/deadcode && pnpm deadcode:knip > .artifacts/deadcode/knip.txt 2>&1 || true",
     "deadcode:report:ci:ts-prune": "mkdir -p .artifacts/deadcode && pnpm deadcode:ts-prune > .artifacts/deadcode/ts-prune.txt 2>&1 || true",
@@ -1583,7 +1596,6 @@
     "mac:open": "open dist/OpenClaw.app",
     "mac:package": "bash scripts/package-mac-app.sh",
     "mac:restart": "bash scripts/restart-mac.sh",
-    "moltbot:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "openclaw": "node scripts/run-node.mjs",
     "openclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "perf:issue-78851": "node --import tsx scripts/perf/issue-78851-model-resolution.ts",
@@ -1710,12 +1722,14 @@
     "test:docker:live-gateway": "bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:claude": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=claude-cli OPENCLAW_LIVE_GATEWAY_MODELS=claude-cli/claude-sonnet-4-6 bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:gemini": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=google-gemini-cli OPENCLAW_LIVE_GATEWAY_MODELS=google-gemini-cli/gemini-3.1-pro-preview bash scripts/test-live-gateway-models-docker.sh",
+    "test:docker:live-mcp-code-mode-gateway": "bash scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
     "test:docker:live-models": "bash scripts/test-live-models-docker.sh",
     "test:docker:live-models:claude": "OPENCLAW_LIVE_PROVIDERS=claude-cli OPENCLAW_LIVE_MODELS=claude-cli/claude-sonnet-4-6 bash scripts/test-live-models-docker.sh",
     "test:docker:live-models:gemini": "OPENCLAW_LIVE_PROVIDERS=google-gemini-cli OPENCLAW_LIVE_MODELS=google-gemini-cli/gemini-3.1-pro-preview bash scripts/test-live-models-docker.sh",
     "test:docker:live:all": "node scripts/run-with-env.mjs OPENCLAW_DOCKER_ALL_LIVE_MODE=only -- node scripts/test-docker-all.mjs",
     "test:docker:local:all": "node scripts/run-with-env.mjs OPENCLAW_DOCKER_ALL_LIVE_MODE=skip -- node scripts/test-docker-all.mjs",
     "test:docker:mcp-channels": "bash scripts/e2e/mcp-channels-docker.sh",
+    "test:docker:mcp-code-mode-gateway": "bash scripts/e2e/mcp-code-mode-gateway-docker.sh",
     "test:docker:multi-node-update": "bash scripts/e2e/multi-node-update-docker.sh",
     "test:docker:codex-on-demand": "bash scripts/e2e/codex-on-demand-docker.sh",
     "test:docker:npm-onboard-channel-agent": "bash scripts/e2e/npm-onboard-channel-agent-docker.sh",
@@ -1748,6 +1762,7 @@
     "test:docker:update-migration": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.4.23} OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:update-restart-auth": "env OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:upgrade-survivor": "bash scripts/e2e/upgrade-survivor-docker.sh",
+    "test:env-mutations:report": "node --import tsx scripts/test-env-mutation-report.ts",
     "test:e2e": "pnpm test:e2e:gateway && pnpm test:ui:e2e",
     "test:e2e:gateway": "node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts",
     "test:e2e:openshell": "node scripts/run-with-env.mjs OPENCLAW_E2E_OPENSHELL=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/openshell/src/backend.e2e.test.ts",
@@ -1809,7 +1824,7 @@
     "test:startup:gateway": "node --import tsx scripts/bench-gateway-startup.ts",
     "test:restart:gateway": "node --import tsx scripts/bench-gateway-restart.ts",
     "test:startup:memory": "node scripts/ensure-cli-startup-build.mjs && node scripts/check-cli-startup-memory.mjs",
-    "test:ui": "pnpm ui:i18n:check && pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",
+    "test:ui": "pnpm ui:i18n:check && pnpm lint:ui:no-raw-window-open && node scripts/ensure-playwright-chromium.mjs && pnpm --dir ui test",
     "test:ui:e2e": "node scripts/ensure-playwright-chromium.mjs && node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner",
     "test:unit": "pnpm test:unit:fast && node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts",
     "test:unit:fast": "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts",
@@ -1851,11 +1866,11 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.22.1",
-    "@anthropic-ai/sdk": "0.98.0",
+    "@anthropic-ai/sdk": "0.100.1",
     "@clack/core": "1.3.1",
     "@clack/prompts": "1.4.0",
-    "@earendil-works/pi-tui": "0.76.0",
-    "@google/genai": "2.6.0",
+    "@earendil-works/pi-tui": "0.78.0",
+    "@google/genai": "2.7.0",
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",
     "@homebridge/ciao": "1.3.9",
@@ -1867,7 +1882,7 @@
     "@openclaw/proxyline": "0.3.3",
     "chalk": "5.6.2",
     "chokidar": "5.0.0",
-    "clawpdf": "0.2.0",
+    "clawpdf": "0.3.0",
     "commander": "14.0.3",
     "croner": "10.0.1",
     "cross-spawn": "7.0.6",
@@ -1878,7 +1893,7 @@
     "glob": "13.0.6",
     "grammy": "1.43.0",
     "highlight.js": "11.11.1",
-    "hosted-git-info": "9.0.3",
+    "hosted-git-info": "10.1.1",
     "ignore": "7.0.5",
     "jiti": "2.7.0",
     "json5": "2.2.3",
@@ -1887,7 +1902,7 @@
     "linkedom": "0.18.12",
     "minimatch": "10.2.5",
     "node-edge-tts": "1.2.10",
-    "openai": "6.39.0",
+    "openai": "6.39.1",
     "partial-json": "0.1.7",
     "playwright-core": "1.60.0",
     "proper-lockfile": "4.1.2",
@@ -1897,7 +1912,7 @@
     "tar": "7.5.15",
     "tree-sitter-bash": "0.25.1",
     "tslog": "4.10.2",
-    "typebox": "1.1.38",
+    "typebox": "1.1.39",
     "typescript": "6.0.3",
     "undici": "8.3.0",
     "web-push": "3.6.7",
@@ -1908,7 +1923,7 @@
   },
   "devDependencies": {
     "@a2ui/lit": "0.10.0",
-    "@copilotkit/aimock": "1.27.1",
+    "@copilotkit/aimock": "1.27.3",
     "@grammyjs/types": "3.27.3",
     "@lit-labs/signals": "0.3.0",
     "@lit/context": "1.1.6",
@@ -1934,21 +1949,13 @@
     "oxlint-tsgolint": "0.23.0",
     "shiki": "4.1.0",
     "signal-utils": "0.21.1",
-    "tsdown": "0.22.0",
+    "tsdown": "0.22.1",
     "tsx": "4.22.3",
     "unrun": "0.3.0",
     "vitest": "4.1.7"
   },
   "optionalDependencies": {
     "sqlite-vec": "0.1.9"
-  },
-  "overrides": {
-    "axios": "1.16.0",
-    "fast-uri": "3.1.2",
-    "follow-redirects": "1.16.0",
-    "ip-address": "10.2.0",
-    "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-    "uuid": "14.0.0"
   },
   "engines": {
     "node": ">=22.19.0"

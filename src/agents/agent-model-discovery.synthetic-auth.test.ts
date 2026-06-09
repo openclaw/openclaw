@@ -1,3 +1,4 @@
+/** Tests synthetic auth fallback during agent model discovery. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -35,7 +36,6 @@ vi.mock("./auth-profiles/store.js", () => ({
 
 vi.mock("./agent-auth-discovery-core.js", () => ({
   addEnvBackedAgentCredentials: (credentials: Record<string, unknown>) => ({ ...credentials }),
-  scrubLegacyStaticAuthJsonEntriesForDiscovery: vi.fn(),
 }));
 
 let resolveAgentCredentialsForDiscovery: typeof import("./agent-auth-discovery.js").resolveAgentCredentialsForDiscovery;
