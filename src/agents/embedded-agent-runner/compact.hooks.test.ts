@@ -2135,6 +2135,61 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps owning context-engine compaction primary for legacy Codex native sessions", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({
+      runtime: "codex",
+      runtimeSource: "model",
+    } as never);
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+      result: {
+        summary: "",
+        firstKeptEntryId: "",
+        tokensBefore: 333,
+        details: {
+          backend: "codex-app-server",
+          signal: "thread/compact/start",
+          pending: true,
+        },
+      },
+    });
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "codex",
+        model: "gpt-5.4",
+        agentHarnessId: "codex",
+        trigger: "budget",
+        currentTokenCount: 333,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(result.result?.summary).toBe("engine-summary");
+    expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
+    expect(contextEngineCompactMock.mock.invocationCallOrder[0]).toBeLessThan(
+      maybeCompactAgentHarnessSessionMock.mock.invocationCallOrder[0],
+    );
+    const details = result.result?.details as
+      | { codexNativeCompaction?: Record<string, unknown> }
+      | undefined;
+    expect(details?.codexNativeCompaction).toMatchObject({
+      ok: true,
+      compacted: false,
+      result: {
+        tokensBefore: 333,
+        details: {
+          backend: "codex-app-server",
+          signal: "thread/compact/start",
+          pending: true,
+        },
+      },
+    });
+  });
+
   it("does not fire after_compaction when compaction fails", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     const sync = vi.fn(async () => {});
