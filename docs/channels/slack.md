@@ -673,6 +673,8 @@ Surface different features that extend the above defaults.
 
 The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. The **Messages** tab remains enabled for Slack DMs. The manifest also enables Slack assistant threads with `features.assistant_view`, `assistant:write`, `assistant_thread_started`, and `assistant_thread_context_changed`; assistant threads route to their own OpenClaw thread sessions and keep Slack-provided thread context available to the agent.
 
+If the **Agent or Assistant** capability is enabled on the Slack app, every inbound DM carries a unique `assistant_app_thread.thread_ts`, which by default causes each DM to resolve to its own thread-scoped OpenClaw session (suffixed `:thread:<ts>`). To collapse those assistant DM threads back into the user's base DM session — useful when you want one continuous conversation per DM peer rather than a new session per message — set `channels.slack.dm.collapseAssistantThreads: true`. The flag defaults to `false` so existing routing is preserved; only direct messages are affected (group and channel threading is unchanged). It is read from the merged Slack account config, so you can set it globally under `channels.slack.dm` or per account under `channels.slack.accounts.<id>.dm`.
+
 <AccordionGroup>
   <Accordion title="Optional native slash commands">
 

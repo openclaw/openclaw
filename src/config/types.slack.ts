@@ -36,6 +36,13 @@ export type SlackDmConfig = {
   groupChannels?: Array<string | number>;
   /** @deprecated Prefer channels.slack.replyToModeByChatType.direct. */
   replyToMode?: ReplyToMode;
+  /**
+   * When true, DM messages wrapped in Slack's `assistant_app_thread` are
+   * routed to the user's base DM session instead of a thread-scoped session.
+   * Default false preserves the existing contract where Slack assistant
+   * threads spawn their own OpenClaw thread sessions.
+   */
+  collapseAssistantThreads?: boolean;
 };
 
 export type SlackChannelConfig = {

@@ -206,7 +206,18 @@ export function resolveSlackRoutingContext(params: {
       ? seedCandidateThreadId
       : undefined;
   const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
-  const assistantThreadId = assistantThreadTs;
+  // Opt-in flag: when dm.collapseAssistantThreads is true, route
+  // assistant_app_thread DM messages into the user's base DM session instead
+  // of a thread-scoped session. Default false preserves the existing contract
+  // where Slack assistant threads spawn their own OpenClaw thread sessions.
+  // Read from the merged account config (account.dm) so account-scoped opt-in
+  // under channels.slack.accounts.<id>.dm.collapseAssistantThreads is honored,
+  // mirroring how resolveSlackReplyToMode reads account.dm.replyToMode. The
+  // merged config already folds in root channels.slack.dm, so single-account
+  // setups keep working.
+  const collapseAssistantDmThreads = account.dm?.collapseAssistantThreads === true;
+  const assistantThreadId =
+    isDirectMessage && collapseAssistantDmThreads ? undefined : assistantThreadTs;
   // DM threads are a UI affordance, not a session boundary. Route all DM
   // messages, including thread replies, to the user's main DM session so
   // the agent sees them as part of the existing conversation. Slack assistant

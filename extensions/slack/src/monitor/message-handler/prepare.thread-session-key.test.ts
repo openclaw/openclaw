@@ -21,7 +21,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   };
 });
 
-import type { ResolvedSlackAccount } from "../../accounts.js";
+import { resolveSlackAccount, type ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackRoutingContext, type SlackRoutingContextDeps } from "./prepare-routing.js";
 
@@ -583,6 +583,216 @@ describe("thread-level session keys", () => {
 
     expect(routing.sessionKey).toBe("agent:main:slack:direct:u3:thread:1770408530.000000");
     expect(routing.threadContext.messageThreadId).toBe("1770408530.000000");
+  });
+
+  it("collapses assistant DM threads to the base DM session when root channels.slack.dm.collapseAssistantThreads=true", () => {
+    // Drive the flag through the REAL account resolver so this exercises the
+    // merged account config path rather than a hand-built account object.
+    const cfg = {
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        slack: {
+          enabled: true,
+          replyToMode: "all",
+          dm: { collapseAssistantThreads: true },
+        },
+      },
+    } as OpenClawConfig;
+    const account = resolveSlackAccount({ cfg });
+    expect(account.dm?.collapseAssistantThreads).toBe(true);
+
+    const ctx = {
+      cfg,
+      teamId: "T1",
+      threadInheritParent: false,
+      threadHistoryScope: "thread",
+    } satisfies SlackRoutingContextDeps;
+
+    const routing = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "im",
+        user: "U3",
+        text: "assistant reply",
+        ts: "1770408540.000000",
+        thread_ts: "1770408530.000000",
+        parent_user_id: "B1",
+      } as SlackMessageEvent,
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
+      assistantThreadTs: "1770408530.000000",
+    });
+
+    expect(routing.sessionKey).toBe("agent:main:slack:direct:u3");
+    expect(routing.sessionKey).not.toContain(":thread:");
+  });
+
+  it("collapses assistant DM threads when the flag is set at account scope (channels.slack.accounts.<id>.dm.collapseAssistantThreads=true)", () => {
+    // Regression: previously routing read only the root channels.slack.dm flag,
+    // so an account-scoped opt-in validated but silently kept fanning assistant
+    // DMs into :thread: sessions. The merged account config must honor it.
+    const cfg = {
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        slack: {
+          enabled: true,
+          replyToMode: "all",
+          accounts: {
+            default: {
+              dm: { collapseAssistantThreads: true },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const account = resolveSlackAccount({ cfg, accountId: "default" });
+    // The merged account config surfaces the account-scoped flag even though it
+    // is absent from the root channels.slack.dm config.
+    expect(account.dm?.collapseAssistantThreads).toBe(true);
+
+    const ctx = {
+      cfg,
+      teamId: "T1",
+      threadInheritParent: false,
+      threadHistoryScope: "thread",
+    } satisfies SlackRoutingContextDeps;
+
+    const routing = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "im",
+        user: "U3",
+        text: "assistant reply",
+        ts: "1770408540.000000",
+        thread_ts: "1770408530.000000",
+        parent_user_id: "B1",
+      } as SlackMessageEvent,
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
+      assistantThreadTs: "1770408530.000000",
+    });
+
+    expect(routing.sessionKey).toBe("agent:main:slack:direct:u3");
+    expect(routing.sessionKey).not.toContain(":thread:");
+  });
+
+  it("preserves a global channels.slack.dm.collapseAssistantThreads=true when an account sets an unrelated dm override", () => {
+    // Regression for the inheritance gap: the account-level dm block shallow-
+    // replaces the root dm object for every key, so the documented global
+    // collapseAssistantThreads flag would read as undefined for an account that
+    // only sets another dm key (e.g. policy), and assistant DMs would fan out.
+    // mergeSlackAccountConfig resolves just this flag account-first then root,
+    // so the global value survives while the account's own dm key still wins.
+    const cfg = {
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        slack: {
+          enabled: true,
+          replyToMode: "all",
+          dm: { collapseAssistantThreads: true },
+          accounts: {
+            default: {
+              // Account overrides only an unrelated dm key; the global collapse
+              // flag must still apply via the deep-merge.
+              dm: { policy: "open" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const account = resolveSlackAccount({ cfg, accountId: "default" });
+    // The explicit flag resolution keeps the root flag while the account's own
+    // dm key (policy) still wins via the normal shallow account override.
+    expect(account.dm?.collapseAssistantThreads).toBe(true);
+    expect(account.dm?.policy).toBe("open");
+
+    const ctx = {
+      cfg,
+      teamId: "T1",
+      threadInheritParent: false,
+      threadHistoryScope: "thread",
+    } satisfies SlackRoutingContextDeps;
+
+    const routing = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "im",
+        user: "U3",
+        text: "assistant reply",
+        ts: "1770408540.000000",
+        thread_ts: "1770408530.000000",
+        parent_user_id: "B1",
+      } as SlackMessageEvent,
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
+      assistantThreadTs: "1770408530.000000",
+    });
+
+    expect(routing.sessionKey).toBe("agent:main:slack:direct:u3");
+    expect(routing.sessionKey).not.toContain(":thread:");
+  });
+
+  it("lets an explicit account-level collapseAssistantThreads=false override a root true", () => {
+    // Opt-out contract: an account that explicitly sets the flag false wins over
+    // a global root true, so that account keeps the default fan-out behavior.
+    const cfg = {
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        slack: {
+          enabled: true,
+          replyToMode: "all",
+          dm: { collapseAssistantThreads: true },
+          accounts: {
+            default: {
+              dm: { collapseAssistantThreads: false },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const account = resolveSlackAccount({ cfg, accountId: "default" });
+    expect(account.dm?.collapseAssistantThreads).toBe(false);
+
+    const ctx = {
+      cfg,
+      teamId: "T1",
+      threadInheritParent: false,
+      threadHistoryScope: "thread",
+    } satisfies SlackRoutingContextDeps;
+
+    const routing = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "im",
+        user: "U3",
+        text: "assistant reply",
+        ts: "1770408540.000000",
+        thread_ts: "1770408530.000000",
+        parent_user_id: "B1",
+      } as SlackMessageEvent,
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
+      assistantThreadTs: "1770408530.000000",
+    });
+
+    // Flag false => assistant DM keeps its own thread-scoped session.
+    expect(routing.sessionKey).toBe("agent:main:slack:direct:u3:thread:1770408530.000000");
   });
 
   it("routes DM thread replies through explicit runtime conversation bindings", () => {
