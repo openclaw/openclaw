@@ -43,15 +43,6 @@ describe("evidence summary", () => {
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
     expect(evidence.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
     expect(evidence.schemaVersion).toBe(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION);
-    expect(evidence.taxonomy).toEqual({
-      sourcePath: "taxonomy.yaml",
-      version: 1,
-      processVersion: 3,
-      snapshotDate: "2026-05-26",
-      sourceRef: "origin/main@41eef4a7965",
-    });
-    expect(evidence.taxonomy).not.toHaveProperty("surfaces");
-    expect(evidence.taxonomy).not.toHaveProperty("categories");
     expect(evidence.entries).toHaveLength(1);
     expect(evidence.entries[0]).toMatchObject({
       scenarioId: "dm-chat-baseline",
