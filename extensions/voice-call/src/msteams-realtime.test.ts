@@ -232,6 +232,70 @@ describe("createMsteamsRealtimeCall", () => {
     );
   });
 
+  it("hides look_at_screen and show_to_caller under the 'none' tool policy", () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        tools: [CONSULT_TOOL],
+        toolPolicy: "none",
+        agentRuntime: {} as unknown as CoreAgentDeps,
+        voiceConfig: {} as unknown as VoiceCallConfig,
+        cfg: {} as unknown as OpenClawConfig,
+        getLatestFrame: () => undefined,
+      },
+    });
+    const toolNames = (mock.getRequest().tools ?? []).map((t) => t.name);
+    expect(toolNames).not.toContain("look_at_screen");
+    expect(toolNames).not.toContain("show_to_caller");
+    expect(toolNames).not.toContain("openclaw_agent_task");
+  });
+
+  it("exposes look_at_screen but not show_to_caller under 'safe-read-only'", () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        tools: [CONSULT_TOOL],
+        toolPolicy: "safe-read-only",
+        agentRuntime: {} as unknown as CoreAgentDeps,
+        voiceConfig: {} as unknown as VoiceCallConfig,
+        cfg: {} as unknown as OpenClawConfig,
+        getLatestFrame: () => undefined,
+      },
+    });
+    const toolNames = (mock.getRequest().tools ?? []).map((t) => t.name);
+    expect(toolNames).toContain("look_at_screen");
+    expect(toolNames).not.toContain("show_to_caller");
+  });
+
+  it("exposes look_at_screen and show_to_caller under 'owner'", () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: {
+        provider: mock.provider,
+        providerConfig: {},
+        tools: [CONSULT_TOOL],
+        toolPolicy: "owner",
+        agentRuntime: {} as unknown as CoreAgentDeps,
+        voiceConfig: {} as unknown as VoiceCallConfig,
+        cfg: {} as unknown as OpenClawConfig,
+        getLatestFrame: () => undefined,
+      },
+    });
+    const toolNames = (mock.getRequest().tools ?? []).map((t) => t.name);
+    expect(toolNames).toContain("look_at_screen");
+    expect(toolNames).toContain("show_to_caller");
+  });
+
   it("refuses a background task (no ack) when the caller has no AAD delivery target", () => {
     const ctx = createMockSession();
     ctx.session.caller.aadId = null; // anonymous caller — no Teams chat to deliver to
