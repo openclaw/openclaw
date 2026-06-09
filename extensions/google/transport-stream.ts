@@ -358,10 +358,7 @@ export function resolveGoogleVertexLocation(options?: { location?: unknown }): s
 }
 
 export function resolveGoogleVertexBaseOrigin(
-export function resolveGoogleVertexBaseOrigin(
   model: { baseUrl?: string },
-  location: string,
-): string {
   location: string,
 ): string {
   const configured = normalizeOptionalString(model.baseUrl);

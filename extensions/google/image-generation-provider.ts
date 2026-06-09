@@ -193,7 +193,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       const model = normalizeGoogleImageModel(req.model);
       const isVertex = providerKey === "google-vertex";
       let requestUrl: string;
-      let requestHeaders: Headers;
+      let requestHeaders: Record<string, string>;
       let allowPrivateNetwork: boolean | undefined;
       let dispatcherPolicy:
         | ReturnType<typeof resolveGoogleGenerativeAiHttpRequestConfig>["dispatcherPolicy"]
@@ -217,13 +217,11 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         const origin = resolveGoogleVertexBaseOrigin({ baseUrl: config.baseUrl }, location);
         requestUrl = `${origin}/v1/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
 
-        requestHeaders = new Headers(
-          await buildGoogleVertexHeaders(
-            { headers: Object.fromEntries(config.headers.entries()) },
-            auth.apiKey,
-            undefined,
-            fetch,
-          ),
+        requestHeaders = await buildGoogleVertexHeaders(
+          { headers: Object.fromEntries(config.headers.entries()) },
+          auth.apiKey,
+          undefined,
+          fetch,
         );
         allowPrivateNetwork = config.allowPrivateNetwork;
         dispatcherPolicy = config.dispatcherPolicy;
