@@ -1089,7 +1089,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           to: target,
           deps: {
             imessage: createIMessageEchoCachingSend({
-              client: getActiveClient(),
               accountId: accountInfo.accountId,
               sentMessageCache,
             }),
@@ -1105,7 +1104,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           cfg,
           replies: [payload],
           target,
-          client: getActiveClient(),
           accountId: accountInfo.accountId,
           runtime,
           maxBytes: mediaMaxBytes,
