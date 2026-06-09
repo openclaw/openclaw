@@ -4589,7 +4589,7 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("delivers compaction hook messages without duplicating notifyUser notices", async () => {
+  it("delivers compaction hook messages alongside notifyUser notices (#90185)", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({
@@ -4639,7 +4639,7 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
+    expect(onBlockReply).toHaveBeenCalledTimes(4);
     expectBlockReplyCall(onBlockReply, 0, {
       text: "Hook before",
       replyToId: "msg",
@@ -4647,7 +4647,19 @@ describe("runAgentTurnWithFallback", () => {
       isCompactionNotice: true,
     });
     expectBlockReplyCall(onBlockReply, 1, {
+      text: "🧹 Compacting context...",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onBlockReply, 2, {
       text: "Hook after",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onBlockReply, 3, {
+      text: "🧹 Compaction complete",
       replyToId: "msg",
       replyToCurrent: true,
       isCompactionNotice: true,

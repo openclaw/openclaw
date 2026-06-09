@@ -117,6 +117,23 @@ describe("iMessage sent-message echo cache", () => {
     expect(cache.has(scope, { messageId: "id-only" })).toBe(true);
   });
 
+  it("keeps short-lived pending persisted echoes out of generic text matching", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const scope = "acct:imessage:+1555";
+
+    rememberPersistedIMessageEcho({ scope, text: "pending-send", ttlMs: 1_000, pending: true });
+    expect(hasPersistedIMessageEcho({ scope, text: "pending-send" })).toBe(false);
+    expect(
+      hasPersistedIMessageEcho({ scope, text: "pending-send", includePendingText: true }),
+    ).toBe(true);
+
+    vi.advanceTimersByTime(1_001);
+    expect(
+      hasPersistedIMessageEcho({ scope, text: "pending-send", includePendingText: true }),
+    ).toBe(false);
+  });
+
   it("refreshes persisted echoes written after an earlier empty lookup", () => {
     const cache = createSentMessageCache();
     const scope = "acct:imessage:+1555";

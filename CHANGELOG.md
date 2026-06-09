@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 - Docs/tooling: add Parallel search docs, refresh weather-skill guidance toward `web_fetch`, clarify legacy `openai-codex` auth, document release/test helper scripts, and tighten changed-test routing docs for CI/debugging work. (#90028, #90250) Thanks @fuller-stack-dev.
 - Release/process: switch release trains to `YYYY.M.PATCH` monthly patch numbering, keep pre-transition tags compatible, and pin the June 2026 floor at `2026.6.5` after the published beta.
 - Platform maintenance: refresh Android, Swift/macOS, Docker, CodeQL, Buildx, Docker build/push, and Codex Action dependencies for this release train. (#74980, #81757, #86481, #86483, #90601)
+- QQBot: add `/bot-group-allways on|off` slash command (with named-account and default-account support) to toggle whether group messages require an `@mention` before the bot replies, and clear the runtime config snapshot after the write so the new account-level `defaultRequireMention` takes effect immediately without restart. (#91423) Thanks @cxyhhhhh.
 
 ### Fixes
 
