@@ -123,7 +123,7 @@ export function normalizeDiagnosticClientContext(
   if (Object.keys(normalized).length === 0) {
     return undefined;
   }
-  if (JSON.stringify(normalized).length > CLIENT_CONTEXT_MAX_BYTES) {
+  if (Buffer.byteLength(JSON.stringify(normalized), "utf8") > CLIENT_CONTEXT_MAX_BYTES) {
     return undefined;
   }
   return deepFreeze(normalized) as DiagnosticClientContext;

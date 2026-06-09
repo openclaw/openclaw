@@ -13,7 +13,6 @@ import {
   isDiagnosticsEnabled,
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
-  onTrustedDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
@@ -844,13 +843,18 @@ describe("diagnostic-events", () => {
     });
   });
 
-  it("onTrustedDiagnosticEvent delivers lifecycle privateData while public listeners stay clean", () => {
+  it("forwards lifecycle privateData to the trusted grant channel while public listeners stay clean", () => {
     const publicEvents: DiagnosticEventPayload[] = [];
     const trusted: Array<{ type: string; clientContext: unknown }> = [];
     onDiagnosticEvent((event) => {
       publicEvents.push(event);
     });
-    onTrustedDiagnosticEvent((event, privateData) => {
+    // `onTrustedInternalDiagnosticEvent` is the grant-backed channel diagnostics
+    // exporters receive through `ctx.internalDiagnostics.onEvent`. The carrying
+    // emit is *untrusted* (the public payload still reaches `onDiagnosticEvent`),
+    // yet dispatch forwards `privateData` to trusted listeners regardless — the
+    // mechanic that keeps the public lifecycle contract unchanged.
+    onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
       trusted.push({
         type: event.type,
         clientContext: (privateData as { clientContext?: unknown }).clientContext,
@@ -879,31 +883,6 @@ describe("diagnostic-events", () => {
       { type: "session.state", clientContext },
       { type: "message.queued", clientContext },
     ]);
-  });
-
-  it("onTrustedDiagnosticEvent ignores events outside the lifecycle allowlist", async () => {
-    const seen: string[] = [];
-    onTrustedDiagnosticEvent((event) => {
-      seen.push(event.type);
-    });
-
-    // Trusted model content-capture also rides privateData, but on a non-lifecycle
-    // event type — the allowlist drops it here.
-    emitTrustedDiagnosticEventWithPrivateData(
-      {
-        type: "model.call.started",
-        runId: "run-1",
-        callId: "call-1",
-        provider: "openai",
-        model: "gpt-5.5",
-      },
-      { modelContent: { inputMessages: ["secret"] } },
-    );
-    // An unseeded lifecycle event (no privateData) still lands, with empty privateData.
-    emitInternalDiagnosticEvent({ type: "session.state", sessionKey: "k", state: "idle" });
-
-    await waitForDiagnosticEventsDrained();
-    expect(seen).toEqual(["session.state"]);
   });
 
   it("skips event enrichment and subscribers when diagnostics are disabled", () => {

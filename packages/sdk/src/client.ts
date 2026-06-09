@@ -206,6 +206,7 @@ function buildAgentParams(params: AgentRunParams): Record<string, unknown> {
     ...(params.attachments ? { attachments: params.attachments } : {}),
     ...(timeoutSeconds !== undefined ? { timeout: timeoutSeconds } : {}),
     ...(params.label ? { label: params.label } : {}),
+    ...(params.clientContext ? { clientContext: params.clientContext } : {}),
     idempotencyKey: params.idempotencyKey ?? randomUUID(),
   };
 }
