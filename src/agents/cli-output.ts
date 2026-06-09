@@ -3,9 +3,9 @@
  * JSONL streaming, Claude stream-json dialects, usage metadata, and tool event
  * reconstruction.
  */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+impor  normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import type { CliBackendConfig } from "../config/types.js";
+import type { CliBackendConfig } from "../conig/types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { isRecord } from "../utils.js";
 
@@ -723,6 +723,8 @@ export function createCliJsonlStreamingParser(params: {
       })
     ) {
       sawToolUse = true;
+    }
+
     if (classifyClaudeCommentary && parsed.type === "result") {
       flushPendingClaudeAssistantText();
     }
