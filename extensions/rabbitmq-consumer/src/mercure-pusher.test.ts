@@ -82,6 +82,32 @@ describe("StreamingMercurePusher push ordering", () => {
     expect(calls).toEqual(["text:第一段", "text:第二段", "done"]);
   });
 
+  it("never streams an internal path split across two flush windows", async () => {
+    const pusher = new StreamingMercurePusher(fakePusher, "user-1", 7, 80);
+    const drain = async () => {
+      while (resolvers.length) {
+        resolvers.shift()!();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+    };
+
+    // The closing backtick of `memory/…md` lands only in the second delta.
+    pusher.appendDelta("处理完成，详见 `memory/2026-");
+    await vi.advanceTimersByTimeAsync(80);
+    await drain(); // window 1: only the safe prefix may be pushed
+
+    pusher.appendDelta("06-09.md` 完成");
+    const finishPromise = pusher.finish();
+    await vi.advanceTimersByTimeAsync(0);
+    await drain();
+    await finishPromise;
+
+    // The path must never appear in any pushed chunk, in either window.
+    expect(calls.join("|")).not.toContain("memory");
+    expect(calls.join("|")).not.toContain("`");
+    expect(calls).toContain("done");
+  });
+
   it("pushError waits for in-flight text pushes before sending the error", async () => {
     const pusher = new StreamingMercurePusher(fakePusher, "user-1", 42, 80);
 

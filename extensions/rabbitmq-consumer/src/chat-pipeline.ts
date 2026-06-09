@@ -6,6 +6,7 @@ import { MercurePusher, StreamingMercurePusher } from "./mercure-pusher.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import type { ReportTemplateLookup } from "./report-template-lookup.js";
 import { computeDateScope, detectReportRequest, type ReportPeriod } from "./report-trigger.js";
+import { sanitizeInternalRefs } from "./sanitize-output.js";
 import { ToolActivityNarrator } from "./tool-activity.js";
 import { pickTopicByLlm } from "./topic-llm-picker.js";
 import { pickTopicByName } from "./topic-match.js";
@@ -521,18 +522,23 @@ export async function processChatMessage(
         fullResponse = streamPusherCtx.streamPusher.getFullText() || "(No response generated)";
       }
 
+      // Hard backstop behind the workspace prompt rule: strip any internal file
+      // paths / identifiers the model may have narrated before they are stored
+      // or returned to the web client.
+      const safeResponse = sanitizeInternalRefs(fullResponse);
+
       // Step 7: Update history record
-      await historyManager.updateResponse(chatMsg.historyId, fullResponse);
+      await historyManager.updateResponse(chatMsg.historyId, safeResponse);
 
       // Step 8: Finish streaming — flush remaining buffer + push done signal
       await streamPusherCtx.streamPusher.finish();
 
       logger.info(
         `[CHAT_PIPELINE] Completed: historyId=${chatMsg.historyId}, ` +
-          `response length=${fullResponse.length}`,
+          `response length=${safeResponse.length}`,
       );
 
-      return fullResponse;
+      return safeResponse;
     } finally {
       unsubscribe();
     }
@@ -551,9 +557,10 @@ export async function processChatMessage(
       try {
         const partialText = streamPusherCtx.streamPusher?.getFullText();
         if (partialText) {
-          await historyManager.updateResponse(chatMsg.historyId, partialText);
+          const safePartial = sanitizeInternalRefs(partialText);
+          await historyManager.updateResponse(chatMsg.historyId, safePartial);
           logger.info(
-            `[CHAT_PIPELINE] Persisted partial response (${partialText.length} chars) before connection reset`,
+            `[CHAT_PIPELINE] Persisted partial response (${safePartial.length} chars) before connection reset`,
           );
         }
       } catch {

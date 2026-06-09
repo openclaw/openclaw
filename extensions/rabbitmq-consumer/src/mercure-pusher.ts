@@ -1,3 +1,4 @@
+import { sanitizeInternalRefs } from "./sanitize-output.js";
 import type { MercureConfig } from "./types.js";
 
 /**
@@ -176,14 +177,30 @@ export class StreamingMercurePusher {
     return this.fullText;
   }
 
-  /** Flush any buffered text immediately (ordered after in-flight pushes). */
-  async flush(): Promise<void> {
+  /**
+   * Flush buffered text immediately (ordered after in-flight pushes), stripping
+   * any internal references before they reach the client.
+   *
+   * To keep a path that straddles two flush windows from being pushed half-open
+   * (and thus slipping past the sanitizer), an unterminated code span — odd
+   * number of backticks — is held back in the buffer until its closing backtick
+   * arrives. `finish()` passes `final` to flush the tail unconditionally so a
+   * never-closed backtick still drains.
+   */
+  async flush(opts?: { final?: boolean }): Promise<void> {
     this.cancelTimer();
-    const chunk = this.buffer;
-    this.buffer = "";
+    let chunk = this.buffer;
+    if (!opts?.final && (chunk.match(/`/g)?.length ?? 0) % 2 === 1) {
+      const lastTick = chunk.lastIndexOf("`");
+      this.buffer = chunk.slice(lastTick);
+      chunk = chunk.slice(0, lastTick);
+    } else {
+      this.buffer = "";
+    }
+    const safe = sanitizeInternalRefs(chunk);
     this.pending = this.pending.then(async () => {
-      if (chunk) {
-        await this.pusher.pushText(this.topic, chunk, this.historyId);
+      if (safe) {
+        await this.pusher.pushText(this.topic, safe, this.historyId);
       }
     });
     await this.pending;
@@ -191,7 +208,7 @@ export class StreamingMercurePusher {
 
   /** Signal that the stream is done: flush remaining buffer + push done event. */
   async finish(): Promise<void> {
-    await this.flush();
+    await this.flush({ final: true });
     await this.pusher.pushDone(this.topic, this.historyId);
   }
 
