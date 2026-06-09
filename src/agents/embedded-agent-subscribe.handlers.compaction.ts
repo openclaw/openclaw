@@ -43,7 +43,7 @@ export function handleCompactionStart(
   const kind = compactionLogKind(reason);
   ctx.state.compactionInFlight = true;
   ctx.state.livenessState = "paused";
-  ctx.state.preCompactionMessageCount = ctx.params.session.messages?.length ?? 0;
+  ctx.state.preCompactionAssistantMessages = collectAssistantMessages(ctx.params.session.messages);
   ctx.ensureCompactionPromise();
   ctx.log.info(`embedded run ${kind} start`, {
     event: "embedded_run_compaction_start",
@@ -182,25 +182,44 @@ export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   return reconcile(params);
 }
 
+/** Collect object references for all assistant messages in the array. */
+function collectAssistantMessages(messages: unknown): Set<object> {
+  const set = new Set<object>();
+  if (!Array.isArray(messages)) {
+    return set;
+  }
+  for (const message of messages) {
+    if (
+      message &&
+      typeof message === "object" &&
+      (message as { role?: unknown }).role === "assistant"
+    ) {
+      set.add(message);
+    }
+  }
+  return set;
+}
+
 function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedAgentSubscribeContext): void {
   const messages = ctx.params.session.messages;
   if (!Array.isArray(messages)) {
     return;
   }
-  const preCount = ctx.state.preCompactionMessageCount;
-  // Only clear usage for messages that existed *before* the current
-  // compaction. Messages added during or after compaction (e.g. new
-  // LLM responses with valid usage data) must not be zeroed. (#50795)
-  for (let i = 0; i < messages.length; i++) {
-    const message = messages[i];
+  const preCompactionMessages = ctx.state.preCompactionAssistantMessages;
+  // Only clear usage for assistant messages that existed *before* the current
+  // compaction. Using object-identity (Set of references captured at compaction
+  // start) is safe across compaction rewrites: messages that survive compaction
+  // keep their object identity, while new messages added after compaction are
+  // not in the set and retain their valid usage data. (#50795)
+  for (const message of messages) {
     if (!message || typeof message !== "object") {
       continue;
     }
-    if (typeof preCount === "number" && i >= preCount) {
-      break;
-    }
     const candidate = message as { role?: unknown; usage?: unknown };
     if (candidate.role !== "assistant") {
+      continue;
+    }
+    if (preCompactionMessages && !preCompactionMessages.has(message)) {
       continue;
     }
     // session runtime expects assistant usage to exist when computing context usage.
