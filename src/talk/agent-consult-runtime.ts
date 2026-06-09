@@ -28,27 +28,30 @@ import {
 export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
 
 /**
- * Speakable text returned to the realtime voice bridge after an agent consult, plus any trusted local
- * media (file paths) the run produced — e.g. a screenshot or a generated image the caller asked to see.
- * The voice bridge reads those files and shows them on the outbound video tile (CVI Phase 8).
+ * Speakable text returned to the realtime voice bridge after an agent consult, plus any media the run
+ * produced — a screenshot or a generated image the caller asked to see, as a local file path OR a URL.
+ * The voice bridge shows it on the outbound video tile (CVI Phase 8): local files are read directly,
+ * remote URLs go through the SSRF guard, and only image MIME types are displayed.
  */
 export type RealtimeVoiceAgentConsultResult = { text: string; mediaPaths?: string[] };
 
-/** Collect trusted-local media file paths from non-error, non-reasoning run payloads. */
+/**
+ * Collect produced media (file paths or URLs) from non-error, non-reasoning run payloads. We do NOT
+ * require the `trustedLocalMedia` manifest flag — most image-producing tools (screenshot, image-gen)
+ * don't set it, and requiring it silently dropped agent screenshots. Safety is enforced downstream by
+ * the bridge (SSRF guard for URLs, local read for files, image-MIME-only display).
+ */
 function collectRealtimeVoiceAgentConsultMediaPaths(
   payloads: Array<{
     mediaUrl?: string;
     mediaUrls?: string[];
     isError?: boolean;
     isReasoning?: boolean;
-    trustedLocalMedia?: boolean;
   }>,
 ): string[] {
   const paths: string[] = [];
   for (const payload of payloads) {
-    // Only trusted, locally-produced media (the agent's own screenshot / generated image) — never a
-    // remote URL — so the bridge can read it as a local file without an SSRF surface.
-    if (payload.isError || payload.isReasoning || !payload.trustedLocalMedia) {
+    if (payload.isError || payload.isReasoning) {
       continue;
     }
     if (payload.mediaUrl) {
