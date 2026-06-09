@@ -5,7 +5,7 @@ import YAML from "yaml";
 import { z } from "zod";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
-export const QA_SCORECARD_TAXONOMY_PATH = "qa/scorecard/stable-lts-taxonomy.json";
+export const QA_SCORECARD_TAXONOMY_PATH = "qa/scorecard/stable-lts-taxonomy.yaml";
 export const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
 
 const QA_SCORECARD_PROFILE_IDS = ["smoke-ci", "release"] as const;
@@ -351,7 +351,7 @@ export function readQaScorecardTaxonomy(): QaScorecardTaxonomy | null {
     return null;
   }
   return parseQaScorecardTaxonomy(
-    JSON.parse(fs.readFileSync(taxonomyPath, "utf8")) as unknown,
+    YAML.parse(fs.readFileSync(taxonomyPath, "utf8")) as unknown,
     QA_SCORECARD_TAXONOMY_PATH,
   );
 }
