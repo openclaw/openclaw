@@ -85,47 +85,47 @@ describe("provider auth warm worker", () => {
         OPENCLAW_STATE_DIR: path.join(root, "state"),
       },
       async () => {
-      const agentDir = path.join(root, "agent");
-      const cfg = {
-        agents: { list: [{ id: "main", agentDir }] },
-        models: {
-          providers: {
-            "cooled-down": {
-              apiKey: "some-key",
-              baseUrl: "https://example.com/v1",
-              api: "openai",
-              models: [{ id: "some-model", name: "Some Model" }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      const usageId = resolveInlineProviderApiKeyUsageId("cooled-down");
-      const result = await runProviderAuthWarmWorkerInput({
-        cfg,
-        runtimeAuthStores: [
-          {
-            agentDir,
-            store: {
-              version: 1,
-              profiles: {},
-              usageStats: {
-                [usageId]: {
-                  disabledUntil: Date.now() + 60_000,
-                  disabledReason: "billing",
-                },
+        const agentDir = path.join(root, "agent");
+        const cfg = {
+          agents: { list: [{ id: "main", agentDir }] },
+          models: {
+            providers: {
+              "cooled-down": {
+                apiKey: "some-key",
+                baseUrl: "https://example.com/v1",
+                api: "openai",
+                models: [{ id: "some-model", name: "Some Model" }],
               },
             },
           },
-        ],
-      });
+        } as unknown as OpenClawConfig;
 
-      expect(result.status).toBe("ok");
-      if (result.status !== "ok") {
-        return;
-      }
-      // Should NOT contain the provider because the inline key is in cooldown
-      expect(result.snapshot.agents[0]?.providers).not.toContainEqual(["cooled-down", true]);
+        const usageId = resolveInlineProviderApiKeyUsageId("cooled-down");
+        const result = await runProviderAuthWarmWorkerInput({
+          cfg,
+          runtimeAuthStores: [
+            {
+              agentDir,
+              store: {
+                version: 1,
+                profiles: {},
+                usageStats: {
+                  [usageId]: {
+                    disabledUntil: Date.now() + 60_000,
+                    disabledReason: "billing",
+                  },
+                },
+              },
+            },
+          ],
+        });
+
+        expect(result.status).toBe("ok");
+        if (result.status !== "ok") {
+          return;
+        }
+        // Should NOT contain the provider because the inline key is in cooldown
+        expect(result.snapshot.agents[0]?.providers).not.toContainEqual(["cooled-down", true]);
       },
     );
   }, 30_000);
