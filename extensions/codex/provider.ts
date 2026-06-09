@@ -48,6 +48,7 @@ type CodexRateLimitReader = (options: {
   timeoutMs: number;
   agentDir?: string;
   config?: Parameters<typeof requestCodexAppServerRateLimitsLazy>[0]["config"];
+  startOptions?: CodexAppServerStartOptions;
 }) => Promise<unknown>;
 
 type BuildCodexProviderOptions = {
@@ -119,10 +120,14 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
       if (ctx.token !== CODEX_APP_SERVER_AUTH_MARKER) {
         return null;
       }
+      const runtimePluginConfig = resolvePluginConfigObject(ctx.config, CODEX_PROVIDER_ID);
+      const pluginConfig = runtimePluginConfig ?? (ctx.config ? undefined : options.pluginConfig);
+      const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
       const rateLimits = await (options.readRateLimits ?? requestCodexAppServerRateLimitsLazy)({
         timeoutMs: ctx.timeoutMs,
         agentDir: ctx.agentDir,
         config: ctx.config,
+        startOptions: appServer.start,
       });
       return buildCodexAppServerUsageSnapshot(rateLimits);
     },
@@ -235,6 +240,7 @@ async function requestCodexAppServerRateLimitsLazy(options: {
   config?: Parameters<
     typeof import("./src/app-server/request.js").requestCodexAppServerJson
   >[0]["config"];
+  startOptions?: CodexAppServerStartOptions;
 }): Promise<unknown> {
   const { requestCodexAppServerJson } = await import("./src/app-server/request.js");
   return await requestCodexAppServerJson({
@@ -242,6 +248,7 @@ async function requestCodexAppServerRateLimitsLazy(options: {
     timeoutMs: options.timeoutMs,
     agentDir: options.agentDir,
     config: options.config,
+    startOptions: options.startOptions,
     isolated: true,
   });
 }

@@ -396,10 +396,14 @@ describe("codex provider", () => {
       timeoutMs: 3500,
       agentDir: undefined,
       config: {},
+      startOptions: expect.objectContaining({
+        command: "codex",
+        commandSource: "managed",
+      }),
     });
   });
 
-  it("keeps synthetic usage rate-limit reads on the default Codex auth bridge", async () => {
+  it("keeps synthetic usage rate-limit reads on the configured Codex auth bridge", async () => {
     const requestCodexAppServerJson = vi.fn(async (_params: unknown) => ({
       rateLimitsByLimitId: {},
     }));
@@ -413,7 +417,15 @@ describe("codex provider", () => {
         provider: "openai",
         token: "codex-app-server",
         timeoutMs: 3500,
-        config: {},
+        config: {
+          plugins: {
+            entries: {
+              codex: {
+                config: TEST_CODEX_APP_SERVER_CONFIG,
+              },
+            },
+          },
+        },
         env: {},
         fetchFn: fetch,
       } as never);
@@ -422,7 +434,20 @@ describe("codex provider", () => {
         method: "account/rateLimits/read",
         timeoutMs: 3500,
         agentDir: undefined,
-        config: {},
+        config: {
+          plugins: {
+            entries: {
+              codex: {
+                config: TEST_CODEX_APP_SERVER_CONFIG,
+              },
+            },
+          },
+        },
+        startOptions: expect.objectContaining({
+          command: "/tmp/openclaw-test-codex",
+          commandSource: "config",
+          args: ["app-server", "--listen", "stdio://"],
+        }),
         isolated: true,
       });
       expect(requestCodexAppServerJson.mock.calls[0]?.[0]).not.toHaveProperty("authProfileId");
