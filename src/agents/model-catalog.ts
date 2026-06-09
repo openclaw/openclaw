@@ -85,6 +85,7 @@ let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalog
 function buildLoadModelCatalogStateCacheKey(params: {
   agentDir: string;
   config: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot;
   sourceFingerprint: string;
   workspaceDir?: string;
 }): string {
@@ -95,6 +96,7 @@ function buildLoadModelCatalogStateCacheKey(params: {
       sourceFingerprint: params.sourceFingerprint,
     },
     config: params.config,
+    metadataSnapshot: params.metadataSnapshot,
     workspaceDir: params.workspaceDir,
   });
 }
@@ -396,6 +398,7 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
     catalogKey: buildLoadModelCatalogStateCacheKey({
       agentDir,
       config: cfg,
+      metadataSnapshot: params?.metadataSnapshot,
       sourceFingerprint: sourceFingerprint.fingerprint,
       workspaceDir,
     }),
@@ -572,6 +575,7 @@ export async function loadModelCatalog(params?: {
       let catalogKey = buildLoadModelCatalogStateCacheKey({
         agentDir,
         config: cfg,
+        metadataSnapshot: params?.metadataSnapshot,
         sourceFingerprint: sourceFingerprint.fingerprint,
         workspaceDir,
       });
@@ -592,6 +596,7 @@ export async function loadModelCatalog(params?: {
         const preparedCatalogKey = buildLoadModelCatalogStateCacheKey({
           agentDir,
           config: cfg,
+          metadataSnapshot: params?.metadataSnapshot,
           sourceFingerprint: preparedSource.fingerprint,
           workspaceDir: preparedSource.workspaceDir ?? workspaceDir,
         });

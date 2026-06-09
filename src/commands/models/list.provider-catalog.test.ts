@@ -208,6 +208,26 @@ function firstDiscoveryRequest(): {
   };
 }
 
+function firstCacheKeyInput(): {
+  cacheScope?: {
+    envFingerprint?: string;
+    sourceFingerprint?: string;
+  };
+  metadataSnapshot?: unknown;
+} {
+  const call = providerDiscoveryMocks.buildAgentModelCatalogCacheKey.mock.calls[0];
+  if (!call) {
+    throw new Error("expected state cache key build call");
+  }
+  return call[0] as {
+    cacheScope?: {
+      envFingerprint?: string;
+      sourceFingerprint?: string;
+    };
+    metadataSnapshot?: unknown;
+  };
+}
+
 describe("loadProviderCatalogModelsForList", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -298,6 +318,35 @@ describe("loadProviderCatalogModelsForList", () => {
     });
     expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
     expect(providerDiscoveryMocks.writeCachedAgentModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("separates provider catalog state cache keys by environment fingerprint", async () => {
+    await loadProviderCatalogModelsForList({
+      ...baseParams,
+      env: {
+        ...baseParams.env,
+        MOONSHOT_API_KEY: "first-secret",
+      },
+      providerFilter: "moonshot",
+    });
+    const firstFingerprint = firstCacheKeyInput().cacheScope?.envFingerprint;
+
+    providerDiscoveryMocks.buildAgentModelCatalogCacheKey.mockClear();
+    await loadProviderCatalogModelsForList({
+      ...baseParams,
+      env: {
+        ...baseParams.env,
+        MOONSHOT_API_KEY: "second-secret",
+      },
+      providerFilter: "moonshot",
+    });
+    const secondFingerprint = firstCacheKeyInput().cacheScope?.envFingerprint;
+
+    expect(firstFingerprint).toEqual(expect.any(String));
+    expect(secondFingerprint).toEqual(expect.any(String));
+    expect(firstFingerprint).not.toBe(secondFingerprint);
+    expect(firstFingerprint).not.toContain("first-secret");
+    expect(secondFingerprint).not.toContain("second-secret");
   });
 
   it("writes provider catalog rows to the state cache after runtime discovery", async () => {
@@ -392,6 +441,7 @@ describe("loadProviderCatalogModelsForList", () => {
     expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
       expect.objectContaining({ pluginMetadataSnapshot: metadataSnapshot }),
     );
+    expect(firstCacheKeyInput()).toEqual(expect.objectContaining({ metadataSnapshot }));
   });
 
   it("uses bundled runtime provider catalogs for provider-filtered self-hosted rows", async () => {

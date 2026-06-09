@@ -1,4 +1,5 @@
 /** Provider plugin catalog loading for model-list output. */
+import { createHash } from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store.js";
@@ -40,6 +41,14 @@ import type { ProviderPlugin } from "../../plugins/types.js";
 const DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 const SELF_HOSTED_DISCOVERY_PROVIDER_IDS = new Set(["lmstudio", "ollama", "sglang", "vllm"]);
 const log = createSubsystemLogger("models/list-provider-catalog");
+
+function buildProviderCatalogEnvCacheFingerprint(env: NodeJS.ProcessEnv): string {
+  const entries = Object.entries(env)
+    .filter((entry): entry is [string, string] => entry[1] !== undefined)
+    .map(([key, value]) => [key, createHash("sha256").update(value).digest("hex")])
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
+}
 
 function providerMatchesFilter(params: {
   provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">;
@@ -360,6 +369,7 @@ export async function loadProviderCatalogModelsForList(params: {
   const catalogKey = buildAgentModelCatalogCacheKey({
     agentDir: params.agentDir,
     cacheScope: {
+      envFingerprint: buildProviderCatalogEnvCacheFingerprint(env),
       source: "models-list-provider-catalog",
       providerFilter,
       scopedPluginIds,
@@ -367,6 +377,7 @@ export async function loadProviderCatalogModelsForList(params: {
       staticOnly: params.staticOnly === true,
     },
     config: params.cfg,
+    metadataSnapshot: params.metadataSnapshot,
     workspaceDir: params.metadataSnapshot?.workspaceDir,
   });
   const cached = readCachedAgentModelCatalog({

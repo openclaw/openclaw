@@ -448,6 +448,24 @@ describe("loadModelCatalog", () => {
     expect(writeCachedAgentModelCatalogMock).not.toHaveBeenCalled();
   });
 
+  it("includes injected metadata snapshots in the state cache key", async () => {
+    const cached = [{ id: "cached-fast", name: "Cached Fast", provider: "openai" }];
+    const metadataSnapshot = emptyPluginMetadataSnapshot();
+    readCachedAgentModelCatalogMock.mockReturnValueOnce(cached);
+
+    const result = await loadModelCatalog({
+      config: {} as OpenClawConfig,
+      metadataSnapshot: metadataSnapshot as never,
+    });
+
+    expect(result).toEqual(cached);
+    expect(buildAgentModelCatalogCacheKeyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ metadataSnapshot }),
+    );
+    expect(prepareOpenClawModelsJsonSourceMock).not.toHaveBeenCalled();
+    expect(writeCachedAgentModelCatalogMock).not.toHaveBeenCalled();
+  });
+
   it("bypasses the state cached catalog when a refresh is requested", async () => {
     readCachedAgentModelCatalogMock.mockReturnValue([
       { id: "cached-stale", name: "Cached Stale", provider: "openai" },
