@@ -8,6 +8,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveMemorySearchConfig,
+  resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -41,7 +42,7 @@ import {
   getOrCreateManagedCacheEntry,
   resolveSingletonManagedCache,
 } from "./manager-cache.js";
-import { closeMemoryDatabase } from "./manager-db.js";
+import { closeMemoryDatabase, openMemoryDatabaseReadonlyAtPath } from "./manager-db.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { isLocalEmbeddingWorkerFailure } from "./manager-local-worker-errors.js";
 import {
@@ -51,7 +52,7 @@ import {
   resolveMemoryProviderState,
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
-import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
+import type { MemoryIndexIdentityState, MemoryIndexMeta } from "./manager-reindex-state.js";
 import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import {
@@ -69,6 +70,7 @@ const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
+const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
 export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
@@ -562,6 +564,70 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
+  private readLiveIndexMetaSnapshot(): {
+    meta: MemoryIndexMeta | null;
+    hasIndexedChunks: boolean;
+  } | null {
+    let liveDb: DatabaseSync;
+    try {
+      liveDb = openMemoryDatabaseReadonlyAtPath(
+        resolveUserPath(this.settings.store.path),
+        this.settings.store.vector.enabled,
+      );
+    } catch (err) {
+      log.debug(`memory index live metadata probe skipped: ${formatErrorMessage(err)}`);
+      return null;
+    }
+    try {
+      const row = liveDb
+        .prepare(`SELECT value FROM meta WHERE key = ?`)
+        .get(MEMORY_INDEX_META_KEY) as { value: string } | undefined;
+      const chunkRow = liveDb.prepare(`SELECT 1 as found FROM chunks LIMIT 1`).get() as
+        | { found?: number }
+        | undefined;
+      if (!row?.value) {
+        return { meta: null, hasIndexedChunks: chunkRow?.found === 1 };
+      }
+      try {
+        return {
+          meta: JSON.parse(row.value) as MemoryIndexMeta,
+          hasIndexedChunks: chunkRow?.found === 1,
+        };
+      } catch {
+        return { meta: null, hasIndexedChunks: chunkRow?.found === 1 };
+      }
+    } catch (err) {
+      log.debug(`memory index live metadata probe failed: ${formatErrorMessage(err)}`);
+      return null;
+    } finally {
+      closeMemoryDatabase(liveDb);
+    }
+  }
+
+  private reopenStaleMissingIndexHandle(params?: { providerKeyKnown?: boolean }): boolean {
+    const live = this.readLiveIndexMetaSnapshot();
+    if (!live?.meta) {
+      return false;
+    }
+    const liveState = this.resolveCurrentIndexIdentityState({
+      meta: live.meta,
+      providerKeyKnown: params?.providerKeyKnown,
+      hasIndexedChunks: live.hasIndexedChunks,
+    });
+    if (liveState.status !== "valid") {
+      return false;
+    }
+    const nextDb = this.openDatabase();
+    try {
+      closeMemoryDatabase(this.db);
+    } catch {}
+    this.db = nextDb;
+    this.resetVectorState();
+    this.ensureSchema();
+    this.vector.dims = live.meta.vectorDims;
+    return true;
+  }
+
   private refreshIndexIdentityDirty(params?: { providerKeyKnown?: boolean }) {
     const provider =
       this.settings.provider === "none"
@@ -571,10 +637,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
             ? { id: this.provider.id, model: this.provider.model }
             : null
           : undefined;
-    const state = this.resolveCurrentIndexIdentityState({
-      ...(provider !== undefined ? { provider } : {}),
-      providerKeyKnown: params?.providerKeyKnown,
-    });
+    const resolveState = () =>
+      this.resolveCurrentIndexIdentityState({
+        ...(provider !== undefined ? { provider } : {}),
+        providerKeyKnown: params?.providerKeyKnown,
+      });
+    let state = resolveState();
+    if (state.status === "missing" && this.reopenStaleMissingIndexHandle(params)) {
+      state = resolveState();
+    }
     this.indexIdentityState = state;
     this.indexIdentityDirty =
       state.status === "mismatched" ||

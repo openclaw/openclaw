@@ -399,6 +399,24 @@ describe("memory index", () => {
     }
   }
 
+  async function moveSqliteFilesForTest(sourceBase: string, targetBase: string): Promise<void> {
+    for (const suffix of ["", "-wal", "-shm"]) {
+      try {
+        await fs.rename(`${sourceBase}${suffix}`, `${targetBase}${suffix}`);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw err;
+        }
+      }
+    }
+  }
+
+  async function removeSqliteFilesForTest(basePath: string): Promise<void> {
+    for (const suffix of ["", "-wal", "-shm"]) {
+      await fs.rm(`${basePath}${suffix}`, { force: true });
+    }
+  }
+
   it("does not prepare vector deletes after unsafe reset drops a missing vector table", async () => {
     const cfg = createCfg({
       storePath: path.join(workspaceDir, "index-vector-missing-table.sqlite"),
@@ -839,6 +857,51 @@ describe("memory index", () => {
       expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
     } finally {
       await manager.close?.();
+    }
+  });
+
+  it("reopens a stale missing-metadata handle when the live index is healthy", async () => {
+    const dbPath = path.join(workspaceDir, "index-stale-missing-meta-handle.sqlite");
+    const cfg = createCfg({
+      storePath: dbPath,
+      provider: "none",
+      model: "",
+      minScore: 0,
+      hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
+    });
+    let staleBackupPath = "";
+    const residentManager = await getFreshManager(cfg);
+    try {
+      await residentManager.sync({ reason: "test", force: true });
+      (
+        residentManager as unknown as {
+          db: { exec: (sql: string) => void };
+        }
+      ).db.exec(`DELETE FROM meta WHERE key = 'memory_index_meta_v1'`);
+      expect(residentManager.status().custom?.indexIdentity).toEqual({
+        status: "missing",
+        reason: "index metadata is missing",
+      });
+
+      staleBackupPath = `${dbPath}.backup-stale-handle`;
+      await moveSqliteFilesForTest(dbPath, staleBackupPath);
+      const liveManager = await getFreshManager(cfg, "cli");
+      try {
+        await liveManager.sync({ reason: "test", force: true });
+        expect(liveManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      } finally {
+        await liveManager.close?.();
+      }
+
+      const results = await residentManager.search("alpha", { minScore: 0 });
+
+      expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
+      expect(residentManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      await residentManager.close?.();
+      if (staleBackupPath) {
+        await removeSqliteFilesForTest(staleBackupPath);
+      }
     }
   });
 

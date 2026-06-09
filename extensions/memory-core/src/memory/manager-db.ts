@@ -21,6 +21,16 @@ export function openMemoryDatabaseAtPath(dbPath: string, allowExtension: boolean
   return db;
 }
 
+export function openMemoryDatabaseReadonlyAtPath(
+  dbPath: string,
+  allowExtension: boolean,
+): DatabaseSync {
+  const { DatabaseSync } = requireNodeSqlite();
+  const db = new DatabaseSync(dbPath, { allowExtension, readOnly: true });
+  db.exec("PRAGMA busy_timeout = 5000");
+  return db;
+}
+
 export function closeMemoryDatabase(db: DatabaseSync): void {
   closeMemorySqliteWalMaintenance(db);
   db.close();
