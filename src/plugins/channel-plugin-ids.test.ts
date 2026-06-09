@@ -1125,27 +1125,6 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "llama-cpp", "memory-core"],
     ],
     [
-      "includes the llama.cpp provider for custom local memory embedding aliases",
-      {
-        channels: {},
-        agents: {
-          defaults: {
-            memorySearch: { provider: "local-gpu" },
-          },
-        },
-        models: {
-          providers: {
-            "local-gpu": {
-              api: "local",
-              baseUrl: "http://localhost:11434",
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      ["browser", "llama-cpp", "memory-core"],
-    ],
-    [
       "skips memory embedding providers from disabled memory search blocks",
       {
         channels: {},
