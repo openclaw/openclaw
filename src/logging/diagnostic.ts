@@ -3,6 +3,7 @@ import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DiagnosticClientContext } from "../infra/diagnostic-client-context.js";
 import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -672,6 +673,7 @@ export function logMessageQueued(params: {
     channel: params.channel,
     source: params.source,
     queueDepth: state.queueDepth,
+    clientContext: state.clientContext,
   });
   markActivity();
 }
@@ -894,8 +896,26 @@ export function logSessionStateChange(
     state: params.state,
     reason: params.reason,
     queueDepth: state.queueDepth,
+    clientContext: state.clientContext,
   });
   markActivity();
+}
+
+/**
+ * Seed an opaque, caller-supplied context bag onto a session's diagnostic state.
+ * Once seeded, every later `message.queued` / `session.state` event for the run
+ * carries it — the same shared-state propagation that already gives a later
+ * `message.queued` its `sessionKey`. Bounding/validation is the caller's
+ * responsibility (see normalizeDiagnosticClientContext).
+ */
+export function setDiagnosticSessionClientContext(
+  ref: SessionRef,
+  clientContext: DiagnosticClientContext | undefined,
+): void {
+  if (!clientContext || !areDiagnosticsEnabledForProcess()) {
+    return;
+  }
+  getDiagnosticSessionState(ref).clientContext = clientContext;
 }
 
 export function updateDiagnosticSessionFile(params: SessionRef) {
