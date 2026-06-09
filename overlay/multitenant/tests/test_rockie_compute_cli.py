@@ -26,6 +26,8 @@ def test_build_request_sends_auth_token_and_tenant_id(monkeypatch):
 
     assert headers["X-tenant-token"] == "service-token"
     assert headers["X-tenant-id"] == "t-compute"
+    assert headers["User-agent"].startswith("rockie-runtime/")
+    assert "Python-urllib" not in headers["User-agent"]
 
 
 def test_build_request_uses_tenant_dev_token_alias(monkeypatch):

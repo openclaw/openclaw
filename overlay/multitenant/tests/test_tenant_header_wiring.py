@@ -27,6 +27,7 @@ def test_mcp_rockie_sends_auth_token_and_tenant_id_headers():
     )
     assert 'h["X-Tenant-Token"] = TENANT_TOKEN' in src
     assert 'h["X-Tenant-Id"] = TENANT_ID' in src
+    assert '"User-Agent": ROCKIE_RUNTIME_USER_AGENT' in src
 
 
 def test_git_credential_helper_sends_auth_token_and_tenant_id_headers():
@@ -38,8 +39,16 @@ def test_git_credential_helper_sends_auth_token_and_tenant_id_headers():
         'tenant_token="${ROCKIELAB_TENANT_TOKEN:-${ROCKIELAB_TENANT_DEV_TOKEN:-}}"'
         in src
     )
+    assert '-H "User-Agent: ${runtime_user_agent}"' in src
     assert '-H "X-Tenant-Token: ${tenant_token}"' in src
     assert '-H "X-Tenant-Id: ${ROCKIELAB_TENANT_ID}"' in src
+
+
+def test_user_skill_sync_identifies_rockie_runtime():
+    src = (OVERLAY / "sync-user-skills.sh").read_text(encoding="utf-8")
+
+    assert 'RUNTIME_USER_AGENT="rockie-runtime/1.0 (+https://api.rockielab.com)"' in src
+    assert '-H "User-Agent: ${RUNTIME_USER_AGENT}"' in src
 
 
 # #1218 — operator attestation (X-Operator-Tenant-Id) plumbing
@@ -64,6 +73,7 @@ def test_rockie_compute_sends_operator_tenant_id_header_when_set():
 
     assert 'OPERATOR_TENANT_ID = os.environ.get("ROCKIELAB_OPERATOR_TENANT_ID"' in src
     assert 'headers["X-Operator-Tenant-Id"] = OPERATOR_TENANT_ID' in src
+    assert '"User-Agent": ROCKIE_RUNTIME_USER_AGENT' in src
 
 
 def test_rockie_gpu_sends_operator_tenant_id_header_when_set():

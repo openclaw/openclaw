@@ -38,6 +38,7 @@ const TENANT_ID = process.env.ROCKIELAB_TENANT_ID || "";
 // say "I'm running as tenant <TENANT_ID> but acting on behalf of
 // tenant <OPERATOR_TENANT_ID>". Empty string means no attestation.
 const OPERATOR_TENANT_ID = process.env.ROCKIELAB_OPERATOR_TENANT_ID || "";
+const ROCKIE_RUNTIME_USER_AGENT = "rockie-runtime/1.0 (+https://api.rockielab.com)";
 const BROKER_PORT = process.env.BROKER_PORT || "7681";
 const MCP_TEST_MODE = process.env.ROCKIE_MCP_TEST_MODE === "1";
 
@@ -615,7 +616,10 @@ const LOCAL_TOOLS = [
 ];
 
 function authHeaders() {
-  const h = { "Content-Type": "application/json" };
+  const h = {
+    "Content-Type": "application/json",
+    "User-Agent": ROCKIE_RUNTIME_USER_AGENT,
+  };
   if (API_PASSWORD) h["Authorization"] = `Bearer ${API_PASSWORD}`;
   if (TENANT_TOKEN) h["X-Tenant-Token"] = TENANT_TOKEN;
   if (TENANT_ID) h["X-Tenant-Id"] = TENANT_ID;
