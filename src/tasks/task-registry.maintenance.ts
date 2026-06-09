@@ -776,6 +776,12 @@ async function cleanupExpiredHubDelegatedAcpSessions(): Promise<void> {
     if (!expiry.expired) {
       continue;
     }
+    if (
+      expiry.reason === "delegate-idle-expired" &&
+      taskRegistryMaintenanceRuntime.hasActiveAcpTurn(sessionKey)
+    ) {
+      continue;
+    }
     try {
       await closeHubDelegatedAcpWorker({
         cfg: acpEntry.cfg,

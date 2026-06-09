@@ -576,6 +576,12 @@ function summarizeError(err: unknown): string {
   return formatErrorMessage(err);
 }
 
+function isHubDelegatedPatchLabelConflictError(err: unknown): boolean {
+  return summarizeError(err).includes("label already in use:");
+}
+
+const HUB_DELEGATED_SPAWN_LABEL_PATCH_ATTEMPTS = 100;
+
 function createAcpSpawnFailure(params: {
   status: "forbidden" | "error";
   errorCode: SpawnAcpErrorCode;
@@ -1539,9 +1545,27 @@ export async function spawnAcpDirect(
           createdAt: Date.now(),
         }
       : undefined;
-  const patchSpawnSessionRow = async (): Promise<SpawnAcpResult | null> => {
-    if (delegateRequested) {
-      const explicitDelegateLabel = spawnLabel;
+  const explicitDelegateLabel = spawnLabel;
+  const applySpawnSessionPatch = async (): Promise<void> => {
+    await callGateway({
+      method: "sessions.patch",
+      params: {
+        key: sessionKey,
+        spawnedBy: requesterInternalKey,
+        ...(hubDelegatedMeta ? { parentSessionKey: requesterInternalKey } : {}),
+        ...(hubDelegatedMeta ? { hubDelegated: hubDelegatedMeta } : {}),
+        ...subagentEnvelopeState.childSessionPatch,
+        ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
+        ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
+        ...(spawnLabel ? { label: spawnLabel } : {}),
+      },
+      timeoutMs: 10_000,
+    });
+  };
+  const resolveDelegateSpawnLabelUnderLock = async (): Promise<SpawnAcpResult | null> => {
+    const { withHubDelegatedLabelPatchLock } = await import("../gateway/sessions-patch.js");
+    let resolutionFailure: SpawnAcpResult | null = null;
+    await withHubDelegatedLabelPatchLock(async () => {
       spawnLabel =
         spawnLabel ??
         resolveHubDelegatedAutoLabel({
@@ -1561,38 +1585,51 @@ export async function spawnAcpDirect(
           label: spawnLabel,
         });
         if (conflictingKey) {
-          return createAcpSpawnFailure({
+          resolutionFailure = createAcpSpawnFailure({
             status: "error",
             errorCode: "delegate_label_conflict",
             error: `An active hub-delegated session with label "${spawnLabel}" already exists (${conflictingKey}). Close it with /acp delegate close ${spawnLabel} before reusing the label.`,
           });
         }
       }
-    }
-    await callGateway({
-      method: "sessions.patch",
-      params: {
-        key: sessionKey,
-        spawnedBy: requesterInternalKey,
-        ...(hubDelegatedMeta ? { parentSessionKey: requesterInternalKey } : {}),
-        ...(hubDelegatedMeta ? { hubDelegated: hubDelegatedMeta } : {}),
-        ...subagentEnvelopeState.childSessionPatch,
-        ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
-        ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
-        ...(spawnLabel ? { label: spawnLabel } : {}),
-      },
-      timeoutMs: 10_000,
     });
-    return null;
+    return resolutionFailure;
   };
 
   try {
-    let patchFailure: SpawnAcpResult | null;
+    let patchFailure: SpawnAcpResult | null = null;
     if (delegateRequested) {
-      const { withHubDelegatedLabelPatchLock } = await import("../gateway/sessions-patch.js");
-      patchFailure = await withHubDelegatedLabelPatchLock(async () => patchSpawnSessionRow());
+      let patched = false;
+      for (
+        let attempt = 0;
+        attempt < HUB_DELEGATED_SPAWN_LABEL_PATCH_ATTEMPTS && !patched;
+        attempt += 1
+      ) {
+        patchFailure = await resolveDelegateSpawnLabelUnderLock();
+        if (patchFailure) {
+          break;
+        }
+        try {
+          await applySpawnSessionPatch();
+          patched = true;
+          patchFailure = null;
+        } catch (err) {
+          if (!explicitDelegateLabel && isHubDelegatedPatchLabelConflictError(err)) {
+            spawnLabel = undefined;
+            continue;
+          }
+          throw err;
+        }
+      }
+      if (!patched && !patchFailure) {
+        patchFailure = createAcpSpawnFailure({
+          status: "error",
+          errorCode: "delegate_label_conflict",
+          error: "Could not allocate a unique hub-delegated label.",
+        });
+      }
     } else {
-      patchFailure = await patchSpawnSessionRow();
+      await applySpawnSessionPatch();
     }
     if (patchFailure) {
       return patchFailure;

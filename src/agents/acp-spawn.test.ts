@@ -1216,7 +1216,14 @@ describe("spawnAcpDirect", () => {
           const label = args.params?.label;
           const sessionKey = args.params?.key;
           if (label && sessionKey) {
-            storeByPath["/tmp/codex-sessions.json"][sessionKey] = {
+            const codexStore = storeByPath["/tmp/codex-sessions.json"];
+            const conflictingKey = Object.entries(codexStore).find(
+              ([existingKey, entry]) => existingKey !== sessionKey && entry.label === label,
+            )?.[0];
+            if (conflictingKey) {
+              throw new Error(`label already in use: ${label}`);
+            }
+            codexStore[sessionKey] = {
               sessionId: `sess-${sessionKey}`,
               updatedAt: Date.now(),
               label,

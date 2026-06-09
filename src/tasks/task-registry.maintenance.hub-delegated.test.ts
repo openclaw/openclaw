@@ -113,4 +113,79 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
       fs.rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it("skips idle-expired hub-delegated cleanup while an ACP turn is active", async () => {
+    const home = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "openclaw-hub-delegate-maint-"));
+    try {
+      const storePath = path.join(home, "agents/codex/sessions/sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      const sessionKey = "agent:codex:acp:idle-active-turn";
+      const createdAt = Date.now() - 4 * 24 * 60 * 60 * 1000;
+      const lastActivityAt = Date.now() - 4 * 24 * 60 * 60 * 1000;
+      writeSessionStoreForTest(storePath, {
+        [sessionKey]: {
+          sessionId: "sess-idle-active",
+          updatedAt: lastActivityAt,
+          label: "long-task",
+          hubDelegated: {
+            ownerSessionKey: "agent:main:main",
+            createdAt,
+          },
+          acp: {
+            lastActivityAt,
+            mode: "persistent",
+          },
+        },
+      });
+      runtimeConfigState.cfg = {
+        session: { store: storePath },
+        acp: { allowedAgents: ["codex"], delegate: { idleHours: 72, maxAgeHours: 168 } },
+      };
+
+      const closeAcpSession = vi.fn(async () => {});
+      setTaskRegistryMaintenanceRuntimeForTests({
+        listAcpSessionEntries: async () => [],
+        readAcpSessionEntry: () => ({
+          cfg: runtimeConfigState.cfg as never,
+          storePath,
+          sessionKey,
+          storeSessionKey: sessionKey,
+          entry: readSessionStoreForTest(storePath)[sessionKey],
+          acp: {
+            lastActivityAt,
+            mode: "persistent",
+          },
+          storeReadFailed: false,
+        }),
+        closeAcpSession,
+        loadSessionStore,
+        resolveStorePath: () => storePath,
+        parseAgentSessionKey: () => ({ agentId: "codex" }) as never,
+        isCronJobActive: () => false,
+        getAgentRunContext: () => undefined,
+        hasActiveAcpTurn: (activeSessionKey) => activeSessionKey === sessionKey,
+        hasActiveTaskForChildSessionKey: () => false,
+        deleteTaskRecordById: () => true,
+        ensureTaskRegistryReady: () => {},
+        getTaskById: () => undefined,
+        listTaskRecords: () => [],
+        markTaskLostById: () => null,
+        markTaskTerminalById: () => null,
+        maybeDeliverTaskTerminalUpdate: async () => null,
+        resolveTaskForLookupToken: () => undefined,
+        setTaskCleanupAfterById: () => null,
+        isRuntimeAuthoritative: () => true,
+        resolveCronJobsStorePath: () => path.join(home, "cron/jobs.json"),
+        loadCronJobsStoreSync: () => ({ version: 1, jobs: [] }),
+        readCronRunLogEntriesSync: () => [],
+      });
+
+      await runTaskRegistryMaintenance();
+
+      expect(closeAcpSession).not.toHaveBeenCalled();
+      expect(readSessionStoreForTest(storePath)[sessionKey]?.hubDelegated).toBeDefined();
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
