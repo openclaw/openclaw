@@ -2640,10 +2640,10 @@ async function processOpenAICompletionsStream(
   const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
   const emitReasoning = options?.emitReasoning ?? true;
   const compat = getCompat(model as OpenAIModeModel);
-  const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
+  const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat, model.id)
     ? createDeepSeekTextFilter()
     : null;
-  const deepSeekToolCallRecoverer = shouldFilterDeepSeekDsmlText(compat)
+  const deepSeekToolCallRecoverer = shouldFilterDeepSeekDsmlText(compat, model.id)
     ? createDeepSeekDsmlToolCallRecoverer()
     : null;
   const reasoningTagTextPartitioner = createReasoningTagTextPartitioner();
@@ -3074,8 +3074,11 @@ type CompletionsReasoningDelta =
       text: string;
     };
 
-function shouldFilterDeepSeekDsmlText(compat: ReturnType<typeof getCompat>) {
-  return compat.thinkingFormat === "deepseek";
+function shouldFilterDeepSeekDsmlText(
+  compat: ReturnType<typeof getCompat>,
+  modelId?: string,
+) {
+  return compat.thinkingFormat === "deepseek" || modelId?.includes("deepseek") === true;
 }
 
 type RecoveredDeepSeekDsmlToolCall = {
