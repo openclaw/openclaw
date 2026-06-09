@@ -2210,6 +2210,9 @@ export function renderApp(state: AppViewState) {
       open: state.paletteOpen,
       query: state.paletteQuery,
       activeIndex: state.paletteActiveIndex,
+      onOpen: () => {
+        void refreshChatCommands(state).finally(requestHostUpdate);
+      },
       onToggle: () => {
         state.paletteOpen = !state.paletteOpen;
       },
