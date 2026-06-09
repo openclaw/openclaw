@@ -149,7 +149,7 @@ function buildPreparedContext(params?: {
   const backend = {
     command: useJsonl ? "claude" : "codex",
     args: useJsonl ? ["-p", "--output-format", "stream-json", "--verbose"] : ["exec", "--json"],
-    output: (useJsonl ? "jsonl" : "text") as "jsonl" | "text",
+    output: useJsonl ? ("jsonl" as const) : ("text" as const),
     input: "arg" as const,
     modelArg: "--model",
     sessionMode: "existing" as const,
