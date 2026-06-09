@@ -787,7 +787,7 @@ async function handleSessionSend(params: {
   const loaded = loadSessionEntry(key, { agentId: requestedAgentId });
   let { entry, canonicalKey, storePath } = loaded;
   // Reject sends/steers targeting sessions whose owning agent was deleted (#65524).
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey);
+  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey, entry);
   if (deletedAgentId !== null) {
     params.respond(
       false,

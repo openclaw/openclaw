@@ -222,6 +222,14 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           sessionId: "sess-acp-harness",
           label: "claude-delegate",
           updatedAt: freshUpdatedAt(),
+          acp: {
+            backend: "acpx",
+            agent: "claude",
+            runtimeSessionName: acpKey,
+            mode: "oneshot",
+            state: "idle",
+            lastActivityAt: freshUpdatedAt(),
+          },
         },
       });
 
@@ -245,6 +253,51 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           p: { label: "claude-delegate" },
         }),
       ).resolves.toEqual({ ok: true, key: acpKey });
+    });
+  });
+
+  it("rejects ACP-shaped bridge sessions without ACP runtime metadata under deleted agents", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-acp-bridge-deleted-", async () => {
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main", default: true }] },
+      };
+      const acpBridgeKey = "agent:deleted-agent:acp:bridge-session-without-runtime-meta";
+      const deletedStorePath = resolveStorePath(cfg.session?.store, { agentId: "deleted-agent" });
+      await saveSessionStore(deletedStorePath, {
+        [acpBridgeKey]: {
+          sessionId: "sess-acp-bridge-deleted",
+          label: "deleted-bridge",
+          updatedAt: freshUpdatedAt(),
+        },
+      });
+      const expected = {
+        ok: false,
+        error: {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: 'Agent "deleted-agent" no longer exists in configuration',
+        },
+      };
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { key: acpBridgeKey },
+        }),
+      ).resolves.toEqual(expected);
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { sessionId: "sess-acp-bridge-deleted" },
+        }),
+      ).resolves.toEqual(expected);
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { label: "deleted-bridge" },
+        }),
+      ).resolves.toEqual(expected);
     });
   });
 

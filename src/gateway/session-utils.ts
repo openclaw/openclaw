@@ -916,19 +916,22 @@ function resolveTranscriptUsageFallback(params: {
 /**
  * Returns the owning agent id if the session key belongs to an agent that is no
  * longer present in config (deleted). Returns null for non-agent legacy/global
- * keys, ACP harness session keys, or when the owning agent still exists (#65524).
+ * keys, confirmed ACP runtime session keys, or when the owning agent still
+ * exists (#65524).
  */
 export function resolveDeletedAgentIdFromSessionKey(
   cfg: OpenClawConfig,
   sessionKey: string,
+  entry?: Pick<SessionEntry, "acp"> | null,
 ): string | null {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
     return null;
   }
-  // Free ACP spawn keys use agent:<harnessId>:acp:<uuid>, but configured ACP
-  // bindings use agent:<agentId>:acp:binding:* where agentId remains the owner.
-  if (isAcpSessionKey(sessionKey) && !parsed.rest.startsWith("acp:binding:")) {
+  // Free ACP runtime keys use agent:<harnessId>:acp:<uuid>, but key shape is
+  // not proof: ACP bridge sessions can use ACP-shaped keys without SessionAcpMeta.
+  // Configured acp:binding keys stay owner-scoped even when ACP metadata exists.
+  if (isAcpSessionKey(sessionKey) && !parsed.rest.startsWith("acp:binding:") && entry?.acp) {
     return null;
   }
   const agentId = normalizeAgentId(parsed.agentId);

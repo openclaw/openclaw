@@ -828,22 +828,43 @@ describe("gateway session utils", () => {
     expect(resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:discord:direct:u1")).toBe("main");
   });
 
-  test("resolveDeletedAgentIdFromSessionKey ignores ACP harness session keys", () => {
+  test("resolveDeletedAgentIdFromSessionKey ignores confirmed ACP runtime session keys", () => {
     const cfg = {
       agents: { list: [{ id: "main", default: true }] },
     } as OpenClawConfig;
+    const acpEntry = (agent: string, runtimeSessionName: string) =>
+      ({
+        acp: {
+          backend: "acpx",
+          agent,
+          runtimeSessionName,
+          mode: "oneshot",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      }) as Pick<SessionEntry, "acp">;
+    const claudeKey = "agent:claude:acp:11111111-1111-4111-8111-111111111111";
+    const cursorKey = "agent:cursor:acp:22222222-2222-4222-8222-222222222222";
+    expect(
+      resolveDeletedAgentIdFromSessionKey(cfg, claudeKey, acpEntry("claude", claudeKey)),
+    ).toBeNull();
+    expect(
+      resolveDeletedAgentIdFromSessionKey(cfg, cursorKey, acpEntry("cursor", cursorKey)),
+    ).toBeNull();
+  });
+
+  test("resolveDeletedAgentIdFromSessionKey rejects ACP-shaped bridge keys without ACP metadata", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+
     expect(
       resolveDeletedAgentIdFromSessionKey(
         cfg,
-        "agent:claude:acp:11111111-1111-4111-8111-111111111111",
+        "agent:deleted-agent:acp:bridge-session-without-runtime-meta",
+        { acp: undefined },
       ),
-    ).toBeNull();
-    expect(
-      resolveDeletedAgentIdFromSessionKey(
-        cfg,
-        "agent:cursor:acp:22222222-2222-4222-8222-222222222222",
-      ),
-    ).toBeNull();
+    ).toBe("deleted-agent");
   });
 
   test("resolveDeletedAgentIdFromSessionKey rejects deleted configured ACP binding owners", () => {
