@@ -1000,40 +1000,6 @@ function isProposalInWorkspace(record: SkillProposalRecord, workspaceDir: string
  * (like `listSkillProposals`) use the result to show derived stale status
  * without mutating proposal records.
  */
-/**
- * Persist stale status for workspace proposals whose target skill already
- * exists (create) or is missing (update). Uses the same target-lock +
- * still-pending recheck pattern as apply/revise paths so a concurrent
- * apply cannot be reclassified after the fact.
- *
- * Idempotent: already-stale proposals are left unchanged.
- */
-async function reconcileStaleWorkspaceProposals(workspaceDir: string): Promise<void> {
-  const staleReasons = await detectStaleProposals(workspaceDir);
-  if (staleReasons.size === 0) {
-    return;
-  }
-
-  for (const [proposalId, reason] of staleReasons) {
-    try {
-      const initial = await readSkillProposalRecord(proposalId);
-      if (!initial || initial.status !== "pending") {
-        continue;
-      }
-      await withSkillProposalTargetLock(initial, async () => {
-        const record = await readSkillProposalRecord(proposalId);
-        if (!record || record.status !== "pending") {
-          return;
-        }
-        await markProposalStale(record, reason);
-      });
-    } catch {
-      // Lock contention or concurrent mutation — skip this proposal.
-      // The next list/inspect call will reconcile it.
-    }
-  }
-}
-
 async function detectStaleProposals(workspaceDir: string): Promise<Map<string, string>> {
   const staleMap = new Map<string, string>();
   const manifest = await readSkillProposalManifest();
