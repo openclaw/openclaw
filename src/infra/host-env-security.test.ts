@@ -339,6 +339,8 @@ describe("sanitizeHostExecEnv", () => {
         AWS_CONFIG_FILE: "/tmp/aws-config",
         SSH_AUTH_SOCK: "/tmp/trusted-ssh-agent.sock",
         CARGO_HOME: "/tmp/cargo",
+        RUSTUP_HOME: "/tmp/rustup-home",
+        RUSTUP_TOOLCHAIN: "/tmp/rustup-toolchain",
         HELM_HOME: "/tmp/helm",
         HTTP_PROXY: "http://proxy.example.test:8080",
         HTTPS_PROXY: "http://proxy.example.test:8443",
@@ -562,6 +564,8 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.GOENV).toBeUndefined();
     expect(env.GOPATH).toBeUndefined();
     expect(env.CARGO_HOME).toBeUndefined();
+    expect(env.RUSTUP_HOME).toBeUndefined();
+    expect(env.RUSTUP_TOOLCHAIN).toBeUndefined();
     expect(env.HELM_HOME).toBeUndefined();
     expect(env.NODE_REDIRECT_WARNINGS).toBeUndefined();
     expect(env.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
