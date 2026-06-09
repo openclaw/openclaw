@@ -217,6 +217,16 @@ const config = {
       entry: ["index.js!", "scripts/postinstall.js!"],
       project: ["index.js!", "scripts/**/*.js!"],
     },
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
+      entry: bundledPluginEntries,
+      project: ["index.ts!", "src/**/*.{js,mjs,ts}!"],
+      ignoreDependencies: [
+        // The provider resolves node-llama-cpp from its own package at runtime
+        // so local embeddings use the plugin-owned native dependency.
+        "node-llama-cpp",
+        ...bundledPluginIgnoredRuntimeDependencies,
+      ],
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       // Bundled plugins often load their public surface via string specifiers in
       // `index.ts` contracts, so Knip needs these convention-based entry files.
