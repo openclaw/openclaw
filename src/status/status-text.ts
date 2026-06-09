@@ -9,6 +9,7 @@ import {
   resolveSessionAgentId,
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
+import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
@@ -19,6 +20,7 @@ import {
 } from "../agents/model-runtime-aliases.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -54,11 +56,6 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "github-copilot",
   "google-gemini-cli",
   "openai",
-]);
-const CODEX_SYNTHETIC_USAGE_AUTH_PROFILE_PROVIDERS = new Set([
-  "openai",
-  "openai-codex",
-  "codex-cli",
 ]);
 
 let statusMessageRuntimePromise: Promise<typeof import("../auto-reply/status.runtime.js")> | null =
@@ -151,21 +148,32 @@ function resolveUsageCredentialType(authLabel?: string): "oauth" | "token" | "ap
   return undefined;
 }
 
-function resolveCodexSyntheticUsageAuthProfileId(
-  profileId: string | undefined,
-): string | undefined {
-  const normalizedProfileId = profileId?.trim();
+function resolveCodexSyntheticUsageAuthProfileId(params: {
+  profileId: string | undefined;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+}): string | undefined {
+  const normalizedProfileId = params.profileId?.trim();
   if (!normalizedProfileId) {
     return undefined;
   }
-  const separatorIndex = normalizedProfileId.indexOf(":");
-  if (separatorIndex <= 0 || separatorIndex === normalizedProfileId.length - 1) {
+  try {
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+      config: params.cfg,
+      readOnly: true,
+      syncExternalCli: false,
+    });
+    const credential = store.profiles[normalizedProfileId];
+    if (!credential) {
+      return undefined;
+    }
+    return resolveProviderIdForAuth(credential.provider, { config: params.cfg }) === "openai"
+      ? normalizedProfileId
+      : undefined;
+  } catch {
     return undefined;
   }
-  const provider = normalizeOptionalLowercaseString(normalizedProfileId.slice(0, separatorIndex));
-  return provider && CODEX_SYNTHETIC_USAGE_AUTH_PROFILE_PROVIDERS.has(provider)
-    ? normalizedProfileId
-    : undefined;
 }
 
 function shouldUseCodexSyntheticUsage(params: {
@@ -365,9 +373,11 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider: activeStatusProvider,
     effectiveHarness,
   });
-  const codexUsageAuthProfileId = resolveCodexSyntheticUsageAuthProfileId(
-    sessionEntry?.authProfileOverride,
-  );
+  const codexUsageAuthProfileId = resolveCodexSyntheticUsageAuthProfileId({
+    profileId: sessionEntry?.authProfileOverride,
+    cfg,
+    agentDir: statusAgentDir,
+  });
   const usageCredentialType = useCodexSyntheticUsage
     ? "token"
     : resolveUsageCredentialType(usageAuthLabel);
