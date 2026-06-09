@@ -54,6 +54,7 @@ vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => 
     nextStreamFn = actual.createCodexNativeWebSearchWrapper(nextStreamFn, {
       config: ctx.config,
       agentDir: ctx.agentDir,
+      agentId: ctx.agentId,
     });
     return actual.createOpenAIResponsesContextManagementWrapper(
       actual.createOpenAIReasoningCompatibilityWrapper(nextStreamFn),

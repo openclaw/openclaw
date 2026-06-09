@@ -468,6 +468,7 @@ function createTestOpenAIProviderWrapper(
   streamFn = createCodexNativeWebSearchWrapper(streamFn, {
     config: params.context.config,
     agentDir: params.context.agentDir,
+    agentId: params.context.agentId,
   });
   streamFn = createOpenAIStringContentWrapper(streamFn);
   streamFn = createOpenAICompletionsStrictMessageKeysWrapper(streamFn);

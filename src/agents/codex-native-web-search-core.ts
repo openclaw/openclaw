@@ -4,6 +4,7 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
+import { isToolAllowedByPolicies, resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { externalCliDiscoveryForProviderAuth } from "./auth-profiles/external-cli-discovery.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
@@ -11,6 +12,7 @@ import {
   type CodexNativeSearchMode,
   resolveCodexNativeWebSearchConfig,
 } from "./codex-native-web-search.shared.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
 type CodexNativeSearchActivation = {
   globalWebSearchEnabled: boolean;
@@ -23,7 +25,8 @@ type CodexNativeSearchActivation = {
     | "globally_disabled"
     | "codex_not_enabled"
     | "model_not_eligible"
-    | "codex_auth_missing";
+    | "codex_auth_missing"
+    | "tool_policy_denied";
 };
 
 type CodexNativeSearchPayloadPatchResult = {
@@ -96,6 +99,9 @@ export function resolveCodexNativeSearchActivation(params: {
   config?: OpenClawConfig;
   modelProvider?: string;
   modelApi?: string;
+  modelId?: string;
+  agentId?: string;
+  sessionKey?: string;
   agentDir?: string;
 }): CodexNativeSearchActivation {
   const globalWebSearchEnabled = params.config?.tools?.web?.search?.enabled !== false;
@@ -105,6 +111,35 @@ export function resolveCodexNativeSearchActivation(params: {
     params.modelApi !== "openai-chatgpt-responses" ||
     !isOpenAIAuthProviderId(params.modelProvider) ||
     hasAvailableCodexAuth(params);
+  const {
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    profile,
+    providerProfile,
+    profileAlsoAllow,
+    providerProfileAlsoAllow,
+  } = resolveEffectiveToolPolicy({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
+  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
+  const providerProfilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(providerProfile),
+    providerProfileAlsoAllow,
+  );
+  const toolPolicyAllowsWebSearch = isToolAllowedByPolicies("web_search", [
+    profilePolicy,
+    providerProfilePolicy,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+  ]);
 
   if (!globalWebSearchEnabled) {
     return {
@@ -151,6 +186,18 @@ export function resolveCodexNativeSearchActivation(params: {
       hasRequiredAuth: false,
       state: "managed_only",
       inactiveReason: "codex_auth_missing",
+    };
+  }
+
+  if (!toolPolicyAllowsWebSearch) {
+    return {
+      globalWebSearchEnabled,
+      codexNativeEnabled: true,
+      codexMode: codexConfig.mode,
+      nativeEligible: true,
+      hasRequiredAuth: true,
+      state: "managed_only",
+      inactiveReason: "tool_policy_denied",
     };
   }
 
@@ -219,6 +266,9 @@ export function shouldSuppressManagedWebSearchTool(params: {
   config?: OpenClawConfig;
   modelProvider?: string;
   modelApi?: string;
+  modelId?: string;
+  agentId?: string;
+  sessionKey?: string;
   agentDir?: string;
 }): boolean {
   return resolveCodexNativeSearchActivation(params).state === "native_active";

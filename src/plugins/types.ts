@@ -707,6 +707,7 @@ export type ProviderPrepareExtraParamsContext = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  agentId?: string;
   provider: string;
   modelId: string;
   model?: ProviderRuntimeModel;

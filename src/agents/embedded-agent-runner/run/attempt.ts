@@ -2658,6 +2658,7 @@ export async function runEmbeddedAttempt(
           {
             config: params.config,
             agentDir,
+            agentId: sessionAgentId,
             codeModeToolSurfaceEnabled: true,
           },
         );

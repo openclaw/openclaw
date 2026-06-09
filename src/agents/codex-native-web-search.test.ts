@@ -112,6 +112,72 @@ describe("resolveCodexNativeSearchActivation", () => {
     expect(result.state).toBe("managed_only");
     expect(result.inactiveReason).toBe("globally_disabled");
   });
+
+  it("keeps native search inactive when the agent denies web_search", () => {
+    const result = resolveCodexNativeSearchActivation({
+      config: {
+        ...baseConfig,
+        agents: {
+          list: [
+            {
+              id: "main",
+              tools: { deny: ["web_search"] },
+            },
+          ],
+        },
+      },
+      agentId: "main",
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+      modelId: "gpt-5.5",
+    });
+
+    expect(result.state).toBe("managed_only");
+    expect(result.inactiveReason).toBe("tool_policy_denied");
+  });
+
+  it("keeps native search inactive when the agent denies group:web via session key", () => {
+    const result = resolveCodexNativeSearchActivation({
+      config: {
+        ...baseConfig,
+        agents: {
+          list: [
+            {
+              id: "main",
+              tools: { deny: ["group:web"] },
+            },
+          ],
+        },
+      },
+      sessionKey: "agent:main:main",
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+      modelId: "gpt-5.5",
+    });
+
+    expect(result.state).toBe("managed_only");
+    expect(result.inactiveReason).toBe("tool_policy_denied");
+  });
+
+  it("keeps native search inactive when provider policy denies web_search", () => {
+    const result = resolveCodexNativeSearchActivation({
+      config: {
+        ...baseConfig,
+        tools: {
+          ...baseConfig.tools,
+          byProvider: {
+            "gateway/gpt-5.5": { deny: ["web_search"] },
+          },
+        },
+      },
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+      modelId: "gpt-5.5",
+    });
+
+    expect(result.state).toBe("managed_only");
+    expect(result.inactiveReason).toBe("tool_policy_denied");
+  });
 });
 
 describe("Codex native web-search payload helpers", () => {
@@ -228,6 +294,28 @@ describe("shouldSuppressManagedWebSearchTool", () => {
         config: baseConfig,
         modelProvider: "openai",
         modelApi: "openai-responses",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not suppress managed web_search when native search is blocked by policy", () => {
+    expect(
+      shouldSuppressManagedWebSearchTool({
+        config: {
+          ...baseConfig,
+          agents: {
+            list: [
+              {
+                id: "main",
+                tools: { deny: ["group:web"] },
+              },
+            ],
+          },
+        },
+        agentId: "main",
+        modelProvider: "gateway",
+        modelApi: "openai-chatgpt-responses",
+        modelId: "gpt-5.5",
       }),
     ).toBe(false);
   });

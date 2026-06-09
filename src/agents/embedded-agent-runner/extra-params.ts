@@ -1096,6 +1096,7 @@ export function applyExtraParamsToAgent(
       config: cfg,
       agentDir,
       workspaceDir,
+      agentId,
       provider,
       modelId,
       extraParams: effectiveExtraParams,
