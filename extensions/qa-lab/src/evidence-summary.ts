@@ -9,6 +9,13 @@ export const QA_EVIDENCE_SUMMARY_SCHEMA_VERSION = 2;
 const qaEvidenceProfileSchema = z.enum(["smoke-ci", "release"]);
 const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
+const QA_EVIDENCE_TAXONOMY_REF = {
+  sourcePath: "taxonomy.yaml",
+  version: 1,
+  processVersion: 3,
+  snapshotDate: "2026-05-26",
+  sourceRef: "origin/main@41eef4a7965",
+} as const;
 const legacyQaEvidenceProfileEnvAliases: Record<string, QaEvidenceProfile> = {
   advisory: "smoke-ci",
   extended: "smoke-ci",
@@ -27,6 +34,16 @@ const qaEvidenceProviderSchema = z
 const qaEvidenceChannelSchema = z
   .object({
     id: nonEmptyStringSchema,
+  })
+  .strict();
+
+const qaEvidenceTaxonomyRefSchema = z
+  .object({
+    sourcePath: nonEmptyStringSchema,
+    version: z.number().int().positive(),
+    processVersion: z.number().int().positive(),
+    snapshotDate: nonEmptyStringSchema,
+    sourceRef: nonEmptyStringSchema,
   })
   .strict();
 
@@ -102,6 +119,7 @@ export const qaEvidenceSummarySchema = z
     kind: z.literal(QA_EVIDENCE_SUMMARY_KIND),
     schemaVersion: z.literal(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION),
     generatedAt: nonEmptyStringSchema,
+    taxonomy: qaEvidenceTaxonomyRefSchema,
     entries: z.array(qaEvidenceSummaryEntrySchema),
   })
   .strict();
@@ -289,6 +307,7 @@ function buildQaEvidenceSummary(params: {
     kind: QA_EVIDENCE_SUMMARY_KIND,
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
+    taxonomy: QA_EVIDENCE_TAXONOMY_REF,
     entries: params.entries,
   });
 }
