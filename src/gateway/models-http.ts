@@ -83,7 +83,11 @@ function loadTtsModelIds(agentId: string): string[] {
   // `/v1/audio/speech` routes with, so agent-scoped TTS overrides do not make
   // the two endpoints disagree about which providers are available.
   const ttsConfig = resolveTtsConfig(cfg, agentId);
+  // Only advertise configured providers that honor the OpenAI speech request
+  // fields, so `/v1/models` never claims a provider is OpenAI-compatible while
+  // it would silently ignore voice/speed/response_format.
   return listSpeechProviders(cfg)
+    .filter((provider) => provider.openAiSpeechCompatible)
     .filter((provider) => isTtsProviderConfigured(ttsConfig, provider.id, cfg))
     .map((provider) => `tts/${provider.id}`);
 }
