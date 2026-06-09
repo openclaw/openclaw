@@ -157,6 +157,10 @@ is_semgrepignored_path() {
 
     if [[ "$trimmed" == */ ]]; then
       dir_pattern="${trimmed%/}"
+      if [[ "$dir_pattern" == */* ]]; then
+        [[ "$path" == $dir_pattern || "$path" == $dir_pattern/* ]] && return 0
+        continue
+      fi
       if [[ "$path" == $dir_pattern || "$path" == $dir_pattern/* || "$path" == */$dir_pattern/* ]]; then
         return 0
       fi
