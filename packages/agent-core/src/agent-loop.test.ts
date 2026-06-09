@@ -76,12 +76,12 @@ describe("agentLoop EventStream failures", () => {
 });
 
 describe("agentLoop streaming updates", () => {
-  it("reuses the current assistant message for text deltas without partial snapshots", async () => {
+  it("rebuilds assistant message snapshots for text deltas without partial snapshots", async () => {
     const streamFn: StreamFn = async () => {
       const stream = createAssistantMessageEventStream();
-      const message: AssistantMessage = {
+      const startMessage: AssistantMessage = {
         role: "assistant",
-        content: [{ type: "text", text: "" }],
+        content: [],
         api: model.api,
         provider: model.provider,
         model: model.id,
@@ -96,17 +96,24 @@ describe("agentLoop streaming updates", () => {
         stopReason: "stop",
         timestamp: 1,
       };
+      const textStartMessage: AssistantMessage = { ...startMessage, content: [] };
+      const finalMessage: AssistantMessage = {
+        ...startMessage,
+        content: [{ type: "text", text: "Hello world" }],
+      };
 
       queueMicrotask(() => {
-        stream.push({ type: "start", partial: message });
-        stream.push({ type: "text_start", contentIndex: 0, partial: message });
-        const textBlock = message.content[0];
-        if (textBlock?.type === "text") {
-          textBlock.text = "Hello";
-        }
+        stream.push({ type: "start", partial: startMessage });
+        stream.push({ type: "text_start", contentIndex: 0, partial: textStartMessage });
         stream.push({ type: "text_delta", contentIndex: 0, delta: "Hello" });
-        stream.push({ type: "text_end", contentIndex: 0, content: "Hello", partial: message });
-        stream.push({ type: "done", reason: "stop", message });
+        stream.push({ type: "text_delta", contentIndex: 0, delta: " world" });
+        stream.push({
+          type: "text_end",
+          contentIndex: 0,
+          content: "Hello world",
+          partial: finalMessage,
+        });
+        stream.push({ type: "done", reason: "stop", message: finalMessage });
       });
 
       return stream;
@@ -121,15 +128,17 @@ describe("agentLoop streaming updates", () => {
     );
     const events = await collectEvents(stream);
 
-    const deltaUpdate = events.find(
+    const deltaUpdates = events.filter(
       (event): event is Extract<AgentEvent, { type: "message_update" }> =>
         event.type === "message_update" && event.assistantMessageEvent.type === "text_delta",
     );
-    expect(deltaUpdate).toMatchObject({
-      type: "message_update",
-      message: { role: "assistant", content: [{ type: "text", text: "Hello" }] },
-      assistantMessageEvent: { type: "text_delta", delta: "Hello" },
-    });
-    expect(deltaUpdate?.assistantMessageEvent).not.toHaveProperty("partial");
+    expect(deltaUpdates).toHaveLength(2);
+    expect(deltaUpdates.map((event) => event.message)).toMatchObject([
+      { role: "assistant", content: [{ type: "text", text: "Hello" }] },
+      { role: "assistant", content: [{ type: "text", text: "Hello world" }] },
+    ]);
+    for (const update of deltaUpdates) {
+      expect(update.assistantMessageEvent).not.toHaveProperty("partial");
+    }
   });
 });
