@@ -4,6 +4,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
+import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resolveStorePath, saveSessionStore } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -222,14 +223,18 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           sessionId: "sess-acp-harness",
           label: "claude-delegate",
           updatedAt: freshUpdatedAt(),
-          acp: {
-            backend: "acpx",
-            agent: "claude",
-            runtimeSessionName: acpKey,
-            mode: "oneshot",
-            state: "idle",
-            lastActivityAt: freshUpdatedAt(),
-          },
+        },
+      });
+      writeAcpSessionMetaForMigration({
+        sessionKey: acpKey,
+        sessionId: "sess-acp-harness",
+        meta: {
+          backend: "acpx",
+          agent: "claude",
+          runtimeSessionName: acpKey,
+          mode: "oneshot",
+          state: "idle",
+          lastActivityAt: freshUpdatedAt(),
         },
       });
 

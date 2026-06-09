@@ -9,7 +9,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { readAcpSessionMeta, readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
@@ -922,17 +922,21 @@ function resolveTranscriptUsageFallback(params: {
 export function resolveDeletedAgentIdFromSessionKey(
   cfg: OpenClawConfig,
   sessionKey: string,
-  entry?: Pick<SessionEntry, "acp"> | null,
+  entry?: SessionEntry | null,
 ): string | null {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
     return null;
   }
-  // Free ACP runtime keys use agent:<harnessId>:acp:<uuid>, but key shape is
-  // not proof: ACP bridge sessions can use ACP-shaped keys without SessionAcpMeta.
-  // Configured acp:binding keys stay owner-scoped even when ACP metadata exists.
-  if (isAcpSessionKey(sessionKey) && !parsed.rest.startsWith("acp:binding:") && entry?.acp) {
-    return null;
+  if (isAcpSessionKey(sessionKey) && !parsed.rest.startsWith("acp:binding:")) {
+    // Free ACP runtime keys use agent:<harnessId>:acp:<uuid>, but key shape is
+    // not proof: ACP bridge sessions can use ACP-shaped keys without SessionAcpMeta.
+    // Configured acp:binding keys stay owner-scoped even when ACP metadata exists.
+    const acpMeta =
+      entry?.acp ?? readAcpSessionMetaForEntry({ sessionKey, entry: entry ?? undefined });
+    if (acpMeta) {
+      return null;
+    }
   }
   const agentId = normalizeAgentId(parsed.agentId);
   if (listAgentIds(cfg).includes(agentId)) {
