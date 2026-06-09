@@ -12,7 +12,7 @@ import {
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
-import { requireRef, resolveBrowserActionContext } from "./shared.js";
+import { resolveBrowserActionContext } from "./shared.js";
 
 /** Registers Browser navigate and resize commands. */
 export function registerBrowserNavigationCommands(
@@ -95,6 +95,4 @@ export function registerBrowserNavigationCommands(
       }
     });
 
-  // Keep `requireRef` reachable; shared utilities are intended for other modules too.
-  void requireRef;
-}
+  }
