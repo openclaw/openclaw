@@ -153,12 +153,12 @@ describe("provider auth profile helpers", () => {
     vi.doMock("../agents/auth-profiles/order.js", () => ({
       resolveAuthProfileOrder: ({
         provider,
-        store,
+        store: profileStore,
       }: {
         provider: string;
         store: AuthProfileStore;
       }) =>
-        Object.entries(store.profiles)
+        Object.entries(profileStore.profiles)
           .filter(([, profile]) => profile.provider === provider)
           .map(([profileId]) => profileId),
     }));
