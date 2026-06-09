@@ -293,7 +293,9 @@ describe("memory reindex state", () => {
       }),
     );
     expect(state.status).toBe("mismatched");
-    expect(state.reason).toContain("expected fts-only");
+    if (state.status === "mismatched") {
+      expect(state.reason).toContain("expected fts-only");
+    }
   });
 
   it("falls back to fts-only when provider.model is whitespace-only", () => {
