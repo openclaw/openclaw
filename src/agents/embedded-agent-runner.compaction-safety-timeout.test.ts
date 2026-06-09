@@ -132,12 +132,12 @@ describe("resolveCompactionTimeoutMs", () => {
     ).toBe(120_000);
   });
 
-  it("caps configured timeoutSeconds at 600", () => {
+  it("preserves explicit timeoutSeconds above 600", () => {
     expect(
       resolveCompactionTimeoutMs({
         agents: { defaults: { compaction: { timeoutSeconds: 1800 } } },
       }),
-    ).toBe(600_000);
+    ).toBe(1_800_000);
   });
 
   it("floors fractional seconds", () => {

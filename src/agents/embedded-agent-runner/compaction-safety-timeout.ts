@@ -7,7 +7,6 @@ import type { CompactResult, ContextEngine } from "../../context-engine/types.js
 import { withTimeout } from "../../node-host/with-timeout.js";
 
 export const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
-const MAX_COMPACTION_TIMEOUT_SECONDS = 600;
 
 function createAbortError(signal: AbortSignal): Error {
   const reason = "reason" in signal ? signal.reason : undefined;
@@ -58,14 +57,10 @@ function composeAbortSignals(...signals: Array<AbortSignal | undefined>): {
 }
 
 export function resolveCompactionTimeoutMs(cfg?: OpenClawConfig): number {
-  const rawSeconds = cfg?.agents?.defaults?.compaction?.timeoutSeconds;
-  const clampedSeconds =
-    typeof rawSeconds === "number" && Number.isFinite(rawSeconds) && rawSeconds > 0
-      ? Math.min(rawSeconds, MAX_COMPACTION_TIMEOUT_SECONDS)
-      : rawSeconds;
   return (
-    finiteSecondsToTimerSafeMilliseconds(clampedSeconds, { floorSeconds: true }) ??
-    EMBEDDED_COMPACTION_TIMEOUT_MS
+    finiteSecondsToTimerSafeMilliseconds(cfg?.agents?.defaults?.compaction?.timeoutSeconds, {
+      floorSeconds: true,
+    }) ?? EMBEDDED_COMPACTION_TIMEOUT_MS
   );
 }
 
