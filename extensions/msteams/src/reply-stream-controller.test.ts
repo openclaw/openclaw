@@ -8,6 +8,7 @@ function makeStream() {
   return {
     emit: vi.fn(),
     update: vi.fn(),
+    clearText: vi.fn(),
     close: vi.fn<() => Promise<StreamCloseResult>>(async () => ({ id: "stream-final" })),
     canceled: false,
   };
@@ -188,6 +189,29 @@ describe("createTeamsReplyStreamController", () => {
     ctrl.onPartialReply({ text: "streamed" });
     expect(ctrl.preparePayload({ text: "streamed" })).toBeUndefined();
     await expect(ctrl.finalize()).resolves.toBeUndefined();
+    expect(stream.close).toHaveBeenCalled();
+  });
+
+  it("skips streaminfo final create for long streamed replies at or above 4000 chars", async () => {
+    const stream = makeStream();
+    const ctrl = makeController({ stream });
+    const longText = "x".repeat(4000);
+    ctrl.onPartialReply({ text: longText });
+    expect(ctrl.preparePayload({ text: longText })).toBeUndefined();
+    await expect(ctrl.finalize()).resolves.toBeUndefined();
+    expect(stream.clearText).toHaveBeenCalled();
+    expect(stream.emit).toHaveBeenCalledTimes(1);
+    expect(stream.close).toHaveBeenCalled();
+  });
+
+  it("still emits streaminfo final for short streamed replies below 4000 chars", async () => {
+    const stream = makeStream();
+    const ctrl = makeController({ stream });
+    ctrl.onPartialReply({ text: "short reply" });
+    expect(ctrl.preparePayload({ text: "short reply" })).toBeUndefined();
+    await expect(ctrl.finalize()).resolves.toBeUndefined();
+    expect(stream.clearText).not.toHaveBeenCalled();
+    expect(stream.emit).toHaveBeenCalledTimes(2);
     expect(stream.close).toHaveBeenCalled();
   });
 

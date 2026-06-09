@@ -44,6 +44,11 @@ function isStreamCancelledError(err: unknown): boolean {
   return err instanceof Error && err.name === "StreamCancelledError";
 }
 
+// Teams often fails to collapse the streamed preview card into the SDK's
+// addStreamFinal() message once the accumulated text crosses the usual 4000-char
+// Bot Framework chunk ceiling, leaving two identical full messages visible.
+const MSTEAMS_STREAM_FINAL_SUPPRESS_AT_CHARS = 4000;
+
 /**
  * Bridges openclaw's reply pipeline callbacks to the SDK's `ctx.stream`.
  * Streaming is enabled for personal (DM) conversations only; group/channel
@@ -343,6 +348,17 @@ export function createTeamsReplyStreamController(params: {
         ? { feedbackLoopEnabled: true }
         : {};
       try {
+        // Long replies already show the full text on the preview card. The SDK's
+        // close() always CREATEs a streaminfo-final message on top; when Teams
+        // fails to collapse that pair, the user sees a duplicate. clearText() +
+        // close() returns early without a second CREATE while the preview stands.
+        if (emittedTextLength >= MSTEAMS_STREAM_FINAL_SUPPRESS_AT_CHARS) {
+          stream.clearText();
+          await stream.close();
+          streamFinalizationPending = false;
+          pendingFinalPayload = undefined;
+          return undefined;
+        }
         stream.emit({
           type: "message",
           entities: finalEntities,
