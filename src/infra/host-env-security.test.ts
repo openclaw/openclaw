@@ -185,6 +185,10 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC_WRAPPER")).toBe(true);
     expect(isDangerousHostEnvVarName("cargo_build_rustc_wrapper")).toBe(true);
     expect(isDangerousHostEnvVarName("cargo_home")).toBe(false);
+    expect(isDangerousHostEnvVarName("RUSTUP_DIST_SERVER")).toBe(false);
+    expect(isDangerousHostEnvVarName("RUSTUP_HOME")).toBe(false);
+    expect(isDangerousHostEnvVarName("rustup_update_root")).toBe(false);
+    expect(isDangerousHostEnvVarName("rustup_toolchain")).toBe(false);
     expect(isDangerousHostEnvVarName("CMAKE_C_COMPILER")).toBe(true);
     expect(isDangerousHostEnvVarName("cmake_c_compiler")).toBe(true);
     expect(isDangerousHostEnvVarName("CMAKE_CXX_COMPILER")).toBe(true);
@@ -364,6 +368,11 @@ describe("sanitizeHostExecEnv", () => {
         AWS_CONFIG_FILE: "/tmp/aws-config",
         SSH_AUTH_SOCK: "/tmp/trusted-ssh-agent.sock",
         CARGO_HOME: "/tmp/cargo",
+        RUSTUP_DIST_ROOT: "https://mirror.example.test/deprecated-dist",
+        RUSTUP_DIST_SERVER: "https://mirror.example.test",
+        RUSTUP_HOME: "/tmp/rustup-home",
+        RUSTUP_TOOLCHAIN: "/tmp/rustup-toolchain",
+        RUSTUP_UPDATE_ROOT: "https://mirror.example.test/rustup",
         HELM_HOME: "/tmp/helm",
         HTTP_PROXY: "http://proxy.example.test:8080",
         HTTPS_PROXY: "http://proxy.example.test:8443",
@@ -401,6 +410,11 @@ describe("sanitizeHostExecEnv", () => {
       DOCKER_CONTEXT: "trusted-remote",
       DOCKER_HOST: "tcp://docker.example.test:2376",
       GIT_ALLOW_PROTOCOL: "",
+      RUSTUP_DIST_ROOT: "https://mirror.example.test/deprecated-dist",
+      RUSTUP_DIST_SERVER: "https://mirror.example.test",
+      RUSTUP_HOME: "/tmp/rustup-home",
+      RUSTUP_TOOLCHAIN: "/tmp/rustup-toolchain",
+      RUSTUP_UPDATE_ROOT: "https://mirror.example.test/rustup",
       OK: "1",
     });
   });
@@ -1007,6 +1021,11 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("rustc_wrapper")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("RUSTFLAGS")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("rustflags")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("RUSTUP_DIST_ROOT")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("rustup_dist_server")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("RUSTUP_HOME")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("rustup_toolchain")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("RUSTUP_UPDATE_ROOT")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CARGO_BUILD_RUSTC_WRAPPER")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("cargo_build_rustc_wrapper")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CARGO_HOME")).toBe(true);
@@ -1145,6 +1164,11 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       ["PYTHONUSERBASE", "/tmp/evil-python-userbase"],
       ["RUSTC_WRAPPER", "/tmp/evil-rustc-wrapper"],
       ["RUSTFLAGS", "-C link-args=-l/tmp/evil.so"],
+      ["RUSTUP_DIST_ROOT", "https://evil.example.test/deprecated-dist"],
+      ["RUSTUP_DIST_SERVER", "https://evil.example.test"],
+      ["RUSTUP_HOME", "/tmp/evil-rustup-home"],
+      ["RUSTUP_TOOLCHAIN", "/tmp/evil-toolchain"],
+      ["RUSTUP_UPDATE_ROOT", "https://evil.example.test/rustup"],
       ["VIRTUAL_ENV", "/tmp/evil-venv"],
       ["JAVA_OPTS", "-javaagent:/tmp/evil.jar"],
       ["YARN_RC_FILENAME", ".evil-yarnrc.yml"],
@@ -1227,6 +1251,11 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "REQUESTS_CA_BUNDLE",
       "RUSTC_WRAPPER",
       "RUSTFLAGS",
+      "RUSTUP_DIST_ROOT",
+      "RUSTUP_DIST_SERVER",
+      "RUSTUP_HOME",
+      "RUSTUP_TOOLCHAIN",
+      "RUSTUP_UPDATE_ROOT",
       "SSL_CERT_DIR",
       "SSL_CERT_FILE",
       "UV_DEFAULT_INDEX",
@@ -1309,6 +1338,11 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.PYTHONUSERBASE).toBeUndefined();
     expect(result.env.RUSTC_WRAPPER).toBeUndefined();
     expect(result.env.RUSTFLAGS).toBeUndefined();
+    expect(result.env.RUSTUP_DIST_ROOT).toBeUndefined();
+    expect(result.env.RUSTUP_DIST_SERVER).toBeUndefined();
+    expect(result.env.RUSTUP_HOME).toBeUndefined();
+    expect(result.env.RUSTUP_TOOLCHAIN).toBeUndefined();
+    expect(result.env.RUSTUP_UPDATE_ROOT).toBeUndefined();
     expect(result.env.VIRTUAL_ENV).toBeUndefined();
     expect(result.env.YARN_RC_FILENAME).toBeUndefined();
   });
