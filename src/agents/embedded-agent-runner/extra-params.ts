@@ -30,6 +30,7 @@ import {
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import type { ProviderNativeWebSearchPolicyContext } from "../../plugins/types.js";
 import { canonicalizeMaxTokensParam, resolveMaxTokensParam } from "../model-max-tokens-params.js";
 import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
@@ -1043,7 +1044,10 @@ export function applyExtraParamsToAgent(
   model?: ProviderRuntimeModel,
   agentDir?: string,
   resolvedTransport?: SupportedTransport,
-  options?: { preparedExtraParams?: Record<string, unknown> },
+  options?: {
+    preparedExtraParams?: Record<string, unknown>;
+    nativeWebSearchPolicyContext?: ProviderNativeWebSearchPolicyContext;
+  },
 ): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -1097,6 +1101,7 @@ export function applyExtraParamsToAgent(
       agentDir,
       workspaceDir,
       agentId,
+      nativeWebSearchPolicyContext: options?.nativeWebSearchPolicyContext,
       provider,
       modelId,
       extraParams: effectiveExtraParams,

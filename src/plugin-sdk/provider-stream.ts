@@ -131,6 +131,7 @@ export function buildProviderStreamFamilyHooks(
             config: ctx.config,
             agentDir: ctx.agentDir,
             agentId: ctx.agentId,
+            ...ctx.nativeWebSearchPolicyContext,
           });
           nextStreamFn = createOpenAIStringContentWrapper(nextStreamFn);
           return createOpenAIResponsesContextManagementWrapper(

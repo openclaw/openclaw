@@ -24,6 +24,7 @@ import {
 import { createOpenAIResponsesTransportStreamFn } from "../../../agents/openai-transport-stream.js";
 import { resolveProviderRequestPolicyConfig } from "../../../agents/provider-request-config.js";
 import type { StreamFn } from "../../../agents/runtime/index.js";
+import type { SandboxToolPolicy } from "../../../agents/sandbox.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
@@ -617,6 +618,18 @@ export function createCodexNativeWebSearchWrapper(
     config?: OpenClawConfig;
     agentDir?: string;
     agentId?: string;
+    sessionKey?: string;
+    sandboxToolPolicy?: SandboxToolPolicy;
+    messageProvider?: string;
+    agentAccountId?: string | null;
+    groupId?: string | null;
+    groupChannel?: string | null;
+    groupSpace?: string | null;
+    spawnedBy?: string | null;
+    senderId?: string | null;
+    senderName?: string | null;
+    senderUsername?: string | null;
+    senderE164?: string | null;
     codeModeToolSurfaceEnabled?: boolean;
   },
 ): StreamFn {
@@ -656,6 +669,18 @@ export function createCodexNativeWebSearchWrapper(
       modelApi: readStringValue(model.api),
       modelId: readStringValue(model.id),
       agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sandboxToolPolicy: params.sandboxToolPolicy,
+      messageProvider: params.messageProvider,
+      agentAccountId: params.agentAccountId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
       agentDir: params.agentDir,
     });
 

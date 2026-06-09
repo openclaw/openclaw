@@ -1,5 +1,8 @@
 // Covers Codex-native web search activation and payload projection.
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import {
   buildCodexNativeWebSearchTool,
   describeCodexNativeWebSearch,
@@ -170,6 +173,73 @@ describe("resolveCodexNativeSearchActivation", () => {
           },
         },
       },
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+      modelId: "gpt-5.5",
+    });
+
+    expect(result.state).toBe("managed_only");
+    expect(result.inactiveReason).toBe("tool_policy_denied");
+  });
+
+  it("keeps native search inactive when sender policy denies web_search", () => {
+    const result = resolveCodexNativeSearchActivation({
+      config: {
+        ...baseConfig,
+        tools: {
+          ...baseConfig.tools,
+          toolsBySender: {
+            "channel:msteams:alice": { deny: ["web_search"] },
+          },
+        },
+      },
+      messageProvider: "teams",
+      senderId: "alice",
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+      modelId: "gpt-5.5",
+    });
+
+    expect(result.state).toBe("managed_only");
+    expect(result.inactiveReason).toBe("tool_policy_denied");
+  });
+
+  it("keeps native search inactive when sandbox policy denies group:web", () => {
+    const result = resolveCodexNativeSearchActivation({
+      config: baseConfig,
+      sandboxToolPolicy: { deny: ["group:web"] },
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+      modelId: "gpt-5.5",
+    });
+
+    expect(result.state).toBe("managed_only");
+    expect(result.inactiveReason).toBe("tool_policy_denied");
+  });
+
+  it("keeps native search inactive when inherited session policy denies web_search", () => {
+    const agentId = `native-inherited-deny-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const sessionKey = `agent:${agentId}:subagent:limited`;
+    const storePath = path.join(os.tmpdir(), `openclaw-native-inherited-deny-${agentId}.json`);
+    writeSessionStoreForTest(storePath, {
+      [sessionKey]: {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolDeny: ["web_search"],
+      },
+    });
+
+    const result = resolveCodexNativeSearchActivation({
+      config: {
+        ...baseConfig,
+        session: {
+          store: storePath,
+        },
+      },
+      sessionKey,
       modelProvider: "gateway",
       modelApi: "openai-chatgpt-responses",
       modelId: "gpt-5.5",

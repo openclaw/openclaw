@@ -4,7 +4,13 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
-import { isToolAllowedByPolicies, resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
+import {
+  isToolAllowedByPolicies,
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+  resolveInheritedToolPolicyForSession,
+  resolveSubagentToolPolicyForSession,
+} from "./agent-tools.policy.js";
 import { externalCliDiscoveryForProviderAuth } from "./auth-profiles/external-cli-discovery.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
@@ -12,6 +18,12 @@ import {
   type CodexNativeSearchMode,
   resolveCodexNativeWebSearchConfig,
 } from "./codex-native-web-search.shared.js";
+import type { SandboxToolPolicy } from "./sandbox.js";
+import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "./subagent-capabilities.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
 type CodexNativeSearchActivation = {
@@ -102,6 +114,17 @@ export function resolveCodexNativeSearchActivation(params: {
   modelId?: string;
   agentId?: string;
   sessionKey?: string;
+  sandboxToolPolicy?: SandboxToolPolicy;
+  messageProvider?: string;
+  agentAccountId?: string | null;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
   agentDir?: string;
 }): CodexNativeSearchActivation {
   const globalWebSearchEnabled = params.config?.tools?.web?.search?.enabled !== false;
@@ -111,36 +134,6 @@ export function resolveCodexNativeSearchActivation(params: {
     params.modelApi !== "openai-chatgpt-responses" ||
     !isOpenAIAuthProviderId(params.modelProvider) ||
     hasAvailableCodexAuth(params);
-  const {
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    profile,
-    providerProfile,
-    profileAlsoAllow,
-    providerProfileAlsoAllow,
-  } = resolveEffectiveToolPolicy({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-  });
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
-  const providerProfilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(providerProfile),
-    providerProfileAlsoAllow,
-  );
-  const toolPolicyAllowsWebSearch = isToolAllowedByPolicies("web_search", [
-    profilePolicy,
-    providerProfilePolicy,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-  ]);
-
   if (!globalWebSearchEnabled) {
     return {
       globalWebSearchEnabled,
@@ -188,6 +181,85 @@ export function resolveCodexNativeSearchActivation(params: {
       inactiveReason: "codex_auth_missing",
     };
   }
+
+  const {
+    agentId,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    profile,
+    providerProfile,
+    profileAlsoAllow,
+    providerProfileAlsoAllow,
+  } = resolveEffectiveToolPolicy({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
+  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
+  const providerProfilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(providerProfile),
+    providerProfileAlsoAllow,
+  );
+  const groupPolicy = resolveGroupToolPolicy({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    spawnedBy: params.spawnedBy,
+    messageProvider: params.messageProvider,
+    groupId: params.groupId,
+    groupChannel: params.groupChannel,
+    groupSpace: params.groupSpace,
+    accountId: params.agentAccountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  const senderPolicy = resolveSenderToolPolicy({
+    config: params.config,
+    agentId,
+    messageProvider: params.messageProvider,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
+    cfg: params.config,
+  });
+  const subagentPolicy =
+    params.sessionKey &&
+    isSubagentEnvelopeSession(params.sessionKey, {
+      cfg: params.config,
+      store: subagentStore,
+    })
+      ? resolveSubagentToolPolicyForSession(params.config, params.sessionKey, {
+          store: subagentStore,
+        })
+      : undefined;
+  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(
+    params.config,
+    params.sessionKey,
+    {
+      store: subagentStore,
+    },
+  );
+  const toolPolicyAllowsWebSearch = isToolAllowedByPolicies("web_search", [
+    profilePolicy,
+    providerProfilePolicy,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    senderPolicy,
+    params.sandboxToolPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+  ]);
 
   if (!toolPolicyAllowsWebSearch) {
     return {
@@ -269,6 +341,17 @@ export function shouldSuppressManagedWebSearchTool(params: {
   modelId?: string;
   agentId?: string;
   sessionKey?: string;
+  sandboxToolPolicy?: SandboxToolPolicy;
+  messageProvider?: string;
+  agentAccountId?: string | null;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
   agentDir?: string;
 }): boolean {
   return resolveCodexNativeSearchActivation(params).state === "native_active";
