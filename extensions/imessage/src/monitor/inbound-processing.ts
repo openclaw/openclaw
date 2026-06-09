@@ -277,15 +277,15 @@ function hasIMessageEchoMatch(params: {
     if (!params.text && !fallbackMessageId) {
       continue;
     }
+    const echoOptions =
+      params.skipIdShortCircuit || params.includePendingText
+        ? {
+            skipIdShortCircuit: params.skipIdShortCircuit,
+            includePendingText: params.includePendingText,
+          }
+        : undefined;
     if (
-      params.echoCache.has(
-        scope,
-        { text: params.text, messageId: fallbackMessageId },
-        {
-          skipIdShortCircuit: params.skipIdShortCircuit,
-          includePendingText: params.includePendingText,
-        },
-      )
+      params.echoCache.has(scope, { text: params.text, messageId: fallbackMessageId }, echoOptions)
     ) {
       return true;
     }
