@@ -13,9 +13,6 @@ function isConversationLikeIdentity(value: string): boolean {
   if (normalized.startsWith("chat_id:")) {
     return true;
   }
-  if (/(^|:)[0-9]+(?:-[0-9]+)*@g\.us$/.test(normalized)) {
-    return true;
-  }
   return /(^|:)(channel|group|thread|topic|room|space|spaces):/.test(normalized);
 }
 
