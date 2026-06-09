@@ -204,24 +204,14 @@ describe("deliverReplies", () => {
     });
   });
 
-  it("records per-chunk pre-send text and post-send message ids in sent-message cache", async () => {
-    // Fix for #47830: pre-send echo markers are per chunk, never the full
-    // un-chunked text before sending begins.
+  it("records outbound text and message ids in sent-message cache after send", async () => {
+    // Fix for #47830: monitor cache population remains per chunk, never the
+    // full un-chunked text before sending begins.
     const remember = vi.fn();
     chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
     sendMessageIMessageMock
-      .mockImplementationOnce(async (_target: string, message: string, opts?: unknown) => {
-        (opts as { onBeforeSendEcho?: (echoText: string) => void } | undefined)?.onBeforeSendEcho?.(
-          message,
-        );
-        return { messageId: "imsg-1", sentText: "first" };
-      })
-      .mockImplementationOnce(async (_target: string, message: string, opts?: unknown) => {
-        (opts as { onBeforeSendEcho?: (echoText: string) => void } | undefined)?.onBeforeSendEcho?.(
-          message,
-        );
-        return { messageId: "imsg-2", sentText: "second" };
-      });
+      .mockResolvedValueOnce({ messageId: "imsg-1", sentText: "first" })
+      .mockResolvedValueOnce({ messageId: "imsg-2", sentText: "second" });
 
     await deliverReplies({
       cfg: IMESSAGE_TEST_CFG,
@@ -235,11 +225,9 @@ describe("deliverReplies", () => {
       sentMessageCache: { remember },
     });
 
-    expect(remember).toHaveBeenCalledTimes(4);
+    expect(remember).toHaveBeenCalledTimes(2);
     expect(remember.mock.calls).toStrictEqual([
-      ["acct-3:chat_id:30", { text: "first" }],
       ["acct-3:chat_id:30", { text: "first", messageId: "imsg-1" }],
-      ["acct-3:chat_id:30", { text: "second" }],
       ["acct-3:chat_id:30", { text: "second", messageId: "imsg-2" }],
     ]);
     expect(remember).not.toHaveBeenCalledWith("acct-3:chat_id:30", {

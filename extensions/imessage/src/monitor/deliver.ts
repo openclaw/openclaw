@@ -54,12 +54,7 @@ export async function deliverReplies(params: {
           client,
           accountId,
           replyToId: payload.replyToId,
-          onBeforeSendEcho: (echoText) => {
-            sentMessageCache?.remember(scope, { text: echoText });
-          },
         });
-        // Keep the returned message id too; the pre-send text entry closes the
-        // SQLite reflection race, while this preserves id-based matching.
         sentMessageCache?.remember(scope, {
           text: sent.echoText ?? sent.sentText,
           messageId: sent.messageId,
@@ -73,9 +68,6 @@ export async function deliverReplies(params: {
           client,
           accountId,
           replyToId: payload.replyToId,
-          onBeforeSendEcho: (echoText) => {
-            sentMessageCache?.remember(scope, { text: echoText });
-          },
         });
         sentMessageCache?.remember(scope, {
           text: sent.echoText ?? (sent.sentText || undefined),
@@ -96,15 +88,11 @@ export function createIMessageEchoCachingSend(params: {
 }): typeof sendMessageIMessage {
   return async (target, text, opts) => {
     const sanitizedText = sanitizeOutboundText(text);
-    const scope = `${params.accountId ?? opts.accountId ?? ""}:${target}`;
     const sent = await sendMessageIMessage(target, sanitizedText, {
       ...opts,
       client: params.client,
-      onBeforeSendEcho: (echoText) => {
-        params.sentMessageCache?.remember(scope, { text: echoText });
-        opts.onBeforeSendEcho?.(echoText);
-      },
     });
+    const scope = `${params.accountId ?? opts.accountId ?? ""}:${target}`;
     params.sentMessageCache?.remember(scope, {
       text: sent.echoText ?? (sent.sentText || undefined),
       messageId: sent.messageId,

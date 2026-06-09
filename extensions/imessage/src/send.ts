@@ -81,7 +81,6 @@ type IMessageSendOpts = {
     text: string;
     sentAfterMs?: number;
   }) => Promise<string | null> | string | null;
-  onBeforeSendEcho?: (echoText: string) => void;
 };
 
 export type IMessageSendResult = {
@@ -1030,9 +1029,6 @@ export async function sendMessageIMessage(
           text: echoText,
           ttlMs: pendingEchoTtlMs,
         });
-      }
-      if (echoText) {
-        opts.onBeforeSendEcho?.(echoText);
       }
       result = await client.request<Record<string, unknown>>("send", params, {
         timeoutMs,
