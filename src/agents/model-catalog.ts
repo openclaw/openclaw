@@ -389,23 +389,6 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
     manifestPlugins ??= getMetadataSnapshot().plugins;
     return manifestPlugins;
   };
-  const sourceFingerprint = await buildModelsJsonSourceFingerprint(cfg, agentDir, {
-    pluginMetadataSnapshot: params?.metadataSnapshot,
-    workspaceDir,
-  });
-  const cached = readCachedAgentModelCatalog({
-    agentDir,
-    catalogKey: buildLoadModelCatalogStateCacheKey({
-      agentDir,
-      config: cfg,
-      metadataSnapshot: params?.metadataSnapshot,
-      sourceFingerprint: sourceFingerprint.fingerprint,
-      workspaceDir,
-    }),
-  }) as ModelCatalogEntry[] | undefined;
-  if (cached?.length) {
-    return cached;
-  }
   const providers = await loadReadOnlyPersistedProviderRows(agentDir, getMetadataSnapshot);
   for (const [providerRaw, providerConfig] of Object.entries(providers)) {
     if (!Array.isArray(providerConfig?.models)) {

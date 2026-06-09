@@ -89,6 +89,38 @@ describe("model catalog state cache", () => {
     ).toBeUndefined();
   });
 
+  it("prunes expired agent catalog rows on write", () => {
+    const expiredEntries = [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }];
+    writeCachedAgentModelCatalog({
+      agentDir: "/agent/main",
+      catalogKey: "expired-key",
+      entries: expiredEntries,
+      nowMs: 1_000,
+    });
+
+    writeCachedAgentModelCatalog({
+      agentDir: "/agent/main",
+      catalogKey: "fresh-key",
+      entries: [{ provider: "openai", id: "gpt-5.6", name: "GPT-5.6" }],
+      nowMs: 31 * 60 * 1_000,
+    });
+
+    expect(
+      readCachedAgentModelCatalog({
+        agentDir: "/agent/main",
+        catalogKey: "expired-key",
+        nowMs: 1_000,
+      }),
+    ).toBeUndefined();
+    expect(
+      readCachedAgentModelCatalog({
+        agentDir: "/agent/main",
+        catalogKey: "fresh-key",
+        nowMs: 31 * 60 * 1_000,
+      }),
+    ).toEqual([{ provider: "openai", id: "gpt-5.6", name: "GPT-5.6" }]);
+  });
+
   it("builds stable keys that change with relevant catalog inputs", () => {
     const base = buildAgentModelCatalogCacheKey({
       agentDir: "/agent/main",

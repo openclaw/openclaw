@@ -139,6 +139,12 @@ export function writeCachedAgentModelCatalog(params: WriteCachedAgentModelCatalo
       executeSqliteQuerySync(
         database.db,
         db
+          .deleteFrom("agent_model_catalogs")
+          .where("updated_at", "<", updatedAt - AGENT_MODEL_CATALOG_CACHE_TTL_MS),
+      );
+      executeSqliteQuerySync(
+        database.db,
+        db
           .insertInto("agent_model_catalogs")
           .values({
             catalog_key: params.catalogKey,

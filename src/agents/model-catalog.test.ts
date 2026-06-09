@@ -733,6 +733,7 @@ describe("loadModelCatalog", () => {
 
     const entry = requireCatalogEntry(result, "openai", "gpt-test");
     expect(entry.name).toBe("GPT Test");
+    expect(readCachedAgentModelCatalogMock).not.toHaveBeenCalled();
     expect(prepareOpenClawModelsJsonSourceMock).not.toHaveBeenCalled();
     expect(importAgentDiscoveryModule).not.toHaveBeenCalled();
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
