@@ -181,6 +181,7 @@ describe("subagent announce continuation chaining", () => {
     const currentStore = loadSessionStore(storePath, { skipCache: true });
     currentStore[params.childSessionKey] = {
       sessionId: `${params.childSessionKey}-session`,
+      updatedAt: Date.now(),
       inputTokens: 0,
       outputTokens: 0,
     };
