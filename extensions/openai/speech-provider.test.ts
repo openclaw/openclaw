@@ -63,6 +63,7 @@ describe("buildOpenAISpeechProvider", () => {
 
   it("normalizes provider-owned speech config from raw provider config", () => {
     const provider = buildOpenAISpeechProvider();
+    expect(provider.openAiSpeechCompatible).toBe(true);
     const resolved = provider.resolveConfig?.({
       cfg: {} as never,
       timeoutMs: 30_000,

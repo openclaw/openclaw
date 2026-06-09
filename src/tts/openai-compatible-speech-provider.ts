@@ -294,6 +294,9 @@ export function createOpenAiCompatibleSpeechProvider<
     defaultModel: options.defaultModel,
     models: [...options.models],
     voices: [...options.voices],
+    // Honors the OpenAI `{ voice, speed, response_format }` request fields, so
+    // the gateway `/v1/audio/speech` endpoint may advertise and route it.
+    openAiSpeechCompatible: true,
     resolveConfig: ({ rawConfig }) => normalizeConfig(rawConfig),
     parseDirectiveToken: (ctx) => parseDirectiveToken(ctx, providerConfigKey),
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {

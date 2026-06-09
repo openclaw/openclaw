@@ -298,6 +298,9 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
     defaultModel: OPENAI_TTS_MODELS[0],
     models: OPENAI_TTS_MODELS,
     voices: OPENAI_TTS_VOICES,
+    // Honors the OpenAI `{ voice, speed, response_format }` request fields, so
+    // the gateway `/v1/audio/speech` endpoint may advertise and route it.
+    openAiSpeechCompatible: true,
     resolveConfig: ({ rawConfig }) => normalizeOpenAIProviderConfig(rawConfig),
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {

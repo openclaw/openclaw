@@ -78,6 +78,7 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
     });
 
     expect(provider.defaultModel).toBe("demo-tts");
+    expect(provider.openAiSpeechCompatible).toBe(true);
     expect(
       provider.resolveConfig?.({
         cfg: {} as never,

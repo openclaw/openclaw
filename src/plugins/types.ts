@@ -1939,6 +1939,14 @@ export type SpeechProviderPlugin = {
   defaultModel?: string;
   models?: readonly string[];
   voices?: readonly string[];
+  /**
+   * True when the provider honors the OpenAI-style `{ voice, speed,
+   * response_format }` request fields. The OpenAI-compatible
+   * `/v1/audio/speech` gateway endpoint only advertises (`/v1/models`) and
+   * routes providers that set this, so it never claims a provider is
+   * OpenAI-compatible while silently ignoring those fields.
+   */
+  openAiSpeechCompatible?: boolean;
   resolveConfig?: (ctx: SpeechProviderResolveConfigContext) => SpeechProviderConfig;
   parseDirectiveToken?: (ctx: SpeechDirectiveTokenParseContext) => SpeechDirectiveTokenParseResult;
   resolveTalkConfig?: (ctx: SpeechProviderResolveTalkConfigContext) => SpeechProviderConfig;

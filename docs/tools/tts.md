@@ -979,9 +979,11 @@ provider default.
 
 When `gateway.http.endpoints.audioSpeech.enabled` is `true`, the Gateway also
 serves `POST /v1/audio/speech`, an OpenAI-compatible text-to-speech endpoint
-backed by these same configured providers. Each configured-and-available
-provider is listed by `GET /v1/models` as `tts/<provider>`, and requests accept
-the OpenAI `model` / `input` / `voice` / `response_format` / `speed` fields.
+backed by these same configured providers. Each configured provider that honors
+the OpenAI speech fields is listed by `GET /v1/models` as `tts/<provider>`, and
+requests accept the OpenAI `model` / `input` / `voice` / `response_format` /
+`speed` fields. Providers that read different override keys are not advertised
+and return `400` if requested explicitly.
 
 See [OpenAI-compatible HTTP API](/gateway/openai-http-api#enabling-audio-speech)
 for request and configuration details.

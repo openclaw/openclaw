@@ -6,7 +6,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { getRuntimeConfig } from "../config/io.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
-import { canonicalizeSpeechProviderId, listSpeechProviders } from "../tts/provider-registry.js";
+import {
+  canonicalizeSpeechProviderId,
+  getSpeechProvider,
+  listSpeechProviders,
+} from "../tts/provider-registry.js";
 import {
   getTtsProvider,
   isTtsProviderConfigured,
@@ -173,6 +177,14 @@ export async function handleOpenAiAudioSpeechHttpRequest(
     return true;
   }
 
+  // Only route providers that honor the OpenAI `{ voice, speed, response_format }`
+  // fields. Routing one that reads different keys would silently apply the
+  // provider default and disagree with what `/v1/models` advertises.
+  if (!getSpeechProvider(providerId, cfg)?.openAiSpeechCompatible) {
+    sendInvalidRequest(res, buildIncompatibleProviderMessage(providerId, cfg, agentId));
+    return true;
+  }
+
   const providerOverrides: Record<string, unknown> = {};
   const voice = normalizeOptionalString(payload.voice);
   if (voice) {
@@ -240,13 +252,14 @@ export async function handleOpenAiAudioSpeechHttpRequest(
   return true;
 }
 
-/** List configured TTS providers as `tts/<provider>` for actionable error messages. */
+/** List configured-and-compatible TTS providers as `tts/<provider>` for actionable errors. */
 function listConfiguredTtsModelIds(
   cfg: ReturnType<typeof getRuntimeConfig>,
   agentId: string,
 ): string[] {
   const ttsConfig = resolveTtsConfig(cfg, agentId);
   return listSpeechProviders(cfg)
+    .filter((provider) => provider.openAiSpeechCompatible)
     .filter((provider) => isTtsProviderConfigured(ttsConfig, provider.id, cfg))
     .map((provider) => `${TTS_MODEL_PREFIX}${provider.id}`);
 }
@@ -260,4 +273,18 @@ function buildUnavailableProviderMessage(
   const availableText =
     available.length > 0 ? available.join(", ") : "(none — configure a TTS provider)";
   return `TTS provider '${providerRef}' is not available. Configured providers: ${availableText}.`;
+}
+
+function buildIncompatibleProviderMessage(
+  providerRef: string,
+  cfg: ReturnType<typeof getRuntimeConfig>,
+  agentId: string,
+): string {
+  const available = listConfiguredTtsModelIds(cfg, agentId);
+  const availableText =
+    available.length > 0 ? available.join(", ") : "(none — configure a TTS provider)";
+  return (
+    `TTS provider '${providerRef}' does not support the OpenAI speech API ` +
+    `(voice/speed/response_format). Compatible providers: ${availableText}.`
+  );
 }

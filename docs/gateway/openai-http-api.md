@@ -182,12 +182,18 @@ opening the chat surface. Set `gateway.http.endpoints.audioSpeech.enabled` to
 
 When enabled, the Gateway synthesizes speech through your configured TTS
 providers (`messages.tts`) and `GET /v1/models` additionally lists each
-configured-and-available provider as `tts/<provider>`.
+configured provider that honors the OpenAI speech fields (`voice` / `speed` /
+`response_format`) as `tts/<provider>`. Providers that read different override
+keys are not advertised, and requesting one explicitly returns `400`, so the
+endpoint never claims a provider is OpenAI-compatible while ignoring those
+fields.
 
 Request fields follow the OpenAI shape:
 
 - `model` (optional): `tts/<provider>` selects a provider; a bare provider name
   is also accepted. When omitted, the configured default TTS provider is used.
+  The provider must honor the OpenAI speech fields; otherwise the request is
+  rejected with `400`.
 - `input` (required): the text to synthesize (max 4096 characters).
 - `voice` (optional): provider voice id.
 - `response_format` (optional): one of `mp3`, `opus`, `wav`. Other values are
@@ -366,8 +372,8 @@ curl -sS http://127.0.0.1:18789/v1/audio/speech \
   --output speech.mp3
 ```
 
-`/v1/audio/speech` returns raw audio bytes; only configured TTS providers are
-listed in `/v1/models` as `tts/<provider>`.
+`/v1/audio/speech` returns raw audio bytes; only configured TTS providers that
+honor the OpenAI speech fields are listed in `/v1/models` as `tts/<provider>`.
 
 ## Related
 

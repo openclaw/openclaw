@@ -13,6 +13,7 @@ const getTtsProvider = vi.fn();
 const resolveTtsPrefsPath = vi.fn();
 const listSpeechProviders = vi.fn();
 const canonicalizeSpeechProviderId = vi.fn();
+const getSpeechProvider = vi.fn();
 
 vi.mock("./http-endpoint-helpers.js", () => ({
   handleGatewayPostJsonEndpoint: (...args: unknown[]) => handleGatewayPostJsonEndpoint(...args),
@@ -34,6 +35,7 @@ vi.mock("../tts/tts.js", () => ({
 vi.mock("../tts/provider-registry.js", () => ({
   listSpeechProviders: (...args: unknown[]) => listSpeechProviders(...args),
   canonicalizeSpeechProviderId: (...args: unknown[]) => canonicalizeSpeechProviderId(...args),
+  getSpeechProvider: (...args: unknown[]) => getSpeechProvider(...args),
 }));
 
 const { handleOpenAiAudioSpeechHttpRequest } = await import("./audio-speech-http.js");
@@ -81,9 +83,19 @@ beforeEach(() => {
   getTtsProvider.mockReturnValue("openai");
   isTtsProviderConfigured.mockReturnValue(true);
   canonicalizeSpeechProviderId.mockImplementation((id: string) =>
-    ["openai", "elevenlabs"].includes(id) ? id : undefined,
+    ["openai", "elevenlabs", "azure-speech"].includes(id) ? id : undefined,
   );
-  listSpeechProviders.mockReturnValue([{ id: "openai" }, { id: "elevenlabs" }]);
+  // azure-speech stands in for a configured provider that does not honor the
+  // OpenAI speech fields; openai/elevenlabs do.
+  getSpeechProvider.mockImplementation((id: string) => ({
+    id,
+    openAiSpeechCompatible: id !== "azure-speech",
+  }));
+  listSpeechProviders.mockReturnValue([
+    { id: "openai", openAiSpeechCompatible: true },
+    { id: "elevenlabs", openAiSpeechCompatible: true },
+    { id: "azure-speech", openAiSpeechCompatible: false },
+  ]);
   synthesizeSpeech.mockResolvedValue({
     success: true,
     audioBuffer: Buffer.from("AUDIO"),
@@ -191,6 +203,16 @@ describe("handleOpenAiAudioSpeechHttpRequest", () => {
     expect(synthesizeSpeech).not.toHaveBeenCalled();
   });
 
+  it("rejects a configured provider that is not OpenAI speech compatible", async () => {
+    const captured = await callEndpoint({ model: "tts/azure-speech", input: "hi" });
+    expect(captured.statusCode).toBe(400);
+    expect(jsonBody(captured).error?.message).toMatch(/does not support the OpenAI speech API/);
+    // Error lists only compatible providers, matching what /v1/models advertises.
+    expect(jsonBody(captured).error?.message).toMatch(/tts\/openai/);
+    expect(jsonBody(captured).error?.message).not.toMatch(/tts\/azure-speech/);
+    expect(synthesizeSpeech).not.toHaveBeenCalled();
+  });
+
   it("rejects when the provider ignored the requested response_format", async () => {
     // Provider honored its own default (mp3) instead of the requested opus.
     synthesizeSpeech.mockResolvedValue({
@@ -200,7 +222,7 @@ describe("handleOpenAiAudioSpeechHttpRequest", () => {
       fileExtension: ".mp3",
     });
     const captured = await callEndpoint({
-      model: "tts/elevenlabs",
+      model: "tts/openai",
       input: "hi",
       response_format: "opus",
     });
