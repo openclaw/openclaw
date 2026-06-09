@@ -867,7 +867,7 @@ export async function prepareSlackMessage(params: {
     return resolvedSenderName;
   };
   const recordDroppedHistory = async (
-    reason: "slack-no-mention" | "slack-other-mention",
+    reason: "slack-mention-detection-unavailable" | "slack-no-mention" | "slack-other-mention",
   ): Promise<void> => {
     const pendingText = (message.text ?? "").trim();
     const historyMediaCandidate = buildSlackHistoryMediaCandidateMessage(message);
@@ -1032,6 +1032,15 @@ export async function prepareSlackMessage(params: {
       reason: "control command (unauthorized)",
       target: senderId,
     });
+    return null;
+  }
+
+  if (isRoom && shouldRequireMention && !canDetectMention && !effectiveWasMentioned) {
+    ctx.logger.info(
+      { channel: message.channel, reason: "mention-detection-unavailable" },
+      "skipping channel message",
+    );
+    await recordDroppedHistory("slack-mention-detection-unavailable");
     return null;
   }
 

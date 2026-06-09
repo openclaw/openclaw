@@ -2951,6 +2951,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       defaultRequireMention: false,
     });
     (slackCtx as { botUserId: string }).botUserId = "";
+    slackCtx.historyLimit = 5;
     slackCtx.resolveChannelName = async () => ({ name: "agents", type: "channel" });
     slackCtx.resolveUserName = async () => ({ name: "Bek" });
 
@@ -2972,6 +2973,134 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.ExplicitlyMentionedBot).toBe(false);
     expect(prepared.ctxPayload.MentionedUserIds).toEqual(["B1"]);
     expect(prepared.ctxPayload.MentionSource).not.toBe("explicit_bot");
+  });
+
+  it("drops required-mention channel messages when bot mention detection is unavailable", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+            channels: { C0AGENTS: { requireMention: true } },
+          },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: true,
+    });
+    (slackCtx as { botUserId: string }).botUserId = "";
+    slackCtx.resolveChannelName = async () => ({ name: "agents", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount(),
+      message: {
+        type: "message",
+        channel: "C0AGENTS",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "WWDC notes look useful later",
+        ts: "1779226598.721350",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeNull();
+    expect(Array.from(slackCtx.channelHistories.values()).flat()).toMatchObject([
+      { body: "WWDC notes look useful later" },
+    ]);
+  });
+
+  it("allows app_mention events when bot mention detection is unavailable", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      defaultRequireMention: true,
+    });
+    (slackCtx as { botUserId: string }).botUserId = "";
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount(),
+      message: createSlackMessage({
+        channel: "C0AGENTS",
+        channel_type: "channel",
+        text: "<@B1> trying again",
+      }),
+      opts: { source: "app_mention" },
+    });
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.MentionSource).toBe("explicit_bot");
+  });
+
+  it("allows authorized control commands when bot mention detection is unavailable", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      defaultRequireMention: true,
+    });
+    (slackCtx as { botUserId: string }).botUserId = "";
+    slackCtx.allowFrom = ["U1"];
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      createSlackMessage({
+        channel: "C0AGENTS",
+        channel_type: "channel",
+        text: "/new",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.MentionSource).toBe("command_bypass");
+  });
+
+  it("allows configured mention patterns when native bot identity is unavailable", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+        messages: { groupChat: { mentionPatterns: ["\\bmy-bot\\b"] } },
+      } as OpenClawConfig,
+      defaultRequireMention: true,
+    });
+    (slackCtx as { botUserId: string }).botUserId = "";
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      createSlackMessage({
+        channel: "C0AGENTS",
+        channel_type: "channel",
+        text: "my-bot status",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.MentionSource).toBe("mention_pattern");
+  });
+
+  it("does not record a detection failure for denied channel senders", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      defaultRequireMention: true,
+      channelsConfig: { C0AGENTS: { requireMention: true, users: ["U_OWNER"] } },
+    });
+    (slackCtx as { botUserId: string }).botUserId = "";
+    slackCtx.historyLimit = 5;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      createSlackMessage({
+        channel: "C0AGENTS",
+        channel_type: "channel",
+        text: "private channel message",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+    expect(slackCtx.channelHistories.size).toBe(0);
   });
 
   it("marks authorized implicit thread control-command wakes as command bypass source", async () => {
