@@ -43,8 +43,8 @@ importers:
   .:
     dependencies:
       '@agentclientprotocol/sdk':
-        specifier: 0.22.1
-        version: 0.22.1(zod@4.4.3)
+        specifier: 0.25.0
+        version: 0.25.0(zod@4.4.3)
       '@anthropic-ai/sdk':
         specifier: 0.100.1
         version: 0.100.1(zod@4.4.3)
@@ -97,8 +97,8 @@ importers:
         specifier: 0.3.0
         version: 0.3.0
       commander:
-        specifier: 14.0.3
-        version: 14.0.3
+        specifier: 15.0.0
+        version: 15.0.0
       croner:
         specifier: 10.0.1
         version: 10.0.1
@@ -212,8 +212,8 @@ importers:
         specifier: 0.10.0
         version: 0.10.0(signal-polyfill@0.2.2)
       '@copilotkit/aimock':
-        specifier: 1.27.3
-        version: 1.27.3(vitest@4.1.7)
+        specifier: 1.29.0
+        version: 1.29.0(vitest@4.1.7)
       '@grammyjs/types':
         specifier: 3.27.3
         version: 3.27.3
@@ -425,8 +425,8 @@ importers:
         specifier: 1.29.0
         version: 1.29.0(zod@4.4.3)
       commander:
-        specifier: 14.0.3
-        version: 14.0.3
+        specifier: 15.0.0
+        version: 15.0.0
       express:
         specifier: 5.2.1
         version: 5.2.1
@@ -812,8 +812,8 @@ importers:
   extensions/google-meet:
     dependencies:
       commander:
-        specifier: 14.0.3
-        version: 14.0.3
+        specifier: 15.0.0
+        version: 15.0.0
       typebox:
         specifier: 1.1.39
         version: 1.1.39
@@ -1190,8 +1190,8 @@ importers:
   extensions/oc-path:
     dependencies:
       commander:
-        specifier: 14.0.3
-        version: 14.0.3
+        specifier: 15.0.0
+        version: 15.0.0
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
@@ -1316,8 +1316,8 @@ importers:
   extensions/qa-lab:
     dependencies:
       '@copilotkit/aimock':
-        specifier: 1.27.3
-        version: 1.27.3(vitest@4.1.7)
+        specifier: 1.29.0
+        version: 1.29.0(vitest@4.1.7)
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.4.3)
@@ -1628,8 +1628,8 @@ importers:
   extensions/voice-call:
     dependencies:
       commander:
-        specifier: 14.0.3
-        version: 14.0.3
+        specifier: 15.0.0
+        version: 15.0.0
       typebox:
         specifier: 1.1.39
         version: 1.1.39
@@ -1965,6 +1965,11 @@ packages:
 
   '@agentclientprotocol/sdk@0.22.1':
     resolution: {integrity: sha512-DfqXtl/8gO9NImq094MTaCXEU2vkhh6v7q/kT+9UjZxUqj8hYaya2OjLVIqn16MzNHcXEpShTR2RIauLSYeDQQ==}
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+
+  '@agentclientprotocol/sdk@0.25.0':
+    resolution: {integrity: sha512-wU1VgXNtMvdVotX49txc3WJUDV+/QbLpsgjMvFhlRmp37osdLbI7L7y+iwAlQATwfjLxcv1r1p3ZxZBcXlGhcQ==}
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
@@ -2357,9 +2362,9 @@ packages:
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
     engines: {node: '>=0.1.90'}
 
-  '@copilotkit/aimock@1.27.3':
-    resolution: {integrity: sha512-ttpU7ykV/j0+VIVA7Zb1fiDSH8ScQQ31ui/5ot824+MVnHEvyzZWl9Kbe3Tij3Agknyo7pL7/lK6omZlO2mkCg==}
-    engines: {node: '>=24.0.0'}
+  '@copilotkit/aimock@1.29.0':
+    resolution: {integrity: sha512-xNMHMUDX7zPSc56dm2ZXbttoLk6x72oEBHwWCAakVWNO85zZepLkB8Poc/x1cJrY69FI9frN0gavI/zVuZq/9A==}
+    engines: {node: '>=20.15.0'}
     hasBin: true
     peerDependencies:
       jest: '>=29'
@@ -4697,6 +4702,10 @@ packages:
   commander@14.0.3:
     resolution: {integrity: sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==}
     engines: {node: '>=20'}
+
+  commander@15.0.0:
+    resolution: {integrity: sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==}
+    engines: {node: '>=22.12.0'}
 
   commander@5.1.0:
     resolution: {integrity: sha512-P0CysNDQ7rtVw4QIQtm+MRxV66vKFSvlsQvGYXZWR3qFU0jlMKHZZZgw8e+8DSah4UDKMqnknRDQz+xuQXQ/Zg==}
@@ -7323,6 +7332,10 @@ snapshots:
     dependencies:
       zod: 4.4.3
 
+  '@agentclientprotocol/sdk@0.25.0(zod@4.4.3)':
+    dependencies:
+      zod: 4.4.3
+
   '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.156':
     optional: true
 
@@ -7971,7 +7984,7 @@ snapshots:
   '@colors/colors@1.5.0':
     optional: true
 
-  '@copilotkit/aimock@1.27.3(vitest@4.1.7)':
+  '@copilotkit/aimock@1.29.0(vitest@4.1.7)':
     optionalDependencies:
       vitest: 4.1.7(@opentelemetry/api@1.9.1)(@types/node@25.9.1)(@vitest/browser-playwright@4.1.7)(@vitest/coverage-v8@4.1.7)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.9.0))
 
@@ -10248,6 +10261,8 @@ snapshots:
       typical: 7.3.0
 
   commander@14.0.3: {}
+
+  commander@15.0.0: {}
 
   commander@5.1.0: {}
 

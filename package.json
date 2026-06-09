@@ -1864,7 +1864,7 @@
     "verify": "node scripts/verify.mjs"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "0.22.1",
+    "@agentclientprotocol/sdk": "0.25.0",
     "@anthropic-ai/sdk": "0.100.1",
     "@clack/core": "1.3.1",
     "@clack/prompts": "1.4.0",
@@ -1882,7 +1882,7 @@
     "chalk": "5.6.2",
     "chokidar": "5.0.0",
     "clawpdf": "0.3.0",
-    "commander": "14.0.3",
+    "commander": "15.0.0",
     "croner": "10.0.1",
     "cross-spawn": "7.0.6",
     "diff": "9.0.0",
@@ -1922,7 +1922,7 @@
   },
   "devDependencies": {
     "@a2ui/lit": "0.10.0",
-    "@copilotkit/aimock": "1.27.3",
+    "@copilotkit/aimock": "1.29.0",
     "@grammyjs/types": "3.27.3",
     "@lit-labs/signals": "0.3.0",
     "@lit/context": "1.1.6",
