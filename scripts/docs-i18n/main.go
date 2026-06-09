@@ -206,7 +206,7 @@ func runDocSequential(ctx context.Context, ordered []string, translator docsTran
 		start := time.Now()
 		skip, outputPath, err := processFileDoc(ctx, translator, docsRoot, file, srcLang, tgtLang, overwrite)
 		if err != nil {
-			if shouldStopDocRun(ctx, allowPartial) {
+			if shouldStopDocRun(ctx, err, allowPartial) {
 				return processed, skipped, outputs, err
 			}
 			if firstErr == nil {
@@ -259,7 +259,7 @@ func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tg
 					skipped:  skip,
 					err:      err,
 				}
-				if err != nil && shouldStopDocRun(ctx, allowPartial) {
+				if err != nil && shouldStopDocRun(ctx, err, allowPartial) {
 					cancel()
 					return
 				}
@@ -306,11 +306,11 @@ func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tg
 	return processed, skipped, outputs, firstErr
 }
 
-func shouldStopDocRun(ctx context.Context, allowPartial bool) bool {
+func shouldStopDocRun(ctx context.Context, err error, allowPartial bool) bool {
 	if !allowPartial {
 		return true
 	}
-	return ctx.Err() != nil
+	return ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func runSegmentSequential(ctx context.Context, ordered []string, translator docsTranslator, tm *TranslationMemory, docsRoot, srcLang, tgtLang string) (int, []string, error) {

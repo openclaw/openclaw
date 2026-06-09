@@ -126,6 +126,24 @@ func (cancelAwareTranslator) TranslateRaw(ctx context.Context, text, _, _ string
 
 func (cancelAwareTranslator) Close() {}
 
+type contextErrorTranslator struct{}
+
+func (contextErrorTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	if strings.Contains(text, "CANCEL") {
+		return "", context.Canceled
+	}
+	return text, nil
+}
+
+func (contextErrorTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	if strings.Contains(text, "CANCEL") {
+		return "", context.Canceled
+	}
+	return text, nil
+}
+
+func (contextErrorTranslator) Close() {}
+
 type cancelAfterFirstDocTranslator struct {
 	cancel context.CancelFunc
 	calls  int
@@ -373,6 +391,42 @@ func TestRunDocsI18NAllowPartialReturnsCancellationAfterPartialSuccess(t *testin
 	}
 	if _, err := os.Stat(filepath.Join(docsRoot, "zh-CN", "zzz-second.md")); err == nil {
 		t.Fatal("did not expect later output to be written after run cancellation")
+	}
+}
+
+func TestRunDocsI18NAllowPartialStopsAfterContextError(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	writeFile(t, filepath.Join(docsRoot, ".i18n", "glossary.zh-CN.json"), "[]")
+	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
+	firstPath := filepath.Join(docsRoot, "aaa-first.md")
+	cancelPath := filepath.Join(docsRoot, "bbb-cancel.md")
+	laterPath := filepath.Join(docsRoot, "zzz-later.md")
+	writeFile(t, firstPath, "# Gateway\n")
+	writeFile(t, cancelPath, "# CANCEL\n")
+	writeFile(t, laterPath, "# Gateway\n")
+
+	err := runDocsI18N(context.Background(), runConfig{
+		targetLang:   "zh-CN",
+		sourceLang:   "en",
+		docsRoot:     docsRoot,
+		mode:         "doc",
+		thinking:     "high",
+		overwrite:    true,
+		allowPartial: true,
+		parallel:     1,
+	}, []string{firstPath, cancelPath, laterPath}, func(_, _ string, _ []GlossaryEntry, _ string) (docsTranslator, error) {
+		return contextErrorTranslator{}, nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation error to remain terminal, got %v", err)
+	}
+	if got := mustReadFile(t, filepath.Join(docsRoot, "zh-CN", "aaa-first.md")); !strings.Contains(got, "# Gateway") {
+		t.Fatalf("expected first output to be written before cancellation, got:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(docsRoot, "zh-CN", "zzz-later.md")); err == nil {
+		t.Fatal("did not expect later output to be written after context error")
 	}
 }
 

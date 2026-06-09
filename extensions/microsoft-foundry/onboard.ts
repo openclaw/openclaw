@@ -212,7 +212,7 @@ export async function selectFoundryDeployment(
     })),
   });
   const selected =
-    supported.find((deployment) => deployment.name === selectedDeploymentName) ?? supported[0]!;
+    supported.find((deployment) => deployment.name === selectedDeploymentName) ?? supported[0];
   return { selected, supported };
 }
 
