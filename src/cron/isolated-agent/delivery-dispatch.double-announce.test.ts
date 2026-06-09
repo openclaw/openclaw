@@ -1870,6 +1870,33 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
+  it("still fails an implicit delivery whose resolved channel has a stale/invalid target (#56078 P1)", async () => {
+    // A channel resolved but its remembered/configured route is stale/invalid
+    // (delivery-target.ts returns ok:false WITH channel populated). That is a real
+    // delivery failure that must stay visible — only the no-channel case downgrades.
+    const params = makeBaseParams({
+      synthesizedText: "Daily digest.",
+      deliveryTargetExplicit: false,
+    });
+    params.resolvedDelivery = {
+      ok: false,
+      channel: "telegram",
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("Invalid delivery target: stale remembered route"),
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expectResultFields(state.result, {
+      status: "error",
+      errorKind: "delivery-target",
+    });
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
   it("text delivery always bypasses the write-ahead queue", async () => {
     vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
 

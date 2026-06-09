@@ -1410,12 +1410,18 @@ export async function dispatchCronDelivery(
       // returning — otherwise the one-shot session leaks. Safe no-op for
       // non-deleteAfterRun / non-cron sessions (see cleanupDirectCronSession).
       await cleanupDirectCronSessionIfNeeded();
-      // Only hard-fail the run when the job named a concrete delivery target.
-      // An implicit announce-to-`last` with no resolvable channel never had a
-      // sendable target (local/no-channel setups, #56078); hard-erroring would
-      // mark a successful agent turn as failed and drop its output. Downgrade
-      // those to the silent-ok path, same as best-effort delivery already does.
-      if (params.deliveryTargetExplicit && !params.deliveryBestEffort) {
+      // Hard-fail when the job named a concrete delivery target, OR when a channel
+      // resolved but its remembered/configured route is stale/invalid (real delivery
+      // failures that must stay visible, with retry/alert — #56078 P1). Only the
+      // implicit no-channel case (announce-to-`last` with no previous channel)
+      // downgrades to silent-ok: it never had a sendable target (#56078), so
+      // hard-erroring would mark a successful agent turn as failed and drop its
+      // output. Best-effort delivery always downgrades, as before.
+      const targetResolvedButFailed = params.resolvedDelivery.channel != null;
+      if (
+        !params.deliveryBestEffort &&
+        (params.deliveryTargetExplicit || targetResolvedButFailed)
+      ) {
         return buildDeliveryState(failDeliveryTarget(params.resolvedDelivery.error.message));
       }
       await logCronDeliveryWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`);
