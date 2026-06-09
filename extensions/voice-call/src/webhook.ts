@@ -916,7 +916,15 @@ export class VoiceCallWebhookServer {
     try {
       const pathname = buildRequestUrl(req.url).pathname;
       const pattern = this.realtimeHandler?.getStreamPathPattern();
-      return Boolean(pattern && pathname.startsWith(pattern));
+      if (!pattern) {
+        return false;
+      }
+      const normalizedPattern = this.normalizeWebhookPathForMatch(pattern);
+      const normalizedPathname = this.normalizeWebhookPathForMatch(pathname);
+      return (
+        normalizedPathname === normalizedPattern ||
+        normalizedPathname.startsWith(`${normalizedPattern}/`)
+      );
     } catch {
       return false;
     }
