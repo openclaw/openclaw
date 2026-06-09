@@ -188,6 +188,35 @@ describe("memory_search unavailable payloads", () => {
     }
   });
 
+  it("keeps the timeout result when an abort-aware search rejects on abort", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemorySearchImpl(
+        async (opts) =>
+          await new Promise((_resolve, reject) => {
+            opts?.signal?.addEventListener(
+              "abort",
+              () => reject(new Error("openai-compatible embeddings query failed: aborted")),
+              { once: true },
+            );
+          }),
+      );
+      const tool = createMemorySearchToolOrThrow();
+
+      const resultPromise = tool.execute("abort-aware-timeout", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 15s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-resolves the manager once when a cached sqlite handle was closed", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {

@@ -94,8 +94,11 @@ async function runMemorySearchToolWithDeadline<T>(params: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<"timeout">((resolve) => {
     timer = setTimeout(() => {
-      controller.abort(timeoutError());
+      // Resolve before aborting: abort listeners run synchronously and an
+      // abort-aware search could reject the task first, replacing the stable
+      // timeout result with a provider-wrapped abort error.
       resolve("timeout");
+      controller.abort(timeoutError());
     }, params.timeoutMs);
     timer.unref?.();
   });
