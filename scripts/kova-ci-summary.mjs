@@ -29,6 +29,8 @@ const keyMetricIds = [
   "agentCleanupP95Ms",
   "runtimeDepsStagingMs",
 ];
+const rssMetricIds = ["peakRssMb", "resourcePeakGatewayRssMb"];
+const cpuMetricIds = ["cpuPercentMax"];
 
 const reportPath = path.resolve(args.report);
 const report = JSON.parse(await readFile(reportPath, "utf8"));
@@ -177,7 +179,27 @@ function validateKovaSummaryReport(reportLocal) {
   if (records.length === 0 && groups.length === 0) {
     return "missing records or performance groups";
   }
+  if (groups.length > 0 && !hasExplicitResourceCollectionSkip(reportLocal)) {
+    if (!groups.some((group) => hasSampledMetric(group, rssMetricIds))) {
+      return "missing sampled RSS metric in performance groups";
+    }
+    if (!groups.some((group) => hasSampledMetric(group, cpuMetricIds))) {
+      return "missing sampled CPU metric in performance groups";
+    }
+  }
   return null;
+}
+
+function hasExplicitResourceCollectionSkip(reportLocal) {
+  const reason = reportLocal.performance?.resourceCollectionSkippedReason;
+  return typeof reason === "string" && reason.trim().length > 0;
+}
+
+function hasSampledMetric(group, metricIds) {
+  return metricIds.some((metricId) => {
+    const metric = group?.metrics?.[metricId];
+    return metric && Number(metric.count) > 0;
+  });
 }
 
 function collectViolations(records) {

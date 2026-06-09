@@ -10,6 +10,7 @@ import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   testing,
@@ -21,7 +22,7 @@ import { previewRemHarness } from "./rem-harness.js";
 import {
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
-  resolveShortTermPhaseSignalStorePath,
+  testing as shortTermTesting,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
@@ -572,9 +573,8 @@ describe("memory-core dreaming phases", () => {
       ([target]) => typeof target === "string" && target === dailyPath,
     ).length;
     expect(dailyReadCount).toBeLessThanOrEqual(1);
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "daily-ingestion.json")),
-    ).resolves.toBeUndefined();
+    const dailyIngestion = await testing.readDailyIngestionState(workspaceDir);
+    expect(Object.keys(dailyIngestion.files)).toHaveLength(1);
   });
 
   it("ingests recent daily memory files even before recall traffic exists", async () => {
@@ -902,9 +902,8 @@ describe("memory-core dreaming phases", () => {
 
     expect(transcriptReadCount).toBeLessThanOrEqual(1);
 
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json")),
-    ).resolves.toBeUndefined();
+    const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
+    expect(Object.keys(sessionIngestion.files)).toContain("main:sessions/main/dreaming-main.jsonl");
     await expect(
       fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
     ).resolves.toBeUndefined();
@@ -1174,21 +1173,7 @@ describe("memory-core dreaming phases", () => {
       path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
     );
 
-    const sessionIngestion = JSON.parse(
-      await fs.readFile(
-        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
-        "utf-8",
-      ),
-    ) as {
-      files: Record<
-        string,
-        {
-          lineCount: number;
-          lastContentLine: number;
-          contentHash: string;
-        }
-      >;
-    };
+    const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
     expect(Object.keys(sessionIngestion.files)).toHaveLength(1);
     const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
     expect(ingestionEntry.lineCount).toBe(0);
@@ -1227,16 +1212,16 @@ describe("memory-core dreaming phases", () => {
       ].join("\n") + "\n",
       "utf-8",
     );
-    await fs.writeFile(
+    await saveSessionStore(
       path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
+      {
         "agent:main:dreaming-narrative-light-1775894400455": {
           sessionId: "dreaming-narrative",
           sessionFile: transcriptPath,
           updatedAt: Date.parse("2026-04-05T18:05:00.000Z"),
         },
-      }),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
     const mtime = new Date("2026-04-05T18:05:00.000Z");
     await fs.utimes(transcriptPath, mtime, mtime);
@@ -1284,21 +1269,7 @@ describe("memory-core dreaming phases", () => {
       path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
     );
 
-    const sessionIngestion = JSON.parse(
-      await fs.readFile(
-        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
-        "utf-8",
-      ),
-    ) as {
-      files: Record<
-        string,
-        {
-          lineCount: number;
-          lastContentLine: number;
-          contentHash: string;
-        }
-      >;
-    };
+    const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
     expect(Object.keys(sessionIngestion.files)).toHaveLength(1);
     const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
     expect(ingestionEntry.lineCount).toBe(0);
@@ -1336,16 +1307,16 @@ describe("memory-core dreaming phases", () => {
       ].join("\n") + "\n",
       "utf-8",
     );
-    await fs.writeFile(
+    await saveSessionStore(
       path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
+      {
         "agent:main:cron:job-1:run:run-1": {
           sessionId: "cron-run",
           sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
-      }),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
 
     const { beforeAgentReply } = createHarness(
@@ -1391,21 +1362,7 @@ describe("memory-core dreaming phases", () => {
       path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
     );
 
-    const sessionIngestion = JSON.parse(
-      await fs.readFile(
-        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
-        "utf-8",
-      ),
-    ) as {
-      files: Record<
-        string,
-        {
-          lineCount: number;
-          lastContentLine: number;
-          contentHash: string;
-        }
-      >;
-    };
+    const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
     const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
     expect(ingestionEntry.lineCount).toBe(0);
     expect(ingestionEntry.lastContentLine).toBe(0);
@@ -2529,10 +2486,10 @@ describe("memory-core dreaming phases", () => {
     const reinforcedCandidate = requireCandidateByKey(reinforced, baseline[0].key);
     expect(reinforcedCandidate.score).toBeGreaterThan(baselineScore);
 
-    const phaseSignalPath = resolveShortTermPhaseSignalStorePath(workspaceDir);
-    const phaseSignalStore = JSON.parse(await fs.readFile(phaseSignalPath, "utf-8")) as {
-      entries: Record<string, { lightHits: number; remHits: number }>;
-    };
+    const phaseSignalStore = await shortTermTesting.readPhaseSignalStore(
+      workspaceDir,
+      new Date().toISOString(),
+    );
     const baselineSignals = phaseSignalStore.entries[baseline[0].key];
     expect(baselineSignals?.lightHits).toBe(1);
     expect(baselineSignals?.remHits).toBe(1);
@@ -2614,10 +2571,10 @@ describe("memory-core dreaming phases", () => {
       });
     });
 
-    const phaseSignalPath = resolveShortTermPhaseSignalStorePath(workspaceDir);
-    const phaseSignalStore = JSON.parse(await fs.readFile(phaseSignalPath, "utf-8")) as {
-      entries: Record<string, { remHits: number }>;
-    };
+    const phaseSignalStore = await shortTermTesting.readPhaseSignalStore(
+      workspaceDir,
+      new Date().toISOString(),
+    );
     expect(phaseSignalStore.entries[liveKey]?.remHits).toBe(1);
     expect(phaseSignalStore.entries[staleKey]).toBeUndefined();
 

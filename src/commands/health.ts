@@ -57,6 +57,7 @@ import type {
   PluginHealthErrorSummary,
   PluginHealthSummary,
 } from "./health.types.js";
+import { ensureSessionStateMigratedForCommand } from "./session-state-migration.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
 export type {
@@ -233,7 +234,8 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
   return { defaultAgentId, ordered };
 };
 
-const buildSessionSummary = async (storePath: string) => {
+const buildSessionSummary = async (storePath: string, cfg: OpenClawConfig) => {
+  await ensureSessionStateMigratedForCommand(cfg);
   const { loadSessionStore } = await import("../config/sessions/store.js");
   const store = loadSessionStore(storePath, { clone: false });
   const sessions = Object.entries(store)
@@ -424,7 +426,7 @@ export async function getHealthSnapshot(params?: {
   const agents: AgentHealthSummary[] = [];
   for (const entry of ordered) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
-    const sessions = sessionCache.get(storePath) ?? (await buildSessionSummary(storePath));
+    const sessions = sessionCache.get(storePath) ?? (await buildSessionSummary(storePath, cfg));
     sessionCache.set(storePath, sessions);
     agents.push({
       agentId: entry.id,
@@ -440,7 +442,10 @@ export async function getHealthSnapshot(params?: {
     : 0;
   const sessions =
     defaultAgent?.sessions ??
-    (await buildSessionSummary(resolveStorePath(cfg.session?.store, { agentId: defaultAgentId })));
+    (await buildSessionSummary(
+      resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }),
+      cfg,
+    ));
 
   const start = Date.now();
   const cappedTimeout = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS, 50);
@@ -723,18 +728,21 @@ export async function healthCommand(
     const localAgents = resolveAgentOrder(cfg);
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
-    const fallbackAgents: AgentHealthSummary[] = [];
-    for (const entry of localAgents.ordered) {
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
-      fallbackAgents.push({
-        agentId: entry.id,
-        name: entry.name,
-        isDefault: entry.id === localAgents.defaultAgentId,
-        heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-        sessions: await buildSessionSummary(storePath),
-      });
-    }
-    const resolvedAgents = agents.length > 0 ? agents : fallbackAgents;
+    const resolvedAgents =
+      agents.length > 0
+        ? agents
+        : await Promise.all(
+            localAgents.ordered.map(async (entry) => {
+              const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
+              return {
+                agentId: entry.id,
+                name: entry.name,
+                isDefault: entry.id === localAgents.defaultAgentId,
+                heartbeat: resolveHeartbeatSummary(cfg, entry.id),
+                sessions: await buildSessionSummary(storePath, cfg),
+              } satisfies AgentHealthSummary;
+            }),
+          );
     const displayAgents = opts.verbose
       ? resolvedAgents
       : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);

@@ -486,10 +486,13 @@ Focused `npm-telegram` reruns require `release_package_spec` or
 `npm_telegram_package_spec`; full/all runs with `release_profile=full` use the
 release-checks package artifact. Focused
 cross-OS reruns can add `cross_os_suite_filter=windows/packaged-upgrade` or
-another OS/suite filter. QA release-check failures are advisory except the
-standard runtime tool coverage gate, which blocks release validation when
-required OpenClaw dynamic tools drift or disappear from the standard tier
-summary.
+another OS/suite filter. QA release-check failures block normal release
+validation, including required OpenClaw dynamic tool drift in the standard tier.
+Tideclaw alpha runs may still treat non-package-safety release-check lanes as
+advisory. When `live_suite_filter` explicitly requests a gated QA live lane such
+as Discord, WhatsApp, or Slack, the matching
+`OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED` repo variable must be enabled; otherwise
+input capture fails instead of silently skipping the lane.
 
 ### Vitest
 

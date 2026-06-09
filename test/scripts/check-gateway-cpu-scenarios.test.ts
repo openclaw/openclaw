@@ -26,7 +26,13 @@ function writeQaSuiteSummary(
       counts,
       metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
       run: { completedAt: "2026-01-01T00:00:01.000Z", startedAt: "2026-01-01T00:00:00.000Z" },
-      scenarios: [{ id: "channel-chat-baseline", status: counts.failed > 0 ? "fail" : "pass" }],
+      scenarios: [
+        {
+          id: "channel-chat-baseline",
+          status: counts.failed > 0 ? "fail" : "pass",
+          ...(counts.failed > 0 ? {} : { steps: [{ name: "mock step", status: "pass" }] }),
+        },
+      ],
     })}\n`,
   );
 }
