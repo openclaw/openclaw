@@ -1541,6 +1541,7 @@ export const ja_JP: TranslationMap = {
       nextHeartbeat: "次の heartbeat",
       wakeModeHelp: "Now は即時にトリガーされます。Next heartbeat は次のサイクルまで待機します。",
       payloadKind: "何を実行しますか？",
+      command: "Command",
       systemEvent: "メインタイムラインにメッセージを投稿",
       agentTurn: "アシスタントタスクを実行（分離）",
       systemEventHelp:

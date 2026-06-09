@@ -1498,6 +1498,7 @@ export const zh_CN: TranslationMap = {
       nextHeartbeat: "下次心跳",
       wakeModeHelp: "立即模式立即触发。下次心跳等待下一个周期。",
       payloadKind: "执行内容",
+      command: "Command",
       systemEvent: "发布消息到主时间线",
       agentTurn: "运行助手任务（隔离）",
       systemEventHelp: "将文本发送到网关主时间线（适用于提醒/触发）。",

@@ -581,7 +581,9 @@ export async function runCodexAppServerAttempt(
     onYieldDetected: () => {
       yieldDetected = true;
     },
-    onCodexAppServerEvent: (event) => emitCodexAppServerEvent(params, event),
+    onCodexAppServerEvent: (event) => {
+      void emitCodexAppServerEvent(params, event);
+    },
   });
   const registeredTools = await buildDynamicTools({
     params,
@@ -600,7 +602,9 @@ export async function runCodexAppServerAttempt(
     onYieldDetected: () => {
       yieldDetected = true;
     },
-    onCodexAppServerEvent: (event) => emitCodexAppServerEvent(params, event),
+    onCodexAppServerEvent: (event) => {
+      void emitCodexAppServerEvent(params, event);
+    },
   });
   const toolBridge = createCodexDynamicToolBridge({
     tools,
@@ -1066,7 +1070,7 @@ export async function runCodexAppServerAttempt(
     };
   };
   try {
-    emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "startup" },
     });
@@ -1108,7 +1112,7 @@ export async function runCodexAppServerAttempt(
     codexSandboxPolicy = startupResult.sandboxPolicy;
     releaseSharedClientLease = startupResult.releaseSharedClientLease;
     restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
-    emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "thread_ready", threadId: thread.threadId },
     });
@@ -1352,7 +1356,7 @@ export async function runCodexAppServerAttempt(
   };
 
   const emitLifecycleStart = () => {
-    emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(params, {
       stream: "lifecycle",
       data: { phase: "start", startedAt: attemptStartedAt },
     });
@@ -1363,7 +1367,7 @@ export async function runCodexAppServerAttempt(
     if (!lifecycleStarted || lifecycleTerminalEmitted) {
       return;
     }
-    emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(params, {
       stream: "lifecycle",
       data: {
         startedAt: attemptStartedAt,
@@ -1717,7 +1721,7 @@ export async function runCodexAppServerAttempt(
       const toolArgs = sanitizeCodexToolArguments(call.arguments);
       const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool, toolArgs);
       if (shouldEmitDynamicToolProgress) {
-        emitCodexAppServerEvent(params, {
+        void emitCodexAppServerEvent(params, {
           stream: "tool",
           data: {
             phase: "start",
@@ -1787,7 +1791,7 @@ export async function runCodexAppServerAttempt(
         });
         if (shouldEmitDynamicToolProgress) {
           const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
-          emitCodexAppServerEvent(params, {
+          void emitCodexAppServerEvent(params, {
             stream: "tool",
             data: {
               phase: "result",
@@ -1966,7 +1970,7 @@ export async function runCodexAppServerAttempt(
       ctx: hookContext,
       hookRunner,
     });
-    emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "turn_starting", threadId: thread.threadId },
     });
@@ -2043,7 +2047,7 @@ export async function runCodexAppServerAttempt(
               );
             }
           }
-          emitCodexAppServerEvent(params, {
+          void emitCodexAppServerEvent(params, {
             stream: "codex_app_server.lifecycle",
             data: { phase: "thread_ready_retry", threadId: thread.threadId },
           });
@@ -2073,7 +2077,7 @@ export async function runCodexAppServerAttempt(
           error: turnStartErrorMessage,
         });
       }
-      emitCodexAppServerEvent(params, {
+      void emitCodexAppServerEvent(params, {
         stream: "codex_app_server.lifecycle",
         data: { phase: "turn_start_failed", error: turnStartErrorMessage },
       });
@@ -2452,7 +2456,7 @@ export async function runCodexAppServerAttempt(
     });
     const terminalAssistantText = collectTerminalAssistantText(result);
     if (terminalAssistantText && !finalAborted && !finalPromptError) {
-      emitCodexAppServerEvent(params, {
+      void emitCodexAppServerEvent(params, {
         stream: "assistant",
         data: { text: terminalAssistantText },
       });

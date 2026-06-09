@@ -1503,6 +1503,7 @@ export const th: TranslationMap = {
       nextHeartbeat: "heartbeat ถัดไป",
       wakeModeHelp: "Now จะทริกเกอร์ทันที ส่วน Next heartbeat จะรอรอบถัดไป",
       payloadKind: "ต้องการให้รันอะไร?",
+      command: "Command",
       systemEvent: "โพสต์ข้อความไปยังไทม์ไลน์หลัก",
       agentTurn: "รันงานของผู้ช่วย (แยก)",
       systemEventHelp: "ส่งข้อความของคุณไปยังไทม์ไลน์หลักของเกตเวย์ (เหมาะสำหรับการเตือน/ทริกเกอร์)",

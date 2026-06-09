@@ -1546,6 +1546,7 @@ export const it: TranslationMap = {
       nextHeartbeat: "Prossimo heartbeat",
       wakeModeHelp: "Ora attiva immediatamente. Prossimo heartbeat attende il ciclo successivo.",
       payloadKind: "Cosa deve essere eseguito?",
+      command: "Command",
       systemEvent: "Pubblica messaggio nella timeline principale",
       agentTurn: "Esegui attività assistente (isolata)",
       systemEventHelp:
