@@ -45,6 +45,7 @@ const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS = new Set<string>(
 );
 const GIT_ALLOW_PROTOCOL_ENV_KEY = "GIT_ALLOW_PROTOCOL";
 const GIT_PROTOCOL_FROM_USER_ENV_KEY = "GIT_PROTOCOL_FROM_USER";
+const GIT_PROTOCOL_FROM_USER_DISABLED_VALUE = "0";
 const GIT_DEFAULT_ALWAYS_ALLOWED_PROTOCOLS = new Set(["git", "http", "https", "ssh"]);
 
 function isShellWrapperAllowedOverrideEnvVarName(rawKey: string): boolean {
@@ -241,11 +242,13 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
       merged[key] = sanitizeInheritedGitAllowProtocolValue(value);
       continue;
     }
-    // Preserve non-permissive Git boolean values. Invalid values make Git fail closed;
-    // dropping them would make Git fall back to the more permissive unset default.
+    // Preserve non-permissive Git boolean values. Permissive values must become explicit `0`
+    // because Git's unset default still permits protocols with policy `user`.
     if (key.toUpperCase() === GIT_PROTOCOL_FROM_USER_ENV_KEY) {
       if (!isPermissiveGitProtocolFromUserValue(value)) {
         merged[key] = value;
+      } else {
+        merged[key] = GIT_PROTOCOL_FROM_USER_DISABLED_VALUE;
       }
       continue;
     }

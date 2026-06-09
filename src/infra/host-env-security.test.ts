@@ -410,6 +410,7 @@ describe("sanitizeHostExecEnv", () => {
       DOCKER_CONTEXT: "trusted-remote",
       DOCKER_HOST: "tcp://docker.example.test:2376",
       GIT_ALLOW_PROTOCOL: "",
+      GIT_PROTOCOL_FROM_USER: "0",
       RUSTUP_DIST_ROOT: "https://mirror.example.test/deprecated-dist",
       RUSTUP_DIST_SERVER: "https://mirror.example.test",
       RUSTUP_HOME: "/tmp/rustup-home",
@@ -471,7 +472,7 @@ describe("sanitizeHostExecEnv", () => {
     }
   });
 
-  it("removes inherited permissive GIT_PROTOCOL_FROM_USER values", () => {
+  it("forces inherited permissive GIT_PROTOCOL_FROM_USER values to the Git disabled value", () => {
     const permissiveValues = ["1", "01", "+1", "-1", "2", "true", "yes", "on"];
 
     for (const value of permissiveValues) {
@@ -482,7 +483,7 @@ describe("sanitizeHostExecEnv", () => {
         },
       });
 
-      expect(env.GIT_PROTOCOL_FROM_USER).toBeUndefined();
+      expect(env.GIT_PROTOCOL_FROM_USER).toBe("0");
     }
   });
 
@@ -1861,6 +1862,81 @@ describe("git env exploit regression", () => {
     } finally {
       fs.rmSync(repoDir, { recursive: true, force: true });
       fs.rmSync(cloneDir, { recursive: true, force: true });
+    }
+  });
+
+  it("forces inherited permissive GIT_PROTOCOL_FROM_USER to block file transport access", async () => {
+    const gitPath = getSystemGitPath();
+    if (!gitPath) {
+      return;
+    }
+
+    const repoDir = fs.mkdtempSync(
+      path.join(
+        os.tmpdir(),
+        `openclaw-git-protocol-from-user-source-${process.pid}-${Date.now()}-`,
+      ),
+    );
+    const unsafeCloneDir = path.join(
+      os.tmpdir(),
+      `openclaw-git-protocol-from-user-unsafe-${process.pid}-${Date.now()}`,
+    );
+    const safeCloneDir = path.join(
+      os.tmpdir(),
+      `openclaw-git-protocol-from-user-safe-${process.pid}-${Date.now()}`,
+    );
+
+    try {
+      await runGitCommand(gitPath, ["init", repoDir]);
+      await runGitCommand(
+        gitPath,
+        [
+          "-C",
+          repoDir,
+          "-c",
+          "user.name=OpenClaw Test",
+          "-c",
+          "user.email=test@example.com",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "init",
+        ],
+        {
+          env: {
+            PATH: process.env.PATH ?? "/usr/bin:/bin",
+          },
+        },
+      );
+
+      const inheritedEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        GIT_PROTOCOL_FROM_USER: "1",
+        GIT_TERMINAL_PROMPT: "0",
+      };
+      const unsafeExitCode = await runGitCommandExitCode(
+        gitPath,
+        ["clone", repoDir, unsafeCloneDir],
+        { env: inheritedEnv },
+      );
+
+      expect(unsafeExitCode).toBe(0);
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv: inheritedEnv,
+      });
+
+      expect(safeEnv.GIT_PROTOCOL_FROM_USER).toBe("0");
+
+      const safeExitCode = await runGitCommandExitCode(gitPath, ["clone", repoDir, safeCloneDir], {
+        env: safeEnv,
+      });
+
+      expect(safeExitCode).not.toBe(0);
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+      fs.rmSync(unsafeCloneDir, { recursive: true, force: true });
+      fs.rmSync(safeCloneDir, { recursive: true, force: true });
     }
   });
 

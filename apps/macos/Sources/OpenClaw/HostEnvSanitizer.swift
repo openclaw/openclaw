@@ -26,6 +26,7 @@ enum HostEnvSanitizer {
     ]
     private static let gitAllowProtocolKey = "GIT_ALLOW_PROTOCOL"
     private static let gitProtocolFromUserKey = "GIT_PROTOCOL_FROM_USER"
+    private static let gitProtocolFromUserDisabledValue = "0"
     private static let gitDefaultAlwaysAllowedProtocols: Set<String> = [
         "git",
         "http",
@@ -153,11 +154,13 @@ enum HostEnvSanitizer {
                 merged[key] = self.sanitizeInheritedGitAllowProtocolValue(value)
                 continue
             }
-            // Preserve non-permissive Git boolean values. Invalid values make Git fail closed;
-            // dropping them would make Git fall back to the more permissive unset default.
+            // Preserve non-permissive Git boolean values. Permissive values must become explicit
+            // `0` because Git's unset default still permits protocols with policy `user`.
             if upper == self.gitProtocolFromUserKey {
                 if !self.isPermissiveGitProtocolFromUserValue(value) {
                     merged[key] = value
+                } else {
+                    merged[key] = self.gitProtocolFromUserDisabledValue
                 }
                 continue
             }
