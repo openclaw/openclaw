@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -161,10 +160,7 @@ function createDeliveryDeps(params: {
   const deps: PostCompactionDelegateDeliveryDeps = {
     enqueueSystemEvent,
     getRuntimeConfig: vi.fn(() => cfg),
-    loadSessionStore: vi.fn(
-      (storePath) =>
-        JSON.parse(fsSync.readFileSync(storePath, "utf-8")) as Record<string, SessionEntry>,
-    ),
+    loadSessionStore: vi.fn((storePath) => readSessionStore(storePath)),
     log,
     now: vi.fn(() => 1_700_000_000_000),
     resolveContinuationRuntimeConfig: vi.fn(() => ({
@@ -183,8 +179,22 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
+async function seedSessionStore(
+  storePath: string,
+  store: Record<string, SessionEntry>,
+): Promise<void> {
+  await sessionStoreModule.saveSessionStore(storePath, store, { skipMaintenance: true });
+  sessionStoreModule.clearSessionStoreCacheForTest();
+}
+
+function readSessionStore(storePath: string): Record<string, SessionEntry> {
+  sessionStoreModule.clearSessionStoreCacheForTest();
+  return sessionStoreModule.loadSessionStore(storePath, { skipCache: true });
+}
+
 afterEach(() => {
   vi.useRealTimers();
+  sessionStoreModule.clearSessionStoreCacheForTest();
 });
 
 describe("post-compaction delegate dispatch extraction", () => {
@@ -268,21 +278,13 @@ describe("post-compaction delegate dispatch extraction", () => {
   it("takes and clears pending delegates from the session store path", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-dispatch-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            main: {
-              sessionId: "session",
-              updatedAt: 1,
-              pendingPostCompactionDelegates: [delegate("persisted")],
-            },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
+      await seedSessionStore(storePath, {
+        main: {
+          sessionId: "session",
+          updatedAt: 1,
+          pendingPostCompactionDelegates: [delegate("persisted")],
+        },
+      });
 
       const taken = await takePendingPostCompactionDelegates({
         sessionKey: "main",
@@ -290,10 +292,7 @@ describe("post-compaction delegate dispatch extraction", () => {
       });
 
       expect(taken).toEqual([normalizePostCompactionDelegate(delegate("persisted"))]);
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        SessionEntry
-      >;
+      const stored = readSessionStore(storePath);
       expect(stored.main?.pendingPostCompactionDelegates).toBeUndefined();
     });
   });
@@ -492,7 +491,9 @@ describe("post-compaction delegate dispatch extraction", () => {
 
   it("surfaces persisted post-compaction delegate load failures without clearing local pending delegates", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-dispatch-fail-" }, async (tempDir) => {
-      const storePath = tempDir;
+      const blockerPath = path.join(tempDir, "not-a-directory");
+      await fs.writeFile(blockerPath, "blocks sqlite parent directory", "utf-8");
+      const storePath = path.join(blockerPath, "sessions.json");
       const sessionEntry: SessionEntry = {
         sessionId: "session",
         updatedAt: 1,
@@ -714,11 +715,7 @@ describe("post-compaction delegate dispatch extraction", () => {
   it("charges chain count only after queued delivery spawns successfully", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({ main: { sessionId: "session", updatedAt: Date.now() } }, null, 2),
-        "utf-8",
-      );
+      await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: Date.now() } });
       const { deps, enqueueSystemEvent, spawnSubagentDirect } = createDeliveryDeps({ storePath });
 
       await deliverQueuedPostCompactionDelegate(
@@ -735,10 +732,7 @@ describe("post-compaction delegate dispatch extraction", () => {
         deps,
       );
 
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        SessionEntry
-      >;
+      const stored = readSessionStore(storePath);
       expect(Object.values(stored).some((entry) => entry.continuationChainCount === 1)).toBe(true);
       expect(spawnSubagentDirect).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -766,11 +760,7 @@ describe("post-compaction delegate dispatch extraction", () => {
     await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
       const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({ main: { sessionId: "session", updatedAt: Date.now() } }, null, 2),
-        "utf-8",
-      );
+      await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: Date.now() } });
       const { deps, enqueueSystemEvent, spawnSubagentDirect } = createDeliveryDeps({ storePath });
 
       await deliverQueuedPostCompactionDelegate(
@@ -794,11 +784,7 @@ describe("post-compaction delegate dispatch extraction", () => {
   it("does not charge chain count when queued spawn fails", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({ main: { sessionId: "session", updatedAt: Date.now() } }, null, 2),
-        "utf-8",
-      );
+      await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: Date.now() } });
       const { deps } = createDeliveryDeps({
         storePath,
         spawnError: new Error("spawn unavailable"),
@@ -808,10 +794,7 @@ describe("post-compaction delegate dispatch extraction", () => {
         deliverQueuedPostCompactionDelegate({ entry: createQueuedEntry() }, deps),
       ).rejects.toThrow("spawn unavailable");
 
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        SessionEntry
-      >;
+      const stored = readSessionStore(storePath);
       expect(Object.values(stored).some((entry) => entry.continuationChainCount != null)).toBe(
         false,
       );
@@ -821,15 +804,9 @@ describe("post-compaction delegate dispatch extraction", () => {
   it("rejects queued delivery when the compaction chain length is already capped", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          { main: { sessionId: "session", updatedAt: 1, continuationChainCount: 2 } },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
+      await seedSessionStore(storePath, {
+        main: { sessionId: "session", updatedAt: 1, continuationChainCount: 2 },
+      });
       const { deps, enqueueSystemEvent, log, spawnSubagentDirect } = createDeliveryDeps({
         storePath,
         runtimeConfig: { maxChainLength: 2 },
@@ -851,15 +828,9 @@ describe("post-compaction delegate dispatch extraction", () => {
   it("rejects queued delivery when continuation tokens exceed the cost cap", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          { main: { sessionId: "session", updatedAt: 1, continuationChainTokens: 11 } },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
+      await seedSessionStore(storePath, {
+        main: { sessionId: "session", updatedAt: 1, continuationChainTokens: 11 },
+      });
       const { deps, enqueueSystemEvent, log, spawnSubagentDirect } = createDeliveryDeps({
         storePath,
         runtimeConfig: { costCapTokens: 10 },
@@ -881,11 +852,7 @@ describe("post-compaction delegate dispatch extraction", () => {
   it("rejects an enabled-at-stage cross-session queued delegate when disabled at delivery", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({ main: { sessionId: "session", updatedAt: 1 } }, null, 2),
-        "utf-8",
-      );
+      await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: 1 } });
       const { deps, enqueueSystemEvent, log, spawnSubagentDirect } = createDeliveryDeps({
         storePath,
         runtimeConfig: { crossSessionTargeting: "disabled" },
@@ -909,10 +876,7 @@ describe("post-compaction delegate dispatch extraction", () => {
         "[continuation] Post-compaction delegate rejected: cross-session targeting was disabled at delivery time. Task: queued delegate",
         { sessionKey: "main", traceparent: VALID_TRACEPARENT },
       );
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        SessionEntry
-      >;
+      const stored = readSessionStore(storePath);
       expect(Object.values(stored).some((entry) => entry.continuationChainCount != null)).toBe(
         false,
       );
@@ -922,11 +886,7 @@ describe("post-compaction delegate dispatch extraction", () => {
   it("allows queued cross-session delivery when targeting is still enabled", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({ main: { sessionId: "session", updatedAt: 1 } }, null, 2),
-        "utf-8",
-      );
+      await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: 1 } });
       const { deps, spawnSubagentDirect } = createDeliveryDeps({
         storePath,
         runtimeConfig: { crossSessionTargeting: "enabled" },
@@ -947,11 +907,7 @@ describe("post-compaction delegate dispatch extraction", () => {
   it("allows queued self-targeting delivery when cross-session targeting is disabled", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({ main: { sessionId: "session", updatedAt: 1 } }, null, 2),
-        "utf-8",
-      );
+      await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: 1 } });
       const { deps, spawnSubagentDirect } = createDeliveryDeps({
         storePath,
         runtimeConfig: { crossSessionTargeting: "disabled" },
@@ -972,11 +928,7 @@ describe("post-compaction delegate dispatch extraction", () => {
   it("allows queued fanoutMode=tree post-compaction delivery when cross-session targeting is disabled", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({ main: { sessionId: "session", updatedAt: 1 } }, null, 2),
-        "utf-8",
-      );
+      await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: 1 } });
       const { deps, spawnSubagentDirect } = createDeliveryDeps({
         storePath,
         runtimeConfig: { crossSessionTargeting: "disabled" },
@@ -1031,11 +983,7 @@ describe("post-compaction delegate dispatch extraction", () => {
   it("propagates chain-state persist failures so the queue entry retries", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-persist-fail-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({ main: { sessionId: "session", updatedAt: 1 } }, null, 2),
-        "utf-8",
-      );
+      await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: 1 } });
       const { deps, log, spawnSubagentDirect } = createDeliveryDeps({ storePath });
 
       // Force the post-spawn chain-state persist to throw by spying on

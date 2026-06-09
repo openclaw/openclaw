@@ -25,7 +25,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../../config/sessions.js";
+import {
+  clearSessionStoreCacheForTest,
+  loadSessionStore,
+  saveSessionStore,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { runAgentAttempt } from "./attempt-execution.js";
@@ -128,7 +133,8 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
       updatedAt: Date.now(),
     } as SessionEntry;
     sessionStore = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
+    clearSessionStoreCacheForTest();
   });
 
   afterEach(async () => {
@@ -137,6 +143,7 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
     const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
     resetContinuationWorkDispatchForTests();
     resetTaskFlowRegistryForTests({ persist: false });
+    clearSessionStoreCacheForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -218,10 +225,8 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
 
     await runEmbeddedAttempt(makeContinuationEnabledConfig());
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      SessionEntry
-    >;
+    clearSessionStoreCacheForTest();
+    const persisted = loadSessionStore(storePath, { skipCache: true });
     expect(sessionStore[sessionKey]?.continuationChainCount).toBe(1);
     expect(persisted[sessionKey]?.continuationChainCount).toBe(1);
     expect(persisted[sessionKey]?.continuationChainTokens).toBe(2);

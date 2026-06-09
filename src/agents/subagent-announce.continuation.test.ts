@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocked = vi.hoisted(() => ({
@@ -82,20 +80,27 @@ import {
   clearRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions.js";
+import {
+  clearSessionStoreCacheForTest,
+  loadSessionStore,
+  resolveStorePath,
+  saveSessionStore,
+} from "../config/sessions.js";
 import { drainSystemEventEntries } from "../infra/system-events.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 import * as subagentSpawn from "./subagent-spawn.js";
 
 /**
- * Write session data directly to the session store file.
- * vitest 4.x forks pool doesn't intercept vi.mock for barrel re-exports
- * so we use the real filesystem-backed session store instead.
+ * Seed session data through the SQLite-backed session-store facade.
+ * vitest 4.x forks pool doesn't intercept vi.mock for barrel re-exports,
+ * so we use the real store instead of a module mock.
  */
-function writeSessionStore(data: Record<string, unknown>) {
+async function writeSessionStore(data: Record<string, unknown>) {
   const storePath = resolveStorePath(undefined, { agentId: "main" });
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(data), "utf8");
+  await saveSessionStore(storePath, data as Parameters<typeof saveSessionStore>[1], {
+    skipMaintenance: true,
+  });
+  clearSessionStoreCacheForTest();
 }
 
 function makeBaseConfig(overrides?: {
@@ -124,7 +129,7 @@ function makeBaseConfig(overrides?: {
 describe("subagent announce continuation chaining", () => {
   let spawnSpy: ReturnType<typeof vi.spyOn>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers();
     // Use vi.spyOn instead of vi.mock for subagent-spawn — vitest 4.x forks
     // pool doesn't reliably intercept vi.mock for modules imported by the SUT.
@@ -146,7 +151,7 @@ describe("subagent announce continuation chaining", () => {
     mocked.countPendingDescendantRunsMock.mockReset().mockReturnValue(0);
     mocked.isSubagentSessionRunActiveMock.mockReset().mockReturnValue(true);
     mocked.resolveRequesterForChildSessionMock.mockReset().mockReturnValue(null);
-    writeSessionStore({
+    await writeSessionStore({
       "agent:main:main": {
         sessionId: "parent-session",
         continuationChainTokens: 0,
@@ -158,6 +163,7 @@ describe("subagent announce continuation chaining", () => {
   afterEach(() => {
     spawnSpy.mockRestore();
     clearRuntimeConfigSnapshot();
+    clearSessionStoreCacheForTest();
   });
 
   async function runContinuationAnnounce(params: {
@@ -172,13 +178,14 @@ describe("subagent announce continuation chaining", () => {
   }) {
     // Write the child entry into the session store
     const storePath = resolveStorePath(undefined, { agentId: "main" });
-    const currentStore = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    const currentStore = loadSessionStore(storePath, { skipCache: true });
     currentStore[params.childSessionKey] = {
       sessionId: `${params.childSessionKey}-session`,
       inputTokens: 0,
       outputTokens: 0,
     };
-    fs.writeFileSync(storePath, JSON.stringify(currentStore), "utf8");
+    await saveSessionStore(storePath, currentStore, { skipMaintenance: true });
+    clearSessionStoreCacheForTest();
 
     // Update config if needed
     if (
@@ -283,7 +290,7 @@ describe("subagent announce continuation chaining", () => {
   });
 
   it("rejects chain-hop fan-out when parent chain tokens already exceed costCapTokens", async () => {
-    writeSessionStore({
+    await writeSessionStore({
       "agent:main:main": {
         sessionId: "parent-session",
         continuationChainTokens: 11,
@@ -302,7 +309,7 @@ describe("subagent announce continuation chaining", () => {
   });
 
   it("reroutes to the live grandparent before applying chain cost guards", async () => {
-    writeSessionStore({
+    await writeSessionStore({
       "agent:main:main": {
         sessionId: "grandparent-session",
         continuationChainTokens: 11,

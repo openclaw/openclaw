@@ -1,11 +1,10 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as jsonFiles from "../../infra/json-files.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
+  saveSessionStore,
   resolveSessionStoreEntry,
   updateSessionStore,
 } from "./store.js";
@@ -33,19 +32,12 @@ import type { SessionEntry } from "./types.js";
  *       activity events; bumping `updatedAt` here would churn idle-reset
  *       evaluation (#49515) and disk-budget pruning ordering off the actual
  *       turn timeline.
- *   (B) `saveSessionStoreUnlocked` MUST short-circuit the disk write when the
- *       serialized payload is byte-identical (the `getSerializedSessionStore`
- *       guard at store.ts:358). Without it, every `updateSessionStore` call
- *       with no real mutation would still hit `writeTextAtomic`, defeating
- *       (A) at the mtime layer and producing spurious continuation-persist
- *       activity in maintenance.
+ *   (B) The persisted SQLite row MUST round-trip continuation-chain fields
+ *       without depending on the retired JSON-file sessions store.
  *
- * Sabotage walks (paste either into `persistContinuationChainState`'s spread
- * to fail this trap):
- *   - Add `updatedAt: Date.now(),` to the spread → "preserves updatedAt …"
- *     case fails.
- *   - Delete the `getSerializedSessionStore(storePath) === json` early
- *     return in store.ts → "skips disk write …" case fails.
+ * Sabotage walk (paste `updatedAt: Date.now(),` into
+ * `persistContinuationChainState`'s spread to fail this trap): the
+ * "preserves updatedAt …" cases fail.
  */
 
 const SESSION_KEY = "agent:main:discord:channel:trap-443";
@@ -122,12 +114,8 @@ describe("session store: continuation chain persist updatedAt churn guard", () =
       updatedAt: SEEDED_UPDATED_AT,
       ...seededChain,
     };
-    await fs.writeFile(storePath, JSON.stringify({ [SESSION_KEY]: seededEntry }, null, 2), "utf-8");
-    // Prime the in-process serialized cache so the byte-identity short-circuit
-    // in saveSessionStoreUnlocked has a baseline to compare against. Without
-    // this, the first updateSessionStore call would always write at least
-    // once (cache empty → mismatch).
-    loadSessionStore(storePath, { skipCache: true });
+    await saveSessionStore(storePath, { [SESSION_KEY]: seededEntry }, { skipMaintenance: true });
+    clearSessionStoreCacheForTest();
   });
 
   afterEach(async () => {
@@ -161,22 +149,15 @@ describe("session store: continuation chain persist updatedAt churn guard", () =
     expect(after[SESSION_KEY]?.continuationChainId).toBe(seededChain.continuationChainId);
   });
 
-  it("skips disk write entirely when the serialized payload is unchanged", async () => {
-    // Re-load to populate the serialized-store cache so the byte-identity
-    // short-circuit in saveSessionStoreUnlocked has a baseline to compare.
-    loadSessionStore(storePath, { skipCache: true });
+  it("round-trips unchanged continuation chain fields through the SQLite store", async () => {
+    await persistChainSpread(storePath, SESSION_KEY, seededChain);
 
-    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
-    try {
-      await persistChainSpread(storePath, SESSION_KEY, seededChain);
-      expect(
-        writeSpy,
-        "no-op continuation-chain persist must not hit writeTextAtomic " +
-          "(getSerializedSessionStore short-circuit at store.ts:~358)",
-      ).not.toHaveBeenCalled();
-    } finally {
-      writeSpy.mockRestore();
-    }
+    clearSessionStoreCacheForTest();
+    const after = loadSessionStore(storePath, { skipCache: true });
+    expect(after[SESSION_KEY]).toMatchObject({
+      updatedAt: SEEDED_UPDATED_AT,
+      ...seededChain,
+    });
   });
 
   it("changes only the mutated chain field and still preserves updatedAt", async () => {
@@ -186,18 +167,9 @@ describe("session store: continuation chain persist updatedAt churn guard", () =
       continuationChainTokens: seededChain.continuationChainTokens + 7_777,
     };
 
-    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
-    try {
-      await persistChainSpread(storePath, SESSION_KEY, mutated);
-      expect(
-        writeSpy,
-        "real chain mutation must reach disk (sanity counterpart to the " +
-          "no-op short-circuit assertion above)",
-      ).toHaveBeenCalledTimes(1);
-    } finally {
-      writeSpy.mockRestore();
-    }
+    await persistChainSpread(storePath, SESSION_KEY, mutated);
 
+    clearSessionStoreCacheForTest();
     const after = loadSessionStore(storePath, { skipCache: true });
     expect(
       after[SESSION_KEY]?.updatedAt,
