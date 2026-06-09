@@ -359,6 +359,9 @@ describe("registerPreActionHooks", () => {
       commandPath: ["plugins", "install"],
       allowInvalid: true,
     });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+    });
 
     vi.clearAllMocks();
     await runPreAction({
@@ -370,6 +373,9 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["plugins", "install"],
       allowInvalid: true,
+    });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
     });
 
     vi.clearAllMocks();
@@ -383,6 +389,9 @@ describe("registerPreActionHooks", () => {
       commandPath: ["plugins", "install"],
       allowInvalid: true,
     });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+    });
 
     vi.clearAllMocks();
     await runPreAction({
@@ -393,6 +402,9 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["plugins", "install"],
+    });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
     });
 
     vi.clearAllMocks();
@@ -405,6 +417,9 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["plugins", "install"],
       allowInvalid: true,
+    });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
     });
 
     vi.clearAllMocks();
@@ -424,6 +439,9 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["plugins", "install"],
+    });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
     });
   });
 

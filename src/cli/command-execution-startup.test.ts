@@ -111,6 +111,21 @@ describe("command-execution-startup", () => {
     ).toBe(true);
   });
 
+  it("loads plugins for cli plugin installs", () => {
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: ["node", "openclaw", "plugins", "install", "@acme/demo"],
+        jsonOutputMode: false,
+      }).startupPolicy,
+    ).toEqual({
+      suppressDoctorStdout: false,
+      hideBanner: false,
+      skipConfigGuard: false,
+      loadPlugins: true,
+      pluginRegistry: { scope: "all" },
+    });
+  });
+
   it("routes logs to stderr and emits banner only when allowed", async () => {
     await mod.applyCliExecutionStartupPresentation({
       startupPolicy: {

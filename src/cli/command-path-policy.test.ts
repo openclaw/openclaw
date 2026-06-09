@@ -222,6 +222,9 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       networkProxy: "bypass",
     });
+    expectResolvedPolicy(["plugins", "install"], {
+      loadPlugins: "always",
+    });
     for (const commandPath of [["tasks"], ["tasks", "list"], ["tasks", "audit"]]) {
       expectResolvedPolicy(commandPath, {
         ensureCliPath: false,
@@ -230,7 +233,6 @@ describe("command-path-policy", () => {
       });
     }
     for (const commandPath of [
-      ["plugins", "install"],
       ["plugins", "inspect"],
       ["plugins", "registry"],
       ["plugins", "doctor"],

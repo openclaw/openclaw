@@ -322,6 +322,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { hideBanner: true },
   },
   {
+    commandPath: ["plugins", "install"],
+    exact: true,
+    policy: { loadPlugins: "always" },
+  },
+  {
     commandPath: ["plugins", "list"],
     exact: true,
     policy: { ensureCliPath: false, loadPlugins: "never", networkProxy: "bypass" },
