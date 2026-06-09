@@ -14,7 +14,7 @@ describe("evidence summary", () => {
   it("builds scorecard-ready QA suite evidence entries from catalog metadata", () => {
     const evidence = buildQaSuiteEvidenceSummary({
       artifactPaths: ["qa-suite-summary.json", "qa-suite-report.md"],
-      catalogScenarios: [
+      scenarioDefinitions: [
         {
           id: "dm-chat-baseline",
           title: "DM baseline conversation",
@@ -37,7 +37,7 @@ describe("evidence summary", () => {
       generatedAt: "2026-06-07T12:00:00.000Z",
       primaryModel: "mock-openai/gpt-5.5",
       providerMode: "mock-openai",
-      scenarios: [{ name: "DM baseline conversation", status: "pass" }],
+      scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
     });
 
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
@@ -100,7 +100,7 @@ describe("evidence summary", () => {
           title: "Telegram canary",
         },
       ],
-      scenarios: [
+      scenarioResults: [
         {
           id: "telegram-canary",
           title: "Telegram canary",
@@ -257,36 +257,36 @@ describe("evidence summary", () => {
     });
   });
 
-  it("normalizes old profile env aliases into the current evidence schema", () => {
-    const evidence = buildQaSuiteEvidenceSummary({
-      artifactPaths: ["qa-suite-summary.json"],
-      catalogScenarios: [
-        {
-          id: "dm-chat-baseline",
-          title: "DM baseline conversation",
-          surface: "dm",
-          coverage: {
-            primary: ["channels.dm"],
+  it("rejects profile env values outside the current evidence schema", () => {
+    expect(() =>
+      buildQaSuiteEvidenceSummary({
+        artifactPaths: ["qa-suite-summary.json"],
+        scenarioDefinitions: [
+          {
+            id: "dm-chat-baseline",
+            title: "DM baseline conversation",
+            surface: "dm",
+            coverage: {
+              primary: ["channels.dm"],
+            },
           },
-        },
-      ],
-      channelId: "qa-channel",
-      env: {
-        OPENCLAW_QA_PROFILE: "advisory",
-      } as NodeJS.ProcessEnv,
-      generatedAt: "2026-06-07T12:09:00.000Z",
-      primaryModel: "mock-openai/gpt-5.5",
-      providerMode: "mock-openai",
-      scenarios: [{ name: "DM baseline conversation", status: "pass" }],
-    });
-
-    expect(evidence.entries[0]?.profile).toBe("smoke-ci");
+        ],
+        channelId: "qa-channel",
+        env: {
+          OPENCLAW_QA_PROFILE: "advisory",
+        } as NodeJS.ProcessEnv,
+        generatedAt: "2026-06-07T12:09:00.000Z",
+        primaryModel: "mock-openai/gpt-5.5",
+        providerMode: "mock-openai",
+        scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
+      }),
+    ).toThrow('OPENCLAW_QA_PROFILE must be one of smoke-ci, release, got "advisory".');
   });
 
   it("keeps mock non-OpenAI model refs attributed to their model provider", () => {
     const evidence = buildQaSuiteEvidenceSummary({
       artifactPaths: ["qa-suite-summary.json"],
-      catalogScenarios: [
+      scenarioDefinitions: [
         {
           id: "anthropic-parity",
           title: "Anthropic parity",
@@ -300,7 +300,7 @@ describe("evidence summary", () => {
       generatedAt: "2026-06-07T12:10:00.000Z",
       primaryModel: "anthropic/claude-opus-4-8",
       providerMode: "mock-openai",
-      scenarios: [{ name: "Anthropic parity", status: "pass" }],
+      scenarioResults: [{ name: "Anthropic parity", status: "pass" }],
     });
 
     expect(evidence.entries[0]?.provider).toMatchObject({
@@ -330,7 +330,7 @@ describe("evidence summary", () => {
           title: "Telegram canary",
         },
       ],
-      scenarios: [{ id: "telegram-canary", status: "pass" }],
+      scenarioResults: [{ id: "telegram-canary", status: "pass" }],
       transportId: "telegram",
     });
     const tarballEvidence = buildLiveTransportEvidenceSummary({
@@ -348,7 +348,7 @@ describe("evidence summary", () => {
           title: "Telegram canary",
         },
       ],
-      scenarios: [{ id: "telegram-canary", status: "pass" }],
+      scenarioResults: [{ id: "telegram-canary", status: "pass" }],
       transportId: "telegram",
     });
 

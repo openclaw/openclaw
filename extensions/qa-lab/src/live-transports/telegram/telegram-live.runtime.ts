@@ -2038,7 +2038,7 @@ export async function runTelegramQaLive(params: {
     primaryModel,
     providerMode,
     scenarioDefinitions: TELEGRAM_QA_EVIDENCE_SCENARIOS,
-    scenarios: scenarioResults,
+    scenarioResults,
     transportId: "telegram",
   });
   const summary: TelegramQaSummary = {

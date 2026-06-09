@@ -9,12 +9,6 @@ export const QA_EVIDENCE_SUMMARY_SCHEMA_VERSION = 2;
 const qaEvidenceProfileSchema = z.enum(["smoke-ci", "release"]);
 const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
-const legacyQaEvidenceProfileEnvAliases: Record<string, QaEvidenceProfile> = {
-  advisory: "smoke-ci",
-  extended: "smoke-ci",
-  manual: "smoke-ci",
-  soak: "release",
-};
 
 const qaEvidenceProviderSchema = z
   .object({
@@ -113,7 +107,7 @@ export type QaEvidenceSummaryJson = z.infer<typeof qaEvidenceSummarySchema>;
 
 type QaEvidenceScenarioStatusInput = "pass" | "fail" | "blocked";
 
-type QaEvidenceCatalogScenarioInput = {
+type QaEvidenceScenarioDefinitionInput = {
   id: string;
   title: string;
   sourcePath?: string;
@@ -179,36 +173,32 @@ function uniqueSortedStrings(values: readonly (string | undefined)[]) {
   );
 }
 
-function parseQaEvidenceProfileEnv(
-  source: string,
-  value: string | undefined,
-): QaEvidenceProfile | undefined {
-  const normalized = value?.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  const parsed = qaEvidenceProfileSchema.safeParse(normalized);
-  if (parsed.success) {
-    return parsed.data;
-  }
-  const alias = legacyQaEvidenceProfileEnvAliases[normalized];
-  if (alias) {
-    return alias;
-  }
-  throw new Error(`${source} must be one of smoke-ci, release, got "${normalized}".`);
-}
-
 function resolveQaEvidenceProfile(params: {
   env?: NodeJS.ProcessEnv;
   fallback: QaEvidenceProfile;
   explicit?: QaEvidenceProfile;
 }) {
-  return (
-    params.explicit ??
-    parseQaEvidenceProfileEnv("OPENCLAW_E2E_PROFILE", params.env?.OPENCLAW_E2E_PROFILE) ??
-    parseQaEvidenceProfileEnv("OPENCLAW_QA_PROFILE", params.env?.OPENCLAW_QA_PROFILE) ??
-    params.fallback
-  );
+  if (params.explicit) {
+    return params.explicit;
+  }
+
+  const envProfiles = [
+    ["OPENCLAW_E2E_PROFILE", params.env?.OPENCLAW_E2E_PROFILE],
+    ["OPENCLAW_QA_PROFILE", params.env?.OPENCLAW_QA_PROFILE],
+  ] as const;
+  for (const [source, value] of envProfiles) {
+    const normalized = value?.trim();
+    if (!normalized) {
+      continue;
+    }
+    const parsed = qaEvidenceProfileSchema.safeParse(normalized);
+    if (!parsed.success) {
+      throw new Error(`${source} must be one of smoke-ci, release, got "${normalized}".`);
+    }
+    return parsed.data;
+  }
+
+  return params.fallback;
 }
 
 function resolveQaEvidenceRunner(params: { env?: NodeJS.ProcessEnv; fallback?: string }) {
@@ -336,9 +326,9 @@ export function validateQaEvidenceSummaryJson(summary: unknown): QaEvidenceSumma
 
 export function buildQaSuiteEvidenceSummary(
   params: QaEvidenceBuildBase & {
-    catalogScenarios: readonly QaEvidenceCatalogScenarioInput[];
     channelId: string;
-    scenarios: readonly QaEvidenceScenarioResultInput[];
+    scenarioDefinitions: readonly QaEvidenceScenarioDefinitionInput[];
+    scenarioResults: readonly QaEvidenceScenarioResultInput[];
   },
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
@@ -354,8 +344,8 @@ export function buildQaSuiteEvidenceSummary(
     env: params.env,
     fallback: params.channelDriver,
   });
-  const entries = params.scenarios.map((result, index): QaEvidenceSummaryEntry => {
-    const scenario = params.catalogScenarios[index];
+  const entries = params.scenarioResults.map((result, index): QaEvidenceSummaryEntry => {
+    const scenario = params.scenarioDefinitions[index];
     const primaryCoverageIds = uniqueSortedStrings(scenario?.coverage?.primary ?? []);
     const coverageIds = uniqueSortedStrings([
       ...(scenario?.coverage?.primary ?? []),
@@ -482,7 +472,7 @@ export function buildLiveTransportEvidenceSummary(
       standardId?: string;
       title: string;
     }[];
-    scenarios: readonly QaEvidenceScenarioResultInput[];
+    scenarioResults: readonly QaEvidenceScenarioResultInput[];
     transportId: string;
   },
 ): QaEvidenceSummaryJson {
@@ -502,7 +492,7 @@ export function buildLiveTransportEvidenceSummary(
   const definitionsById = new Map(
     params.scenarioDefinitions.map((definition) => [definition.id, definition]),
   );
-  const entries = params.scenarios.map((result, index): QaEvidenceSummaryEntry => {
+  const entries = params.scenarioResults.map((result, index): QaEvidenceSummaryEntry => {
     const scenarioId = result.id ?? result.name ?? `scenario-${index + 1}`;
     const definition = definitionsById.get(scenarioId);
     const standardCoverageId = definition?.standardId

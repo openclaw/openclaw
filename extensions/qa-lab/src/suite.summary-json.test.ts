@@ -107,7 +107,7 @@ describe("buildQaSuiteSummaryJson", () => {
   it("preserves the normalized evidence summary when provided", () => {
     const evidence = buildQaSuiteEvidenceSummary({
       artifactPaths: ["qa-suite-summary.json"],
-      catalogScenarios: [
+      scenarioDefinitions: [
         {
           id: "dm-chat-baseline",
           title: "DM baseline conversation",
@@ -122,7 +122,7 @@ describe("buildQaSuiteSummaryJson", () => {
       generatedAt: "2026-04-11T00:05:00.000Z",
       primaryModel: "mock-openai/gpt-5.5",
       providerMode: "mock-openai",
-      scenarios: [{ name: "DM baseline conversation", status: "pass" }],
+      scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
     });
     const json = buildQaSuiteSummaryJson({
       ...baseParams,
