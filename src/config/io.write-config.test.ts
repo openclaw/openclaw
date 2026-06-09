@@ -233,6 +233,66 @@ describe("config io write", () => {
     });
   });
 
+  it("allows writes to unrelated paths while a $includeText string field is present", async () => {
+    await withSuiteHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      await fs.mkdir(path.join(configDir, "prompts"), { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "prompts", "slack.md"),
+        "resolved prompt text\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            gateway: { mode: "local" },
+            channels: {
+              slack: { channels: { C0: { systemPrompt: { $includeText: "./prompts/slack.md" } } } },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const io = createConfigIO({
+        configPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      await io.readConfigFileSnapshot();
+      // The runtime config sees systemPrompt resolved to the file's text. Pass that
+      // exact value back so the write does not touch (and thus does not flatten) the
+      // $includeText-owned path — it only changes an unrelated field, gateway.port.
+      const current = io.loadConfig() as {
+        channels?: { slack?: { channels?: Record<string, { systemPrompt?: unknown }> } };
+      };
+      const resolvedPrompt = current.channels?.slack?.channels?.C0?.systemPrompt;
+
+      await io.writeConfigFile({
+        gateway: { mode: "local", port: 19001 },
+        channels: {
+          slack: { channels: { C0: { systemPrompt: resolvedPrompt } } },
+        },
+      } as OpenClawConfig);
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        gateway?: { port?: number };
+        channels?: { slack?: { channels?: Record<string, { systemPrompt?: unknown }> } };
+      };
+      // The unrelated change landed...
+      expect(persisted.gateway?.port).toBe(19001);
+      // ...and the $includeText directive is preserved, not flattened to its text.
+      expect(persisted.channels?.slack?.channels?.C0?.systemPrompt).toEqual({
+        $includeText: "./prompts/slack.md",
+      });
+    });
+  });
+
   it("loads shipped plugin install config records without mutating config or plugin index", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

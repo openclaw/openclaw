@@ -1457,6 +1457,7 @@ Where `$include` merges a parsed JSON5 file into the surrounding object, `$inclu
 - Same path and security rules as `$include`: resolved relative to the including file, must stay inside the config directory, no null bytes, length-bounded, 2 MB size cap, and symlink/hardlink-guarded.
 - Resolves **before** schema validation and `${ENV}` expansion, so the injected string flows through the normal config pipeline.
 - Treated as include-owned for write-back: OpenClaw-owned (and channel-initiated) config writes that would touch a `$includeText` node fail closed rather than flattening it into a resolved string. Editing the prompt file triggers a config hot-reload.
+- Writes to **other** fields are unaffected: the directive is preserved verbatim, and write-back validation runs against the include-resolved shape, so an unrelated change (e.g. `openclaw config set models.providers.<id>.timeoutSeconds 90`) succeeds even while a `$includeText` system prompt is present elsewhere.
 
 ---
 

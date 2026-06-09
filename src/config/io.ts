@@ -2252,7 +2252,38 @@ export function createConfigIO(
 
     persistCandidate = applyUnsetPathsForWrite(persistCandidate as OpenClawConfig, unsetPaths);
 
-    const validated = validateConfigObjectRawWithPlugins(persistCandidate, {
+    // $include / $includeText directives are preserved verbatim in persistCandidate so
+    // authored include files are never flattened on write (see preserveUntouchedIncludes).
+    // Validate against the include-RESOLVED shape, otherwise an untouched include sitting
+    // in a typed field (e.g. a $includeText systemPrompt, which resolves to a string) reads
+    // as an object and fails validation — which would block writes to entirely unrelated
+    // paths. persistCandidate (directives intact) is still what gets written below.
+    let candidateForValidation: unknown = persistCandidate;
+    try {
+      candidateForValidation = resolveConfigIncludes(
+        persistCandidate,
+        configPath,
+        {
+          readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+          readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
+            readConfigIncludeFileWithGuards({
+              includePath,
+              resolvedPath,
+              rootRealDir,
+              ioFs: deps.fs,
+            }),
+          parseJson: (raw) => deps.json5.parse(raw),
+        },
+        { allowedRoots: resolveIncludeRoots(deps.env, deps.homedir) },
+      );
+    } catch {
+      // If includes can't be resolved (e.g. a missing or guard-rejected file), fall back
+      // to validating the raw candidate so the underlying error still surfaces to the
+      // caller rather than being masked.
+      candidateForValidation = persistCandidate;
+    }
+
+    const validated = validateConfigObjectRawWithPlugins(candidateForValidation, {
       env: deps.env,
       pluginValidation: options.skipPluginValidation ? "skip" : "full",
       preservedLegacyRootKeys: options.preservedLegacyRootKeys,
