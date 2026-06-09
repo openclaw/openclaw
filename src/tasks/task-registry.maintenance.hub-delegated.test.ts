@@ -122,6 +122,14 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
       const sessionKey = "agent:codex:acp:idle-active-turn";
       const createdAt = Date.now() - 4 * 24 * 60 * 60 * 1000;
       const lastActivityAt = Date.now() - 4 * 24 * 60 * 60 * 1000;
+      const persistentAcpMeta = {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: sessionKey,
+        mode: "persistent" as const,
+        state: "running" as const,
+        lastActivityAt,
+      };
       writeSessionStoreForTest(storePath, {
         [sessionKey]: {
           sessionId: "sess-idle-active",
@@ -131,10 +139,7 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
             ownerSessionKey: "agent:main:main",
             createdAt,
           },
-          acp: {
-            lastActivityAt,
-            mode: "persistent",
-          },
+          acp: persistentAcpMeta,
         },
       });
       runtimeConfigState.cfg = {
@@ -151,10 +156,7 @@ describe("task-registry maintenance hub-delegated cleanup", () => {
           sessionKey,
           storeSessionKey: sessionKey,
           entry: readSessionStoreForTest(storePath)[sessionKey],
-          acp: {
-            lastActivityAt,
-            mode: "persistent",
-          },
+          acp: persistentAcpMeta,
           storeReadFailed: false,
         }),
         closeAcpSession,
