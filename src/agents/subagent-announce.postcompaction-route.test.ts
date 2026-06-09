@@ -153,6 +153,16 @@ describe("announce-path post-compaction routing (#978 :995 — leaf-lifeboat sea
 
     // The :995 fix: post-compaction routes to staging...
     expect(stageMock).toHaveBeenCalledTimes(1);
+    // ...under the REQUESTER (parent) session key — NOT the leaf's childSessionKey.
+    // This is the documented semantic-timing limitation (Emeric/Ronan byte): the
+    // announce path catches the bracket on the LEAF's COMPLETION, when the leaf
+    // is already terminating, so the lifeboat can only stage under the parent's
+    // session (consumed at the PARENT's next compaction, not the leaf's own).
+    // Caught-on-completion != staged-in-turn — #974's doc names this. Asserting
+    // the sessionKey here pins the behavior so a future change is visible.
+    const stagedSessionKey = stageMock.mock.calls[0]?.[0] as string;
+    expect(stagedSessionKey).toBe("agent:main:discord:dm:test-route"); // requesterSessionKey
+    expect(stagedSessionKey).not.toBe("agent:main:subagent:postcompaction-route"); // NOT childSessionKey
     const stagedArg = stageMock.mock.calls[0]?.[1] as { task?: string };
     expect(stagedArg.task).toContain("lifeboat leaf");
     // ...AND the normal chain-spawn is NOT taken (mutual exclusion).
