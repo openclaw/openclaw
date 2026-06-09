@@ -574,8 +574,9 @@ function buildResolvedRouteCacheKey(params: {
   teamId: string;
   memberRoleIds: string[];
   dmScope: string;
+  groupScope: string;
 }): string {
-  return `${params.channel}\t${params.accountId}\t${formatRouteCachePeer(params.peer)}\t${formatRouteCachePeer(params.parentPeer)}\t${params.guildId || "-"}\t${params.teamId || "-"}\t${formatRoleIdsCacheKey(params.memberRoleIds)}\t${params.dmScope}`;
+  return `${params.channel}\t${params.accountId}\t${formatRouteCachePeer(params.peer)}\t${formatRouteCachePeer(params.parentPeer)}\t${params.guildId || "-"}\t${params.teamId || "-"}\t${formatRoleIdsCacheKey(params.memberRoleIds)}\t${params.dmScope}\t${params.groupScope}`;
 }
 
 function hasGuildConstraint(match: NormalizedBindingMatch): boolean {
@@ -647,6 +648,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
         teamId,
         memberRoleIds,
         dmScope,
+        groupScope: groupScope ?? "per-group",
       })
     : "";
   if (routeCache && routeCacheKey) {
