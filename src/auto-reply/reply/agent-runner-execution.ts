@@ -2550,28 +2550,24 @@ export async function runAgentTurnWithFallback(params: {
                           summary: readStringValue(evt.data.summary),
                         });
                       }
-                      // Track auto-compaction and notify higher layers.
                       if (evt.stream === "compaction") {
                         const phase = readStringValue(evt.data.phase) ?? "";
                         const hookMessages = readCompactionHookMessages(evt.data.messages);
+                        const sendCompactionUserNotices = async (
+                          noticePhase: "start" | "end" | "incomplete",
+                        ) => {
+                          if (hookMessages.length > 0) {
+                            await sendCompactionHookMessages(hookMessages);
+                          }
+                          if (notifyUserAboutCompaction) {
+                            await sendCompactionNotice(noticePhase);
+                          }
+                        };
                         if (phase === "start") {
-                          // Three independent audiences: internal callbacks
-                          // (Control UI) fire regardless; hookMessages deliver
-                          // plugin-authored user-channel text (overlap with the
-                          // default notice, so they suppress it); notifyUser is
-                          // the opt-in user-channel notice. Internal callbacks
-                          // must not suppress the user notice — see #87107.
                           if (params.opts?.onCompactionStart) {
                             await params.opts.onCompactionStart();
                           }
-                          if (hookMessages.length > 0) {
-                            await sendCompactionHookMessages(hookMessages);
-                          } else if (notifyUserAboutCompaction) {
-                            // Send directly via opts.onBlockReply (bypassing the
-                            // pipeline) so the notice does not cause final payloads
-                            // to be discarded on non-streaming model paths.
-                            await sendCompactionNotice("start");
-                          }
+                          await sendCompactionUserNotices("start");
                         }
                         if (phase === "end") {
                           const completed = evt.data?.completed === true;
@@ -2580,15 +2576,9 @@ export async function runAgentTurnWithFallback(params: {
                             if (params.opts?.onCompactionEnd) {
                               await params.opts.onCompactionEnd();
                             }
-                            if (hookMessages.length > 0) {
-                              await sendCompactionHookMessages(hookMessages);
-                            } else if (notifyUserAboutCompaction) {
-                              await sendCompactionNotice("end");
-                            }
-                          } else if (hookMessages.length > 0) {
-                            await sendCompactionHookMessages(hookMessages);
-                          } else if (notifyUserAboutCompaction) {
-                            await sendCompactionNotice("incomplete");
+                            await sendCompactionUserNotices("end");
+                          } else {
+                            await sendCompactionUserNotices("incomplete");
                           }
                         }
                       }
