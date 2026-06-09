@@ -769,8 +769,11 @@ function normalizeToolParameterSchemaUncached(
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
   const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
+  const normalizedModel = normalizeLowercaseStringOrEmpty(options?.modelId);
   const isGeminiProvider =
-    normalizedProvider.includes("google") || normalizedProvider.includes("gemini");
+    normalizedProvider.includes("google") ||
+    normalizedProvider.includes("gemini") ||
+    normalizedModel.includes("gemini");
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
   const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
