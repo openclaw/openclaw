@@ -1,4 +1,7 @@
-import { requiresInternalAcpSessionEffects } from "@openclaw/acp-core";
+import {
+  isHubDelegatedAcpSessionEntry,
+  requiresInternalAcpSessionEffects,
+} from "@openclaw/acp-core";
 /** Main agent command orchestration for sessions, model selection, delivery, and attempts. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
@@ -16,6 +19,7 @@ import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { loadSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
@@ -539,6 +543,29 @@ function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model")
   return trimmed;
 }
 
+function isHubDelegatedSessionTarget(params: {
+  sessionKey?: string;
+  storePath?: string;
+  sessionEntry?: SessionEntry;
+  preparedSessionEntry?: SessionEntry;
+}): boolean {
+  if (isHubDelegatedAcpSessionEntry(params.sessionEntry)) {
+    return true;
+  }
+  if (isHubDelegatedAcpSessionEntry(params.preparedSessionEntry)) {
+    return true;
+  }
+  if (!params.sessionKey || !params.storePath) {
+    return false;
+  }
+  try {
+    const store = loadSessionStore(params.storePath, { skipCache: true, clone: false });
+    return isHubDelegatedAcpSessionEntry(store[params.sessionKey]);
+  } catch {
+    return false;
+  }
+}
+
 function createAgentCommandSessionWorkingCopy(params: {
   sessionKey?: string;
   sessionEntry?: SessionEntry;
@@ -843,6 +870,15 @@ async function agentCommandInternal(
     modelManifestContext,
   } = prepared;
   let acpResolution = prepared.acpResolution;
+  // Hub-delegated workers stay off visible surfaces but must persist turns to the
+  // canonical session transcript so waited sessions_send callers can read chat.history.
+  const hubDelegatedSession = isHubDelegatedSessionTarget({
+    sessionKey,
+    storePath,
+    sessionEntry: prepared.sessionEntry,
+    preparedSessionEntry: prepared.sessionEntry,
+  });
+  const usePrivateTranscriptFile = suppressVisibleSessionEffects && !hubDelegatedSession;
   const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
   let sessionEntry = prepared.sessionEntry;
   let trackedRestartRecoveryDeliveryContext = false;
@@ -1031,7 +1067,7 @@ async function agentCommandInternal(
           loadAcpSessionIdentifiersRuntime(),
           loadTranscriptResolveRuntime(),
         ]);
-        const internalSource = suppressVisibleSessionEffects
+        const internalSource = usePrivateTranscriptFile
           ? await resolveSessionTranscriptFile({
               sessionId,
               sessionKey,
@@ -1040,7 +1076,7 @@ async function agentCommandInternal(
               threadId: opts.threadId,
             })
           : undefined;
-        const internalSessionFile = suppressVisibleSessionEffects
+        const internalSessionFile = usePrivateTranscriptFile
           ? await prepareInternalSessionEffectsTranscript({
               sessionFile: internalSource?.sessionFile,
               runId,
@@ -1064,14 +1100,14 @@ async function agentCommandInternal(
           sessionId,
           sessionKey,
           sessionEntry: transcriptSessionEntry,
-          sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
-          storePath: suppressVisibleSessionEffects ? undefined : storePath,
+          sessionStore: usePrivateTranscriptFile ? undefined : sessionStore,
+          storePath: usePrivateTranscriptFile ? undefined : storePath,
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
           config: cfg,
         });
-        if (internalSessionFile) {
+        if (usePrivateTranscriptFile) {
           sessionEntry = prepared.sessionEntry;
         }
       } catch (error) {
@@ -1603,7 +1639,7 @@ async function agentCommandInternal(
       sessionFile = resolvedSessionFile.sessionFile;
       sessionEntry = resolvedSessionFile.sessionEntry;
     }
-    const attemptSessionFile = suppressVisibleSessionEffects
+    const attemptSessionFile = usePrivateTranscriptFile
       ? await prepareInternalSessionEffectsTranscript({ sessionFile, runId })
       : sessionFile;
 

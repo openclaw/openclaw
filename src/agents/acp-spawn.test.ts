@@ -1188,6 +1188,89 @@ describe("spawnAcpDirect", () => {
     }
   });
 
+  it("assigns suffixed auto-labels for concurrent delegate spawns at the same timestamp", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-05T14:30:22.000Z"));
+    try {
+      const storeByPath: Record<string, Record<string, SessionEntry>> = {
+        "/tmp/main-sessions.json": {},
+        "/tmp/codex-sessions.json": {},
+      };
+      hoisted.resolveStorePathMock.mockImplementation((_store, opts?: { agentId?: string }) =>
+        opts?.agentId === "main" ? "/tmp/main-sessions.json" : "/tmp/codex-sessions.json",
+      );
+      hoisted.loadSessionStoreMock.mockImplementation(
+        (storePath: string) => storeByPath[storePath] ?? {},
+      );
+      let agentRunCount = 0;
+      hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
+        const args = argsUnknown as {
+          method?: string;
+          params?: {
+            key?: string;
+            label?: string;
+            hubDelegated?: SessionEntry["hubDelegated"];
+          };
+        };
+        if (args.method === "sessions.patch") {
+          const label = args.params?.label;
+          const sessionKey = args.params?.key;
+          if (label && sessionKey) {
+            storeByPath["/tmp/codex-sessions.json"][sessionKey] = {
+              sessionId: `sess-${sessionKey}`,
+              updatedAt: Date.now(),
+              label,
+              hubDelegated: args.params?.hubDelegated,
+            };
+          }
+          return { ok: true };
+        }
+        if (args.method === "agent") {
+          agentRunCount += 1;
+          return { runId: `run-${agentRunCount}` };
+        }
+        if (args.method === "sessions.delete") {
+          return { ok: true };
+        }
+        return {};
+      });
+
+      const ctx = {
+        agentSessionKey: "agent:main:webchat:main",
+        agentChannel: "webchat",
+      } as SpawnContext;
+      const [first, second] = await Promise.all([
+        spawnAcpDirect(
+          {
+            task: "Investigate flaky tests",
+            agentId: "codex",
+            delegate: true,
+          },
+          ctx,
+        ),
+        spawnAcpDirect(
+          {
+            task: "Investigate flaky tests",
+            agentId: "codex",
+            delegate: true,
+          },
+          ctx,
+        ),
+      ]);
+
+      expectAcceptedSpawn(first);
+      expectAcceptedSpawn(second);
+      expect(first).toMatchObject({
+        label: "delegate-20260605-143022",
+      });
+      expect(second).toMatchObject({
+        label: "delegate-20260605-143022-2",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects delegate=true combined with thread=true", async () => {
     const result = await spawnAcpDirect(
       {

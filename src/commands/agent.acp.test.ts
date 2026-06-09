@@ -8,6 +8,7 @@ import * as acpManagerModule from "../acp/control-plane/manager.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import * as embeddedModule from "../agents/embedded-agent.js";
 import * as configIoModule from "../config/io.js";
+import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentCommand } from "./agent.js";
@@ -166,29 +167,26 @@ function mockConfigWithAcpOverrides(
 
 function writeAcpSessionStore(storePath: string, agent = "codex") {
   const sessionKey = `agent:${agent}:acp:test`;
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(
-    storePath,
-    JSON.stringify({
-      [sessionKey]: {
-        sessionId: "acp-session-1",
-        updatedAt: Date.now(),
-        acp: {
-          backend: "acpx",
-          agent,
-          runtimeSessionName: sessionKey,
-          mode: "oneshot",
-          state: "idle",
-          lastActivityAt: Date.now(),
-        },
+  writeSessionStoreForTest(storePath, {
+    [sessionKey]: {
+      sessionId: "acp-session-1",
+      updatedAt: Date.now(),
+      acp: {
+        backend: "acpx",
+        agent,
+        runtimeSessionName: sessionKey,
+        mode: "oneshot",
+        state: "idle",
+        lastActivityAt: Date.now(),
       },
-    }),
-  );
+    },
+  });
 }
 
 function resolveReadySession(
   sessionKey: string,
   agent = "codex",
+  mode: "oneshot" | "persistent" = "oneshot",
 ): ReturnType<ReturnType<typeof acpManagerModule.getAcpSessionManager>["resolveSession"]> {
   return {
     kind: "ready",
@@ -197,7 +195,7 @@ function resolveReadySession(
       backend: "acpx",
       agent,
       runtimeSessionName: sessionKey,
-      mode: "oneshot",
+      mode,
       state: "idle",
       lastActivityAt: Date.now(),
     },
@@ -403,6 +401,49 @@ describe("agentCommand ACP runtime routing", () => {
         attemptExecutionMocks.emitAcpLifecycleEnd.mock.invocationCallOrder[0] ?? 0;
       expect(persistOrder).toBeGreaterThan(0);
       expect(lifecycleEndOrder).toBeGreaterThan(persistOrder);
+    });
+  });
+
+  it("persists hub-delegated ACP replies to the canonical session transcript", async () => {
+    await withAcpSessionEnvInfo(async ({ storePath }) => {
+      const sessionKey = "agent:codex:acp:test";
+      writeSessionStoreForTest(storePath, {
+        [sessionKey]: {
+          sessionId: "acp-session-1",
+          updatedAt: Date.now(),
+          hubDelegated: {
+            ownerSessionKey: "agent:main:main",
+            createdAt: Date.now(),
+          },
+          acp: {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: sessionKey,
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        },
+      });
+      mockAcpManager({
+        runTurn: createRunTurnFromTextDeltas(["delegated-reply"]),
+        resolveSession: ({ sessionKey: resolvedKey }) =>
+          resolveReadySession(resolvedKey, "codex", "persistent"),
+      });
+      await agentCommand(
+        {
+          message: "follow up",
+          sessionKey,
+          sessionEffects: "internal",
+        },
+        runtime,
+      );
+      expect(attemptExecutionMocks.persistAcpTurnTranscript).toHaveBeenCalled();
+      const persistCall = attemptExecutionMocks.persistAcpTurnTranscript.mock.calls.at(-1)?.[0] as
+        | { sessionStore?: unknown; storePath?: string }
+        | undefined;
+      expect(persistCall?.sessionStore).toBeDefined();
+      expect(persistCall?.storePath).toBe(storePath);
     });
   });
 

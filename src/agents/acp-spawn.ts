@@ -1405,36 +1405,6 @@ export async function spawnAcpDirect(
         'Retry with { mode: "session", thread: true } on a channel that exposes threads (e.g. Discord, Slack, Telegram topics), use delegate=true for hub-relayed persistent workers, or use mode="run" for one-shot work.',
     });
   }
-  if (delegateRequested) {
-    const explicitDelegateLabel = spawnLabel;
-    spawnLabel =
-      spawnLabel ??
-      resolveHubDelegatedAutoLabel({
-        hasLabelConflict: (label) =>
-          Boolean(
-            findHubDelegateLabelConflict({
-              cfg,
-              ownerSessionKey: requesterInternalKey,
-              label,
-            }),
-          ),
-      });
-    if (explicitDelegateLabel) {
-      const conflictingKey = findHubDelegateLabelConflict({
-        cfg,
-        ownerSessionKey: requesterInternalKey,
-        label: spawnLabel,
-      });
-      if (conflictingKey) {
-        return createAcpSpawnFailure({
-          status: "error",
-          errorCode: "delegate_label_conflict",
-          error: `An active hub-delegated session with label "${spawnLabel}" already exists (${conflictingKey}). Close it with /acp delegate close ${spawnLabel} before reusing the label.`,
-        });
-      }
-    }
-  }
-
   const targetAgentResult = resolveTargetAcpAgentId({
     requestedAgentId: params.agentId,
     cfg,
@@ -1569,7 +1539,36 @@ export async function spawnAcpDirect(
           createdAt: Date.now(),
         }
       : undefined;
-  try {
+  const patchSpawnSessionRow = async (): Promise<SpawnAcpResult | null> => {
+    if (delegateRequested) {
+      const explicitDelegateLabel = spawnLabel;
+      spawnLabel =
+        spawnLabel ??
+        resolveHubDelegatedAutoLabel({
+          hasLabelConflict: (label) =>
+            Boolean(
+              findHubDelegateLabelConflict({
+                cfg,
+                ownerSessionKey: requesterInternalKey,
+                label,
+              }),
+            ),
+        });
+      if (explicitDelegateLabel) {
+        const conflictingKey = findHubDelegateLabelConflict({
+          cfg,
+          ownerSessionKey: requesterInternalKey,
+          label: spawnLabel,
+        });
+        if (conflictingKey) {
+          return createAcpSpawnFailure({
+            status: "error",
+            errorCode: "delegate_label_conflict",
+            error: `An active hub-delegated session with label "${spawnLabel}" already exists (${conflictingKey}). Close it with /acp delegate close ${spawnLabel} before reusing the label.`,
+          });
+        }
+      }
+    }
     await callGateway({
       method: "sessions.patch",
       params: {
@@ -1584,6 +1583,20 @@ export async function spawnAcpDirect(
       },
       timeoutMs: 10_000,
     });
+    return null;
+  };
+
+  try {
+    let patchFailure: SpawnAcpResult | null;
+    if (delegateRequested) {
+      const { withHubDelegatedLabelPatchLock } = await import("../gateway/sessions-patch.js");
+      patchFailure = await withHubDelegatedLabelPatchLock(async () => patchSpawnSessionRow());
+    } else {
+      patchFailure = await patchSpawnSessionRow();
+    }
+    if (patchFailure) {
+      return patchFailure;
+    }
     sessionCreated = true;
     invalidateSessionStoreCache(resolveStorePath(cfg.session?.store, { agentId: targetAgentId }));
     const initializedSession = await initializeAcpSpawnRuntime({
