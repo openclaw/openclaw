@@ -409,9 +409,48 @@ describe("resolveSandboxContext", () => {
     expect(syncOptions?.config).toBe(cfg);
     expect(syncOptions?.agentId).toBe("main");
     expect(syncOptions?.eligibility).toEqual({ remote: { note: "test-remote" } });
+    expect(result?.skillsWorkspaceDir).toBe(syncOptions?.targetWorkspaceDir);
+    expect(result?.workspaceAccess).toBe("rw");
+    expect(result?.skillsEligibility).toEqual({ remote: { note: "test-remote" } });
     await expect(
       fs.readFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "utf8"),
     ).resolves.toBe("# User owned\n");
+  }, 15_000);
+
+  it("uses the SSH backend remote workspace for sandbox workspace info", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
+    const workspaceDir = await createSandboxFixtureDir("ssh-workspace");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "ssh",
+            scope: "session",
+            workspaceAccess: "rw",
+            ssh: {
+              target: "ssh.example.test",
+              workspaceRoot: "/remote/openclaw",
+            },
+          },
+        },
+      },
+    };
+
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+
+    expect(result?.workspaceDir).toBe(workspaceDir);
+    expect(result?.containerWorkdir).toMatch(
+      /^\/remote\/openclaw\/openclaw-ssh-agent-main-main-[a-f0-9]{8}\/workspace$/,
+    );
+    expect(result?.containerWorkdir).not.toBe("/workspace");
+    expect(result?.skillsWorkspaceDir).toContain(
+      path.join(".openclaw", "sandbox", "skills-workspaces"),
+    );
   }, 15_000);
 
   it("materializes skills for shared writable sandboxes even when roots match", async () => {

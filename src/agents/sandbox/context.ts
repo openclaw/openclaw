@@ -26,6 +26,7 @@ import { createSandboxFsBridge } from "./fs-bridge.js";
 import { updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
+import { resolveSshRuntimePaths } from "./ssh-backend.js";
 import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "./types.js";
 import { resolveMaterializedSandboxSkillsWorkspaceDir } from "./workspace-mounts.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
@@ -178,6 +179,16 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
   return { rawSessionKey, runtime, cfg };
 }
 
+function resolveSandboxWorkspaceInfoWorkdir(params: {
+  cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
+  scopeKey: string;
+}): string {
+  if (params.cfg.backend === "ssh") {
+    return resolveSshRuntimePaths(params.cfg.ssh.workspaceRoot, params.scopeKey).remoteWorkspaceDir;
+  }
+  return params.cfg.docker.workdir;
+}
+
 export async function resolveSandboxContext(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
@@ -308,16 +319,20 @@ export async function ensureSandboxWorkspaceForSession(params: {
   }
   const { rawSessionKey, cfg, runtime } = resolved;
 
-  const { workspaceDir } = await ensureSandboxWorkspaceLayout({
-    cfg,
-    agentId: runtime.agentId,
-    rawSessionKey,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-  });
+  const { scopeKey, skillsEligibility, skillsWorkspaceDir, workspaceDir } =
+    await ensureSandboxWorkspaceLayout({
+      cfg,
+      agentId: runtime.agentId,
+      rawSessionKey,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+    });
 
   return {
     workspaceDir,
-    containerWorkdir: cfg.docker.workdir,
+    containerWorkdir: resolveSandboxWorkspaceInfoWorkdir({ cfg, scopeKey }),
+    skillsWorkspaceDir,
+    ...(skillsEligibility ? { skillsEligibility } : {}),
+    workspaceAccess: cfg.workspaceAccess,
   };
 }
