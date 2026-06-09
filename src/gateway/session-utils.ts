@@ -922,12 +922,13 @@ export function resolveDeletedAgentIdFromSessionKey(
   cfg: OpenClawConfig,
   sessionKey: string,
 ): string | null {
-  // ACP keys use agent:<harnessId>:acp:<uuid>; harness ids are not agents.list entries.
-  if (isAcpSessionKey(sessionKey)) {
-    return null;
-  }
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
+    return null;
+  }
+  // Free ACP spawn keys use agent:<harnessId>:acp:<uuid>, but configured ACP
+  // bindings use agent:<agentId>:acp:binding:* where agentId remains the owner.
+  if (isAcpSessionKey(sessionKey) && !parsed.rest.startsWith("acp:binding:")) {
     return null;
   }
   const agentId = normalizeAgentId(parsed.agentId);

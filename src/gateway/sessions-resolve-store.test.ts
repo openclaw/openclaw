@@ -248,6 +248,51 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
     });
   });
 
+  it("rejects configured ACP binding sessions when their owning agent is deleted", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-acp-binding-deleted-", async () => {
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main", default: true }] },
+      };
+      const acpBindingKey = "agent:deleted-agent:acp:binding:discord:default:feedface";
+      const deletedStorePath = resolveStorePath(cfg.session?.store, { agentId: "deleted-agent" });
+      await saveSessionStore(deletedStorePath, {
+        [acpBindingKey]: {
+          sessionId: "sess-acp-binding-deleted",
+          label: "deleted-binding",
+          updatedAt: freshUpdatedAt(),
+        },
+      });
+      const expected = {
+        ok: false,
+        error: {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: 'Agent "deleted-agent" no longer exists in configuration',
+        },
+      };
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { key: acpBindingKey },
+        }),
+      ).resolves.toEqual(expected);
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { sessionId: "sess-acp-binding-deleted" },
+        }),
+      ).resolves.toEqual(expected);
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { label: "deleted-binding" },
+        }),
+      ).resolves.toEqual(expected);
+    });
+  });
+
   it("rejects an explicit listed deleted main key instead of remapping to the live default main", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-key-deleted-main-", async () => {
       const cfg: OpenClawConfig = {

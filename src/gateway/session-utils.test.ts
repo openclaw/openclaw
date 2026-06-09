@@ -846,6 +846,22 @@ describe("gateway session utils", () => {
     ).toBeNull();
   });
 
+  test("resolveDeletedAgentIdFromSessionKey rejects deleted configured ACP binding owners", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+
+    expect(
+      resolveDeletedAgentIdFromSessionKey(
+        cfg,
+        "agent:deleted-agent:acp:binding:discord:default:feedface",
+      ),
+    ).toBe("deleted-agent");
+    expect(
+      resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:acp:binding:discord:default:feedface"),
+    ).toBeNull();
+  });
+
   test("resolveSessionStoreKey canonicalizes bare keys to default agent", () => {
     const cfg = {
       session: { mainKey: "main" },
