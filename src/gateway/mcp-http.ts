@@ -14,6 +14,7 @@ import { logDebug, logWarn } from "../logger.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
+  resolveMcpLoopbackScopedBearerTokenContext,
   setActiveMcpLoopbackRuntime,
 } from "./mcp-http.loopback-runtime.js";
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
@@ -33,7 +34,9 @@ import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 export {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
+  issueMcpLoopbackScopedBearerToken,
   resolveMcpLoopbackBearerToken,
+  revokeMcpLoopbackScopedBearerToken,
 } from "./mcp-http.loopback-runtime.js";
 
 type McpLoopbackServer = {
@@ -145,7 +148,13 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   const toolCache = new McpLoopbackToolCache();
 
   const httpServer = createHttpServer((req, res) => {
-    const auth = validateMcpLoopbackRequest({ req, res, ownerToken, nonOwnerToken });
+    const auth = validateMcpLoopbackRequest({
+      req,
+      res,
+      ownerToken,
+      nonOwnerToken,
+      resolveScopedTokenContext: resolveMcpLoopbackScopedBearerTokenContext,
+    });
     if (!auth) {
       return;
     }
@@ -157,7 +166,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         const body = await readMcpHttpBody(req, { timeoutMs: resolveMcpHttpBodyTimeoutMs() });
         parsed = parseMcpJsonBody(body);
         const cfg = getRuntimeConfig();
-        const requestContext = resolveMcpRequestContext(req, cfg, auth);
+        const requestContext = resolveMcpRequestContext(cfg, auth);
         const scopedTools = toolCache.resolve({
           cfg,
           sessionKey: requestContext.sessionKey,
