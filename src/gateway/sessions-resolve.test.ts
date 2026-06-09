@@ -185,7 +185,19 @@ describe("resolveSessionKeyFromResolveParams", () => {
       storePath,
     });
     hoisted.loadSessionStoreMock.mockReturnValue({
-      [acpKey]: { sessionId: "sess-acp", updatedAt: 1, label: "claude-delegate-test" },
+      [acpKey]: {
+        sessionId: "sess-acp",
+        updatedAt: 1,
+        label: "claude-delegate-test",
+        acp: {
+          backend: "acpx",
+          agent: "claude",
+          runtimeSessionName: acpKey,
+          mode: "oneshot",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      },
     });
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
 

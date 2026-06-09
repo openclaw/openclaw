@@ -57,6 +57,13 @@ const LEGACY_REMOVED_PLUGIN_IDS = new Set([
 ]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
 
+function formatRemovedPluginConfigWarning(pluginId: string): string {
+  if (pluginId === "skill-workshop") {
+    return "plugin removed: skill-workshop (stale plugin config ignored; Skill Workshop is built into OpenClaw skills now. Use skills.workshop settings and openclaw skills workshop commands, then remove this plugins config entry)";
+  }
+  return `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`;
+}
+
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
 type ExplicitPluginReferences = {
@@ -1717,7 +1724,7 @@ function validateConfigObjectWithPluginsBase(
     if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
       warnings.push({
         path: pathLocal,
-        message: `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
+        message: formatRemovedPluginConfigWarning(pluginId),
       });
       return;
     }
