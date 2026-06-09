@@ -1,3 +1,4 @@
+// Googlechat tests cover google auth plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -348,18 +349,45 @@ describe("googlechat google auth runtime", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("rejects malformed auth content-length before reading the body", async () => {
+    const release = vi.fn();
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(16));
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: {
+        arrayBuffer,
+        body: null,
+        headers: new Headers({
+          "content-length": "0x3",
+        }),
+        status: 200,
+        statusText: "OK",
+      } as unknown as Response,
+      release,
+    });
+
+    const guardedFetch = createGoogleAuthFetch();
+
+    await expect(
+      guardedFetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+      } as RequestInit),
+    ).rejects.toThrow("invalid content-length header: 0x3");
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("builds a scoped Gaxios transport without mutating global window", async () => {
     const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
     Reflect.deleteProperty(globalThis as object, "window");
     try {
       const transport = await getGoogleAuthTransport();
       const transportDefaults = transport.defaults as { fetchImplementation?: unknown };
-      const requestInterceptorAdd = transport.interceptors.request.add as unknown as ReturnType<
+      const requestInterceptorAdd = transport.interceptors.request["add"] as unknown as ReturnType<
         typeof vi.fn
       >;
-      const responseInterceptorAdd = transport.interceptors.response.add as unknown as ReturnType<
-        typeof vi.fn
-      >;
+      const responseInterceptorAdd = transport.interceptors.response[
+        "add"
+      ] as unknown as ReturnType<typeof vi.fn>;
       const requestInterceptor = mockCallArg(requestInterceptorAdd) as
         | { resolved?: unknown }
         | undefined;
@@ -387,10 +415,10 @@ describe("googlechat google auth runtime", () => {
 
     expect(first).not.toBe(second);
     expect(mocks.gaxiosCtor).toHaveBeenCalledTimes(2);
-    expect(first.interceptors.request.add).toHaveBeenCalledOnce();
-    expect(first.interceptors.response.add).toHaveBeenCalledOnce();
-    expect(second.interceptors.request.add).toHaveBeenCalledOnce();
-    expect(second.interceptors.response.add).toHaveBeenCalledOnce();
+    expect(first.interceptors.request["add"]).toHaveBeenCalledOnce();
+    expect(first.interceptors.response["add"]).toHaveBeenCalledOnce();
+    expect(second.interceptors.request["add"]).toHaveBeenCalledOnce();
+    expect(second.interceptors.response["add"]).toHaveBeenCalledOnce();
   });
 
   it("normalizes Google auth request headers before upstream interceptors run", () => {

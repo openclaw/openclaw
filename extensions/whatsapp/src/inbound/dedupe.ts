@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements dedupe behavior.
 import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 
 const RECENT_WEB_MESSAGE_TTL_MS = 20 * 60_000;
@@ -94,9 +95,17 @@ export function resetWebInboundDedupe(): void {
   recentOutboundMessages.clear();
 }
 
-export async function claimRecentInboundMessage(key: string): Promise<boolean> {
+export type RecentInboundMessageClaimKind = "claimed" | "duplicate" | "inflight";
+
+export async function claimRecentInboundMessageDelivery(
+  key: string,
+): Promise<RecentInboundMessageClaimKind> {
   const claim = await claimableInboundMessages.claim(key);
-  return claim.kind === "claimed";
+  return claim.kind;
+}
+
+export async function claimRecentInboundMessage(key: string): Promise<boolean> {
+  return (await claimRecentInboundMessageDelivery(key)) === "claimed";
 }
 
 export async function commitRecentInboundMessage(key: string): Promise<void> {

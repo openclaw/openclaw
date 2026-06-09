@@ -1,3 +1,5 @@
+// Human and JSON rendering for gathered daemon status diagnostics.
+import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -17,7 +19,6 @@ import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
-import { colorize } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
 import {
@@ -36,6 +37,7 @@ import {
 } from "./status.gather.js";
 
 function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
+  // JSON output can be copied into issues; redact service env before serialization.
   const command = status.service.command;
   if (!command?.environment) {
     return status;
@@ -86,7 +88,7 @@ function formatConnectionLine(
   return `${pid}${ppid}${direction}${command}${address}${commandLine}`;
 }
 
-export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
+export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
   if (opts.json) {
     const sanitized = sanitizeDaemonStatusForJson(status);
     defaultRuntime.writeJson(sanitized);
@@ -220,7 +222,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
-  const gatewayVersion = rpc?.server?.version?.trim();
+  const gatewayVersion = rpc?.server?.version?.trim() || status.gateway?.version?.trim();
   const cliVersionLine = formatCliVersionLine(status.cli);
   if (gatewayVersion) {
     if (cliVersionLine) {
@@ -320,7 +322,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   }
 
   const systemdUnavailable =
-    process.platform === "linux" && isSystemdUnavailableDetail(service.runtime?.detail);
+    process.platform === "linux" &&
+    rpc?.ok !== true &&
+    isSystemdUnavailableDetail(service.runtime?.detail);
   if (systemdUnavailable) {
     const container = Boolean(
       resolveDaemonContainerContext(service.command?.environment ?? process.env),
@@ -447,6 +451,35 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     }
     for (const hint of renderGatewayServiceCleanupHints()) {
       defaultRuntime.log(`${infoText("Cleanup hint:")} ${hint}`);
+    }
+    spacer();
+  }
+
+  const drift = status.pluginVersionDrift;
+  if (drift && drift.drifts.length > 0) {
+    defaultRuntime.log(
+      warnText(
+        `Plugin version drift: ${drift.drifts.length} active official plugin${
+          drift.drifts.length === 1 ? "" : "s"
+        } not on gateway ${drift.gatewayVersion}`,
+      ),
+    );
+    if (opts.deep) {
+      for (const entry of drift.drifts) {
+        const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
+        defaultRuntime.log(
+          `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${drift.gatewayVersion}`,
+        );
+      }
+      defaultRuntime.log(
+        `${label("Fix:")} ${formatCliCommand("openclaw plugins update <plugin-id>")} for each drifted plugin, then ${formatCliCommand("openclaw gateway restart")}.`,
+      );
+    } else {
+      defaultRuntime.log(
+        infoText(
+          `Run ${formatCliCommand("openclaw gateway status --deep")} for affected plugin ids and fix commands.`,
+        ),
+      );
     }
     spacer();
   }

@@ -1,6 +1,8 @@
+// Test helper for asserting bundled plugin public surface files.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   loadBundledPluginPublicSurfaceModule,
   loadBundledPluginPublicSurfaceModuleSync,
@@ -46,14 +48,13 @@ function findBundledPluginMetadataFast(
   if (!isSafeBundledPluginDirName(pluginId)) {
     return undefined;
   }
-  const roots = [
+  const rawRoots = [
     resolveBundledPluginsDir(),
     path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions"),
     path.resolve(OPENCLAW_PACKAGE_ROOT, "dist-runtime", "extensions"),
     path.resolve(OPENCLAW_PACKAGE_ROOT, "dist", "extensions"),
-  ].filter(
-    (entry, index, values): entry is string => Boolean(entry) && values.indexOf(entry) === index,
-  );
+  ].filter((entry): entry is string => Boolean(entry));
+  const roots = uniqueStrings(rawRoots);
 
   for (const root of roots) {
     const pluginDir = path.join(root, pluginId);
@@ -84,14 +85,13 @@ function readPackageName(packageDir: string): string | undefined {
 }
 
 function resolveWorkspacePackageDir(packageName: string): string {
-  const roots = [
+  const rawRoots = [
     resolveBundledPluginsDir(),
     path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions"),
     path.resolve(OPENCLAW_PACKAGE_ROOT, "dist-runtime", "extensions"),
     path.resolve(OPENCLAW_PACKAGE_ROOT, "dist", "extensions"),
-  ].filter(
-    (entry, index, values): entry is string => Boolean(entry) && values.indexOf(entry) === index,
-  );
+  ].filter((entry): entry is string => Boolean(entry));
+  const roots = uniqueStrings(rawRoots);
 
   for (const root of roots) {
     let entries: string[];

@@ -1,3 +1,4 @@
+// Covers transient and benign unhandled rejection classifiers.
 import { describe, expect, it } from "vitest";
 import {
   isAbortError,
@@ -60,6 +61,7 @@ describe("isTransientNetworkError", () => {
       "ESOCKETTIMEDOUT",
       "ECONNABORTED",
       "EPIPE",
+      "ENETDOWN",
       "EHOSTUNREACH",
       "ENETUNREACH",
       "EADDRNOTAVAIL",
@@ -375,6 +377,12 @@ describe("isTransientUnhandledRejectionError", () => {
     const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
     const sqlite = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
     const network = Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+    const networkDown = Object.assign(new Error("connect ENETDOWN"), {
+      code: "ENETDOWN",
+    });
+    const rawNetworkDown = new Error(
+      "connect ENETDOWN 149.154.167.220:443 - Local (10.0.10.40:50017)",
+    );
     const hostUnreachable = Object.assign(new Error("connect EHOSTUNREACH"), {
       code: "EHOSTUNREACH",
     });
@@ -393,11 +401,19 @@ describe("isTransientUnhandledRejectionError", () => {
     const wrappedDestroyedHttp2Session = Object.assign(new Error("model call failed"), {
       cause: destroyedHttp2Session,
     });
+    const wsPreHandshakeClose = new Error(
+      "WebSocket was closed before the connection was established",
+    );
+    const wrappedWsPreHandshakeClose = Object.assign(new Error("feishu reconnect failed"), {
+      cause: wsPreHandshakeClose,
+    });
     const generic = new Error("boom");
 
     expect(isBenignUncaughtExceptionError(epipe)).toBe(true);
     expect(isBenignUncaughtExceptionError(sqlite)).toBe(false);
     expect(isBenignUncaughtExceptionError(network)).toBe(false);
+    expect(isBenignUncaughtExceptionError(networkDown)).toBe(true);
+    expect(isBenignUncaughtExceptionError(rawNetworkDown)).toBe(true);
     expect(isBenignUncaughtExceptionError(hostUnreachable)).toBe(true);
     expect(isBenignUncaughtExceptionError(rawHostUnreachable)).toBe(true);
     expect(isBenignUncaughtExceptionError(addressUnavailable)).toBe(true);
@@ -405,6 +421,13 @@ describe("isTransientUnhandledRejectionError", () => {
     expect(isBenignUncaughtExceptionError(destroyedHttp2Session)).toBe(true);
     expect(isBenignUncaughtExceptionError(wrappedDestroyedHttp2Session)).toBe(true);
     expect(isBenignUncaughtExceptionError(new Error("ERR_HTTP2_INVALID_SESSION"))).toBe(true);
+    expect(isBenignUncaughtExceptionError(wsPreHandshakeClose)).toBe(true);
+    expect(isBenignUncaughtExceptionError(wrappedWsPreHandshakeClose)).toBe(true);
+    expect(
+      isBenignUncaughtExceptionError(
+        new Error("WebSocket error: WebSocket was closed before the connection was established"),
+      ),
+    ).toBe(false);
     expect(isBenignUncaughtExceptionError(generic)).toBe(false);
   });
   it("returns true for transient SQLite errors", () => {

@@ -1,3 +1,9 @@
+/** Builds provider auth summaries for model-list/status output. */
+import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { formatRemainingShort } from "../../agents/auth-health.js";
 import { resolveAuthProfileDisplayLabel } from "../../agents/auth-profiles/display.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
@@ -5,19 +11,14 @@ import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persis
 import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
-import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
+import { isNonSecretApiKeyMarker, isOAuthApiKeyMarker } from "../../agents/model-auth-markers.js";
 import {
   getCustomProviderApiKey,
   resolveEnvApiKey,
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
-import { normalizeProviderIdForAuth } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderAuthEvidence } from "../../secrets/provider-env-vars.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "./list.format.js";
 import type { ProviderAuthOverview } from "./list.types.js";
@@ -62,6 +63,7 @@ function resolveProfileSourceAgentDir(params: {
     : params.agentDir;
 }
 
+/** Resolves the effective auth source and profile counts for a provider. */
 export function resolveProviderAuthOverview(params: {
   provider: string;
   cfg: OpenClawConfig;
@@ -150,6 +152,8 @@ export function resolveProviderAuthOverview(params: {
 
   const effective: ProviderAuthOverview["effective"] = (() => {
     if (profiles.length > 0) {
+      // Profiles win over env/config markers because runtime auth selection uses
+      // the profile store before provider-wide fallback material.
       return {
         kind: "profiles",
         detail: shortenHomePath(
@@ -176,6 +180,9 @@ export function resolveProviderAuthOverview(params: {
     }
     if (params.syntheticAuth) {
       return { kind: "synthetic", detail: params.syntheticAuth.source };
+    }
+    if (customKey && isOAuthApiKeyMarker(customKey)) {
+      return { kind: "models.json", detail: formatMarkerOrSecret(customKey) };
     }
     return { kind: "missing", detail: "missing" };
   })();

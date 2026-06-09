@@ -1,12 +1,14 @@
+// Covers plugin install behavior from git-backed sources.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runCommandWithTimeoutMock = vi.fn();
 const installPluginFromInstalledPackageDirMock = vi.fn();
+const preflightPluginGitInstallPolicyMock = vi.fn();
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -21,9 +23,21 @@ vi.mock("./install.js", async () => {
   };
 });
 
+vi.mock("./install-security-scan.js", async () => {
+  const actual = await vi.importActual<typeof import("./install-security-scan.js")>(
+    "./install-security-scan.js",
+  );
+  return {
+    ...actual,
+    preflightPluginGitInstallPolicy: (...args: unknown[]) =>
+      preflightPluginGitInstallPolicyMock(...args),
+  };
+});
+
 vi.resetModules();
 
-const { installPluginFromGitSpec, parseGitPluginSpec } = await import("./git-install.js");
+const { installPluginFromGitSpec, isImmutableGitCommitRef, parseGitPluginSpec } =
+  await import("./git-install.js");
 
 function expectedGitRepoDir(params: { gitDir: string; normalizedSpec: string }): string {
   const hash = createHash("sha256")
@@ -40,11 +54,6 @@ function expectParsedGitSpec(spec: string) {
   }
   return parsed;
 }
-
-function firstCommandRun(): unknown[] | undefined {
-  return runCommandWithTimeoutMock.mock.calls[0];
-}
-
 function commandArgvAt(index: number): string[] {
   const call = runCommandWithTimeoutMock.mock.calls[index];
   if (!call) {
@@ -57,6 +66,7 @@ function firstInstallOptions():
   | {
       expectedPluginId?: string;
       packageDir?: string;
+      mode?: string;
       installPolicyRequest?: { kind?: string; requestedSpecifier?: string };
     }
   | undefined {
@@ -64,6 +74,7 @@ function firstInstallOptions():
     | {
         expectedPluginId?: string;
         packageDir?: string;
+        mode?: string;
         installPolicyRequest?: { kind?: string; requestedSpecifier?: string };
       }
     | undefined;
@@ -77,23 +88,66 @@ describe("parseGitPluginSpec", () => {
     expect(explicitRef.label).toBe("acme/demo");
     expect(explicitRef.normalizedSpec).toBe("git:https://github.com/acme/demo.git@v1.2.3");
 
+    const slashRef = expectParsedGitSpec("git:acme/demo@feature/foo");
+    expect(slashRef.url).toBe("https://github.com/acme/demo.git");
+    expect(slashRef.ref).toBe("feature/foo");
+    expect(slashRef.label).toBe("acme/demo");
+
     const hashRef = expectParsedGitSpec("git:acme/demo#main");
     expect(hashRef.url).toBe("https://github.com/acme/demo.git");
     expect(hashRef.ref).toBe("main");
   });
 
+  it("does not treat URL credentials as ref selectors", () => {
+    const parsed = expectParsedGitSpec("git:https://token:secret@github.com/acme/demo.git");
+    expect(parsed.url).toBe("https://token:secret@github.com/acme/demo.git");
+    expect(parsed.ref).toBeUndefined();
+    expect(parsed.label).toBe("github.com/acme/demo");
+  });
+
   it("keeps scp-style clone URLs without treating git@ as a ref", () => {
-    const parsed = expectParsedGitSpec("git:git@github.com:acme/demo.git@release");
+    const parsed = expectParsedGitSpec("git:git@github.com:acme/demo.git@feature/foo");
     expect(parsed.url).toBe("git@github.com:acme/demo.git");
-    expect(parsed.ref).toBe("release");
-    expect(parsed.label).toBe("git@github.com:acme/demo.git");
+    expect(parsed.ref).toBe("feature/foo");
+    expect(parsed.label).toBe("git@github.com:acme/demo");
+  });
+});
+
+describe("isImmutableGitCommitRef", () => {
+  it.each([
+    [undefined, false],
+    ["main", false],
+    ["v1.2.3", false],
+    ["abc123", false],
+    ["0123456789abcdef0123456789abcdef01234567", true],
+    ["0123456789ABCDEF0123456789ABCDEF01234567", true],
+  ] as const)("classifies %s as immutable=%s", (ref, expected) => {
+    expect(isImmutableGitCommitRef(ref)).toBe(expected);
   });
 });
 
 describe("installPluginFromGitSpec", () => {
-  beforeEach(() => {
+  const tempDirs: string[] = [];
+
+  beforeEach(async () => {
     runCommandWithTimeoutMock.mockReset();
     installPluginFromInstalledPackageDirMock.mockReset();
+    preflightPluginGitInstallPolicyMock.mockReset();
+    preflightPluginGitInstallPolicyMock.mockResolvedValue(null);
+    const globalConfigRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-git-install-npmrc-"),
+    );
+    tempDirs.push(globalConfigRoot);
+    const globalConfig = path.join(globalConfigRoot, "global-npmrc");
+    await fs.writeFile(globalConfig, "", "utf8");
+    vi.stubEnv("NPM_CONFIG_GLOBALCONFIG", globalConfig);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
   });
 
   it("clones, checks out refs, installs from the clone, and returns commit metadata", async () => {
@@ -183,6 +237,117 @@ describe("installPluginFromGitSpec", () => {
       "https://github.com/acme/demo.git",
     ]);
     expect(cloneArgv[5]).toContain("/repo");
+  });
+
+  it("runs install policy preflight before npm installs git dependencies", async () => {
+    runCommandWithTimeoutMock
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" });
+    preflightPluginGitInstallPolicyMock.mockResolvedValueOnce({
+      blocked: {
+        reason: "blocked by install policy: git installs disabled",
+        code: "security_scan_blocked",
+      },
+    });
+
+    const result = await installPluginFromGitSpec({
+      spec: "git:github.com/acme/demo",
+      expectedPluginId: "demo",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("git installs disabled");
+    }
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
+    expect(commandArgvAt(0).slice(0, 5)).toEqual([
+      "git",
+      "clone",
+      "--depth",
+      "1",
+      "https://github.com/acme/demo.git",
+    ]);
+    expect(commandArgvAt(1)).toEqual(["git", "rev-parse", "HEAD"]);
+    expect(preflightPluginGitInstallPolicyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "demo",
+        requestedSpecifier: "git:github.com/acme/demo",
+        source: { kind: "git", authority: "third-party", mutable: true, network: true },
+        sourcePath: expect.stringContaining("/repo"),
+      }),
+    );
+    expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
+  });
+
+  it("reports full commit refs as immutable to install policy", async () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    runCommandWithTimeoutMock
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: `${commit}\n`, stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+    installPluginFromInstalledPackageDirMock.mockImplementation(
+      async (params: { packageDir: string }) => {
+        await fs.mkdir(params.packageDir, { recursive: true });
+        return {
+          ok: true,
+          pluginId: "demo",
+          targetDir: params.packageDir,
+          version: "1.2.3",
+          extensions: ["index.js"],
+        };
+      },
+    );
+
+    const result = await installPluginFromGitSpec({
+      spec: `git:github.com/acme/demo@${commit}`,
+      expectedPluginId: "demo",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(preflightPluginGitInstallPolicyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestedSpecifier: `git:github.com/acme/demo@${commit}`,
+        source: { kind: "git", authority: "third-party", mutable: false, network: true },
+      }),
+    );
+  });
+
+  it("reports effective install mode for requested git update without an installed target", async () => {
+    const gitDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-install-mode-"));
+    try {
+      runCommandWithTimeoutMock
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      installPluginFromInstalledPackageDirMock.mockImplementation(
+        async (params: { packageDir: string }) => {
+          await fs.mkdir(params.packageDir, { recursive: true });
+          return {
+            ok: true,
+            pluginId: "demo",
+            targetDir: params.packageDir,
+            version: "1.2.3",
+            extensions: ["index.js"],
+          };
+        },
+      );
+
+      const result = await installPluginFromGitSpec({
+        spec: "git:github.com/acme/demo",
+        expectedPluginId: "demo",
+        gitDir,
+        mode: "update",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(preflightPluginGitInstallPolicyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: "install" }),
+      );
+      expect(firstInstallOptions()?.mode).toBe("install");
+    } finally {
+      await fs.rm(gitDir, { recursive: true, force: true });
+    }
   });
 
   it("uses a credential-free managed repo path for authenticated git URLs", async () => {

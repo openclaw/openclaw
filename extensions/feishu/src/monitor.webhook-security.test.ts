@@ -1,6 +1,7 @@
+// Feishu tests cover monitor.webhook security plugin behavior.
 import type { IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createFeishuClientMockModule,
   createFeishuRuntimeMockModule,
@@ -49,6 +50,10 @@ import {
 import { buildFeishuWebhookRateLimitKeyForTest, monitorWebhook } from "./monitor.transport.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
+beforeAll(async () => {
+  await import("./monitor.account.js");
+});
+
 async function waitForSlowBodyTimeoutResponse(
   url: string,
   timeoutMs: number,
@@ -75,7 +80,7 @@ async function waitForSlowBodyTimeoutResponse(
     socket.setEncoding("utf8");
     socket.on("error", () => {});
     socket.on("data", (chunk) => {
-      response += chunk;
+      response += chunk.toString();
       if (response.includes("Request body timeout")) {
         clearTimeout(failTimer);
         socket.destroy();
@@ -123,7 +128,7 @@ async function waitForOversizedBodyResponse(url: string): Promise<string> {
 
     socket.setEncoding("utf8");
     socket.on("data", (chunk) => {
-      response += chunk;
+      response += chunk.toString();
       if (response.includes("Payload too large")) {
         finish(response);
       }

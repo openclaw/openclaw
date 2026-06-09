@@ -9,7 +9,8 @@ DOCKER_TARGET="${OPENCLAW_NPM_TELEGRAM_DOCKER_TARGET:-build}"
 PACKAGE_SPEC="${OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC:-openclaw@beta}"
 PACKAGE_TGZ="${OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
 PACKAGE_LABEL="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-}"
-OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-rtt}"
+RUN_ID="${OPENCLAW_NPM_TELEGRAM_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-rtt/$RUN_ID}"
 
 resolve_credential_source() {
   if [ -n "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE:-}" ]; then
@@ -207,6 +208,7 @@ docker_env=(
   -e OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES="${OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES:-20}"
   -e OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS="${OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS:-30000}"
   -e OPENCLAW_NPM_TELEGRAM_MAX_FAILURES="${OPENCLAW_NPM_TELEGRAM_MAX_FAILURES:-${OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES:-20}}"
+  -e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
 )
 
 forward_env_if_set() {
@@ -233,6 +235,9 @@ for key in \
   OPENCLAW_QA_CREDENTIAL_HEARTBEAT_INTERVAL_MS \
   OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS \
   OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS \
+  OPENCLAW_QA_CREDENTIAL_HTTP_MAX_BODY_BYTES \
+  OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES \
+  OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS \
   OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX \
   OPENCLAW_QA_CREDENTIAL_OWNER_ID \
   OPENCLAW_QA_ALLOW_INSECURE_HTTP; do
@@ -241,15 +246,15 @@ done
 
 run_logged() {
   if ! "$@" >"$run_log" 2>&1; then
-    cat "$run_log"
+    docker_e2e_print_log "$run_log"
     exit 1
   fi
-  cat "$run_log"
+  docker_e2e_print_log "$run_log"
   >"$run_log"
 }
 
 echo "Installing ${PACKAGE_LABEL} from ${package_install_source}..."
-run_logged docker run --rm \
+run_logged docker_e2e_docker_run_cmd run --rm \
   "${install_env[@]}" \
   ${package_mount_args[@]+"${package_mount_args[@]}"} \
   -v "$npm_prefix_host:/npm-global" \
@@ -262,20 +267,45 @@ export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 install_source="${OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE:?missing OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE}"
 package_label="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-$install_source}"
 
-npm install -g "$install_source" --no-fund --no-audit
+npm_install_timeout="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
+run_npm_install() {
+  if [ -z "$npm_install_timeout" ] || [ "$npm_install_timeout" = "0" ]; then
+    npm install -g "$install_source" --no-fund --no-audit
+    return
+  fi
+
+  local timeout_bin=""
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
+  fi
+  if [ -z "$timeout_bin" ]; then
+    echo "timeout or gtimeout is required for OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$npm_install_timeout" >&2
+    return 127
+  fi
+
+  if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
+    "$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
+  else
+    "$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
+  fi
+}
+run_npm_install
 command -v openclaw
 openclaw --version
 node -p "require('/npm-global/lib/node_modules/openclaw/package.json').version"
 EOF
 
 echo "Running package Telegram RTT Docker E2E ($PACKAGE_LABEL)..."
-run_logged docker run --rm \
+run_logged docker_e2e_docker_run_cmd run --rm \
   "${docker_env[@]}" \
   -v "$ROOT_DIR/scripts:/app/scripts:ro" \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
 
 export HOME="$(mktemp -d "/tmp/openclaw-npm-telegram-rtt.XXXXXX")"
 export NPM_CONFIG_PREFIX="/npm-global"
@@ -307,7 +337,7 @@ dump_logs() {
     "$gateway_log"; do
     if [ -f "$file" ]; then
       echo "--- $file ---" >&2
-      sed -n '1,260p' "$file" >&2 || true
+      openclaw_e2e_print_log "$file" >&2
     fi
   done
 }
@@ -361,12 +391,30 @@ installed_version="$(node -p "require('/npm-global/lib/node_modules/openclaw/pac
 
 node /app/scripts/e2e/mock-openai-server.mjs >"$mock_log" 2>&1 &
 mock_pid="$!"
+mock_ready=0
 for _ in $(seq 1 60); do
-  if node -e "fetch('http://127.0.0.1:${mock_port}/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+  if node --input-type=module -e '
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1000);
+    try {
+      const response = await fetch(process.argv[1], { signal: controller.signal });
+      process.exit(response.ok ? 0 : 1);
+    } catch {
+      process.exit(1);
+    } finally {
+      clearTimeout(timer);
+    }
+  ' "http://127.0.0.1:${mock_port}/health"; then
+    mock_ready=1
     break
   fi
   sleep 1
 done
+if [ "$mock_ready" != "1" ]; then
+  echo "Mock OpenAI server did not become ready" >&2
+  openclaw_e2e_print_log "$mock_log" >&2
+  exit 1
+fi
 
 mkdir -p "$(dirname "$config_path")" "$HOME/.openclaw/workspace" "$HOME/.openclaw/agents/main/sessions" "$HOME/workspace"
 

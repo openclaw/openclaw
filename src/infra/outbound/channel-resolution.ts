@@ -1,3 +1,5 @@
+// Channel resolution exposes read-only outbound runtime facades and performs
+// optional bootstrap for deliverable channels that are not loaded yet.
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import { channelPluginHasNativeApprovalPromptUi } from "../../channels/plugins/native-approval-prompt.js";
@@ -19,7 +21,7 @@ import type {
   ChannelThreadingAdapter,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginChannelRegistry, getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -32,6 +34,7 @@ import {
 
 type ChannelTargetResolver = NonNullable<ChannelMessagingAdapter["targetResolver"]>;
 
+/** Prompt-facing channel capabilities exposed to outbound/runtime callers. */
 export type ChannelPromptRuntime = {
   messageToolHints?: ChannelAgentPromptAdapter["messageToolHints"];
   messageToolCapabilities?: ChannelAgentPromptAdapter["messageToolCapabilities"];
@@ -39,6 +42,7 @@ export type ChannelPromptRuntime = {
   hasNativeApprovalPromptUi?: boolean;
 };
 
+/** Read-only channel runtime facade assembled from a channel plugin. */
 export type OutboundChannelRuntime = {
   id: string;
   label: string;
@@ -84,10 +88,12 @@ export type OutboundChannelRuntime = {
   blockStreamingCoalesceDefaults?: ChannelStreamingAdapter["blockStreamingCoalesceDefaults"];
 };
 
+/** Resets outbound channel bootstrap/resolution state for isolated tests. */
 export function resetOutboundChannelResolutionStateForTest(): void {
   resetOutboundChannelBootstrapStateForTests();
 }
 
+/** Normalizes a raw channel id and rejects non-deliverable/internal channels. */
 export function normalizeDeliverableOutboundChannel(
   raw?: string | null,
 ): DeliverableMessageChannel | undefined {
@@ -105,18 +111,95 @@ function maybeBootstrapChannelPlugin(params: {
   bootstrapOutboundChannelPlugin(params);
 }
 
-function resolveDirectFromActiveRegistry(channel: string): ChannelPlugin | undefined {
-  const activeRegistry = getActivePluginRegistry();
-  if (!activeRegistry) {
+function resolveDirectFromRegistry(
+  registry: ReturnType<typeof getActivePluginRegistry>,
+  channel: string,
+): ChannelPlugin | undefined {
+  if (!registry) {
     return undefined;
   }
-  for (const entry of activeRegistry.channels) {
+  for (const entry of registry.channels) {
     const plugin = entry?.plugin;
     if (plugin?.id === channel) {
       return plugin;
     }
   }
   return undefined;
+}
+
+function messageAdapterCanSendText(
+  message: ChannelMessageAdapterShape | undefined,
+): message is ChannelMessageAdapterShape {
+  return typeof message?.send?.text === "function";
+}
+
+function resolveSendCapableMessageAdapter(
+  plugin: ChannelPlugin | undefined,
+): ChannelMessageAdapterShape | undefined {
+  const message = plugin?.message;
+  return messageAdapterCanSendText(message) ? message : undefined;
+}
+
+function channelPluginHasRuntimeOutboundSurface(plugin: ChannelPlugin | undefined): boolean {
+  return Boolean(plugin?.outbound ?? resolveSendCapableMessageAdapter(plugin));
+}
+
+function resolveRuntimeOutboundPlugin(plugin: ChannelPlugin): ChannelPlugin | undefined {
+  return channelPluginHasRuntimeOutboundSurface(plugin) ? plugin : undefined;
+}
+
+function resolveRuntimeOutboundPluginCandidate(params: {
+  loaded?: ChannelPlugin;
+  runtime?: ChannelPlugin;
+  setupFallback?: ChannelPlugin;
+  bundled?: ChannelPlugin;
+  allowSetupShell?: boolean;
+}): ChannelPlugin | undefined {
+  if (channelPluginHasRuntimeOutboundSurface(params.loaded)) {
+    return params.loaded;
+  }
+  if (params.runtime) {
+    return params.runtime;
+  }
+  if (channelPluginHasRuntimeOutboundSurface(params.bundled)) {
+    return params.bundled;
+  }
+  if (params.allowSetupShell) {
+    return params.loaded ?? params.setupFallback ?? params.bundled;
+  }
+  return undefined;
+}
+
+function resolveValueFromRuntimeRegistries<TValue>(
+  channel: string,
+  resolveValue: (plugin: ChannelPlugin) => TValue | undefined,
+): TValue | undefined {
+  const channelRegistry = getActivePluginChannelRegistry();
+  const channelPlugin = resolveDirectFromRegistry(channelRegistry, channel);
+  if (channelPlugin) {
+    const value = resolveValue(channelPlugin);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  const activeRegistry = getActivePluginRegistry();
+  if (activeRegistry && activeRegistry !== channelRegistry) {
+    const activePlugin = resolveDirectFromRegistry(activeRegistry, channel);
+    if (activePlugin) {
+      return resolveValue(activePlugin);
+    }
+  }
+  return undefined;
+}
+
+function resolveDirectFromRuntimeRegistries(channel: string): ChannelPlugin | undefined {
+  return resolveValueFromRuntimeRegistries(channel, (plugin) => plugin);
+}
+
+function resolveRuntimeOutboundPluginFromRuntimeRegistries(
+  channel: string,
+): ChannelPlugin | undefined {
+  return resolveValueFromRuntimeRegistries(channel, resolveRuntimeOutboundPlugin);
 }
 
 function toOutboundChannelRuntime(plugin: ChannelPlugin): OutboundChannelRuntime {
@@ -171,6 +254,7 @@ function toOutboundChannelRuntime(plugin: ChannelPlugin): OutboundChannelRuntime
   };
 }
 
+/** Resolves a deliverable outbound channel plugin, optionally bootstrapping it. */
 export function resolveOutboundChannelPlugin(params: {
   channel: string;
   cfg?: OpenClawConfig;
@@ -184,30 +268,59 @@ export function resolveOutboundChannelPlugin(params: {
   const resolveLoaded = () => getLoadedChannelPlugin(normalized);
   const resolve = () => getChannelPlugin(normalized);
   const current = resolveLoaded();
-  if (current) {
-    return current;
-  }
-  const directCurrent = resolveDirectFromActiveRegistry(normalized);
-  if (directCurrent) {
-    return directCurrent;
+  const runtimeCurrent = resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized);
+  const setupFallback = resolveDirectFromRuntimeRegistries(normalized);
+  const bundledCurrent = resolve();
+  const candidate = resolveRuntimeOutboundPluginCandidate({
+    loaded: current,
+    runtime: runtimeCurrent,
+    setupFallback,
+    bundled: bundledCurrent,
+    allowSetupShell: params.allowBootstrap !== true,
+  });
+  if (candidate) {
+    return candidate;
   }
 
   if (params.allowBootstrap !== true) {
-    return resolve();
+    return undefined;
   }
 
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
-  return resolveLoaded() ?? resolveDirectFromActiveRegistry(normalized) ?? resolve();
+  return resolveRuntimeOutboundPluginCandidate({
+    loaded: resolveLoaded(),
+    runtime: resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized),
+    setupFallback: resolveDirectFromRuntimeRegistries(normalized),
+    bundled: resolve(),
+  });
 }
 
+/** Resolves the message adapter for a deliverable outbound channel. */
 export function resolveOutboundChannelMessageAdapter(params: {
   channel: string;
   cfg?: OpenClawConfig;
   allowBootstrap?: boolean;
 }): ChannelMessageAdapterShape | undefined {
-  return resolveOutboundChannelPlugin(params)?.message;
+  const normalized = normalizeDeliverableOutboundChannel(params.channel);
+  if (!normalized) {
+    return undefined;
+  }
+  const current =
+    resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
+    resolveValueFromRuntimeRegistries(normalized, resolveSendCapableMessageAdapter) ??
+    resolveSendCapableMessageAdapter(getChannelPlugin(normalized));
+  if (current || params.allowBootstrap !== true) {
+    return current;
+  }
+  maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
+  return (
+    resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
+    resolveValueFromRuntimeRegistries(normalized, resolveSendCapableMessageAdapter) ??
+    resolveSendCapableMessageAdapter(getChannelPlugin(normalized))
+  );
 }
 
+/** Resolves a channel plugin for read-only metadata paths. */
 export function resolveOutboundChannelPluginForRead(params: {
   channel: string;
   cfg?: OpenClawConfig;
@@ -221,7 +334,7 @@ export function resolveOutboundChannelPluginForRead(params: {
   if (current) {
     return current;
   }
-  const directCurrent = resolveDirectFromActiveRegistry(normalized);
+  const directCurrent = resolveDirectFromRuntimeRegistries(normalized);
   if (directCurrent) {
     return directCurrent;
   }
@@ -230,13 +343,14 @@ export function resolveOutboundChannelPluginForRead(params: {
     maybeBootstrapChannelPlugin({ channel: deliverable, cfg: params.cfg });
     return (
       getLoadedChannelPlugin(deliverable) ??
-      resolveDirectFromActiveRegistry(deliverable) ??
+      resolveDirectFromRuntimeRegistries(deliverable) ??
       getChannelPlugin(deliverable)
     );
   }
   return getChannelPlugin(channelId);
 }
 
+/** Resolves the read-only outbound runtime facade for a channel. */
 export function resolveOutboundChannelRuntime(params: {
   channel: string;
   cfg?: OpenClawConfig;
@@ -245,6 +359,7 @@ export function resolveOutboundChannelRuntime(params: {
   return plugin ? toOutboundChannelRuntime(plugin) : undefined;
 }
 
+/** Reads an already-loaded channel plugin without bootstrapping. */
 export function resolveLoadedOutboundChannelPluginForRead(params: {
   channel: string;
 }): ChannelPlugin | undefined {
@@ -254,6 +369,6 @@ export function resolveLoadedOutboundChannelPluginForRead(params: {
   }
   return (
     getLoadedChannelPlugin(normalized as Parameters<typeof getLoadedChannelPlugin>[0]) ??
-    resolveDirectFromActiveRegistry(normalized)
+    resolveDirectFromRuntimeRegistries(normalized)
   );
 }

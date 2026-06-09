@@ -1,10 +1,13 @@
+// Covers core TUI state transitions and backend event rendering.
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
+import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  canSubmitTuiChatMessage,
   createDeferredTuiFinish,
   drainAndStopTuiSafely,
   installTuiTerminalLossExitHandler,
@@ -15,10 +18,12 @@ import {
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
+  isTuiBusyActivityStatus,
   resolveLocalAuthCliInvocation,
   resolveLocalAuthSpawnCwd,
   resolveLocalAuthSpawnOptions,
   resolveTuiCtrlCAction,
+  resolveTuiShutdownHardExitMs,
   resolveTuiSessionKey,
   scheduleProcessExitAfterTuiReturn,
   stopTuiSafely,
@@ -81,6 +86,91 @@ describe("tui slash commands", () => {
   it("includes /auth in local embedded mode", () => {
     const commands = getSlashCommands({ local: true });
     expect(commands.map((command) => command.name)).toContain("auth");
+  });
+});
+
+describe("canSubmitTuiChatMessage", () => {
+  it("allows submit when no run registration is pending", () => {
+    expect(canSubmitTuiChatMessage({})).toBe(true);
+  });
+
+  it("allows local submit while a run is active", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: true,
+        activeChatRunId: "run-active",
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks gateway submit while a run is active", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        activeChatRunId: "run-active",
+      }),
+    ).toBe(false);
+  });
+
+  it("allows gateway stop text while a run is active", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        activeChatRunId: "run-active",
+        message: "please stop",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows local stop text while a queued run is pending", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: true,
+        activeChatRunId: "run-active",
+        pendingChatRunId: "run-queued",
+        message: "please stop",
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks submits with pending optimistic state", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        pendingOptimisticUserMessage: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("blocks submits with a pending chat run id", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        pendingChatRunId: "run-pending",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isTuiBusyActivityStatus", () => {
+  it("treats finishing context as a visible busy status", () => {
+    expect(isTuiBusyActivityStatus("finishing context")).toBe(true);
+  });
+});
+
+describe("resolveTuiShutdownHardExitMs", () => {
+  it("keeps gateway shutdown bounded by the hard-exit timer", () => {
+    expect(resolveTuiShutdownHardExitMs({ localMode: false })).toBe(2000);
+  });
+
+  it("adds local run shutdown grace before forcing embedded shutdown", () => {
+    withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "3456" }, () => {
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(5456);
+    });
+  });
+
+  it("ignores partial local run shutdown grace values", () => {
+    withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "3456abc" }, () => {
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(122000);
+    });
   });
 });
 

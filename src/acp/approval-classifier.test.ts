@@ -1,3 +1,4 @@
+/** Tests ACP tool approval classification and spoofing backstops. */
 import { describe, expect, it } from "vitest";
 import { classifyAcpToolApproval } from "./approval-classifier.js";
 
@@ -84,7 +85,7 @@ describe("classifyAcpToolApproval", () => {
       expectedClass: "exec_capable",
     },
   ] as const)(
-    "classifies shared owner-only ACP backstops for $expectedToolName",
+    "classifies shared ACP backstop tools for $expectedToolName",
     ({ title, rawInput, expectedToolName, expectedClass }) => {
       expect(
         classify({

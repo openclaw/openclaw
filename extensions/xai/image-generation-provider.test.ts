@@ -1,3 +1,4 @@
+// Xai tests cover image generation provider plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildXaiImageGenerationProvider } from "./image-generation-provider.js";
 
@@ -176,12 +177,13 @@ describe("xai image generation provider", () => {
     expect(httpParams?.baseUrl).toBe("https://custom.x.ai/v1");
     const request = requirePostJsonCall();
     expect(request.url).toContain("/images/generations");
-    expect(request.timeoutMs).toBe(180_000);
+    expect(provider.defaultTimeoutMs).toBe(600_000);
+    expect(request.timeoutMs).toBe(600_000);
     expect(request.body?.aspect_ratio).toBe("2:3");
     expect(request.body?.resolution).toBe("2k");
     expect(resolveProviderOperationTimeoutMsMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        defaultTimeoutMs: 180_000,
+        defaultTimeoutMs: 600_000,
       }),
     );
   });

@@ -1,7 +1,11 @@
-import type { Model } from "@earendil-works/pi-ai";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+// Simple completion runtime tests cover model resolution, provider auth, and
+// one-shot completion wiring before requests reach the shared LLM stream path.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Model } from "../llm/types.js";
 
+// Hoisted mocks keep Vitest module replacement stable while the implementation
+// under test imports auth, model resolution, and transport helpers at module load.
 const hoisted = vi.hoisted(() => ({
   resolveModelMock: vi.fn(),
   resolveModelAsyncMock: vi.fn(),
@@ -14,11 +18,11 @@ const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
 }));
 
-vi.mock("@earendil-works/pi-ai", () => ({
+vi.mock("../llm/stream.js", () => ({
   completeSimple: hoisted.completeMock,
 }));
 
-vi.mock("./pi-embedded-runner/model.js", () => ({
+vi.mock("./embedded-agent-runner/model.js", () => ({
   resolveModel: hoisted.resolveModelMock,
   resolveModelAsync: hoisted.resolveModelAsyncMock,
 }));
@@ -44,17 +48,11 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
   prepareProviderRuntimeAuth: hoisted.prepareProviderRuntimeAuthMock,
 }));
 
-let completeWithPreparedSimpleCompletionModel: typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel;
-let prepareSimpleCompletionModel: typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModel;
-let prepareSimpleCompletionModelForAgent: typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent;
-
-beforeAll(async () => {
-  ({
-    completeWithPreparedSimpleCompletionModel,
-    prepareSimpleCompletionModel,
-    prepareSimpleCompletionModelForAgent,
-  } = await import("./simple-completion-runtime.js"));
-});
+import {
+  completeWithPreparedSimpleCompletionModel,
+  prepareSimpleCompletionModel,
+  prepareSimpleCompletionModelForAgent,
+} from "./simple-completion-runtime.js";
 
 beforeEach(() => {
   hoisted.resolveModelMock.mockReset();
@@ -277,8 +275,8 @@ describe("prepareSimpleCompletionModel", () => {
       return;
     }
 
-    // The returned auth.apiKey should be the exchanged runtime token,
-    // not the original GitHub token
+    // Callers must only receive the short-lived Copilot runtime token. The
+    // original GitHub token is broader auth material and must not leave prep.
     expect(result.auth.apiKey).toBe("copilot-runtime-token");
     expect(result.auth.apiKey).not.toBe("ghu_original_github_token");
   });
@@ -439,7 +437,7 @@ describe("prepareSimpleCompletionModel", () => {
     expect(result.auth.apiKey).toBe("bedrock-runtime-token");
   });
 
-  it("can skip Pi model/auth discovery for config-scoped one-shot completions", async () => {
+  it("can skip agent model/auth discovery for config-scoped one-shot completions", async () => {
     hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
       model: {
         provider: "ollama",
@@ -460,7 +458,7 @@ describe("prepareSimpleCompletionModel", () => {
       cfg: undefined,
       provider: "ollama",
       modelId: "llama3.2:latest",
-      skipPiDiscovery: true,
+      skipAgentDiscovery: true,
       modelResolver: hoisted.resolveModelAsyncMock,
     });
 
@@ -472,7 +470,7 @@ describe("prepareSimpleCompletionModel", () => {
       undefined,
       undefined,
       {
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
       },
     );
   });
@@ -494,7 +492,7 @@ describe("prepareSimpleCompletionModel", () => {
       provider: "mistral",
       modelId: "mistral-medium-3-5",
       allowBundledStaticCatalogFallback: true,
-      skipPiDiscovery: true,
+      skipAgentDiscovery: true,
       modelResolver: hoisted.resolveModelAsyncMock,
     });
 
@@ -506,7 +504,7 @@ describe("prepareSimpleCompletionModel", () => {
       undefined,
       {
         allowBundledStaticCatalogFallback: true,
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
       },
     );
   });
@@ -526,7 +524,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
     } as OpenClawConfig;
     hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
       model: {
-        provider: "openai-codex",
+        provider: "openai",
         id: "gpt-5.4-mini",
       },
       authStorage: {
@@ -538,26 +536,26 @@ describe("prepareSimpleCompletionModelForAgent", () => {
     const result = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId: "main",
-      skipPiDiscovery: true,
+      skipAgentDiscovery: true,
       modelResolver: hoisted.resolveModelAsyncMock,
     });
 
     expectPreparedModelResult(result);
     expect(result.selection.provider).toBe("openai");
     expect(result.selection.modelId).toBe("gpt-5.4-mini");
-    expect(result.selection.runtimeProvider).toBe("openai-codex");
+    expect(result.selection.runtimeProvider).toBe("openai");
     expect(hoisted.resolveModelAsyncMock).toHaveBeenCalledWith(
-      "openai-codex",
+      "openai",
       "gpt-5.4-mini",
       expect.any(String),
       cfg,
       {
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
       },
     );
     expect(
       (callArg(hoisted.getApiKeyForModelMock) as { model?: { provider?: string } }).model?.provider,
-    ).toBe("openai-codex");
+    ).toBe("openai");
   });
 });
 
@@ -609,7 +607,7 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
     );
   });
 
-  it("normalizes OpenClaw-only thinking levels before using pi-ai simple completion", async () => {
+  it("normalizes OpenClaw-only thinking levels before using shared model runtime simple completion", async () => {
     const model = {
       provider: "openai",
       id: "gpt-5.4",

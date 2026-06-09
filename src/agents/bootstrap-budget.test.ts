@@ -1,3 +1,4 @@
+/** Tests bootstrap context truncation accounting and user-facing warning metadata. */
 import { describe, expect, it } from "vitest";
 import {
   appendBootstrapPromptWarning,
@@ -103,6 +104,29 @@ describe("analyzeBootstrapBudget", () => {
 });
 
 describe("bootstrap prompt warnings", () => {
+  it("handles malformed truncation entries without names", () => {
+    const analysis = analyzeBootstrapBudget({
+      files: [
+        {
+          name: "TEMP.md",
+          path: "/tmp/unknown",
+          missing: false,
+          rawChars: 10,
+          injectedChars: 1,
+          truncated: true,
+        },
+      ],
+      bootstrapMaxChars: 5,
+      bootstrapTotalMaxChars: 5,
+    });
+    (analysis.truncatedFiles[0] as { name?: string }).name = undefined;
+
+    const lines = formatBootstrapTruncationWarningLines({
+      analysis,
+    });
+    expect(lines.join("\n")).toContain("10 raw -> 1 injected");
+  });
+
   it("appends warning details to the turn prompt instead of mutating the system prompt", () => {
     const prompt = appendBootstrapPromptWarning("Please continue.", [
       "AGENTS.md: 200 raw -> 0 injected",
@@ -209,6 +233,8 @@ describe("bootstrap prompt warnings", () => {
     expect(first.warningShown).toBe(true);
     expect(first.signature).toBeTypeOf("string");
     expect(first.signature).not.toBe("");
+    // Signatures carry only stable truncation inputs so once-mode warnings dedupe
+    // without tying prompt cache bytes to volatile warning prose.
     const signature = JSON.parse(first.signature ?? "{}") as {
       bootstrapMaxChars?: unknown;
       bootstrapTotalMaxChars?: unknown;
@@ -326,6 +352,28 @@ describe("bootstrap prompt warnings", () => {
     expect(lines).toContain("+1 more truncated file(s).");
   });
 
+  it("warns explicitly when AGENTS.md bootstrap policy is truncated", () => {
+    const analysis = analyzeBootstrapBudget({
+      files: [
+        {
+          name: "AGENTS.md",
+          path: "/tmp/AGENTS.md",
+          missing: false,
+          rawChars: 150,
+          injectedChars: 100,
+          truncated: true,
+        },
+      ],
+      bootstrapMaxChars: 120,
+      bootstrapTotalMaxChars: 200,
+    });
+    const lines = formatBootstrapTruncationWarningLines({ analysis });
+
+    expect(lines).toContain(
+      "AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.",
+    );
+  });
+
   it("disambiguates duplicate file names in warning lines", () => {
     const analysis = analyzeBootstrapBudget({
       files: [
@@ -390,6 +438,7 @@ describe("bootstrap prompt warnings", () => {
     expect(always.warningShown).toBe(true);
     expect(always.lines).toStrictEqual([
       "AGENTS.md: 150 raw -> 100 injected (~33% removed; max/file).",
+      "AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.",
       "If unintentional, raise agents.defaults.bootstrapMaxChars and/or agents.defaults.bootstrapTotalMaxChars.",
     ]);
   });
@@ -467,6 +516,8 @@ describe("bootstrap prompt warnings", () => {
       workspaceDir: "/tmp/openclaw",
       contextFiles,
     });
+    // Legacy injection mutated the system prompt; current warning placement keeps
+    // the system prompt stable for provider prompt caches.
     const optimizedTurns = [stableSystemPrompt, stableSystemPrompt, stableSystemPrompt];
     const injectLegacyWarning = (prompt: string, lines: string[]) => {
       const warningBlock = [

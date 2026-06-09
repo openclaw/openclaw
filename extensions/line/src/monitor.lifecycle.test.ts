@@ -1,3 +1,4 @@
+// Line tests cover monitor.lifecycle plugin behavior.
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -8,6 +9,7 @@ import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type LineNodeWebhookHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+type LineHandleWebhook = (...args: unknown[]) => Promise<void>;
 
 const {
   createLineBotMock,
@@ -17,7 +19,7 @@ const {
 } = vi.hoisted(() => ({
   createLineBotMock: vi.fn(() => ({
     account: { accountId: "default" },
-    handleWebhook: vi.fn(),
+    handleWebhook: vi.fn<LineHandleWebhook>(),
   })),
   createLineNodeWebhookHandlerMock: vi.fn<() => LineNodeWebhookHandler>(() =>
     vi.fn<LineNodeWebhookHandler>(async () => {}),
@@ -89,11 +91,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/channel-message", () => ({
-  createChannelMessageReplyPipeline: vi.fn(() => ({})),
-  hasFinalChannelTurnDispatch: vi.fn(() => false),
-}));
-
 vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/webhook-ingress")>(
     "openclaw/plugin-sdk/webhook-ingress",
@@ -153,7 +150,6 @@ describe("monitorLineProvider lifecycle", () => {
     vi.doUnmock("./bot.js");
     vi.doUnmock("openclaw/plugin-sdk/reply-runtime");
     vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-    vi.doUnmock("openclaw/plugin-sdk/channel-message");
     vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
     vi.doUnmock("./webhook-node.js");
     vi.doUnmock("./auto-reply-delivery.js");
@@ -169,7 +165,7 @@ describe("monitorLineProvider lifecycle", () => {
     createLineBotMock.mockReset();
     createLineBotMock.mockImplementation(() => ({
       account: { accountId: "default" },
-      handleWebhook: vi.fn(),
+      handleWebhook: vi.fn<LineHandleWebhook>(),
     }));
     innerLineWebhookHandlerMock = vi.fn<LineNodeWebhookHandler>(async () => {});
     createLineNodeWebhookHandlerMock
@@ -177,9 +173,13 @@ describe("monitorLineProvider lifecycle", () => {
       .mockImplementation(() => innerLineWebhookHandlerMock);
     unregisterHttpMock.mockReset();
     registerWebhookTargetWithPluginRouteMock.mockReset().mockImplementation((params) => {
-      const key = params.target.path.startsWith("/")
+      const withLeadingSlash = params.target.path.startsWith("/")
         ? params.target.path
         : `/${params.target.path}`;
+      const key =
+        withLeadingSlash.length > 1 && withLeadingSlash.endsWith("/")
+          ? withLeadingSlash.slice(0, -1)
+          : withLeadingSlash;
       const normalizedTarget = { ...params.target, path: key };
       const existing = params.targetsByPath.get(key) ?? [];
       params.targetsByPath.set(key, [...existing, normalizedTarget]);
@@ -357,6 +357,39 @@ describe("monitorLineProvider lifecycle", () => {
     secondMonitor.stop();
   });
 
+  it("dispatches a signed POST to a configured trailing-slash webhook path", async () => {
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      webhookPath: "/line/webhook/",
+      accountId: "default",
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+
+    const registration = requireWebhookRegistration();
+    expect(registration.target.path).toBe("/line/webhook");
+
+    const route = requireRegisteredRoute();
+    const payload = JSON.stringify({ events: [{ type: "message" }] });
+    const signature = crypto.createHmac("SHA256", "secret").update(payload).digest("base64");
+    const req = Object.assign(createMockIncomingRequest([payload]), {
+      method: "POST",
+      headers: { "x-line-signature": signature },
+    }) as unknown as IncomingMessage;
+    const res = createRouteResponse();
+
+    await route.handler(req, res);
+
+    const bot = createLineBotMock.mock.results[0]?.value as {
+      handleWebhook: ReturnType<typeof vi.fn>;
+    };
+    expect(res.statusCode).toBe(200);
+    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+
+    monitor.stop();
+  });
+
   it("acknowledges shared-path POST requests before matched event processing completes", async () => {
     const monitor = await monitorLineProvider({
       channelAccessToken: "token",
@@ -368,11 +401,11 @@ describe("monitorLineProvider lifecycle", () => {
 
     let releaseWebhook: (() => void) | undefined;
     const bot = createLineBotMock.mock.results[0]?.value as {
-      handleWebhook: ReturnType<typeof vi.fn>;
+      handleWebhook: ReturnType<typeof vi.fn<LineHandleWebhook>>;
     };
     bot.handleWebhook.mockImplementation(
-      async () =>
-        await new Promise<void>((resolve) => {
+      () =>
+        new Promise<void>((resolve) => {
           releaseWebhook = resolve;
         }),
     );
@@ -480,7 +513,9 @@ describe("monitorLineProvider lifecycle", () => {
     const firstRequests = Array.from({ length: limit }, () =>
       route.handler(createHeldPostRequest(), createRouteResponse()),
     );
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     const overflowResponse = createRouteResponse();
     await route.handler(createSignedPostRequest(), overflowResponse);

@@ -1,10 +1,12 @@
+// WebSocket message-handler health tests cover post-connect startup-unavailable and health-gated dispatch.
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
+import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import type { HealthSummary } from "../../../commands/health.types.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
-import { PROTOCOL_VERSION } from "../../protocol/index.js";
+import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 
 const {
@@ -67,6 +69,11 @@ vi.mock("../health-state.js", () => ({
 
 import { testing, attachGatewayWsMessageHandler } from "./message-handler.js";
 
+const DEVICE_TOKEN_MUTATION_PARAMS = {
+  deviceId: "device-1",
+  role: "operator",
+} as const satisfies Record<string, unknown>;
+
 function createLogger() {
   return {
     debug: vi.fn(),
@@ -95,9 +102,289 @@ function createHealthSummary(): HealthSummary {
   };
 }
 
+type ConnectedTestClient = {
+  invalidated: boolean;
+  invalidatedReason?: string;
+  connect: {
+    client: {
+      id: string;
+      version: string;
+      platform: string;
+      mode: string;
+    };
+    role: "operator";
+    scopes: string[];
+  };
+  connId: string;
+  usesSharedGatewayAuth: false;
+};
+
+type CloseGatewayConnection = (code?: number, reason?: string) => void;
+type SetCloseCause = (cause: string, meta?: Record<string, unknown>) => void;
+
+function createConnectedTestClient(params: {
+  connId: string;
+  invalidated?: boolean;
+  invalidatedReason?: string;
+}): ConnectedTestClient {
+  return {
+    invalidated: params.invalidated ?? false,
+    ...(params.invalidatedReason ? { invalidatedReason: params.invalidatedReason } : {}),
+    connect: {
+      client: {
+        id: "openclaw-control-ui",
+        version: "dev",
+        platform: "test",
+        mode: "ui",
+      },
+      role: "operator",
+      scopes: [],
+    },
+    connId: params.connId,
+    usesSharedGatewayAuth: false,
+  };
+}
+
+function createCloseMock() {
+  return vi.fn<CloseGatewayConnection>();
+}
+
+function createSetCloseCauseMock() {
+  return vi.fn<SetCloseCause>();
+}
+
+function attachGatewayHarness(options: {
+  connId: string;
+  connectNonce: string;
+  refreshHealthSnapshot?: GatewayRequestContext["refreshHealthSnapshot"];
+  requestOrigin?: string;
+  requestHost?: string;
+  remoteAddr?: string;
+  localAddr?: string;
+  resolvedAuth?: ResolvedGatewayAuth;
+  client?: unknown;
+  close?: CloseGatewayConnection;
+  isClosed?: () => boolean;
+  setCloseCause?: SetCloseCause;
+}) {
+  const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
+    cb?.();
+  });
+  let onMessage: ((data: string) => void) | undefined;
+  const socket = {
+    _receiver: {},
+    send: socketSend,
+    on: vi.fn((event: string, handler: (data: string) => void) => {
+      if (event === "message") {
+        onMessage = handler;
+      }
+      return socket;
+    }),
+  } as unknown as WebSocket;
+  const send = vi.fn();
+  let client: unknown = options.client ?? null;
+  const requestHost = options.requestHost ?? "127.0.0.1:19001";
+  const remoteAddr = options.remoteAddr ?? "127.0.0.1";
+  const localAddr = options.localAddr ?? "127.0.0.1";
+  const resolvedAuth: ResolvedGatewayAuth = options.resolvedAuth ?? {
+    mode: "none",
+    allowTailscale: false,
+  };
+  attachGatewayWsMessageHandler({
+    socket,
+    upgradeReq: {
+      headers: {
+        host: requestHost,
+        ...(options.requestOrigin ? { origin: options.requestOrigin } : {}),
+      },
+      socket: { localAddress: localAddr, remoteAddress: remoteAddr },
+    } as unknown as IncomingMessage,
+    connId: options.connId,
+    remoteAddr,
+    localAddr,
+    requestHost,
+    requestOrigin: options.requestOrigin,
+    connectNonce: options.connectNonce,
+    getResolvedAuth: () => resolvedAuth,
+    gatewayMethods: [],
+    events: [],
+    extraHandlers: {},
+    buildRequestContext: () => ({}) as GatewayRequestContext,
+    refreshHealthSnapshot:
+      options.refreshHealthSnapshot ?? vi.fn(async () => createHealthSummary()),
+    send,
+    close: options.close ?? createCloseMock(),
+    isClosed: options.isClosed ?? vi.fn(() => false),
+    clearHandshakeTimer: vi.fn(),
+    getClient: () => client as never,
+    setClient: (next) => {
+      client = next;
+      return true;
+    },
+    setHandshakeState: vi.fn(),
+    setCloseCause: options.setCloseCause ?? createSetCloseCauseMock(),
+    setLastFrameMeta: vi.fn(),
+    originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
+    logGateway: createLogger() as never,
+    logHealth: createLogger() as never,
+    logWsControl: createLogger() as never,
+  });
+  if (onMessage === undefined) {
+    throw new Error("expected websocket message handler");
+  }
+  const sendMessage = onMessage;
+  return {
+    socketSend,
+    sendRequest: (id: string, method: string, params: Record<string, unknown> = {}) => {
+      sendMessage(
+        JSON.stringify({
+          type: "req",
+          id,
+          method,
+          params,
+        }),
+      );
+    },
+    sendConnect: (id: string, params: Record<string, unknown>) => {
+      sendMessage(
+        JSON.stringify({
+          type: "req",
+          id,
+          method: "connect",
+          params,
+        }),
+      );
+    },
+    get client() {
+      return client;
+    },
+  };
+}
+
 describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("closes invalidated clients before dispatching queued requests", () => {
+    const close = createCloseMock();
+    const setCloseCause = createSetCloseCauseMock();
+    const client = createConnectedTestClient({
+      connId: "conn-invalidated",
+      invalidated: true,
+      invalidatedReason: "device-token-revoked",
+    });
+    const harness = attachGatewayHarness({
+      connId: "conn-invalidated",
+      connectNonce: "nonce-invalidated",
+      client,
+      close,
+      setCloseCause,
+    });
+
+    harness.sendRequest("queued-1", "status.summary");
+
+    expect(setCloseCause).toHaveBeenCalledWith("client-invalidated", {
+      reason: "device-token-revoked",
+      method: "status.summary",
+    });
+    expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-token-revoked");
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+  });
+
+  it("waits for credential mutation requests before dispatching later queued requests", async () => {
+    let releaseMutation: (() => void) | undefined;
+    const close = createCloseMock();
+    const setCloseCause = createSetCloseCauseMock();
+    const client = createConnectedTestClient({ connId: "conn-invalidating" });
+    vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
+      expect(opts.req.method).toBe("device.token.revoke");
+      await new Promise<void>((resolve) => {
+        releaseMutation = resolve;
+      });
+      client.invalidated = true;
+      client.invalidatedReason = "device-token-revoked";
+    });
+
+    const harness = attachGatewayHarness({
+      connId: "conn-invalidating",
+      connectNonce: "nonce-invalidating",
+      client,
+      close,
+      setCloseCause,
+    });
+
+    harness.sendRequest("revoke-1", "device.token.revoke", DEVICE_TOKEN_MUTATION_PARAMS);
+    harness.sendRequest("queued-1", "status.summary");
+
+    await vi.waitFor(() => {
+      expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+      expect(releaseMutation).toBeTypeOf("function");
+    });
+
+    releaseMutation?.();
+
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-token-revoked");
+    });
+    expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+    expect(setCloseCause).toHaveBeenCalledWith("client-invalidated", {
+      reason: "device-token-revoked",
+      method: "status.summary",
+    });
+  });
+
+  it("drains credential mutation barriers installed by earlier queued requests", async () => {
+    let releaseFirstMutation: (() => void) | undefined;
+    let releaseSecondMutation: (() => void) | undefined;
+    const close = createCloseMock();
+    const client = createConnectedTestClient({ connId: "conn-chained-invalidating" });
+    vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
+      if (opts.req.method === "device.token.rotate") {
+        await new Promise<void>((resolve) => {
+          releaseFirstMutation = resolve;
+        });
+        return;
+      }
+      expect(opts.req.method).toBe("device.token.revoke");
+      await new Promise<void>((resolve) => {
+        releaseSecondMutation = resolve;
+      });
+      client.invalidated = true;
+      client.invalidatedReason = "device-token-revoked";
+    });
+
+    const harness = attachGatewayHarness({
+      connId: "conn-chained-invalidating",
+      connectNonce: "nonce-chained-invalidating",
+      client,
+      close,
+    });
+
+    harness.sendRequest("rotate-1", "device.token.rotate", DEVICE_TOKEN_MUTATION_PARAMS);
+    harness.sendRequest("revoke-1", "device.token.revoke", DEVICE_TOKEN_MUTATION_PARAMS);
+    harness.sendRequest("queued-1", "status.summary");
+
+    await vi.waitFor(() => {
+      expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+      expect(releaseFirstMutation).toBeTypeOf("function");
+    });
+
+    releaseFirstMutation?.();
+    await vi.waitFor(() => {
+      expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
+      expect(releaseSecondMutation).toBeTypeOf("function");
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
+
+    releaseSecondMutation?.();
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-token-revoked");
+    });
+    expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
   });
 
   it("uses the injected runtime-aware health refresh after hello", async () => {
@@ -108,96 +395,36 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           resolveRefresh = () => resolve(createHealthSummary());
         }),
     );
-    const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
-      cb?.();
-    });
-    let onMessage: ((data: string) => void) | undefined;
-    const socket = {
-      _receiver: {},
-      send: socketSend,
-      on: vi.fn((event: string, handler: (data: string) => void) => {
-        if (event === "message") {
-          onMessage = handler;
-        }
-        return socket;
-      }),
-    } as unknown as WebSocket;
-    const send = vi.fn();
     const isClosed = vi.fn(() => false);
-    let client: unknown = null;
-    const resolvedAuth: ResolvedGatewayAuth = {
-      mode: "none",
-      allowTailscale: false,
-    };
-
-    attachGatewayWsMessageHandler({
-      socket,
-      upgradeReq: {
-        headers: { host: "127.0.0.1:19001", origin: "http://127.0.0.1:19001" },
-        socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
-      } as unknown as IncomingMessage,
+    const harness = attachGatewayHarness({
       connId: "conn-1",
-      remoteAddr: "127.0.0.1",
-      localAddr: "127.0.0.1",
-      requestHost: "127.0.0.1:19001",
       requestOrigin: "http://127.0.0.1:19001",
       connectNonce: "nonce-1",
-      getResolvedAuth: () => resolvedAuth,
-      gatewayMethods: [],
-      events: [],
-      extraHandlers: {},
-      buildRequestContext: () => ({}) as GatewayRequestContext,
       refreshHealthSnapshot,
-      send,
-      close: vi.fn(),
       isClosed,
-      clearHandshakeTimer: vi.fn(),
-      getClient: () => client as never,
-      setClient: (next) => {
-        client = next;
-        return true;
-      },
-      setHandshakeState: vi.fn(),
-      setCloseCause: vi.fn(),
-      setLastFrameMeta: vi.fn(),
-      originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
-      logGateway: createLogger() as never,
-      logHealth: createLogger() as never,
-      logWsControl: createLogger() as never,
     });
 
-    if (onMessage === undefined) {
-      throw new Error("expected websocket message handler");
-    }
-
-    onMessage(
-      JSON.stringify({
-        type: "req",
-        id: "connect-1",
-        method: "connect",
-        params: {
-          minProtocol: PROTOCOL_VERSION,
-          maxProtocol: PROTOCOL_VERSION,
-          client: {
-            id: "openclaw-control-ui",
-            version: "dev",
-            platform: "test",
-            mode: "ui",
-          },
-          role: "operator",
-          caps: [],
-        },
-      }),
-    );
+    harness.sendConnect("connect-1", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "openclaw-control-ui",
+        version: "dev",
+        platform: "test",
+        mode: "ui",
+      },
+      role: "operator",
+      caps: [],
+    });
 
     await vi.waitFor(() => {
-      expect(socketSend).toHaveBeenCalled();
+      expect(harness.socketSend).toHaveBeenCalled();
     });
-    const hello = JSON.parse(socketSend.mock.calls.at(0)?.[0] ?? "{}") as { ok?: boolean };
+    const hello = JSON.parse(harness.socketSend.mock.calls.at(0)?.[0] ?? "{}") as { ok?: boolean };
     expect(hello.ok).toBe(true);
 
     await vi.waitFor(() => {
-      expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: true });
+      expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: false });
     });
     resolveRefresh?.();
   });
@@ -206,91 +433,30 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
       createHealthSummary(),
     );
-    const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
-      cb?.();
-    });
-    let onMessage: ((data: string) => void) | undefined;
-    const socket = {
-      _receiver: {},
-      send: socketSend,
-      on: vi.fn((event: string, handler: (data: string) => void) => {
-        if (event === "message") {
-          onMessage = handler;
-        }
-        return socket;
-      }),
-    } as unknown as WebSocket;
-    const send = vi.fn();
-    let client: unknown = null;
-    const resolvedAuth: ResolvedGatewayAuth = {
-      mode: "none",
-      allowTailscale: false,
-    };
-
-    attachGatewayWsMessageHandler({
-      socket,
-      upgradeReq: {
-        headers: { host: "127.0.0.1:19001" },
-        socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
-      } as unknown as IncomingMessage,
+    const harness = attachGatewayHarness({
       connId: "conn-approval-runtime-spoof",
-      remoteAddr: "127.0.0.1",
-      localAddr: "127.0.0.1",
-      requestHost: "127.0.0.1:19001",
       connectNonce: "nonce-approval-runtime-spoof",
-      getResolvedAuth: () => resolvedAuth,
-      gatewayMethods: [],
-      events: [],
-      extraHandlers: {},
-      buildRequestContext: () => ({}) as GatewayRequestContext,
       refreshHealthSnapshot,
-      send,
-      close: vi.fn(),
-      isClosed: vi.fn(() => false),
-      clearHandshakeTimer: vi.fn(),
-      getClient: () => client as never,
-      setClient: (next) => {
-        client = next;
-        return true;
-      },
-      setHandshakeState: vi.fn(),
-      setCloseCause: vi.fn(),
-      setLastFrameMeta: vi.fn(),
-      originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
-      logGateway: createLogger() as never,
-      logHealth: createLogger() as never,
-      logWsControl: createLogger() as never,
     });
 
-    if (onMessage === undefined) {
-      throw new Error("expected websocket message handler");
-    }
-
-    onMessage(
-      JSON.stringify({
-        type: "req",
-        id: "connect-approval-runtime-spoof",
-        method: "connect",
-        params: {
-          minProtocol: PROTOCOL_VERSION,
-          maxProtocol: PROTOCOL_VERSION,
-          client: {
-            id: "gateway-client",
-            version: "dev",
-            platform: "test",
-            mode: "backend",
-          },
-          role: "operator",
-          scopes: ["operator.approvals"],
-          caps: [],
-        },
-      }),
-    );
+    harness.sendConnect("connect-approval-runtime-spoof", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.approvals"],
+      caps: [],
+    });
 
     await vi.waitFor(() => {
-      expect(socketSend).toHaveBeenCalled();
+      expect(harness.socketSend).toHaveBeenCalled();
     });
-    const connectedClient = client as {
+    const connectedClient = harness.client as {
       connect?: { scopes?: string[] };
       internal?: { approvalRuntime?: boolean };
     } | null;
@@ -302,97 +468,80 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
       createHealthSummary(),
     );
-    const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
-      cb?.();
-    });
-    let onMessage: ((data: string) => void) | undefined;
-    const socket = {
-      _receiver: {},
-      send: socketSend,
-      on: vi.fn((event: string, handler: (data: string) => void) => {
-        if (event === "message") {
-          onMessage = handler;
-        }
-        return socket;
-      }),
-    } as unknown as WebSocket;
-    const send = vi.fn();
-    let client: unknown = null;
-    const resolvedAuth: ResolvedGatewayAuth = {
-      mode: "none",
-      allowTailscale: false,
-    };
-
-    attachGatewayWsMessageHandler({
-      socket,
-      upgradeReq: {
-        headers: { host: "127.0.0.1:19001" },
-        socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
-      } as unknown as IncomingMessage,
+    const harness = attachGatewayHarness({
       connId: "conn-approval-runtime-token",
-      remoteAddr: "127.0.0.1",
-      localAddr: "127.0.0.1",
-      requestHost: "127.0.0.1:19001",
       connectNonce: "nonce-approval-runtime-token",
-      getResolvedAuth: () => resolvedAuth,
-      gatewayMethods: [],
-      events: [],
-      extraHandlers: {},
-      buildRequestContext: () => ({}) as GatewayRequestContext,
       refreshHealthSnapshot,
-      send,
-      close: vi.fn(),
-      isClosed: vi.fn(() => false),
-      clearHandshakeTimer: vi.fn(),
-      getClient: () => client as never,
-      setClient: (next) => {
-        client = next;
-        return true;
-      },
-      setHandshakeState: vi.fn(),
-      setCloseCause: vi.fn(),
-      setLastFrameMeta: vi.fn(),
-      originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
-      logGateway: createLogger() as never,
-      logHealth: createLogger() as never,
-      logWsControl: createLogger() as never,
     });
 
-    if (onMessage === undefined) {
-      throw new Error("expected websocket message handler");
-    }
-
-    onMessage(
-      JSON.stringify({
-        type: "req",
-        id: "connect-approval-runtime-token",
-        method: "connect",
-        params: {
-          minProtocol: PROTOCOL_VERSION,
-          maxProtocol: PROTOCOL_VERSION,
-          client: {
-            id: "gateway-client",
-            version: "dev",
-            platform: "test",
-            mode: "backend",
-          },
-          role: "operator",
-          scopes: ["operator.approvals"],
-          caps: [],
-          auth: {
-            approvalRuntimeToken: getOperatorApprovalRuntimeToken(),
-          },
-        },
-      }),
-    );
+    harness.sendConnect("connect-approval-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.approvals"],
+      caps: [],
+      auth: {
+        approvalRuntimeToken: getOperatorApprovalRuntimeToken(),
+      },
+    });
 
     await vi.waitFor(() => {
-      expect(socketSend).toHaveBeenCalled();
+      expect(harness.socketSend).toHaveBeenCalled();
     });
-    const connectedClient = client as {
+    const connectedClient = harness.client as {
       internal?: { approvalRuntime?: boolean };
     } | null;
     expect(connectedClient?.internal?.approvalRuntime).toBe(true);
+  });
+
+  it("does not trust approval runtime tokens from remote clients", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const harness = attachGatewayHarness({
+      connId: "conn-remote-approval-runtime-token",
+      connectNonce: "nonce-remote-approval-runtime-token",
+      requestHost: "gateway.example.com:18789",
+      remoteAddr: "203.0.113.50",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+      refreshHealthSnapshot,
+    });
+
+    harness.sendConnect("connect-remote-approval-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.approvals"],
+      caps: [],
+      auth: {
+        token: "gateway-token",
+        approvalRuntimeToken: getOperatorApprovalRuntimeToken(),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    const connectedClient = harness.client as {
+      internal?: { approvalRuntime?: boolean };
+    } | null;
+    expect(connectedClient?.internal?.approvalRuntime).not.toBe(true);
   });
 });
 

@@ -1,3 +1,4 @@
+// Verifies explicit web-provider artifact fast paths avoid runtime loading.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
@@ -36,6 +37,25 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => {
               id: "gemini",
               createTool: () => ({ description: "fixture", parameters: {} }),
             }),
+          };
+        }
+        if (dirName === "mockplugin" && artifactBasename === "web-search-contract-api.js") {
+          return {
+            createFuzzpluginWebSearchProvider: () => {
+              throw new Error("fuzzplugin web provider factory failed");
+            },
+            createMockpluginWebSearchProvider: () => ({
+              ...providerBase,
+              id: "mockplugin",
+              createTool: () => null,
+            }),
+          };
+        }
+        if (dirName === "fuzzplugin" && artifactBasename === "web-search-contract-api.js") {
+          return {
+            createFuzzpluginWebSearchProvider: () => {
+              throw new Error("fuzzplugin web provider factory failed");
+            },
           };
         }
         if (dirName === "firecrawl" && artifactBasename === "web-fetch-contract-api.js") {
@@ -95,7 +115,6 @@ describe("web provider public artifacts explicit fast path", () => {
   it("resolves bundled web search providers by explicit plugin id without manifest scans", () => {
     const provider = expectSingleProvider(
       resolveBundledWebSearchProvidersFromPublicArtifacts({
-        bundledAllowlistCompat: true,
         onlyPluginIds: ["brave"],
       }),
     );
@@ -104,6 +123,37 @@ describe("web provider public artifacts explicit fast path", () => {
     expect(provider.createTool({ config: {} as never })).toBeNull();
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "brave",
+      artifactBasename: "web-search-contract-api.js",
+    });
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("skips throwing bundled web provider factories while preserving healthy siblings", () => {
+    const provider = expectSingleProvider(
+      resolveBundledWebSearchProvidersFromPublicArtifacts({
+        onlyPluginIds: ["mockplugin"],
+      }),
+    );
+
+    expect(provider.pluginId).toBe("mockplugin");
+    expect(provider.id).toBe("mockplugin");
+    expect(provider.createTool({ config: {} as never })).toBeNull();
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+      dirName: "mockplugin",
+      artifactBasename: "web-search-contract-api.js",
+    });
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("throws when every matching bundled web provider factory fails", () => {
+    expect(() =>
+      resolveBundledWebSearchProvidersFromPublicArtifacts({
+        onlyPluginIds: ["fuzzplugin"],
+      }),
+    ).toThrow("Unable to initialize web providers for plugin fuzzplugin");
+
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+      dirName: "fuzzplugin",
       artifactBasename: "web-search-contract-api.js",
     });
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
@@ -131,7 +181,6 @@ describe("web provider public artifacts explicit fast path", () => {
   it("resolves bundled web fetch providers by explicit plugin id without manifest scans", () => {
     const provider = expectSingleProvider(
       resolveBundledWebFetchProvidersFromPublicArtifacts({
-        bundledAllowlistCompat: true,
         onlyPluginIds: ["firecrawl"],
       }),
     );

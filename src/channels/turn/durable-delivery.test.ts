@@ -1,3 +1,4 @@
+// Durable delivery tests cover persisted channel turn delivery attempts and recovery.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -33,6 +34,7 @@ type SendDurableMessageBatchRequest = {
   to?: string;
   threadId?: string | number | null;
   durability?: string;
+  gatewayClientScopes?: readonly string[];
 };
 
 type DeliverySupportRequest = {
@@ -141,6 +143,7 @@ describe("durable inbound reply delivery", () => {
     expect(request.to).toBe("chat-1");
     expect(request.threadId).toBeNull();
     expect(request.durability).toBe("best_effort");
+    expect(request.gatewayClientScopes).toEqual([]);
   });
 
   it("does not require unknown-send reconciliation for the default best-effort final path", async () => {
@@ -215,6 +218,7 @@ describe("durable inbound reply delivery", () => {
       }),
     });
 
-    expect(result).toEqual({ status: "failed", error });
+    expect(result).toEqual({ status: "failed", error, sentBeforeError: true });
+    expect(error).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
   });
 });

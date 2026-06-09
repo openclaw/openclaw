@@ -1,7 +1,8 @@
+// Googlechat plugin module implements actions behavior.
 import {
   createActionGate,
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
@@ -101,7 +102,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
     mediaReadFile,
   }) => {
     const account = resolveGoogleChatAccount({
-      cfg: cfg,
+      cfg,
       accountId,
     });
     if (account.credentialSource === "none") {
@@ -213,7 +214,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "reactions") {
       const messageName = readStringParam(params, "messageId", { required: true });
-      const limit = readNumberParam(params, "limit", { integer: true });
+      const limit = readPositiveIntegerParam(params, "limit");
       const reactions = await listGoogleChatReactions({
         account,
         messageName,

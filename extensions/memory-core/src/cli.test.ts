@@ -1,3 +1,4 @@
+// Memory Core tests cover cli plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +10,15 @@ import {
   spyRuntimeLogs,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
+import {
+  configureMemoryCoreDreamingStateForTests,
+  resetMemoryCoreDreamingStateForTests,
+} from "./dreaming-state.js";
+import {
+  readShortTermRecallEntries,
+  recordShortTermRecalls,
+  testing as shortTermTesting,
+} from "./short-term-promotion.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));
@@ -72,6 +81,7 @@ let workspaceCaseId = 0;
 let qmdCaseId = 0;
 
 beforeAll(async () => {
+  await configureMemoryCoreDreamingStateForTests();
   ({ registerMemoryCli } = await import("./cli.js"));
   ({ defaultRuntime, isVerbose, setVerbose } =
     await import("openclaw/plugin-sdk/memory-core-host-runtime-cli"));
@@ -103,6 +113,7 @@ afterAll(async () => {
     return;
   }
   await fs.rm(fixtureRoot, { recursive: true, force: true });
+  resetMemoryCoreDreamingStateForTests();
 });
 
 describe("memory cli", () => {
@@ -212,6 +223,110 @@ describe("memory cli", () => {
     await program.parseAsync(["memory", ...args], { from: "user" });
   }
 
+  it("rejects invalid memory search numeric options before running the command", async () => {
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerMemoryCli(program);
+
+    await expect(
+      program.parseAsync(["memory", "search", "hello", "--max-results", "nope"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--max-results must be a positive integer.");
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
+  it("rejects fractional memory search result limits before running the command", async () => {
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerMemoryCli(program);
+
+    await expect(
+      program.parseAsync(["memory", "search", "hello", "--max-results", "2.5"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--max-results must be a positive integer.");
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid memory promote numeric options before running the command", async () => {
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerMemoryCli(program);
+
+    await expect(
+      program.parseAsync(["memory", "promote", "--limit", "Infinity"], { from: "user" }),
+    ).rejects.toThrow("--limit must be a positive integer.");
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [["search", "hello", "--max-results", "0x10"], "--max-results must be a positive integer."],
+    [["search", "hello", "--max-results", "1e2"], "--max-results must be a positive integer."],
+    [["search", "hello", "--min-score", "0x1"], "--min-score must be a finite number."],
+    [["search", "hello", "--min-score", "1e-1"], "--min-score must be a finite number."],
+    [
+      ["promote", "--min-recall-count", "0x1"],
+      "--min-recall-count must be a non-negative integer.",
+    ],
+    [
+      ["promote", "--min-unique-queries", "1e2"],
+      "--min-unique-queries must be a non-negative integer.",
+    ],
+  ])("rejects non-decimal memory numeric option %j", async (args, message) => {
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerMemoryCli(program);
+
+    await expect(program.parseAsync(["memory", ...args], { from: "user" })).rejects.toThrow(
+      message,
+    );
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["--limit", "1.5", "--limit must be a positive integer."],
+    ["--min-recall-count", "1.5", "--min-recall-count must be a non-negative integer."],
+    ["--min-unique-queries", "1.5", "--min-unique-queries must be a non-negative integer."],
+  ])(
+    "rejects fractional memory promote %s values before running the command",
+    async (flag, value, message) => {
+      const program = new Command();
+      program.name("test");
+      program.exitOverride();
+      program.configureOutput({
+        writeErr: () => {},
+        writeOut: () => {},
+      });
+      registerMemoryCli(program);
+
+      await expect(
+        program.parseAsync(["memory", "promote", flag, value], { from: "user" }),
+      ).rejects.toThrow(message);
+      expect(getMemorySearchManager).not.toHaveBeenCalled();
+    },
+  );
+
   function captureHelpOutput(command: Command | undefined) {
     let output = "";
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
@@ -308,6 +423,36 @@ describe("memory cli", () => {
     expectLogged(log, "Vector path: /opt/sqlite-vec.dylib");
     expectLogged(log, "FTS: ready");
     expectLogged(log, "Embedding cache: enabled (123 entries)");
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("prints index identity mismatch reasons", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      status: () =>
+        makeMemoryStatus({
+          dirty: true,
+          provider: "ollama",
+          model: "nomic-embed-text",
+          requestedProvider: "ollama",
+          custom: {
+            indexIdentity: {
+              status: "mismatched",
+              reason: "index was built for provider openai, expected ollama",
+            },
+          },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expectLogged(log, "Provider: ollama (requested: ollama)");
+    expectLogged(log, "Dirty: yes");
+    expectLogged(log, "Index identity: index was built for provider openai, expected ollama");
+    expectLogged(log, "Vector search: paused until memory is rebuilt");
+    expectLogged(log, "Fix: Run: openclaw memory status --index --agent main");
     expect(close).toHaveBeenCalled();
   });
 
@@ -567,42 +712,33 @@ describe("memory cli", () => {
 
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            version: 1,
-            updatedAt: "2026-04-04T00:00:00.000Z",
-            entries: {
-              good: {
-                key: "good",
-                path: "memory/2026-04-03.md",
-                startLine: 1,
-                endLine: 2,
-                source: "memory",
-                snippet: "QMD router cache note",
-                recallCount: 1,
-                totalScore: 0.8,
-                maxScore: 0.8,
-                firstRecalledAt: "2026-04-04T00:00:00.000Z",
-                lastRecalledAt: "2026-04-04T00:00:00.000Z",
-                queryHashes: ["a"],
-              },
-              bad: {
-                path: "",
-              },
-            },
+      await shortTermTesting.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-04T00:00:00.000Z",
+        entries: {
+          good: {
+            key: "good",
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "QMD router cache note",
+            recallCount: 1,
+            totalScore: 0.8,
+            maxScore: 0.8,
+            firstRecalledAt: "2026-04-04T00:00:00.000Z",
+            lastRecalledAt: "2026-04-04T00:00:00.000Z",
+            queryHashes: ["a"],
           },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-      const lockPath = path.join(workspaceDir, "memory", ".dreams", "short-term-promotion.lock");
-      await fs.writeFile(lockPath, "999999:0\n", "utf-8");
-      const staleMtime = new Date(Date.now() - 120_000);
-      await fs.utimes(lockPath, staleMtime, staleMtime);
+          bad: {
+            path: "",
+          },
+        },
+      });
+      await shortTermTesting.writeShortTermLock(workspaceDir, {
+        owner: "999999:0",
+        acquiredAt: Date.now() - 120_000,
+      });
 
       const close = vi.fn(async () => {});
       mockManager({
@@ -615,8 +751,8 @@ describe("memory cli", () => {
       await runMemoryCli(["status", "--fix"]);
 
       expectLogged(log, "Repair: rewrote store");
-      await expectPathMissing(lockPath);
-      const repaired = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      const audit = await shortTermTesting.readRecallStore(workspaceDir, new Date().toISOString());
+      const repaired = audit as {
         entries: Record<string, { conceptTags?: string[] }>;
       };
       expect(repaired.entries.good?.conceptTags).toContain("router");
@@ -626,8 +762,15 @@ describe("memory cli", () => {
 
   it("shows the fix hint only before --fix has been run", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-      await fs.writeFile(storePath, " \n", "utf-8");
+      await shortTermTesting.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-04T00:00:00.000Z",
+        entries: {
+          bad: {
+            path: "",
+          },
+        },
+      });
 
       const close = vi.fn(async () => {});
       mockManager({
@@ -1004,10 +1147,10 @@ describe("memory cli", () => {
     mockManager({ search, close });
 
     const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["search", "hello"]);
+    await runMemoryCli(["search", "hello", "--max-results", "+02"]);
 
     expect(search).toHaveBeenCalledWith("hello", {
-      maxResults: undefined,
+      maxResults: 2,
       minScore: undefined,
       sessionKey: "agent:main:cli:direct:memory-search",
     });
@@ -1131,12 +1274,14 @@ describe("memory cli", () => {
       await runMemoryCli([
         "promote",
         "--json",
+        "--limit",
+        "+01",
         "--min-score",
         "0",
         "--min-recall-count",
-        "0",
+        "+0",
         "--min-unique-queries",
-        "0",
+        "00",
       ]);
 
       const payload = firstWrittenJsonArg<{ candidates: unknown[] }>(writeJson);
@@ -1872,7 +2017,7 @@ describe("memory cli", () => {
     });
   });
 
-  async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
+  async function waitFor<T>(task: () => Promise<T>, timeoutMs = 1500): Promise<T> {
     let value: T | undefined;
     await vi.waitFor(
       async () => {
@@ -1896,6 +2041,19 @@ describe("memory cli", () => {
           source: "memory",
         },
       ]);
+      getRuntimeConfig.mockReturnValue({
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      });
       mockManager({
         search,
         status: () => makeMemoryStatus({ workspaceDir }),
@@ -1904,32 +2062,11 @@ describe("memory cli", () => {
 
       await runMemoryCli(["search", "glacier", "--json"]);
 
-      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-      const storeRaw = await waitFor(async () => await fs.readFile(storePath, "utf-8"));
-      const store = JSON.parse(storeRaw) as {
-        entries?: Record<
-          string,
-          {
-            key: string;
-            path: string;
-            startLine: number;
-            endLine: number;
-            source: string;
-            snippet: string;
-            recallCount: number;
-            dailyCount: number;
-            groundedCount: number;
-            totalScore: number;
-            maxScore: number;
-            firstRecalledAt: string;
-            lastRecalledAt: string;
-            queryHashes: string[];
-            recallDays: string[];
-            conceptTags: string[];
-          }
-        >;
-      };
-      const entries = Object.values(store.entries ?? {});
+      const entries = await waitFor(async () => {
+        const recalled = await readShortTermRecallEntries({ workspaceDir });
+        expect(recalled).toHaveLength(1);
+        return recalled;
+      });
       expect(entries).toHaveLength(1);
       const entry = entries[0];
       if (!entry) {
@@ -1965,6 +2102,52 @@ describe("memory cli", () => {
         recallDays: ["<today>"],
         conceptTags: ["backup", "backups", "glacier"],
       });
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("does not record short-term recall entries from memory search when dreaming is disabled", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      const search = vi.fn(async () => [
+        {
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.91,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ]);
+      getRuntimeConfig.mockReturnValue({
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                },
+              },
+            },
+          },
+        },
+      });
+      mockManager({
+        search,
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["search", "glacier", "--json"]);
+
+      const payload = firstWrittenJsonArg<{ results: Array<{ path: string }> }>(writeJson);
+      if (!payload) {
+        throw new Error("Expected memory search JSON payload");
+      }
+      expect(payload.results).toHaveLength(1);
+      expect(payload.results[0]?.path).toBe("memory/2026-04-03.md");
+      expect(await readShortTermRecallEntries({ workspaceDir })).toHaveLength(0);
       expect(close).toHaveBeenCalled();
     });
   });

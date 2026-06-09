@@ -2,12 +2,13 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
-import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
-import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
+import { sanitizeInboundSystemTags } from "../security/system-tags.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -19,20 +20,13 @@ export type SystemEvent = {
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
-  forceSenderIsOwnerFalse?: boolean;
-  /** @deprecated Use forceSenderIsOwnerFalse. Kept for installed plugin compatibility. */
-  trusted?: boolean;
 };
 
 const MAX_EVENTS = 20;
 
 type SessionQueue = {
-  queue: QueuedSystemEvent[];
+  queue: SystemEvent[];
   lastContextKey: string | null;
-};
-
-type QueuedSystemEvent = Omit<SystemEvent, "trusted"> & {
-  forceSenderIsOwnerFalse: boolean;
 };
 
 const SYSTEM_EVENT_QUEUES_KEY = Symbol.for("openclaw.systemEvents.queues");
@@ -43,9 +37,6 @@ type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
-  forceSenderIsOwnerFalse?: boolean;
-  /** @deprecated Use forceSenderIsOwnerFalse. Kept for installed plugin compatibility. */
-  trusted?: boolean;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -78,11 +69,10 @@ function getOrCreateSessionQueue(sessionKey: string): SessionQueue {
   return created;
 }
 
-function cloneSystemEvent(event: QueuedSystemEvent): SystemEvent {
+function cloneSystemEvent(event: SystemEvent): SystemEvent {
   return {
     ...event,
     ...(event.deliveryContext ? { deliveryContext: { ...event.deliveryContext } } : {}),
-    trusted: !event.forceSenderIsOwnerFalse,
   };
 }
 
@@ -96,71 +86,41 @@ export function isSystemEventContextChanged(
 }
 
 function findDuplicateInQueue(
-  queue: readonly QueuedSystemEvent[],
+  queue: readonly SystemEvent[],
   text: string,
   contextKey: string | null,
   deliveryContext: DeliveryContext | undefined,
-  forceSenderIsOwnerFalse: boolean,
-): SystemEvent | undefined {
+): boolean {
+  const incoming = { text, contextKey, deliveryContext };
   if (contextKey === null) {
     const last = queue[queue.length - 1];
-    return last &&
-      isDuplicateSystemEvent(last, { text, contextKey, deliveryContext, forceSenderIsOwnerFalse })
-      ? last
-      : undefined;
+    return last ? isDuplicateSystemEvent(last, incoming) : false;
   }
-  for (const event of queue) {
-    if (
-      isDuplicateSystemEvent(event, {
-        text,
-        contextKey,
-        deliveryContext,
-        forceSenderIsOwnerFalse,
-      })
-    ) {
-      return event;
-    }
-  }
-  return undefined;
-}
-
-function applyContextKeyPolicy(entry: SessionQueue, incomingContextKey: string | null): void {
-  if (incomingContextKey !== null) {
-    entry.lastContextKey = incomingContextKey;
-  }
+  return queue.some((event) => isDuplicateSystemEvent(event, incoming));
 }
 
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
-  const key = requireSessionKey(options?.sessionKey);
+  const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
-  const cleaned = text.trim();
+  // These entries are rendered as `System:` lines, so strip nested system-marker
+  // spoofs at the queue boundary before any plugin/channel text reaches a prompt.
+  const cleaned = sanitizeInboundSystemTags(text).trim();
   if (!cleaned) {
     return false;
   }
-  const normalizedContextKey = normalizeContextKey(options?.contextKey);
-  const normalizedDeliveryContext = normalizeDeliveryContext(options?.deliveryContext);
-  const forceSenderIsOwnerFalse =
-    options.forceSenderIsOwnerFalse ??
-    // Preserve the old plugin SDK contract without carrying trust labels into prompts.
-    options.trusted === false;
-  if (
-    findDuplicateInQueue(
-      entry.queue,
-      cleaned,
-      normalizedContextKey,
-      normalizedDeliveryContext,
-      forceSenderIsOwnerFalse,
-    )
-  ) {
+  const normalizedContextKey = normalizeContextKey(options.contextKey);
+  const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
+  if (findDuplicateInQueue(entry.queue, cleaned, normalizedContextKey, normalizedDeliveryContext)) {
     return false;
   }
-  applyContextKeyPolicy(entry, normalizedContextKey);
+  if (normalizedContextKey !== null) {
+    entry.lastContextKey = normalizedContextKey;
+  }
   entry.queue.push({
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
-    forceSenderIsOwnerFalse,
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -191,33 +151,22 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
   return channelRouteDedupeKey(left) === channelRouteDedupeKey(right);
 }
 
-function resolveEventOwnerDowngrade(
-  event: Pick<SystemEvent, "forceSenderIsOwnerFalse" | "trusted">,
-): boolean {
-  return event.forceSenderIsOwnerFalse ?? event.trusted === false;
-}
-
 function isDuplicateSystemEvent(
-  existing: QueuedSystemEvent,
-  incoming: Pick<
-    SystemEvent,
-    "text" | "contextKey" | "deliveryContext" | "forceSenderIsOwnerFalse" | "trusted"
-  >,
+  existing: SystemEvent,
+  incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext">,
 ): boolean {
   return (
     existing.text === incoming.text &&
     (existing.contextKey ?? null) === (incoming.contextKey ?? null) &&
-    existing.forceSenderIsOwnerFalse === resolveEventOwnerDowngrade(incoming) &&
     areDeliveryContextsEqual(existing.deliveryContext, incoming.deliveryContext)
   );
 }
 
-function areSystemEventsEqual(left: QueuedSystemEvent, right: SystemEvent): boolean {
+function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
   return (
     left.text === right.text &&
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
-    left.forceSenderIsOwnerFalse === resolveEventOwnerDowngrade(right) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
 }

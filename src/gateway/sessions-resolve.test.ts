@@ -1,6 +1,8 @@
+// Session resolve tests cover canonical/legacy key lookup, store migration,
+// agent scoping, listed-session selection, and protocol error mapping.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { ErrorCodes } from "./protocol/index.js";
 
 const hoisted = vi.hoisted(() => ({
   loadSessionStoreMock: vi.fn(),
@@ -49,6 +51,21 @@ describe("resolveSessionKeyFromResolveParams", () => {
   const canonicalKey = "agent:main:canon";
   const legacyKey = "agent:main:legacy";
   const storePath = "/tmp/sessions.json";
+
+  const expectResolveToCanonicalKey = async (
+    p: Parameters<typeof resolveSessionKeyFromResolveParams>[0]["p"],
+  ) => {
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      key: canonicalKey,
+    });
+    expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
+  };
 
   beforeEach(() => {
     hoisted.loadSessionStoreMock.mockReset();
@@ -116,16 +133,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
     }
     hoisted.loadSessionStoreMock.mockReturnValue(store);
 
-    await expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { key: canonicalKey, spawnedBy: "controller-1" },
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      key: canonicalKey,
-    });
-    expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
+    await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
   });
 
   it("re-checks migrated legacy keys through the same visibility filter", async () => {
@@ -134,21 +142,12 @@ describe("resolveSessionKeyFromResolveParams", () => {
     } satisfies Record<string, SessionEntry>;
     hoisted.loadSessionStoreMock.mockImplementation(() => store);
 
-    await expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { key: canonicalKey, spawnedBy: "controller-1" },
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      key: canonicalKey,
-    });
+    await expectResolveToCanonicalKey({ key: canonicalKey, spawnedBy: "controller-1" });
 
     expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(1);
     const updateSessionStoreCall = hoisted.updateSessionStoreMock.mock.calls[0];
     expect(updateSessionStoreCall?.[0]).toBe(storePath);
     expect(typeof updateSessionStoreCall?.[1]).toBe("function");
-    expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
   });
 
   it("rejects sessions belonging to a deleted agent (key-based lookup)", async () => {

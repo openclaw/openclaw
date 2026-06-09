@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements server behavior.
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -74,14 +75,14 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
   // the caller supplied one — that's the most reliable signal.
   const separatorMatch = /^([^/:]+)[/:]/.exec(trimmed);
   const provider = separatorMatch?.[1] ?? trimmed;
-  if (provider === "openai" || provider === "openai-codex") {
+  if (provider === "openai") {
     return "openai";
   }
   if (provider === "anthropic" || provider === "claude-cli") {
     return "anthropic";
   }
   // Fall back to model-name prefix matching for bare model strings like
-  // `gpt-5.5` or `claude-opus-4-7`.
+  // `gpt-5.5` or `claude-opus-4-8`.
   if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
     return "openai";
   }
@@ -101,8 +102,11 @@ type MockOpenAiRequestSnapshot = {
   model: string;
   providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
+  plannedToolCallId?: string;
   plannedToolName?: string;
   plannedToolArgs?: Record<string, unknown>;
+  toolOutputCallId?: string;
+  toolOutputStructuredError?: true;
 };
 
 // Anthropic /v1/messages request/response shapes the mock actually needs.
@@ -122,6 +126,7 @@ type AnthropicMessageContentBlock =
   | {
       type: "tool_result";
       tool_use_id: string;
+      is_error?: boolean;
       content: string | Array<{ type: "text"; text: string }>;
     }
   | { type: "image"; source: Record<string, unknown> };
@@ -159,6 +164,7 @@ const QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE = /telegram current session_s
 const QA_TELEGRAM_STREAM_SINGLE_MARKER = "QA-TELEGRAM-STREAM-SINGLE-OK";
 const QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE = /telegram long final three chunk qa check/i;
 const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
+const QA_WHATSAPP_LONG_FINAL_PROMPT_RE = /whatsapp long final qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
@@ -174,6 +180,13 @@ const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill 
 const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small project/i;
 const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
 const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
+const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
+const QA_AUDIO_TRANSCRIPTION_TEXT =
+  "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
+const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
+  "openclawqa reply with only this exact marker after group audio preflight: WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_OK";
+const QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS = 48_000;
+const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 type MockScenarioState = {
   subagentFanoutPhase: number;
@@ -210,6 +223,13 @@ function readBody(req: IncomingMessage): Promise<string> {
     maxBytes: MOCK_OPENAI_MAX_BODY_BYTES,
     timeoutMs: MOCK_OPENAI_BODY_TIMEOUT_MS,
   });
+}
+
+function transcriptionTextForAudioRequest(rawBody: string) {
+  if (rawBody.length >= QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS) {
+    return QA_GROUP_AUDIO_TRANSCRIPTION_TEXT;
+  }
+  return QA_AUDIO_TRANSCRIPTION_TEXT;
 }
 
 function writeJson(res: ServerResponse, status: number, body: unknown) {
@@ -374,6 +394,29 @@ function extractFunctionCallOutputText(item: ResponsesInputItem) {
   return stringifyFunctionCallOutput(item.output);
 }
 
+function extractFunctionCallOutputCallId(item: ResponsesInputItem) {
+  if (item.type !== "function_call_output") {
+    return "";
+  }
+  const record = item as {
+    call_id?: unknown;
+    tool_call_id?: unknown;
+    tool_use_id?: unknown;
+  };
+  return (
+    [record.call_id, record.tool_call_id, record.tool_use_id].find(
+      (value): value is string => typeof value === "string" && value.trim().length > 0,
+    ) ?? ""
+  );
+}
+
+function functionCallOutputIsStructuredError(item: ResponsesInputItem) {
+  if (item.type !== "function_call_output") {
+    return false;
+  }
+  return item.is_error === true || item.isError === true;
+}
+
 function extractToolOutput(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
   for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
@@ -399,6 +442,64 @@ function extractToolOutput(input: ResponsesInputItem[]) {
         return output;
       }
       continue;
+    }
+  }
+  return "";
+}
+
+function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
+  const lastUserIndex = findLastUserIndex(input);
+  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
+    const item = input[index];
+    const output = extractFunctionCallOutputText(item);
+    if (output) {
+      return functionCallOutputIsStructuredError(item);
+    }
+  }
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    const output = extractFunctionCallOutputText(item);
+    if (output) {
+      const laterUserTexts = input
+        .slice(index + 1)
+        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
+        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
+        .filter(Boolean);
+      if (
+        laterUserTexts.length > 0 &&
+        laterUserTexts.every((text) => isToolOutputContinuationText(text))
+      ) {
+        return functionCallOutputIsStructuredError(item);
+      }
+    }
+  }
+  return false;
+}
+
+function extractToolOutputCallId(input: ResponsesInputItem[]) {
+  const lastUserIndex = findLastUserIndex(input);
+  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
+    const item = input[index];
+    const output = extractFunctionCallOutputText(item);
+    if (output) {
+      return extractFunctionCallOutputCallId(item);
+    }
+  }
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    const output = extractFunctionCallOutputText(item);
+    if (output) {
+      const laterUserTexts = input
+        .slice(index + 1)
+        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
+        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
+        .filter(Boolean);
+      if (
+        laterUserTexts.length > 0 &&
+        laterUserTexts.every((text) => isToolOutputContinuationText(text))
+      ) {
+        return extractFunctionCallOutputCallId(item);
+      }
     }
   }
   return "";
@@ -445,7 +546,7 @@ function extractInputText(content: unknown[]): string {
   return content
     .filter(
       (entry): entry is { type: "input_text"; text: string } =>
-        !!entry &&
+        Boolean(entry) &&
         typeof entry === "object" &&
         (entry as { type?: unknown }).type === "input_text" &&
         typeof (entry as { text?: unknown }).text === "string",
@@ -555,6 +656,31 @@ function countImageInputs(value: unknown): number {
   return count;
 }
 
+function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
+  const latestUserIndex = findLastUserIndex(input);
+  if (latestUserIndex < 0) {
+    return { text: "", imageInputCount: 0 };
+  }
+
+  const latestUserItem = input[latestUserIndex];
+  if (!latestUserItem) {
+    return { text: "", imageInputCount: 0 };
+  }
+
+  const imageTurnItems = [latestUserItem];
+  const imageInputCount = countImageInputs(imageTurnItems.map((item) => item.content));
+  if (imageInputCount === 0) {
+    return { text: "", imageInputCount: 0 };
+  }
+  return {
+    text: imageTurnItems
+      .map((item) => extractInputText(item.content as unknown[]))
+      .filter(Boolean)
+      .join("\n"),
+    imageInputCount,
+  };
+}
+
 function parseToolOutputJson(toolOutput: string): Record<string, unknown> | null {
   if (!toolOutput.trim()) {
     return null;
@@ -584,14 +710,14 @@ function normalizePromptPathCandidate(candidate: string) {
 function readTargetFromPrompt(prompt: string) {
   const backtickedMatches = Array.from(prompt.matchAll(/`([^`]+)`/g))
     .map((match) => normalizePromptPathCandidate(match[1] ?? ""))
-    .filter((value): value is string => !!value);
+    .filter((value): value is string => Boolean(value));
   if (backtickedMatches.length > 0) {
     return backtickedMatches[0];
   }
 
   const quotedMatches = Array.from(prompt.matchAll(/"([^"]+)"/g))
     .map((match) => normalizePromptPathCandidate(match[1] ?? ""))
-    .filter((value): value is string => !!value);
+    .filter((value): value is string => Boolean(value));
   if (quotedMatches.length > 0) {
     return quotedMatches[0];
   }
@@ -610,9 +736,17 @@ function readTargetFromPrompt(prompt: string) {
   return "repo/package.json";
 }
 
-function buildToolCallEventsWithArgs(name: string, args: Record<string, unknown>): StreamEvent[] {
+function execCommandFromToolProgressPrompt(prompt: string) {
+  return (
+    /call the exec tool exactly once with this exact command before answering:\s*`([^`]+)`/i
+      .exec(prompt)?.[1]
+      ?.trim() || null
+  );
+}
+
+function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
   const serialized = JSON.stringify(args);
-  const callSuffix = createHash("sha1")
+  const callSuffix = createHash("sha256")
     .update(name)
     .update("\0")
     .update(serialized)
@@ -620,42 +754,46 @@ function buildToolCallEventsWithArgs(name: string, args: Record<string, unknown>
     .slice(0, 10);
   const callId = `call_mock_${name}_${callSuffix}`;
   const itemId = `fc_mock_${name}_${callSuffix}`;
+  const item = {
+    type: "function_call",
+    id: itemId,
+    call_id: callId,
+    name,
+    arguments: serialized,
+  };
+  return {
+    callId,
+    item,
+    itemId,
+    responseId: `resp_mock_${name}_${callSuffix}`,
+    serialized,
+  };
+}
+
+function buildToolCallEventsWithArgs(name: string, args: Record<string, unknown>): StreamEvent[] {
+  const call = buildMockFunctionCall(name, args);
   return [
     {
       type: "response.output_item.added",
       item: {
         type: "function_call",
-        id: itemId,
-        call_id: callId,
+        id: call.itemId,
+        call_id: call.callId,
         name,
         arguments: "",
       },
     },
-    { type: "response.function_call_arguments.delta", delta: serialized },
+    { type: "response.function_call_arguments.delta", delta: call.serialized },
     {
       type: "response.output_item.done",
-      item: {
-        type: "function_call",
-        id: itemId,
-        call_id: callId,
-        name,
-        arguments: serialized,
-      },
+      item: call.item,
     },
     {
       type: "response.completed",
       response: {
-        id: `resp_mock_${name}_${callSuffix}`,
+        id: call.responseId,
         status: "completed",
-        output: [
-          {
-            type: "function_call",
-            id: itemId,
-            call_id: callId,
-            name,
-            arguments: serialized,
-          },
-        ],
+        output: [call.item],
         usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
       },
     },
@@ -787,6 +925,12 @@ function extractLastCapture(text: string, pattern: RegExp) {
   return lastMatch?.[1]?.trim() || null;
 }
 
+function extractCaptures(text: string, pattern: RegExp) {
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const globalPattern = new RegExp(pattern.source, flags);
+  return Array.from(text.matchAll(globalPattern), (match) => match[1]?.trim()).filter(Boolean);
+}
+
 function extractLastMatchingUserText(texts: string[], pattern: RegExp) {
   for (let index = texts.length - 1; index >= 0; index -= 1) {
     const text = texts[index] ?? "";
@@ -824,6 +968,33 @@ function extractExactMarkerDirective(text: string) {
   );
 }
 
+function extractWhatsAppLocationMarkerDirective(text: string) {
+  return extractLastCapture(
+    text,
+    /WhatsApp location marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i,
+  );
+}
+
+function extractWhatsAppContactMarkerDirective(text: string) {
+  return extractLastCapture(text, /WhatsApp contact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
+}
+
+function extractWhatsAppStickerMarkerDirective(text: string) {
+  return extractLastCapture(text, /WhatsApp sticker marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
+}
+
+function shouldUseWhatsAppLocationMarker(prompt: string) {
+  return /(?:^|[\n:]\s*)📍\s*37\.774900,\s*-122\.419400\b/u.test(prompt.trim());
+}
+
+function shouldUseWhatsAppContactMarker(prompt: string) {
+  return /(?:^|[\n:]\s*)<contacts?(?::|>)/iu.test(prompt.trim());
+}
+
+function shouldUseWhatsAppStickerMarker(prompt: string) {
+  return /(?:^|[\n:]\s*)<media:sticker>(?:\s|$)/iu.test(prompt.trim());
+}
+
 function extractLabeledMarkerDirective(text: string, label: string) {
   const escapedLabel = escapeRegExp(label);
   const backtickedMatch = extractLastCapture(
@@ -837,6 +1008,29 @@ function extractLabeledMarkerDirective(text: string, label: string) {
     text,
     new RegExp(`${escapedLabel}:\\s*([^\\s\\\`.,;:!?]+(?:-[^\\s\\\`.,;:!?]+)*)`, "i"),
   );
+}
+
+function extractBlockStreamingMarkerDirectives(text: string) {
+  const firstLabeledMarker = extractLabeledMarkerDirective(text, "first exact marker");
+  const secondLabeledMarker = extractLabeledMarkerDirective(text, "second exact marker");
+  if (firstLabeledMarker && secondLabeledMarker) {
+    return {
+      first: firstLabeledMarker,
+      second: secondLabeledMarker,
+    };
+  }
+
+  const markers = extractCaptures(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i);
+  if (markers.length < 2) {
+    return null;
+  }
+  const [first, second] = markers.slice(-2);
+  return first && second
+    ? {
+        first,
+        second,
+      }
+    : null;
 }
 
 function extractQuotedToolArg(text: string, name: string) {
@@ -976,6 +1170,41 @@ function isHeartbeatPrompt(text: string) {
   return /(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed);
 }
 
+function readFirstMediaPath(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return "";
+  }
+  const media = value as {
+    mediaUrl?: unknown;
+    mediaUrls?: unknown;
+    path?: unknown;
+    filePath?: unknown;
+    attachments?: unknown;
+  };
+  for (const candidate of [media.mediaUrl, media.path, media.filePath]) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  if (Array.isArray(media.mediaUrls)) {
+    const mediaUrl = media.mediaUrls.find(
+      (candidate) => typeof candidate === "string" && candidate.trim(),
+    );
+    if (typeof mediaUrl === "string" && mediaUrl.trim()) {
+      return mediaUrl.trim();
+    }
+  }
+  if (Array.isArray(media.attachments)) {
+    for (const attachment of media.attachments) {
+      const mediaPath = readFirstMediaPath(attachment);
+      if (mediaPath) {
+        return mediaPath;
+      }
+    }
+  }
+  return "";
+}
+
 function buildAssistantText(
   input: ResponsesInputItem[],
   body: Record<string, unknown>,
@@ -1002,14 +1231,28 @@ function buildAssistantText(
         ? JSON.stringify(toolJson.results)
         : scenarioToolOutput;
   const orbitCode = extractOrbitCode(memorySnippet) ?? extractOrbitCode(allInputText);
-  const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
-  const exactReplyDirective =
-    extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const mediaPath =
+    typeof toolJson?.details === "object" &&
+    toolJson.details !== null &&
+    !Array.isArray(toolJson.details)
+      ? readFirstMediaPath((toolJson.details as { media?: unknown }).media)
+      : "";
+  const promptExactReplyDirective = extractExactReplyDirective(prompt);
+  const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
+  const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
+    ? extractWhatsAppLocationMarkerDirective(allInputText)
+    : "";
+  const whatsAppContactMarker = shouldUseWhatsAppContactMarker(prompt)
+    ? extractWhatsAppContactMarkerDirective(allInputText)
+    : "";
+  const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(prompt)
+    ? extractWhatsAppStickerMarkerDirective(allInputText)
+    : "";
   const finishExactlyDirective =
     extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
-  const imageInputCount = countImageInputs(input);
+  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
   const sessionsSpawnError = extractToolErrorForNamedCall({
@@ -1036,11 +1279,35 @@ function buildAssistantText(
   if (isHeartbeatPrompt(prompt)) {
     return "HEARTBEAT_OK";
   }
+  if (
+    /roundtrip image inspection check/i.test(latestImageUserTurn.text) &&
+    latestImageUserTurn.imageInputCount > 0
+  ) {
+    return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
+  }
+  if (
+    /image understanding check/i.test(latestImageUserTurn.text) &&
+    latestImageUserTurn.imageInputCount > 0
+  ) {
+    return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
+  }
+  if (whatsAppLocationMarker) {
+    return whatsAppLocationMarker;
+  }
+  if (whatsAppContactMarker) {
+    return whatsAppContactMarker;
+  }
+  if (whatsAppStickerMarker) {
+    return whatsAppStickerMarker;
+  }
   if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
     return exactReplyDirective;
   }
   if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
     return exactMarkerDirective;
+  }
+  if (promptExactReplyDirective) {
+    return promptExactReplyDirective;
   }
   if (/visible skill marker/i.test(prompt)) {
     return "VISIBLE-SKILL-OK";
@@ -1103,7 +1370,7 @@ function buildAssistantText(
     return `Protocol note: model switch acknowledged. Continuing on ${model || "the requested model"}.`;
   }
   if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && mediaPath) {
-    return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${mediaPath}`;
+    return `Protocol note: generated the QA lighthouse image successfully. Attachment: ${mediaPath}`;
   }
   if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && toolOutput) {
     return [
@@ -1114,12 +1381,6 @@ function buildAssistantText(
       "- Keep a local copy before using the asset.",
       "- Re-open the copied file for final verification.",
     ].join("\n");
-  }
-  if (/roundtrip image inspection check/i.test(prompt) && imageInputCount > 0) {
-    return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
-  }
-  if (/image understanding check/i.test(prompt) && imageInputCount > 0) {
-    return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
   }
   if (
     /interrupted by a gateway reload/i.test(prompt) &&
@@ -1312,6 +1573,19 @@ function extractPlannedToolName(events: StreamEvent[]) {
   return undefined;
 }
 
+function extractPlannedToolCallId(events: StreamEvent[]) {
+  for (const event of events) {
+    if (event.type !== "response.output_item.done") {
+      continue;
+    }
+    const item = event.item as { type?: unknown; call_id?: unknown };
+    if (item.type === "function_call" && typeof item.call_id === "string") {
+      return item.call_id;
+    }
+  }
+  return undefined;
+}
+
 function extractPlannedToolArgs(events: StreamEvent[]) {
   for (const event of events) {
     if (event.type !== "response.output_item.done") {
@@ -1350,19 +1624,20 @@ function splitMockStreamingText(text: string, parts = 3) {
   return chunks.length > 1 ? chunks : [text.slice(0, 1), text.slice(1)];
 }
 
-function buildTelegramLongFinalText({
+function buildQaLongFinalText({
   endMarker = "TELEGRAM-LONG-FINAL-END",
+  segmentPrefix = "telegram-long-final-segment",
   segmentCount = 42,
   startMarker = "TELEGRAM-LONG-FINAL-BEGIN",
 }: {
   endMarker?: string;
+  segmentPrefix?: string;
   segmentCount?: number;
   startMarker?: string;
 } = {}) {
   const body = Array.from(
     { length: segmentCount },
-    (_, index) =>
-      `telegram-long-final-segment-${String(index + 1).padStart(3, "0")} ${"x".repeat(54)}`,
+    (_, index) => `${segmentPrefix}-${String(index + 1).padStart(3, "0")} ${"x".repeat(54)}`,
   ).join("\n");
   return `${startMarker}\n${body}\n${endMarker}`;
 }
@@ -1376,6 +1651,78 @@ function buildAssistantOutputItem(spec: MockAssistantMessageSpec) {
     ...(spec.phase ? { phase: spec.phase } : {}),
     content: [{ type: "output_text", text: spec.text, annotations: [] }],
   } as const;
+}
+
+function appendAssistantMessageEvents(events: StreamEvent[], spec: MockAssistantMessageSpec) {
+  events.push({
+    type: "response.output_item.added",
+    item: {
+      type: "message",
+      id: spec.id,
+      role: "assistant",
+      ...(spec.phase ? { phase: spec.phase } : {}),
+      content: [],
+      status: "in_progress",
+    },
+  });
+  for (const delta of spec.streamDeltas ?? []) {
+    events.push({
+      type: "response.output_text.delta",
+      item_id: spec.id,
+      output_index: 0,
+      content_index: 0,
+      delta,
+    });
+  }
+  if ((spec.streamDeltas ?? []).length > 0) {
+    events.push({
+      type: "response.output_text.done",
+      item_id: spec.id,
+      output_index: 0,
+      content_index: 0,
+      text: spec.text,
+    });
+  }
+  events.push({
+    type: "response.output_item.done",
+    item: buildAssistantOutputItem(spec),
+  });
+}
+
+function buildAssistantThenToolCallEvents(
+  spec: MockAssistantMessageSpec,
+  name: string,
+  args: Record<string, unknown>,
+): StreamEvent[] {
+  const call = buildMockFunctionCall(name, args);
+  const message = buildAssistantOutputItem(spec);
+  const events: StreamEvent[] = [];
+  appendAssistantMessageEvents(events, spec);
+  events.push({
+    type: "response.output_item.added",
+    item: {
+      type: "function_call",
+      id: call.itemId,
+      call_id: call.callId,
+      name,
+      arguments: "",
+    },
+  });
+  events.push({ type: "response.function_call_arguments.delta", delta: call.serialized });
+  events.push({
+    type: "response.output_item.done",
+    item: call.item,
+  });
+  events.push({
+    type: "response.completed",
+    response: {
+      id: call.responseId,
+      status: "completed",
+      output: [message, call.item],
+      usage: { input_tokens: 64, output_tokens: 32, total_tokens: 96 },
+    },
+  });
+  return events;
 }
 
 function buildAssistantEvents(specsOrText: MockAssistantMessageSpec[] | string): StreamEvent[] {
@@ -1510,6 +1857,20 @@ function buildReasoningAndAssistantEvents(params: {
       },
     },
     {
+      type: "response.output_text.delta",
+      item_id: answerItem.id,
+      output_index: 1,
+      content_index: 0,
+      delta: params.answerText,
+    },
+    {
+      type: "response.output_text.done",
+      item_id: answerItem.id,
+      output_index: 1,
+      content_index: 0,
+      text: params.answerText,
+    },
+    {
       type: "response.output_item.done",
       item: answerItem,
     },
@@ -1548,14 +1909,23 @@ async function buildResponsesPayload(
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
-  const firstExactMarkerDirective = extractLabeledMarkerDirective(
-    allInputText,
-    "first exact marker",
-  );
-  const secondExactMarkerDirective = extractLabeledMarkerDirective(
-    allInputText,
-    "second exact marker",
-  );
+  const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
+    ? extractWhatsAppLocationMarkerDirective(allInputText)
+    : "";
+  const whatsAppContactMarker = shouldUseWhatsAppContactMarker(prompt)
+    ? extractWhatsAppContactMarkerDirective(allInputText)
+    : "";
+  const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(prompt)
+    ? extractWhatsAppStickerMarkerDirective(allInputText)
+    : "";
+  const blockStreamingPrompt =
+    extractLastMatchingUserText(extractAllUserTexts(input), QA_BLOCK_STREAMING_PROMPT_RE) ||
+    prompt ||
+    allInputText;
+  const blockStreamingMarkers =
+    extractBlockStreamingMarkerDirectives(blockStreamingPrompt) ??
+    extractBlockStreamingMarkerDirectives(allInputText);
+  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const isGroupChat = allInputText.includes('"is_group_chat": true');
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
@@ -1576,6 +1946,11 @@ async function buildResponsesPayload(
     return buildToolCallEventsWithArgs("read", {
       path: readTargetFromPrompt(toolProgressPrompt || prompt || allInputText),
     });
+  };
+  const buildToolProgressExecEvents = (pattern: RegExp) => {
+    const toolProgressPrompt = extractLastMatchingUserText(extractAllUserTexts(input), pattern);
+    const command = execCommandFromToolProgressPrompt(toolProgressPrompt || prompt || allInputText);
+    return command ? buildToolCallEventsWithArgs("exec", { command }) : null;
   };
   if (
     (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
@@ -1598,6 +1973,70 @@ async function buildResponsesPayload(
     }
     if (targetTool && (hasDeclaredTool(body, targetTool) || isQaToolSearchFixture(allInputText))) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
+    }
+  }
+  if (
+    QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText) ||
+    QA_MCP_CODE_MODE_PROMPT_RE.test(allInputText)
+  ) {
+    if (!toolOutput && hasDeclaredTool(body, "exec")) {
+      const useApiFiles = QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText);
+      return buildToolCallEventsWithArgs("exec", {
+        language: "javascript",
+        code: useApiFiles
+          ? [
+              'const files = await API.list("mcp");',
+              'const root = await API.read("mcp/index.d.ts");',
+              'const api = await API.read("mcp/fixture.d.ts");',
+              'const result = await MCP.fixture.lookupNote({ id: "alpha" });',
+              "return {",
+              '  marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",',
+              "  files: files.files.map((file) => file.path),",
+              "  rootHasFixture: root.content.includes('fixture'),",
+              "  headerHasLookup: api.content.includes('function lookupNote'),",
+              "  resultText: result.content?.[0]?.text,",
+              "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+              "};",
+            ].join("\n")
+          : [
+              "const rootApi = await MCP.$api();",
+              'const api = await MCP.fixture.$api("lookupNote", { schema: true });',
+              'const result = await MCP.fixture.lookupNote({ id: "alpha" });',
+              "return {",
+              '  marker: "MCP_CODE_MODE_TOOL_RESULT",',
+              "  rootServers: rootApi.servers,",
+              "  headerHasLookup: api.header.includes('function lookupNote'),",
+              "  schemaKeys: Object.keys(api.schemas),",
+              "  resultText: result.content?.[0]?.text,",
+              "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+              "};",
+            ].join("\n"),
+      });
+    }
+    if (
+      toolJson?.status === "waiting" &&
+      typeof toolJson.runId === "string" &&
+      hasDeclaredTool(body, "wait")
+    ) {
+      return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
+    }
+    if (
+      toolOutput.includes("MCP_CODE_MODE_FILE_TOOL_RESULT") &&
+      toolOutput.includes("fixture-note-alpha")
+    ) {
+      return buildAssistantEvents(
+        "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha unclear=none improvement=virtual-api-files-were-clear-and-needed-one-exec",
+      );
+    }
+    if (toolOutput.includes("MCP_CODE_MODE_FILE_TOOL_RESULT")) {
+      return buildAssistantEvents(
+        "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
+      );
+    }
+    if (/MCP_CODE_MODE_TOOL_RESULT|fixture-note-alpha/.test(toolOutput)) {
+      return buildAssistantEvents(
+        "MCP_CODE_MODE_OK unclear=none improvement=virtual-header-files-would-avoid-the-first-api-call",
+      );
     }
   }
   if (
@@ -1633,6 +2072,22 @@ async function buildResponsesPayload(
   }
   if (/fanout worker beta/i.test(prompt)) {
     return buildAssistantEvents("BETA-OK");
+  }
+  if (
+    /roundtrip image inspection check/i.test(latestImageUserTurn.text) &&
+    latestImageUserTurn.imageInputCount > 0
+  ) {
+    return buildAssistantEvents(
+      "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.",
+    );
+  }
+  if (
+    /image understanding check/i.test(latestImageUserTurn.text) &&
+    latestImageUserTurn.imageInputCount > 0
+  ) {
+    return buildAssistantEvents(
+      "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.",
+    );
   }
   if (QA_REASONING_ONLY_RECOVERY_PROMPT_RE.test(allInputText)) {
     if (!scenarioToolOutput) {
@@ -1686,7 +2141,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("");
   }
   if (QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE.test(allInputText)) {
-    const text = buildTelegramLongFinalText({
+    const text = buildQaLongFinalText({
       endMarker: "TELEGRAM-LONG-FINAL-3CHUNK-END",
       segmentCount: 96,
       startMarker: "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
@@ -1701,10 +2156,26 @@ async function buildResponsesPayload(
     ]);
   }
   if (QA_TELEGRAM_LONG_FINAL_PROMPT_RE.test(allInputText)) {
-    const text = buildTelegramLongFinalText();
+    const text = buildQaLongFinalText();
     return buildAssistantEvents([
       {
         id: "msg_mock_telegram_long_final",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText(text),
+        text,
+      },
+    ]);
+  }
+  if (QA_WHATSAPP_LONG_FINAL_PROMPT_RE.test(allInputText)) {
+    const text = buildQaLongFinalText({
+      endMarker: "WHATSAPP-LONG-FINAL-END",
+      segmentPrefix: "whatsapp-long-final-segment",
+      segmentCount: 64,
+      startMarker: "WHATSAPP-LONG-FINAL-BEGIN",
+    });
+    return buildAssistantEvents([
+      {
+        id: "msg_mock_whatsapp_long_final",
         phase: "final_answer",
         streamDeltas: splitMockStreamingText(text),
         text,
@@ -1747,27 +2218,34 @@ async function buildResponsesPayload(
   }
   if (QA_TOOL_PROGRESS_PROMPT_RE.test(allInputText) && toolProgressReplyDirective) {
     if (!toolOutput) {
-      return buildToolProgressReadEvents(QA_TOOL_PROGRESS_PROMPT_RE);
+      return (
+        buildToolProgressExecEvents(QA_TOOL_PROGRESS_PROMPT_RE) ??
+        buildToolProgressReadEvents(QA_TOOL_PROGRESS_PROMPT_RE)
+      );
     }
     return buildAssistantEvents(toolProgressReplyDirective);
   }
-  if (
-    QA_BLOCK_STREAMING_PROMPT_RE.test(allInputText) &&
-    firstExactMarkerDirective &&
-    secondExactMarkerDirective
-  ) {
+  if (QA_BLOCK_STREAMING_PROMPT_RE.test(allInputText) && blockStreamingMarkers) {
+    if (!toolOutput) {
+      return buildAssistantThenToolCallEvents(
+        {
+          id: "msg_mock_block_1",
+          phase: "final_answer",
+          streamDeltas: splitMockStreamingText(blockStreamingMarkers.first),
+          text: blockStreamingMarkers.first,
+        },
+        "read",
+        {
+          path: readTargetFromPrompt(blockStreamingPrompt),
+        },
+      );
+    }
     return buildAssistantEvents([
-      {
-        id: "msg_mock_block_1",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(firstExactMarkerDirective),
-        text: firstExactMarkerDirective,
-      },
       {
         id: "msg_mock_block_2",
         phase: "final_answer",
-        streamDeltas: splitMockStreamingText(secondExactMarkerDirective),
-        text: secondExactMarkerDirective,
+        streamDeltas: splitMockStreamingText(blockStreamingMarkers.second),
+        text: blockStreamingMarkers.second,
       },
     ]);
   }
@@ -1785,6 +2263,15 @@ async function buildResponsesPayload(
     return buildAssistantEvents(
       exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-FALLBACK-OK",
     );
+  }
+  if (whatsAppLocationMarker) {
+    return buildAssistantEvents(whatsAppLocationMarker);
+  }
+  if (whatsAppContactMarker) {
+    return buildAssistantEvents(whatsAppContactMarker);
+  }
+  if (whatsAppStickerMarker) {
+    return buildAssistantEvents(whatsAppStickerMarker);
   }
   if (/\bmarker\b/i.test(prompt) && exactReplyDirective) {
     return buildAssistantEvents(exactReplyDirective);
@@ -1986,6 +2473,49 @@ async function buildResponsesPayload(
     }
     if (progressEvidenceText.includes("# Progress request")) {
       return buildToolCallEventsWithArgs("read", { path: "PROGRESS_EVIDENCE.md" });
+    }
+  }
+  if (/personal failure recovery check/i.test(allInputText)) {
+    const recoveryEvidenceText = [
+      extractAllToolOutputText(input),
+      extractUserTextAfterLatestToolOutput(input),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(recoveryEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Artifact: personal-failure-recovery.txt",
+          "Failed step: external calendar update was not attempted",
+          "Retry boundary: do not retry until approval is given",
+          "PERSONAL-FAILURE-RECOVERY-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !recoveryEvidenceText ||
+      (!recoveryEvidenceText.includes("# Failure recovery request") &&
+        !recoveryEvidenceText.includes("# Failure recovery evidence"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "FAILURE_RECOVERY_REQUEST.md" });
+    }
+    if (
+      recoveryEvidenceText.includes("# Failure recovery request") &&
+      recoveryEvidenceText.includes("# Failure recovery evidence")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "personal-failure-recovery.txt",
+        content: [
+          "Personal failure recovery",
+          "Completed: request reviewed and local evidence captured",
+          "Failed step: external calendar update was not attempted because explicit approval is missing",
+          "Retry boundary: do not retry the external step until approval is given",
+          "Next step: ask for approval before any external update",
+        ].join("\n"),
+      });
+    }
+    if (recoveryEvidenceText.includes("# Failure recovery request")) {
+      return buildToolCallEventsWithArgs("read", { path: "FAILURE_RECOVERY_EVIDENCE.md" });
     }
   }
   if (/lobster invaders/i.test(prompt)) {
@@ -2359,7 +2889,7 @@ async function buildResponsesPayload(
 //
 // The QA parity gate needs two comparable scenario runs: one against the
 // "candidate" (openai/gpt-5.5) and one against the "baseline"
-// (anthropic/claude-opus-4-7). The OpenAI mock above already dispatches all
+// (anthropic/claude-opus-4-8). The OpenAI mock above already dispatches all
 // the scenario prompt branches we care about. Rather than duplicating that
 // machinery, the /v1/messages route below translates Anthropic request
 // shapes into the shared ResponsesInputItem[] format, calls the same
@@ -2464,7 +2994,12 @@ function convertAnthropicMessagesToResponsesInput(params: {
       if (block.type === "tool_result") {
         const output = stringifyToolResultContent(block.content);
         if (output.trim()) {
-          toolResultItems.push({ type: "function_call_output", output });
+          toolResultItems.push({
+            type: "function_call_output",
+            call_id: block.tool_use_id,
+            output,
+            ...(block.is_error === true ? { is_error: true } : {}),
+          });
         }
         continue;
       }
@@ -2582,7 +3117,7 @@ function buildAnthropicMessageResponse(params: {
     id: `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`,
     type: "message",
     role: "assistant",
-    model: params.model || "claude-opus-4-7",
+    model: params.model || "claude-opus-4-8",
     content,
     stop_reason: stopReason,
     stop_sequence: null,
@@ -2610,7 +3145,7 @@ function buildAnthropicMessageStreamEvents(params: {
         id: messageId,
         type: "message",
         role: "assistant",
-        model: params.model || "claude-opus-4-7",
+        model: params.model || "claude-opus-4-8",
         content: [],
         stop_reason: null,
         stop_sequence: null,
@@ -2709,7 +3244,7 @@ async function buildMessagesPayload(
   // which then confuses parity consumers that assume the mock always
   // echoes the real provider label. Normalize once and reuse everywhere.
   const normalizedModel =
-    typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-7";
+    typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-8";
   // Dispatch through the same scenario logic the /v1/responses route uses.
   // Preserve declared tools so route-specific adapters mirror what the
   // real provider request made available to the model.
@@ -2741,163 +3276,179 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
-  const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
-      writeJson(res, 200, { ok: true, status: "live" });
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/v1/models") {
-      writeJson(res, 200, {
-        data: [
-          { id: "gpt-5.5", object: "model" },
-          { id: "gpt-5.5-alt", object: "model" },
-          { id: "gpt-image-1", object: "model" },
-          { id: "text-embedding-3-small", object: "model" },
-          { id: "claude-opus-4-7", object: "model" },
-          { id: "claude-sonnet-4-6", object: "model" },
-        ],
-      });
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/debug/last-request") {
-      writeJson(res, 200, lastRequest ?? { ok: false, error: "no request recorded" });
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/debug/requests") {
-      writeJson(res, 200, requests);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/debug/image-generations") {
-      writeJson(res, 200, imageGenerationRequests);
-      return;
-    }
-    if (req.method === "POST" && url.pathname === "/v1/images/generations") {
-      const raw = await readBody(req);
-      const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-      imageGenerationRequests.push(body);
-      if (imageGenerationRequests.length > 20) {
-        imageGenerationRequests.splice(0, imageGenerationRequests.length - 20);
-      }
-      writeJson(res, 200, {
-        data: [
-          {
-            b64_json: TINY_PNG_BASE64,
-            revised_prompt: "A QA lighthouse with protocol droid silhouette.",
-          },
-        ],
-      });
-      return;
-    }
-    if (req.method === "POST" && url.pathname === "/v1/embeddings") {
-      const raw = await readBody(req);
-      const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-      const inputs = extractEmbeddingInputTexts(body.input);
-      writeJson(res, 200, {
-        object: "list",
-        data: inputs.map((text, index) => ({
-          object: "embedding",
-          index,
-          embedding: buildDeterministicEmbedding(text),
-        })),
-        model:
-          typeof body.model === "string" && body.model.trim()
-            ? body.model
-            : "text-embedding-3-small",
-        usage: {
-          prompt_tokens: inputs.reduce((sum, text) => sum + countApproxTokens(text), 0),
-          total_tokens: inputs.reduce((sum, text) => sum + countApproxTokens(text), 0),
-        },
-      });
-      return;
-    }
-    if (req.method === "POST" && url.pathname === "/v1/responses") {
-      const raw = await readBody(req);
-      const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-      const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
-      const events = await buildResponsesPayload(body, scenarioState);
-      const resolvedModel = typeof body.model === "string" ? body.model : "";
-      lastRequest = {
-        raw,
-        body,
-        prompt: extractLastUserText(input),
-        allInputText: extractAllRequestTexts(input, body),
-        instructions: extractInstructionsText(body) || undefined,
-        toolOutput: extractToolOutput(input),
-        model: resolvedModel,
-        providerVariant: resolveProviderVariant(resolvedModel),
-        imageInputCount: countImageInputs(input),
-        plannedToolName: extractPlannedToolName(events),
-        plannedToolArgs: extractPlannedToolArgs(events),
-      };
-      requests.push(lastRequest);
-      if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
-        requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
-      }
-      if (body.stream === false) {
-        const completion = events.at(-1);
-        if (!completion || completion.type !== "response.completed") {
-          writeJson(res, 500, { error: "mock completion failed" });
-          return;
-        }
-        writeJson(res, 200, completion.response);
+  const server = createServer((req, res) => {
+    void (async () => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
+        writeJson(res, 200, { ok: true, status: "live" });
         return;
       }
-      writeSse(res, events);
-      return;
-    }
-    if (req.method === "POST" && url.pathname === "/v1/messages") {
-      const raw = await readBody(req);
-      let body: AnthropicMessagesRequest = {};
-      try {
-        body = raw ? (JSON.parse(raw) as AnthropicMessagesRequest) : {};
-      } catch {
-        writeJson(res, 400, {
-          type: "error",
-          error: {
-            type: "invalid_request_error",
-            message: "Malformed JSON body for Anthropic Messages request.",
+      if (req.method === "GET" && url.pathname === "/v1/models") {
+        writeJson(res, 200, {
+          data: [
+            { id: "gpt-5.5", object: "model" },
+            { id: "gpt-5.5-alt", object: "model" },
+            { id: "gpt-image-1", object: "model" },
+            { id: "gpt-4o-transcribe", object: "model" },
+            { id: "text-embedding-3-small", object: "model" },
+            { id: "claude-opus-4-8", object: "model" },
+            { id: "claude-sonnet-4-6", object: "model" },
+          ],
+        });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/debug/last-request") {
+        writeJson(res, 200, lastRequest ?? { ok: false, error: "no request recorded" });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/debug/requests") {
+        writeJson(res, 200, requests);
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/debug/image-generations") {
+        writeJson(res, 200, imageGenerationRequests);
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/v1/images/generations") {
+        const raw = await readBody(req);
+        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        imageGenerationRequests.push(body);
+        if (imageGenerationRequests.length > 20) {
+          imageGenerationRequests.splice(0, imageGenerationRequests.length - 20);
+        }
+        writeJson(res, 200, {
+          data: [
+            {
+              b64_json: TINY_PNG_BASE64,
+              revised_prompt: "A QA lighthouse with protocol droid silhouette.",
+            },
+          ],
+        });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/v1/audio/transcriptions") {
+        const raw = await readBody(req);
+        writeJson(res, 200, {
+          text: transcriptionTextForAudioRequest(raw),
+        });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/v1/embeddings") {
+        const raw = await readBody(req);
+        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        const inputs = extractEmbeddingInputTexts(body.input);
+        writeJson(res, 200, {
+          object: "list",
+          data: inputs.map((text, index) => ({
+            object: "embedding",
+            index,
+            embedding: buildDeterministicEmbedding(text),
+          })),
+          model:
+            typeof body.model === "string" && body.model.trim()
+              ? body.model
+              : "text-embedding-3-small",
+          usage: {
+            prompt_tokens: inputs.reduce((sum, text) => sum + countApproxTokens(text), 0),
+            total_tokens: inputs.reduce((sum, text) => sum + countApproxTokens(text), 0),
           },
         });
         return;
       }
-      const {
-        events,
-        input,
-        responseBody,
-        streamEvents,
-        model: normalizedModel,
-      } = await buildMessagesPayload(body, scenarioState);
-      // Record the adapted request snapshot so /debug/requests gives the QA
-      // suite the same plannedToolName / allInputText / toolOutput signals
-      // on the Anthropic route that the OpenAI route already exposes. This
-      // is what lets a single parity run diff assertions across both lanes.
-      // Reuse the normalized model so an empty-string body.model no longer
-      // leaks through to `lastRequest.model`.
-      lastRequest = {
-        raw,
-        body: body as Record<string, unknown>,
-        prompt: extractLastUserText(input),
-        allInputText: extractAllInputTexts(input),
-        toolOutput: extractToolOutput(input),
-        model: normalizedModel,
-        providerVariant: resolveProviderVariant(normalizedModel),
-        imageInputCount: countImageInputs(input),
-        plannedToolName: extractPlannedToolName(events),
-        plannedToolArgs: extractPlannedToolArgs(events),
-      };
-      requests.push(lastRequest);
-      if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
-        requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
-      }
-      if (body.stream === true) {
-        writeAnthropicSse(res, streamEvents);
+      if (req.method === "POST" && url.pathname === "/v1/responses") {
+        const raw = await readBody(req);
+        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
+        const events = await buildResponsesPayload(body, scenarioState);
+        const resolvedModel = typeof body.model === "string" ? body.model : "";
+        lastRequest = {
+          raw,
+          body,
+          prompt: extractLastUserText(input),
+          allInputText: extractAllRequestTexts(input, body),
+          instructions: extractInstructionsText(body) || undefined,
+          toolOutput: extractToolOutput(input),
+          model: resolvedModel,
+          providerVariant: resolveProviderVariant(resolvedModel),
+          imageInputCount: countImageInputs(input),
+          plannedToolCallId: extractPlannedToolCallId(events),
+          plannedToolName: extractPlannedToolName(events),
+          plannedToolArgs: extractPlannedToolArgs(events),
+          toolOutputCallId: extractToolOutputCallId(input) || undefined,
+          ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
+        };
+        requests.push(lastRequest);
+        if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
+          requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
+        }
+        if (body.stream === false) {
+          const completion = events.at(-1);
+          if (!completion || completion.type !== "response.completed") {
+            writeJson(res, 500, { error: "mock completion failed" });
+            return;
+          }
+          writeJson(res, 200, completion.response);
+          return;
+        }
+        writeSse(res, events);
         return;
       }
-      writeJson(res, 200, responseBody);
-      return;
-    }
-    writeJson(res, 404, { error: "not found" });
+      if (req.method === "POST" && url.pathname === "/v1/messages") {
+        const raw = await readBody(req);
+        let body: AnthropicMessagesRequest;
+        try {
+          body = raw ? (JSON.parse(raw) as AnthropicMessagesRequest) : {};
+        } catch {
+          writeJson(res, 400, {
+            type: "error",
+            error: {
+              type: "invalid_request_error",
+              message: "Malformed JSON body for Anthropic Messages request.",
+            },
+          });
+          return;
+        }
+        const {
+          events,
+          input,
+          responseBody,
+          streamEvents,
+          model: normalizedModel,
+        } = await buildMessagesPayload(body, scenarioState);
+        // Record the adapted request snapshot so /debug/requests gives the QA
+        // suite the same plannedToolName / allInputText / toolOutput signals
+        // on the Anthropic route that the OpenAI route already exposes. This
+        // is what lets a single parity run diff assertions across both lanes.
+        // Reuse the normalized model so an empty-string body.model no longer
+        // leaks through to `lastRequest.model`.
+        lastRequest = {
+          raw,
+          body: body as Record<string, unknown>,
+          prompt: extractLastUserText(input),
+          allInputText: extractAllInputTexts(input),
+          toolOutput: extractToolOutput(input),
+          model: normalizedModel,
+          providerVariant: resolveProviderVariant(normalizedModel),
+          imageInputCount: countImageInputs(input),
+          plannedToolCallId: extractPlannedToolCallId(events),
+          plannedToolName: extractPlannedToolName(events),
+          plannedToolArgs: extractPlannedToolArgs(events),
+          toolOutputCallId: extractToolOutputCallId(input) || undefined,
+          ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
+        };
+        requests.push(lastRequest);
+        if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
+          requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
+        }
+        if (body.stream === true) {
+          writeAnthropicSse(res, streamEvents);
+          return;
+        }
+        writeJson(res, 200, responseBody);
+        return;
+      }
+      writeJson(res, 404, { error: "not found" });
+    })();
   });
 
   await new Promise<void>((resolve, reject) => {

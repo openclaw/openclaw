@@ -1,10 +1,13 @@
+// Local media access helpers validate workspace-local media path access.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { assertNoWindowsNetworkPath } from "../infra/local-file-access.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { resolveInboundMediaReference } from "./media-reference.js";
 
+/** Machine-readable reasons local media path validation can fail. */
 export type LocalMediaAccessErrorCode =
   | "path-not-allowed"
   | "invalid-root"
@@ -15,6 +18,7 @@ export type LocalMediaAccessErrorCode =
   | "invalid-path"
   | "not-file";
 
+/** Error raised when a local media path escapes the configured allowlist. */
 export class LocalMediaAccessError extends Error {
   code: LocalMediaAccessErrorCode;
 
@@ -25,13 +29,16 @@ export class LocalMediaAccessError extends Error {
   }
 }
 
+/** Returns the default root allowlist for local media reads. */
 export function getDefaultLocalRoots(): readonly string[] {
   return getDefaultMediaLocalRoots();
 }
 
+/** Verifies that a local media path is managed inbound media or lives under allowed roots. */
 export async function assertLocalMediaAllowed(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
+  options?: { inboundRoots?: readonly string[] },
 ): Promise<void> {
   if (localRoots === "any") {
     return;
@@ -47,6 +54,12 @@ export async function assertLocalMediaAllowed(
       cause: err,
     });
   }
+  if (
+    options?.inboundRoots?.length &&
+    isInboundPathAllowed({ filePath: mediaPath, roots: options.inboundRoots })
+  ) {
+    return;
+  }
   const roots = localRoots ?? getDefaultLocalRoots();
   let resolved: string;
   try {
@@ -56,6 +69,7 @@ export async function assertLocalMediaAllowed(
   }
 
   if (localRoots === undefined) {
+    // Unscoped default roots include workspace, but not sibling workspace-* agent sandboxes.
     const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
     if (workspaceRoot) {
       const stateDir = path.dirname(workspaceRoot);

@@ -1,3 +1,4 @@
+// Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
 import {
   startLogsPolling,
@@ -7,7 +8,12 @@ import {
   startDebugPolling,
   stopDebugPolling,
 } from "./app-polling.ts";
-import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
+import {
+  observeTopbar,
+  scheduleActivityScroll,
+  scheduleChatScroll,
+  scheduleLogsScroll,
+} from "./app-scroll.ts";
 import {
   applySettingsFromUrl,
   detachThemeListener,
@@ -15,9 +21,19 @@ import {
   syncTabWithLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
+import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { startControlUiResponsivenessObserver } from "./control-ui-performance.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import type { Tab } from "./navigation.ts";
+import type { ChatQueueItem } from "./ui-types.ts";
+
+const CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS = 200;
+
+type PendingChatComposerPersistSnapshot = {
+  sessionKey: string;
+  chatMessage: string;
+  chatQueue: ChatQueueItem[];
+};
 
 type LifecycleHost = {
   basePath: string;
@@ -37,11 +53,25 @@ type LifecycleHost = {
   allowExternalEmbedUrls: boolean;
   chatHasAutoScrolled: boolean;
   chatManualRefreshInFlight: boolean;
+  settings?: { gatewayUrl?: string | null };
+  sessionKey: string;
+  chatMessage: string;
+  chatQueue: ChatQueueItem[];
+  chatComposerProvisionalRestore?: {
+    sessionKey: string;
+    chatMessage: string;
+    chatQueue: ChatQueueItem[];
+  } | null;
+  chatComposerPersistTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
+  chatComposerPersistSnapshot?: PendingChatComposerPersistSnapshot | null;
+  pendingGatewayUrl?: string | null;
   realtimeTalkSession?: { stop: () => void } | null;
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: string;
   realtimeTalkDetail?: string | null;
   realtimeTalkTranscript?: string | null;
+  realtimeTalkConversation?: unknown[];
+  resetRealtimeTalkConversation?: () => void;
   chatLoading: boolean;
   chatMessages: unknown[];
   chatToolMessages: unknown[];
@@ -49,12 +79,17 @@ type LifecycleHost = {
   logsAutoFollow: boolean;
   logsAtBottom: boolean;
   logsEntries: unknown[];
+  activityEntries: unknown[];
+  activityAutoFollow: boolean;
+  activityAtBottom: boolean;
   chatScrollFrame?: number | null;
   chatScrollTimeout?: number | null;
   logsScrollFrame?: number | null;
+  activityScrollFrame?: number | null;
   sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   controlUiTabPaintSeq?: number;
   controlUiResponsivenessObserver?: { disconnect: () => void } | null;
+  controlUiBootstrapReady?: Promise<void> | null;
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
 };
@@ -63,16 +98,27 @@ export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
-  const bootstrapReady = loadControlUiBootstrapConfig(host);
+  host.controlUiBootstrapReady = loadControlUiBootstrapConfig(
+    host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
+    { applyIdentity: false },
+  );
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
+  const hasPendingGatewaySwitch =
+    typeof host.pendingGatewayUrl === "string" && host.pendingGatewayUrl.trim();
+  if (!hasPendingGatewaySwitch && restoreChatComposerState(host, { preserveCurrent: true })) {
+    host.chatComposerProvisionalRestore = {
+      sessionKey: host.sessionKey,
+      chatMessage: host.chatMessage,
+      chatQueue: [...host.chatQueue],
+    };
+  } else {
+    host.chatComposerProvisionalRestore = null;
+  }
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
   window.addEventListener("popstate", host.popStateHandler);
-  void bootstrapReady.finally(() => {
-    if (host.connectGeneration !== connectGeneration) {
-      return;
-    }
+  if (host.connectGeneration === connectGeneration) {
     connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
-  });
+  }
   if (host.tab === "nodes") {
     startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
   }
@@ -111,9 +157,46 @@ function clearHostGlobalTimeout(
   }
 }
 
+function clearPendingChatComposerPersistence(host: LifecycleHost) {
+  clearHostGlobalTimeout(host.chatComposerPersistTimer);
+  host.chatComposerPersistTimer = null;
+  host.chatComposerPersistSnapshot = null;
+}
+
+function flushPendingChatComposerPersistence(host: LifecycleHost) {
+  const snapshot = host.chatComposerPersistSnapshot;
+  if (host.chatComposerPersistTimer == null || !snapshot) {
+    clearPendingChatComposerPersistence(host);
+    return;
+  }
+  clearPendingChatComposerPersistence(host);
+  persistChatComposerState(
+    {
+      ...host,
+      sessionKey: snapshot.sessionKey,
+      chatMessage: snapshot.chatMessage,
+      chatQueue: snapshot.chatQueue,
+    },
+    snapshot.sessionKey,
+  );
+}
+
+function scheduleChatComposerDraftPersistence(host: LifecycleHost) {
+  clearPendingChatComposerPersistence(host);
+  host.chatComposerPersistSnapshot = {
+    sessionKey: host.sessionKey,
+    chatMessage: host.chatMessage,
+    chatQueue: [...host.chatQueue],
+  };
+  host.chatComposerPersistTimer = globalThis.setTimeout(() => {
+    flushPendingChatComposerPersistence(host);
+  }, CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS);
+}
+
 export function handleDisconnected(host: LifecycleHost) {
   host.connectGeneration += 1;
   host.controlUiTabPaintSeq = (host.controlUiTabPaintSeq ?? 0) + 1;
+  flushPendingChatComposerPersistence(host);
   window.removeEventListener("popstate", host.popStateHandler);
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
@@ -122,6 +205,8 @@ export function handleDisconnected(host: LifecycleHost) {
   host.chatScrollFrame = null;
   cancelHostAnimationFrame(host.logsScrollFrame);
   host.logsScrollFrame = null;
+  cancelHostAnimationFrame(host.activityScrollFrame);
+  host.activityScrollFrame = null;
   clearHostTimeout(host.chatScrollTimeout);
   host.chatScrollTimeout = null;
   clearHostGlobalTimeout(host.sessionsChangedReloadTimer);
@@ -132,6 +217,7 @@ export function handleDisconnected(host: LifecycleHost) {
   host.realtimeTalkStatus = "idle";
   host.realtimeTalkDetail = null;
   host.realtimeTalkTranscript = null;
+  host.resetRealtimeTalkConversation?.();
   host.client?.stop();
   host.client = null;
   host.connected = false;
@@ -143,6 +229,17 @@ export function handleDisconnected(host: LifecycleHost) {
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
+  if (changed.has("chatQueue")) {
+    clearPendingChatComposerPersistence(host);
+    persistChatComposerState(host);
+  } else if (changed.has("sessionKey")) {
+    flushPendingChatComposerPersistence(host);
+    if (changed.has("chatMessage")) {
+      persistChatComposerState(host);
+    }
+  } else if (changed.has("chatMessage")) {
+    scheduleChatComposerDraftPersistence(host);
+  }
   if (host.tab === "chat" && host.chatManualRefreshInFlight) {
     return;
   }
@@ -152,6 +249,7 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
       changed.has("chatToolMessages") ||
       changed.has("chatStream") ||
       changed.has("chatLoading") ||
+      changed.has("realtimeTalkConversation") ||
       changed.has("tab"))
   ) {
     const forcedByTab = changed.has("tab");
@@ -176,6 +274,17 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
       scheduleLogsScroll(
         host as unknown as Parameters<typeof scheduleLogsScroll>[0],
         changed.has("tab") || changed.has("logsAutoFollow"),
+      );
+    }
+  }
+  if (
+    host.tab === "activity" &&
+    (changed.has("activityEntries") || changed.has("activityAutoFollow") || changed.has("tab"))
+  ) {
+    if (host.activityAutoFollow && host.activityAtBottom) {
+      scheduleActivityScroll(
+        host as unknown as Parameters<typeof scheduleActivityScroll>[0],
+        changed.has("tab") || changed.has("activityAutoFollow"),
       );
     }
   }

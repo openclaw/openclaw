@@ -1,7 +1,8 @@
+// Slack plugin module implements streaming compat behavior.
 import {
   getChannelStreamingConfigObject,
   resolveChannelStreamingNativeTransport,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

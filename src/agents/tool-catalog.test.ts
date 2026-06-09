@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for core tool catalog profile defaults.
+ * Verifies built-in profile allowlists include expected core tool groups.
+ */
 import { describe, expect, it } from "vitest";
 import { resolveCoreToolProfilePolicy } from "./tool-catalog.js";
 
@@ -41,7 +45,11 @@ describe("tool-catalog", () => {
       "subagents",
       "session_status",
       "cron",
+      "get_goal",
+      "create_goal",
+      "update_goal",
       "update_plan",
+      "skill_workshop",
       "image",
       "image_generate",
       "music_generate",

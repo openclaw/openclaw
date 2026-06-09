@@ -1,3 +1,5 @@
+// Web tool runtime-context tests cover late-bound config snapshots and
+// plugin-owner lookups for search/fetch provider selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveWebFetchToolRuntimeContext,
@@ -6,7 +8,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   getActiveRuntimeWebToolsMetadata: vi.fn(),
-  getActiveSecretsRuntimeSnapshot: vi.fn(),
+  getActiveSecretsRuntimeConfigSnapshot: vi.fn(),
   resolveManifestContractOwnerPluginId: vi.fn(),
 }));
 
@@ -19,10 +21,12 @@ vi.mock("../../secrets/runtime-web-tools-state.js", () => ({
 }));
 
 vi.mock("../../secrets/runtime-state.js", () => ({
-  getActiveSecretsRuntimeSnapshot: mocks.getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeConfigSnapshot: mocks.getActiveSecretsRuntimeConfigSnapshot,
 }));
 
 function latestOwnerLookupParams(): Record<string, unknown> {
+  // Owner lookups are the evidence for whether runtime providers stay enabled
+  // or a configured plugin takes over the tool call.
   const params = mocks.resolveManifestContractOwnerPluginId.mock.calls.at(-1)?.[0];
   if (!params || typeof params !== "object") {
     throw new Error("expected owner lookup params");
@@ -34,8 +38,8 @@ describe("web tool runtime context", () => {
   beforeEach(() => {
     mocks.getActiveRuntimeWebToolsMetadata.mockReset();
     mocks.getActiveRuntimeWebToolsMetadata.mockReturnValue(null);
-    mocks.getActiveSecretsRuntimeSnapshot.mockReset();
-    mocks.getActiveSecretsRuntimeSnapshot.mockReturnValue(null);
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReset();
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue(null);
     mocks.resolveManifestContractOwnerPluginId.mockReset();
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue(undefined);
   });
@@ -44,7 +48,7 @@ describe("web tool runtime context", () => {
     const runtimeConfig = {
       tools: { web: { search: { provider: "perplexity" } } },
     };
-    mocks.getActiveSecretsRuntimeSnapshot.mockReturnValue({ config: runtimeConfig });
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({ config: runtimeConfig });
     mocks.getActiveRuntimeWebToolsMetadata.mockReturnValue({
       search: {
         providerConfigured: "perplexity",
@@ -123,9 +127,10 @@ describe("web tool runtime context", () => {
 
   it("treats resolved global provider owners as explicit selections", async () => {
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue("brave");
-    const { resolveWebSearchToolRuntimeContext } = await import("./web-tool-runtime-context.js");
+    const { resolveWebSearchToolRuntimeContext: resolveWebSearchToolRuntimeContextLocal } =
+      await import("./web-tool-runtime-context.js");
 
-    const resolved = resolveWebSearchToolRuntimeContext({
+    const resolved = resolveWebSearchToolRuntimeContextLocal({
       config: { tools: { web: { search: { provider: "brave" } } } },
     });
 

@@ -1,4 +1,6 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Defines safe-bin policy profile fixtures and metadata.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 
 export type SafeBinProfile = {
   minPositional?: number;
@@ -300,7 +302,7 @@ function resolveSafeBinDeniedFlags(
 ): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const [name, fixture] of Object.entries(fixtures)) {
-    const denied = Array.from(new Set(fixture.deniedFlags ?? [])).toSorted();
+    const denied = sortUniqueStrings(fixture.deniedFlags ?? []);
     if (denied.length > 0) {
       out[name] = denied;
     }

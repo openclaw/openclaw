@@ -1,9 +1,11 @@
+// Covers plugin trust audit findings and remediation hints.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 
@@ -205,9 +207,7 @@ describe("security audit install metadata findings", () => {
       })),
       diagnostics: [],
     };
-    const filePath = path.join(stateDir, "plugins", "installs.json");
-    await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-    await fs.writeFile(filePath, `${JSON.stringify(index, null, 2)}\n`, { mode: 0o600 });
+    await writePersistedInstalledPluginIndex(index, { stateDir });
   };
 
   beforeAll(async () => {
@@ -294,6 +294,42 @@ describe("security audit install metadata findings", () => {
           "hooks.installs_unpinned_npm_specs",
           "hooks.installs_missing_integrity",
         ],
+      },
+      {
+        name: "still warns when active npm specs are unpinned even with resolved metadata",
+        run: async () => {
+          const stateDir = await makeTmpDir("unpinned-active-spec-resolved-plugin-index");
+          await writePluginIndexInstallRecords(stateDir, {
+            "voice-call": {
+              source: "npm",
+              spec: "@openclaw/voice-call",
+              resolvedSpec: "@openclaw/voice-call@1.2.3",
+              integrity: "sha512-plugin",
+            },
+          });
+          return runInstallMetadataAudit(
+            {
+              hooks: {
+                internal: {
+                  installs: {
+                    "test-hooks": {
+                      source: "npm",
+                      spec: "@openclaw/test-hooks",
+                      resolvedSpec: "@openclaw/test-hooks@1.2.3",
+                      integrity: "sha512-hook",
+                    },
+                  },
+                },
+              },
+            },
+            stateDir,
+          );
+        },
+        expectedPresent: [
+          "plugins.installs_unpinned_npm_specs",
+          "hooks.installs_unpinned_npm_specs",
+        ],
+        expectedAbsent: ["plugins.installs_missing_integrity", "hooks.installs_missing_integrity"],
       },
       {
         name: "warns when install records drift from installed package versions",

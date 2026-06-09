@@ -1,3 +1,4 @@
+// Slack tests cover dispatch.streaming plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createSlackEventDeliveryTracker,
@@ -19,10 +20,18 @@ describe("slack native streaming defaults", () => {
     expect(isSlackStreamingEnabled({ mode: "partial", nativeStreaming: true })).toBe(true);
   });
 
-  it("is disabled outside partial mode or when native streaming is off", () => {
+  it("keeps native progress task cards opt-in while preserving partial native streaming", () => {
     expect(isSlackStreamingEnabled({ mode: "partial", nativeStreaming: false })).toBe(false);
     expect(isSlackStreamingEnabled({ mode: "block", nativeStreaming: true })).toBe(false);
     expect(isSlackStreamingEnabled({ mode: "progress", nativeStreaming: true })).toBe(false);
+    expect(
+      isSlackStreamingEnabled({
+        mode: "progress",
+        nativeStreaming: true,
+        nativeProgressTaskCards: true,
+      }),
+    ).toBe(true);
+    expect(isSlackStreamingEnabled({ mode: "progress", nativeStreaming: false })).toBe(false);
     expect(isSlackStreamingEnabled({ mode: "off", nativeStreaming: true })).toBe(false);
   });
 });

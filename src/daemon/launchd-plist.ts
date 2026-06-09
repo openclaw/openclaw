@@ -1,3 +1,4 @@
+/** Reads and renders macOS LaunchAgent plists for gateway service installs. */
 import fs from "node:fs/promises";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
@@ -27,6 +28,12 @@ const plistUnescape = (value: string): string =>
     .replaceAll("&lt;", "<")
     .replaceAll("&amp;", "&");
 
+type ReadLaunchAgentProgramArgumentsOptions = {
+  expectedEnvironmentWrapperPath?: string;
+  expectedEnvironmentFilePath?: string;
+  generatedEnvironmentLabel?: string;
+};
+
 function parseGeneratedEnvValue(value: string): string {
   const trimmed = value.trim();
   if (!trimmed.startsWith("'") || !trimmed.endsWith("'")) {
@@ -35,17 +42,95 @@ function parseGeneratedEnvValue(value: string): string {
   return trimmed.slice(1, -1).replaceAll("'\\''", "'");
 }
 
+function includesGeneratedEnvironmentPathToken(value: string | undefined, token: string): boolean {
+  return Boolean(value?.replaceAll("\\", "/").includes(token));
+}
+
+function includesGeneratedEnvironmentDirToken(value: string | undefined): boolean {
+  return Boolean(value?.replaceAll("\\", "/").includes("/service-env/"));
+}
+
+function resolveSiblingGeneratedEnvFilePath(
+  envFilePath: string,
+  options?: ReadLaunchAgentProgramArgumentsOptions,
+): string | undefined {
+  const label = options?.generatedEnvironmentLabel?.trim();
+  if (!label) {
+    return undefined;
+  }
+  const serviceEnvMarker = "/service-env/";
+  const markerIndex = envFilePath.replaceAll("\\", "/").lastIndexOf(serviceEnvMarker);
+  if (markerIndex < 0) {
+    return undefined;
+  }
+  // Custom state dirs can also contain service-env; use the generated env dir closest to the file.
+  const serviceEnvDirEnd = markerIndex + serviceEnvMarker.length - 1;
+  return `${envFilePath.slice(0, serviceEnvDirEnd)}/${label}.env`;
+}
+
+function isGeneratedEnvWrapperArgs(
+  programArguments: string[],
+  options?: ReadLaunchAgentProgramArgumentsOptions,
+): boolean {
+  const wrapperPath = programArguments[0];
+  const envFilePath = programArguments[1];
+  if (!wrapperPath || !envFilePath) {
+    return false;
+  }
+  if (!options) {
+    return wrapperPath.endsWith("-env-wrapper.sh");
+  }
+  if (
+    options.expectedEnvironmentWrapperPath &&
+    options.expectedEnvironmentFilePath &&
+    wrapperPath === options.expectedEnvironmentWrapperPath &&
+    envFilePath === options.expectedEnvironmentFilePath
+  ) {
+    return true;
+  }
+  const label = options.generatedEnvironmentLabel?.trim();
+  if (!label) {
+    return false;
+  }
+  // Legacy/corrupted plists may preserve the label-derived wrapper name inside
+  // a mangled service-env path. Still unwrap it so the next rewrite can repair.
+  return (
+    includesGeneratedEnvironmentDirToken(wrapperPath) &&
+    includesGeneratedEnvironmentDirToken(envFilePath) &&
+    includesGeneratedEnvironmentPathToken(wrapperPath, `${label}-env-wrapper.sh`) &&
+    includesGeneratedEnvironmentPathToken(envFilePath, `${label}.env`)
+  );
+}
+
 async function readLaunchAgentEnvironmentFile(
   programArguments: string[],
+  options?: ReadLaunchAgentProgramArgumentsOptions,
 ): Promise<Record<string, string>> {
   const envFilePath = programArguments[1];
-  if (!programArguments[0]?.endsWith("-env-wrapper.sh") || !envFilePath) {
+  if (!isGeneratedEnvWrapperArgs(programArguments, options) || !envFilePath) {
     return {};
   }
   let content = "";
-  try {
-    content = await fs.readFile(envFilePath, "utf8");
-  } catch {
+  const candidateEnvFilePaths = Array.from(
+    new Set(
+      [
+        envFilePath,
+        resolveSiblingGeneratedEnvFilePath(envFilePath, options),
+        options?.expectedEnvironmentFilePath,
+      ].filter((candidate): candidate is string => Boolean(candidate)),
+    ),
+  );
+  // Corrupted wrapper args can still point near the generated env dir. Try the
+  // sibling canonical env file before giving up so repair rewrites retain env.
+  for (const candidate of candidateEnvFilePaths) {
+    try {
+      content = await fs.readFile(candidate, "utf8");
+      break;
+    } catch {
+      // Keep trying; mangled wrapper args may still have the canonical env file.
+    }
+  }
+  if (!content) {
     return {};
   }
   const environment: Record<string, string> = {};
@@ -68,8 +153,11 @@ async function readLaunchAgentEnvironmentFile(
   return environment;
 }
 
-function unwrapGeneratedEnvWrapperArgs(programArguments: string[]): string[] {
-  if (!programArguments[0]?.endsWith("-env-wrapper.sh") || !programArguments[1]) {
+function unwrapGeneratedEnvWrapperArgs(
+  programArguments: string[],
+  options?: ReadLaunchAgentProgramArgumentsOptions,
+): string[] {
+  if (!isGeneratedEnvWrapperArgs(programArguments, options)) {
     return programArguments;
   }
   return programArguments.slice(2);
@@ -95,6 +183,26 @@ const renderEnvDict = (env: Record<string, string | undefined> | undefined): str
 };
 
 export async function readLaunchAgentProgramArgumentsFromFile(plistPath: string): Promise<{
+  programArguments: string[];
+  workingDirectory?: string;
+  environment?: Record<string, string>;
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
+  sourcePath?: string;
+} | null>;
+export async function readLaunchAgentProgramArgumentsFromFile(
+  plistPath: string,
+  options: ReadLaunchAgentProgramArgumentsOptions,
+): Promise<{
+  programArguments: string[];
+  workingDirectory?: string;
+  environment?: Record<string, string>;
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
+  sourcePath?: string;
+} | null>;
+export async function readLaunchAgentProgramArgumentsFromFile(
+  plistPath: string,
+  options?: ReadLaunchAgentProgramArgumentsOptions,
+): Promise<{
   programArguments: string[];
   workingDirectory?: string;
   environment?: Record<string, string>;
@@ -128,10 +236,12 @@ export async function readLaunchAgentProgramArgumentsFromFile(plistPath: string)
         inlineEnvironment[key] = value;
       }
     }
-    const fileEnvironment = await readLaunchAgentEnvironmentFile(args);
-    const effectiveProgramArguments = unwrapGeneratedEnvWrapperArgs(args);
+    const fileEnvironment = await readLaunchAgentEnvironmentFile(args, options);
+    const effectiveProgramArguments = unwrapGeneratedEnvWrapperArgs(args, options);
     const environment = { ...inlineEnvironment, ...fileEnvironment };
     const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> = {};
+    // Track source provenance so repair flows can tell inline plist env from the
+    // generated env file and preserve both when they overlap.
     for (const key of Object.keys(inlineEnvironment)) {
       environmentValueSources[key] = Object.hasOwn(fileEnvironment, key)
         ? "inline-and-file"

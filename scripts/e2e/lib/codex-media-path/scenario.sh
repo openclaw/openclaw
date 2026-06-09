@@ -38,6 +38,8 @@ entry="$(openclaw_e2e_resolve_entrypoint)"
 mkdir -p "$OPENCLAW_STATE_DIR" "$OPENCLAW_TEST_WORKSPACE_DIR"
 rm -f "$OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG"
 
+openclaw_e2e_enable_openclaw_cli_timeout
+
 echo "Installing Codex plugin: $PLUGIN_SPEC"
 openclaw plugins install "$PLUGIN_SPEC" --force >"$PLUGIN_INSTALL_LOG" 2>&1
 openclaw plugins inspect codex --runtime --json >"$PLUGIN_INSPECT_LOG"
@@ -45,10 +47,10 @@ openclaw plugins inspect codex --runtime --json >"$PLUGIN_INSPECT_LOG"
 node scripts/e2e/lib/codex-media-path/write-config.mjs
 
 gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$GATEWAY_LOG")"
-openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 480
+openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 480 "$PORT"
 
 PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" \
   tsx scripts/e2e/lib/codex-media-path/client.mjs >"$CLIENT_LOG" 2>&1
 
-cat "$CLIENT_LOG"
+openclaw_e2e_print_log "$CLIENT_LOG"
 echo "Codex media-path Docker E2E passed"

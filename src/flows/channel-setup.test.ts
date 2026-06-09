@@ -1,3 +1,4 @@
+// Channel setup tests cover setup flow prompts and config output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   makeCatalogEntry,
@@ -54,6 +55,7 @@ function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegi
     webSearchProviders: [],
     webFetchProviders: [],
     migrationProviders: [],
+    embeddingProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
     videoGenerationProviders: [],

@@ -1,3 +1,4 @@
+// Feishu tests cover send plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildMarkdownCard } from "./send.js";
@@ -485,6 +486,45 @@ describe("getMessageFeishu", () => {
         contentType: "interactive",
         content: "hello from card 2.0",
         createTime: 1710000000000,
+      },
+    ]);
+  });
+
+  it("does not partially parse malformed thread history create_time values", async () => {
+    mockClientList.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_text",
+            msg_type: "text",
+            body: {
+              content: JSON.stringify({ text: "partial time" }),
+            },
+            sender: {
+              id: "ou_1",
+              sender_type: "user",
+            },
+            create_time: "1710000000000ms",
+          },
+        ],
+      },
+    });
+
+    const result = await listFeishuThreadMessages({
+      cfg: {} as ClawdbotConfig,
+      threadId: "omt_1",
+      rootMessageId: "om_root",
+    });
+
+    expect(result).toEqual([
+      {
+        messageId: "om_text",
+        senderId: "ou_1",
+        senderType: "user",
+        contentType: "text",
+        content: "partial time",
+        createTime: undefined,
       },
     ]);
   });

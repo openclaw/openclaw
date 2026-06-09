@@ -1,12 +1,13 @@
+// Dev gateway bootstrap for a local loopback config and seeded dev workspace.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveWorkspaceTemplateDir } from "../../agents/workspace-templates.js";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveWorkspaceTemplateSearchDirs } from "../../agents/workspace-templates.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { handleReset } from "../../commands/onboard-helpers.js";
 import { createConfigIO, replaceConfigFile } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 
 const DEV_IDENTITY_NAME = "C3-PO";
@@ -15,20 +16,32 @@ const DEV_IDENTITY_EMOJI = "🤖";
 const DEV_AGENT_WORKSPACE_SUFFIX = "dev";
 
 async function loadDevTemplate(name: string, fallback: string): Promise<string> {
+  // Template frontmatter is metadata only; workspace files receive the body content.
   try {
-    const templateDir = await resolveWorkspaceTemplateDir();
-    const raw = await fs.promises.readFile(path.join(templateDir, name), "utf-8");
-    if (!raw.startsWith("---")) {
-      return raw;
+    const templateDirs = await resolveWorkspaceTemplateSearchDirs();
+    for (const templateDir of templateDirs) {
+      let raw: string;
+      try {
+        raw = await fs.promises.readFile(path.join(templateDir, name), "utf-8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+          continue;
+        }
+        throw error;
+      }
+      if (!raw.startsWith("---")) {
+        return raw;
+      }
+      const endIndex = raw.indexOf("\n---", 3);
+      if (endIndex === -1) {
+        return raw;
+      }
+      return raw.slice(endIndex + "\n---".length).replace(/^\s+/, "");
     }
-    const endIndex = raw.indexOf("\n---", 3);
-    if (endIndex === -1) {
-      return raw;
-    }
-    return raw.slice(endIndex + "\n---".length).replace(/^\s+/, "");
   } catch {
     return fallback;
   }
+  return fallback;
 }
 
 const resolveDevWorkspaceDir = (env: NodeJS.ProcessEnv = process.env): string => {

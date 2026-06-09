@@ -1,15 +1,24 @@
+// Gateway server test helpers create isolated config/state dirs, start gateway
+// servers/clients, and provide common RPC/session fixtures.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import "./test-helpers.mocks.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
-import "./test-helpers.mocks.js";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
 import {
   clearSessionStoreCacheForTest,
   resolveMainSessionKeyFromConfig,
   type SessionEntry,
 } from "../config/sessions.js";
+import {
+  readSessionStoreForTest,
+  writeSessionStoreForTestAsync,
+} from "../config/sessions/test-helpers.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -31,15 +40,12 @@ import {
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resetTaskRegistryForTests } from "../tasks/runtime-internal.js";
 import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-runtime-internal.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
 import type { GatewayServerOptions } from "./server.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
@@ -47,7 +53,7 @@ import {
   cronIsolatedRun,
   embeddedRunMock,
   getReplyFromConfig,
-  piSdkMock,
+  agentDiscoveryMock,
   sendWhatsAppMock,
   sessionStoreSaveDelayMs,
   setTestConfigRoot,
@@ -72,7 +78,6 @@ const GATEWAY_TEST_ENV_KEYS = [
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_AGENT_DIR",
-  "PI_CODING_AGENT_DIR",
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
   "OPENCLAW_SKIP_GMAIL_WATCHER",
@@ -218,13 +223,20 @@ export async function writeSessionStore(params: {
           });
     store[storeKey] = entry;
   }
-  // Gateway suites often reuse the same store path across tests while writing the
-  // file directly; clear the in-process cache so handlers reload the seeded state.
+  // Gateway suites often reuse the same store path across tests; clear the
+  // in-process cache so handlers reload the seeded SQLite state.
   clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+  await writeSessionStoreForTestAsync(storePath, store);
   clearSessionStoreCacheForTest();
+}
+
+export function readSessionStore(storePath?: string): Record<string, SessionEntry> {
+  const resolvedStorePath = storePath ?? testState.sessionStorePath;
+  if (!resolvedStorePath) {
+    throw new Error("readSessionStore requires testState.sessionStorePath");
+  }
+  return readSessionStoreForTest(resolvedStorePath);
 }
 
 async function setupGatewayTestHome() {
@@ -235,7 +247,6 @@ async function setupGatewayTestHome() {
   process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
   delete process.env.OPENCLAW_CONFIG_PATH;
   delete process.env.OPENCLAW_AGENT_DIR;
-  delete process.env.PI_CODING_AGENT_DIR;
 }
 
 function applyGatewaySkipEnv() {
@@ -347,8 +358,8 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
   embeddedRunMock.waitResults.clear();
-  embeddedRunMock.compactEmbeddedPiSession.mockReset();
-  embeddedRunMock.compactEmbeddedPiSession.mockResolvedValue({
+  embeddedRunMock.compactEmbeddedAgentSession.mockReset();
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValue({
     ok: true,
     compacted: true,
     result: {
@@ -364,9 +375,9 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   resetAgentRunContextForTest();
   const mod = await getServerModule();
   await mod.resetModelCatalogCacheForTest();
-  piSdkMock.enabled = false;
-  piSdkMock.discoverCalls = 0;
-  piSdkMock.models = [];
+  agentDiscoveryMock.enabled = false;
+  agentDiscoveryMock.discoverCalls = 0;
+  agentDiscoveryMock.models = [];
 }
 
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
@@ -438,8 +449,8 @@ async function resetGatewayTestRuntimeOnly() {
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
   embeddedRunMock.waitResults.clear();
-  embeddedRunMock.compactEmbeddedPiSession.mockReset();
-  embeddedRunMock.compactEmbeddedPiSession.mockResolvedValue({
+  embeddedRunMock.compactEmbeddedAgentSession.mockReset();
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValue({
     ok: true,
     compacted: true,
     result: {
@@ -461,6 +472,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
   const scope = options?.scope ?? "test";
   if (scope === "suite") {
     beforeAll(async () => {
+      vi.useRealTimers();
       if (activeSuiteHookScopeCount === 0) {
         await setupGatewayTestHome();
         await resetGatewayTestState({ uniqueConfigRoot: false });
@@ -468,6 +480,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
       activeSuiteHookScopeCount += 1;
     });
     beforeEach(async () => {
+      vi.useRealTimers();
       if (activeSuiteGatewayServerCount > 0) {
         await resetGatewayTestRuntimeOnly();
         return;
@@ -491,6 +504,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
   }
 
   beforeEach(async () => {
+    vi.useRealTimers();
     await setupGatewayTestHome();
     await resetGatewayTestState({ uniqueConfigRoot: false });
   }, 60_000);
@@ -555,7 +569,6 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   timeoutMs = 10_000,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout>;
     function cleanup() {
       clearTimeout(timer);
       ws.off("message", handler);
@@ -572,7 +585,7 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
         resolve(obj);
       }
     }
-    timer = setTimeout(() => {
+    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
       cleanup();
       reject(new Error("timeout"));
     }, timeoutMs);
@@ -1185,7 +1198,9 @@ export async function waitForSystemEvent(timeoutMs = 2000) {
         return events;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw new Error("timeout waiting for system event");
 }

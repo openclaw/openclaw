@@ -1,9 +1,15 @@
+// Memory Core plugin module implements manager search behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   cosineSimilarity,
   parseEmbedding,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  normalizeStringEntries,
+  normalizeStringEntriesLower,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const vectorToBlob = (embedding: number[]): Buffer =>
   Buffer.from(new Float32Array(embedding).buffer);
@@ -36,12 +42,7 @@ type SearchRowResult = {
 };
 
 function normalizeSearchTokens(raw: string): string[] {
-  return (
-    raw
-      .match(FTS_QUERY_TOKEN_RE)
-      ?.map((token) => token.trim().toLowerCase())
-      .filter(Boolean) ?? []
-  );
+  return normalizeStringEntriesLower(raw.match(FTS_QUERY_TOKEN_RE) ?? []);
 }
 
 function scoreFallbackKeywordResult(params: {
@@ -50,7 +51,7 @@ function scoreFallbackKeywordResult(params: {
   text: string;
   ftsScore: number;
 }): number {
-  const queryTokens = [...new Set(normalizeSearchTokens(params.query))];
+  const queryTokens = uniqueStrings(normalizeSearchTokens(params.query));
   if (queryTokens.length === 0) {
     return params.ftsScore;
   }
@@ -105,11 +106,7 @@ function planKeywordSearch(params: {
     };
   }
 
-  const tokens =
-    params.query
-      .match(FTS_QUERY_TOKEN_RE)
-      ?.map((token) => token.trim())
-      .filter(Boolean) ?? [];
+  const tokens = normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []);
   if (tokens.length === 0) {
     return { matchQuery: null, substringTerms: [] };
   }
@@ -311,7 +308,6 @@ async function searchChunksByEmbedding(params: {
 export async function searchKeyword(params: {
   db: DatabaseSync;
   ftsTable: string;
-  providerModel: string | undefined;
   query: string;
   ftsTokenizer?: "unicode61" | "trigram";
   limit: number;
@@ -333,9 +329,9 @@ export async function searchKeyword(params: {
     return [];
   }
 
-  // When providerModel is undefined (FTS-only mode), search all models
-  const modelClause = params.providerModel ? " AND model = ?" : "";
-  const modelParams = params.providerModel ? [params.providerModel] : [];
+  // Lexical FTS is model-agnostic (issue #48300), but old databases may
+  // already contain orphaned FTS rows from prior model-scoped cleanup.
+  const liveChunkClause = ` AND EXISTS (SELECT 1 FROM chunks c WHERE c.id = ${params.ftsTable}.id)`;
   const substringClause = plan.substringTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
   const substringParams = plan.substringTerms.map((term) => `%${escapeLikePattern(term)}%`);
 
@@ -357,14 +353,13 @@ export async function searchKeyword(params: {
           `SELECT id, path, source, start_line, end_line, text,\n` +
             `       bm25(${params.ftsTable}) AS rank\n` +
             `  FROM ${params.ftsTable}\n` +
-            ` WHERE ${params.ftsTable} MATCH ?${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
+            ` WHERE ${params.ftsTable} MATCH ?${substringClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
             ` ORDER BY rank ASC\n` +
             ` LIMIT ?`,
         )
         .all(
           plan.matchQuery,
           ...substringParams,
-          ...modelParams,
           ...params.sourceFilter.params,
           params.limit,
         ) as typeof rows;
@@ -375,12 +370,8 @@ export async function searchKeyword(params: {
       // Log the root cause, then fall back to per-token LIKE-based substring
       // search so results are still returned instead of being silently dropped.
       console.warn(`memory search: FTS5 MATCH failed, falling back to LIKE: ${String(matchErr)}`);
-      const queryTokens =
-        params.query
-          .match(FTS_QUERY_TOKEN_RE)
-          ?.map((t) => t.trim())
-          .filter(Boolean) ?? [];
-      const allTerms = [...new Set([...queryTokens, ...plan.substringTerms])];
+      const queryTokens = normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []);
+      const allTerms = uniqueStrings([...queryTokens, ...plan.substringTerms]);
       const fallbackLikeClause = allTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
       const fallbackLikeParams = allTerms.map((term) => `%${escapeLikePattern(term)}%`);
       rows = params.db
@@ -388,12 +379,11 @@ export async function searchKeyword(params: {
           `SELECT id, path, source, start_line, end_line, text,\n` +
             `       0 AS rank\n` +
             `  FROM ${params.ftsTable}\n` +
-            ` WHERE 1=1${fallbackLikeClause}${modelClause}${params.sourceFilter.sql}\n` +
+            ` WHERE 1=1${fallbackLikeClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
             ` LIMIT ?`,
         )
         .all(
           ...fallbackLikeParams,
-          ...modelParams,
           ...params.sourceFilter.params,
           params.limit,
         ) as typeof rows;
@@ -404,12 +394,11 @@ export async function searchKeyword(params: {
         `SELECT id, path, source, start_line, end_line, text,\n` +
           `       0 AS rank\n` +
           `  FROM ${params.ftsTable}\n` +
-          ` WHERE 1=1${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
+          ` WHERE 1=1${substringClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
           ` LIMIT ?`,
       )
       .all(
         ...substringParams,
-        ...modelParams,
         ...params.sourceFilter.params,
         params.limit,
       ) as typeof rows;

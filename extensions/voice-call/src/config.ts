@@ -1,3 +1,4 @@
+// Voice Call helper module supports config behavior.
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/realtime-voice";
 import {
   buildSecretInputSchema,
@@ -267,8 +268,6 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     maxChars: z.number().int().positive().default(6000),
     /** Include configured agent identity fields. */
     includeIdentity: z.boolean().default(true),
-    /** Include agents.defaults/list systemPromptOverride when configured. */
-    includeSystemPrompt: z.boolean().default(true),
     /** Include selected workspace files such as SOUL.md and IDENTITY.md. */
     includeWorkspaceFiles: z.boolean().default(true),
     /** Workspace-relative files to include, bounded by maxChars. */
@@ -279,7 +278,6 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     enabled: false,
     maxChars: 6000,
     includeIdentity: true,
-    includeSystemPrompt: true,
     includeWorkspaceFiles: true,
     files: ["SOUL.md", "IDENTITY.md", "USER.md"],
   });
@@ -350,7 +348,6 @@ const VoiceCallRealtimeConfigSchema = z
       enabled: false,
       maxChars: 6000,
       includeIdentity: true,
-      includeSystemPrompt: true,
       includeWorkspaceFiles: true,
       files: ["SOUL.md", "IDENTITY.md", "USER.md"],
     },
@@ -577,7 +574,7 @@ export function resolveVoiceCallNumberRouteKey(
   if (!routes) {
     return undefined;
   }
-  if (phone && Object.prototype.hasOwnProperty.call(routes, phone)) {
+  if (phone && Object.hasOwn(routes, phone)) {
     return phone;
   }
 

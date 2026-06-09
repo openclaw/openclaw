@@ -5,12 +5,14 @@
  * inside the owning plugin package instead of hanging off core runtime slots
  * keyed by plugin id.
  */
-import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
-import type { CreateReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.runtime-types.js";
-import type {
-  ReadChannelAllowFromStoreForAccount,
-  UpsertChannelPairingRequestForAccount,
-} from "../../pairing/pairing-store.types.js";
+type DispatchReplyWithBufferedBlockDispatcher =
+  import("../../auto-reply/reply/provider-dispatcher.types.js").DispatchReplyWithBufferedBlockDispatcher;
+type CreateReplyDispatcherWithTyping =
+  import("../../auto-reply/reply/reply-dispatcher.runtime-types.js").CreateReplyDispatcherWithTyping;
+type ReadChannelAllowFromStoreForAccount =
+  import("../../pairing/pairing-store.types.js").ReadChannelAllowFromStoreForAccount;
+type UpsertChannelPairingRequestForAccount =
+  import("../../pairing/pairing-store.types.js").UpsertChannelPairingRequestForAccount;
 type ShouldHandleTextCommands =
   import("../../auto-reply/commands-registry.runtime-types.js").ShouldHandleTextCommands;
 type IsControlCommandMessage =
@@ -81,12 +83,12 @@ export type PluginRuntimeChannel = {
     resolveTextChunkLimit: typeof import("../../auto-reply/chunk.js").resolveTextChunkLimit;
     hasControlCommand: typeof import("../../auto-reply/command-detection.js").hasControlCommand;
     resolveMarkdownTableMode: import("../../config/markdown-tables.types.js").ResolveMarkdownTableMode;
-    convertMarkdownTables: typeof import("../../markdown/tables.js").convertMarkdownTables;
+    convertMarkdownTables: typeof import("../../../packages/markdown-core/src/tables.js").convertMarkdownTables;
   };
   reply: {
     dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
     /**
-     * @deprecated Prefer `openclaw/plugin-sdk/channel-message` adapters plus
+     * @deprecated Prefer `openclaw/plugin-sdk/channel-outbound` adapters plus
      * `dispatchReplyWithBufferedBlockDispatcher` or channel turn helpers.
      * This is a low-level legacy dispatcher escape hatch.
      */
@@ -107,9 +109,9 @@ export type PluginRuntimeChannel = {
     withReplyDispatcher: typeof import("../../auto-reply/dispatch-dispatcher.js").withReplyDispatcher;
     settleReplyDispatcher: typeof import("../../auto-reply/dispatch-dispatcher.js").settleReplyDispatcher;
     /**
-     * @deprecated Prefer `buildChannelInboundEventContext` /
-     * `buildChannelTurnContext` from `openclaw/plugin-sdk/channel-inbound` so
-     * inbound event metadata is carried into reply dispatch.
+     * @deprecated Prefer `buildChannelInboundEventContext` from
+     * `openclaw/plugin-sdk/channel-inbound` so inbound event metadata is
+     * carried into reply dispatch.
      */
     finalizeInboundContext: typeof import("../../auto-reply/reply/inbound-context.js").finalizeInboundContext;
     formatAgentEnvelope: typeof import("../../auto-reply/envelope.js").formatAgentEnvelope;
@@ -177,15 +179,12 @@ export type PluginRuntimeChannel = {
   outbound: {
     loadAdapter: import("../../channels/plugins/outbound/load.types.js").LoadChannelOutboundAdapter;
   };
-  turn: {
-    run: typeof import("../../channels/turn/kernel.js").runChannelTurn;
-    runAssembled: typeof import("../../channels/turn/kernel.js").dispatchAssembledChannelTurn;
-    /** @deprecated Prefer `run(...)`. */
-    runResolved: typeof import("../../channels/turn/kernel.js").runResolvedChannelTurn;
-    buildContext: typeof import("../../channels/turn/kernel.js").buildChannelInboundEventContext;
-    runPrepared: typeof import("../../channels/turn/kernel.js").runPreparedChannelTurn;
-    /** @deprecated Prefer `runAssembled(...)`. */
-    dispatchAssembled: typeof import("../../channels/turn/kernel.js").dispatchAssembledChannelTurn;
+  inbound: {
+    buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
+    run: typeof import("../../channels/turn/kernel.js").runChannelInboundEvent;
+    /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
+    runPreparedReply: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
+    dispatchReply: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
   };
   threadBindings: {
     setIdleTimeoutBySessionKey: (params: {

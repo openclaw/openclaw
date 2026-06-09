@@ -5,19 +5,26 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  normalizeTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { resolveAuthProfileDatabaseFilePaths } from "../agents/auth-profiles/sqlite.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import type { SkillScanFinding } from "../skills/security/scanner.js";
 import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
-import type { SkillScanFinding } from "./skill-scanner.js";
 import type { ExecFn } from "./windows-acl.js";
 
 export type SecurityAuditFinding = {
@@ -32,31 +39,33 @@ type CollectPluginsTrustFindingsParams = Parameters<
   typeof import("./audit-plugins-trust.js").collectPluginsTrustFindings
 >[0];
 type SkillScanSummary = Awaited<
-  ReturnType<typeof import("./skill-scanner.js").scanDirectoryWithSummary>
+  ReturnType<typeof import("../skills/security/scanner.js").scanDirectoryWithSummary>
 >;
 type ExecDockerRawFn = (
   args: string[],
   opts?: { allowFailure?: boolean; input?: Buffer | string; signal?: AbortSignal },
 ) => Promise<import("../agents/sandbox/docker.js").ExecDockerRawResult>;
 
+const DEFAULT_SANDBOX_BROWSER_DOCKER_PROBE_TIMEOUT_MS = 5000;
+
 type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
-let skillsModulePromise: Promise<typeof import("../agents/skills.js")> | undefined;
+let skillsModulePromise: Promise<typeof import("../skills/loading/workspace.js")> | undefined;
 let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
 let agentScopeModulePromise: Promise<typeof import("../agents/agent-scope.js")> | undefined;
 let agentWorkspaceDirsModulePromise:
   | Promise<typeof import("../agents/workspace-dirs.js")>
   | undefined;
-let skillSourceModulePromise: Promise<typeof import("../agents/skills/source.js")> | undefined;
+let skillSourceModulePromise: Promise<typeof import("../skills/loading/source.js")> | undefined;
 let sandboxDockerModulePromise: Promise<typeof import("../agents/sandbox/docker.js")> | undefined;
 let sandboxConstantsModulePromise:
   | Promise<typeof import("../agents/sandbox/constants.js")>
   | undefined;
 let auditPluginsTrustModulePromise: Promise<typeof import("./audit-plugins-trust.js")> | undefined;
 let auditFsModulePromise: Promise<typeof import("./audit-fs.js")> | undefined;
-let skillScannerModulePromise: Promise<typeof import("./skill-scanner.js")> | undefined;
+let skillScannerModulePromise: Promise<typeof import("../skills/security/scanner.js")> | undefined;
 
 function loadSkillsModule() {
-  skillsModulePromise ??= import("../agents/skills.js");
+  skillsModulePromise ??= import("../skills/loading/workspace.js");
   return skillsModulePromise;
 }
 
@@ -81,12 +90,12 @@ function loadAgentWorkspaceDirsModule() {
 }
 
 function loadSkillSourceModule() {
-  skillSourceModulePromise ??= import("../agents/skills/source.js");
+  skillSourceModulePromise ??= import("../skills/loading/source.js");
   return skillSourceModulePromise;
 }
 
 function loadSkillScannerModule() {
-  skillScannerModulePromise ??= import("./skill-scanner.js");
+  skillScannerModulePromise ??= import("../skills/security/scanner.js");
   return skillScannerModulePromise;
 }
 
@@ -187,7 +196,7 @@ async function readPluginManifestExtensions(pluginPath: string): Promise<string[
   if (!Array.isArray(extensions)) {
     return [];
   }
-  return extensions.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
+  return normalizeTrimmedStringList(extensions);
 }
 
 function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string): string {
@@ -213,7 +222,7 @@ async function listInstalledPluginDirs(params: {
   if (!st.ok || !st.isDir) {
     return { extensionsDir, pluginDirs: [] };
   }
-  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err) => {
+  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err: unknown) => {
     params.onReadError?.(err);
     return [];
   });
@@ -229,7 +238,7 @@ function buildCodeSafetySummaryCacheKey(params: {
   dirPath: string;
   includeFiles?: string[];
 }): string {
-  const includeFiles = (params.includeFiles ?? []).map((entry) => entry.trim()).filter(Boolean);
+  const includeFiles = normalizeStringEntries(params.includeFiles);
   const includeKey = includeFiles.length > 0 ? includeFiles.toSorted().join("\u0000") : "";
   return `${params.dirPath}\u0000${includeKey}`;
 }
@@ -274,23 +283,72 @@ function normalizeDockerLabelValue(raw: string | undefined): string | null {
   return trimmed;
 }
 
-async function listSandboxBrowserContainers(
-  execDockerRawFn: ExecDockerRawFn,
-): Promise<string[] | null> {
+class DockerProbeTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Docker probe timed out after ${timeoutMs}ms`);
+    this.name = "DockerProbeTimeoutError";
+  }
+}
+
+function normalizeDockerProbeTimeoutMs(timeoutMs: number | undefined): number {
+  if (Number.isFinite(timeoutMs) && timeoutMs !== undefined) {
+    return Math.max(250, Math.floor(timeoutMs));
+  }
+  return DEFAULT_SANDBOX_BROWSER_DOCKER_PROBE_TIMEOUT_MS;
+}
+
+async function withDockerProbeTimeout<T>(
+  timeoutMs: number,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setNodeTimeout> | undefined;
+  let timedOut = false;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setNodeTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(new DockerProbeTimeoutError(timeoutMs));
+    }, timeoutMs);
+  });
   try {
-    const result = await execDockerRawFn(
-      ["ps", "-a", "--filter", "label=openclaw.sandboxBrowser=1", "--format", "{{.Names}}"],
-      { allowFailure: true },
+    return await Promise.race([run(controller.signal), timeoutPromise]);
+  } catch (err) {
+    if (timedOut || controller.signal.aborted) {
+      throw new DockerProbeTimeoutError(timeoutMs);
+    }
+    throw err;
+  } finally {
+    if (timeout) {
+      clearNodeTimeout(timeout);
+    }
+  }
+}
+
+function isDockerProbeTimeoutError(error: unknown): boolean {
+  return error instanceof DockerProbeTimeoutError;
+}
+
+async function listSandboxBrowserContainers(params: {
+  execDockerRawFn: ExecDockerRawFn;
+  timeoutMs: number;
+  onTimeout?: () => void;
+}): Promise<string[] | null> {
+  try {
+    const result = await withDockerProbeTimeout(params.timeoutMs, (signal) =>
+      params.execDockerRawFn(
+        ["ps", "-a", "--filter", "label=openclaw.sandboxBrowser=1", "--format", "{{.Names}}"],
+        { allowFailure: true, signal },
+      ),
     );
     if (result.code !== 0) {
       return null;
     }
-    return result.stdout
-      .toString("utf8")
-      .split(/\r?\n/)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  } catch {
+    return normalizeStringEntries(result.stdout.toString("utf8").split(/\r?\n/));
+  } catch (err) {
+    if (isDockerProbeTimeoutError(err)) {
+      params.onTimeout?.();
+    }
     return null;
   }
 }
@@ -298,16 +356,20 @@ async function listSandboxBrowserContainers(
 async function readSandboxBrowserHashLabels(params: {
   containerName: string;
   execDockerRawFn: ExecDockerRawFn;
+  timeoutMs: number;
+  onTimeout?: () => void;
 }): Promise<{ configHash: string | null; epoch: string | null } | null> {
   try {
-    const result = await params.execDockerRawFn(
-      [
-        "inspect",
-        "-f",
-        '{{ index .Config.Labels "openclaw.configHash" }}\t{{ index .Config.Labels "openclaw.browserConfigEpoch" }}',
-        params.containerName,
-      ],
-      { allowFailure: true },
+    const result = await withDockerProbeTimeout(params.timeoutMs, (signal) =>
+      params.execDockerRawFn(
+        [
+          "inspect",
+          "-f",
+          '{{ index .Config.Labels "openclaw.configHash" }}\t{{ index .Config.Labels "openclaw.browserConfigEpoch" }}',
+          params.containerName,
+        ],
+        { allowFailure: true, signal },
+      ),
     );
     if (result.code !== 0) {
       return null;
@@ -317,7 +379,10 @@ async function readSandboxBrowserHashLabels(params: {
       configHash: normalizeDockerLabelValue(hashRaw),
       epoch: normalizeDockerLabelValue(epochRaw),
     };
-  } catch {
+  } catch (err) {
+    if (isDockerProbeTimeoutError(err)) {
+      params.onTimeout?.();
+    }
     return null;
   }
 }
@@ -349,34 +414,51 @@ function isLoopbackPublishHost(host: string): boolean {
 async function readSandboxBrowserPortMappings(params: {
   containerName: string;
   execDockerRawFn: ExecDockerRawFn;
+  timeoutMs: number;
+  onTimeout?: () => void;
 }): Promise<string[] | null> {
   try {
-    const result = await params.execDockerRawFn(["port", params.containerName], {
-      allowFailure: true,
-    });
+    const result = await withDockerProbeTimeout(params.timeoutMs, (signal) =>
+      params.execDockerRawFn(["port", params.containerName], {
+        allowFailure: true,
+        signal,
+      }),
+    );
     if (result.code !== 0) {
       return null;
     }
-    return result.stdout
-      .toString("utf8")
-      .split(/\r?\n/)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  } catch {
+    return normalizeStringEntries(result.stdout.toString("utf8").split(/\r?\n/));
+  } catch (err) {
+    if (isDockerProbeTimeoutError(err)) {
+      params.onTimeout?.();
+    }
     return null;
   }
 }
 
 export async function collectSandboxBrowserHashLabelFindings(params?: {
   execDockerRawFn?: ExecDockerRawFn;
+  timeoutMs?: number;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
+  const timeoutMs = normalizeDockerProbeTimeoutMs(params?.timeoutMs);
+  let timedOut = false;
+  const markTimedOut = () => {
+    timedOut = true;
+  };
   const [execFn, browserHashEpoch] = await Promise.all([
     params?.execDockerRawFn ? Promise.resolve(params.execDockerRawFn) : loadExecDockerRaw(),
     loadSandboxBrowserSecurityHashEpoch(),
   ]);
-  const containers = await listSandboxBrowserContainers(execFn);
+  const containers = await listSandboxBrowserContainers({
+    execDockerRawFn: execFn,
+    timeoutMs,
+    onTimeout: markTimedOut,
+  });
   if (!containers || containers.length === 0) {
+    if (timedOut) {
+      findings.push(buildSandboxBrowserDockerProbeTimeoutFinding(timeoutMs));
+    }
     return findings;
   }
 
@@ -385,7 +467,15 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
   const nonLoopbackPublished: string[] = [];
 
   for (const containerName of containers) {
-    const labels = await readSandboxBrowserHashLabels({ containerName, execDockerRawFn: execFn });
+    const labels = await readSandboxBrowserHashLabels({
+      containerName,
+      execDockerRawFn: execFn,
+      timeoutMs,
+      onTimeout: markTimedOut,
+    });
+    if (timedOut) {
+      break;
+    }
     if (!labels) {
       continue;
     }
@@ -398,7 +488,12 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
     const portMappings = await readSandboxBrowserPortMappings({
       containerName,
       execDockerRawFn: execFn,
+      timeoutMs,
+      onTimeout: markTimedOut,
     });
+    if (timedOut) {
+      break;
+    }
     if (!portMappings?.length) {
       continue;
     }
@@ -449,7 +544,24 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
     });
   }
 
+  if (timedOut) {
+    findings.push(buildSandboxBrowserDockerProbeTimeoutFinding(timeoutMs));
+  }
+
   return findings;
+}
+
+function buildSandboxBrowserDockerProbeTimeoutFinding(timeoutMs: number): SecurityAuditFinding {
+  return {
+    checkId: "sandbox.browser_container.docker_probe_timeout",
+    severity: "warn",
+    title: "Sandbox browser Docker audit probe timed out",
+    detail:
+      `Docker did not answer within ${timeoutMs}ms while checking sandbox browser containers. ` +
+      "OpenClaw skipped any remaining sandbox browser container drift checks for this status run.",
+    remediation:
+      "Retry after Docker is responsive, or recreate sandbox browser containers if drift is suspected.",
+  };
 }
 
 export async function collectIncludeFilePermFindings(params: {
@@ -593,45 +705,53 @@ export async function collectStateDeepFilesystemFindings(params: {
     : [];
   const { resolveDefaultAgentId } = await loadAgentScopeModule();
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const ids = Array.from(new Set([defaultAgentId, ...agentIds])).map((id) => normalizeAgentId(id));
+  const ids = uniqueStrings([defaultAgentId, ...agentIds]).map((id) => normalizeAgentId(id));
 
   for (const agentId of ids) {
     const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    const authPerms = await inspectPathPermissions(authPath, {
-      env: params.env,
-      platform: params.platform,
-      exec: params.execIcacls,
-    });
-    if (authPerms.ok) {
-      if (authPerms.worldWritable || authPerms.groupWritable) {
-        findings.push({
-          checkId: "fs.auth_profiles.perms_writable",
-          severity: "critical",
-          title: "auth-profiles.json is writable by others",
-          detail: `${formatPermissionDetail(authPath, authPerms)}; another user could inject credentials.`,
-          remediation: formatPermissionRemediation({
-            targetPath: authPath,
-            perms: authPerms,
-            isDir: false,
-            posixMode: 0o600,
-            env: params.env,
-          }),
-        });
-      } else if (authPerms.worldReadable || authPerms.groupReadable) {
-        findings.push({
-          checkId: "fs.auth_profiles.perms_readable",
-          severity: "warn",
-          title: "auth-profiles.json is readable by others",
-          detail: `${formatPermissionDetail(authPath, authPerms)}; auth-profiles.json contains API keys and OAuth tokens.`,
-          remediation: formatPermissionRemediation({
-            targetPath: authPath,
-            perms: authPerms,
-            isDir: false,
-            posixMode: 0o600,
-            env: params.env,
-          }),
-        });
+    const authTargets = [
+      { path: path.join(agentDir, "auth-profiles.json"), label: "legacy auth-profiles.json" },
+      ...resolveAuthProfileDatabaseFilePaths(agentDir).map((targetPath) => ({
+        path: targetPath,
+        label: "auth profile SQLite store",
+      })),
+    ];
+    for (const authTarget of authTargets) {
+      const authPerms = await inspectPathPermissions(authTarget.path, {
+        env: params.env,
+        platform: params.platform,
+        exec: params.execIcacls,
+      });
+      if (authPerms.ok) {
+        if (authPerms.worldWritable || authPerms.groupWritable) {
+          findings.push({
+            checkId: "fs.auth_profiles.perms_writable",
+            severity: "critical",
+            title: `${authTarget.label} is writable by others`,
+            detail: `${formatPermissionDetail(authTarget.path, authPerms)}; another user could inject credentials.`,
+            remediation: formatPermissionRemediation({
+              targetPath: authTarget.path,
+              perms: authPerms,
+              isDir: false,
+              posixMode: 0o600,
+              env: params.env,
+            }),
+          });
+        } else if (authPerms.worldReadable || authPerms.groupReadable) {
+          findings.push({
+            checkId: "fs.auth_profiles.perms_readable",
+            severity: "warn",
+            title: `${authTarget.label} is readable by others`,
+            detail: `${formatPermissionDetail(authTarget.path, authPerms)}; auth profile storage contains API keys and OAuth tokens.`,
+            remediation: formatPermissionRemediation({
+              targetPath: authTarget.path,
+              perms: authPerms,
+              isDir: false,
+              posixMode: 0o600,
+              env: params.env,
+            }),
+          });
+        }
       }
     }
 
@@ -780,7 +900,7 @@ export async function collectPluginsCodeSafetyFindings(params: {
       dirPath: pluginPath,
       includeFiles: forcedScanEntries,
       summaryCache: params.summaryCache,
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       findings.push({
         checkId: "plugins.code_safety.scan_failed",
         severity: "warn",
@@ -860,7 +980,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       const summary = await getCodeSafetySummary({
         dirPath: skillDir,
         summaryCache: params.summaryCache,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         findings.push({
           checkId: "skills.code_safety.scan_failed",
           severity: "warn",

@@ -1,9 +1,13 @@
+// Exercises npm-managed root detection across package-manager markers.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import YAML from "yaml";
 import type { CommandOptions } from "../process/exec.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
@@ -14,7 +18,11 @@ import {
   upsertManagedNpmRootDependency,
 } from "./npm-managed-root.js";
 
+const fixtureRootTracker = createSuiteTempRootTracker({
+  prefix: "openclaw-npm-managed-root-",
+});
 const tempDirs: string[] = [];
+let npmConfigEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 const successfulSpawn = {
   code: 0,
@@ -26,13 +34,27 @@ const successfulSpawn = {
 };
 
 async function makeTempRoot(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-managed-root-"));
+  const dir = await fixtureRootTracker.make("case");
   tempDirs.push(dir);
   return dir;
 }
 
+beforeAll(async () => {
+  const fixtureRoot = await fixtureRootTracker.setup();
+  npmConfigEnvSnapshot = captureEnv(["NPM_CONFIG_GLOBALCONFIG"]);
+  const globalConfig = path.join(fixtureRoot, "global-npmrc");
+  await fs.writeFile(globalConfig, "", "utf8");
+  process.env.NPM_CONFIG_GLOBALCONFIG = globalConfig;
+});
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+afterAll(async () => {
+  npmConfigEnvSnapshot?.restore();
+  npmConfigEnvSnapshot = undefined;
+  await fixtureRootTracker.cleanup();
 });
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -210,18 +232,20 @@ describe("managed npm root", () => {
     });
   });
 
-  it("reads package-level npm overrides for managed plugin installs", async () => {
-    await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual({
+  it("reads workspace pnpm overrides for managed plugin installs", async () => {
+    const workspace = YAML.parse(
+      await fs.readFile(path.resolve(process.cwd(), "pnpm-workspace.yaml"), "utf8"),
+    ) as { overrides?: Record<string, unknown> };
+    const expectedOverrides = workspace.overrides ?? {};
+
+    expect(expectedOverrides).toMatchObject({
       axios: "1.16.0",
-      "fast-uri": "3.1.2",
-      "follow-redirects": "1.16.0",
-      "ip-address": "10.2.0",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-      uuid: "14.0.0",
     });
+    await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual(expectedOverrides);
   });
 
-  it("resolves package-level npm overrides from packaged dist chunks", async () => {
+  it("resolves workspace pnpm overrides from packaged dist chunks", async () => {
     const packageRoot = await makeTempRoot();
     await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
     await fs.writeFile(
@@ -229,13 +253,14 @@ describe("managed npm root", () => {
       `${JSON.stringify(
         {
           name: "openclaw",
-          overrides: {
-            axios: "1.16.0",
-          },
         },
         null,
         2,
       )}\n`,
+    );
+    await fs.writeFile(
+      path.join(packageRoot, "pnpm-workspace.yaml"),
+      "overrides:\n  axios: 1.16.0\n",
     );
 
     await expect(
@@ -256,29 +281,33 @@ describe("managed npm root", () => {
         {
           name: "openclaw",
           dependencies: {
-            "@aws-sdk/client-bedrock-runtime": "3.1024.0",
+            "managed-runtime": "3.1024.0",
             "node-domexception": "npm:@nolyfill/domexception@1.0.28",
           },
           optionalDependencies: {
             "optional-runtime": "2.0.0",
-          },
-          overrides: {
-            "@aws-sdk/client-bedrock-runtime": "$@aws-sdk/client-bedrock-runtime",
-            nested: {
-              "optional-runtime": "$optional-runtime",
-              alias: "$node-domexception",
-            },
-            axios: "1.16.0",
-            "node-domexception": "$node-domexception",
           },
         },
         null,
         2,
       )}\n`,
     );
+    await fs.writeFile(
+      path.join(packageRoot, "pnpm-workspace.yaml"),
+      [
+        "overrides:",
+        '  managed-runtime: "$managed-runtime"',
+        "  nested:",
+        '    optional-runtime: "$optional-runtime"',
+        '    alias: "$node-domexception"',
+        "  axios: 1.16.0",
+        '  node-domexception: "$node-domexception"',
+        "",
+      ].join("\n"),
+    );
 
     await expect(readOpenClawManagedNpmRootOverrides({ packageRoot })).resolves.toEqual({
-      "@aws-sdk/client-bedrock-runtime": "3.1024.0",
+      "managed-runtime": "3.1024.0",
       nested: {
         "optional-runtime": "2.0.0",
         alias: "npm:@nolyfill/domexception@1.0.28",
@@ -697,6 +726,71 @@ describe("managed npm root", () => {
       },
       openclaw: {
         managedPeerDependencies: ["runtime-peer"],
+      },
+    });
+  });
+
+  it("does not promote nested bundled peer ranges without a root peer package", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            plugin: "file:./plugin.tgz",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const runCommand = vi.fn(async (_args: string[], optionsOrTimeout: number | CommandOptions) => {
+      const options = requireCommandOptions(optionsOrTimeout, "npm peer plan");
+      if (!options.cwd) {
+        throw new Error("expected npm peer plan cwd");
+      }
+      await fs.writeFile(
+        path.join(options.cwd, "package-lock.json"),
+        `${JSON.stringify(
+          {
+            lockfileVersion: 3,
+            packages: {
+              "": {
+                dependencies: {
+                  plugin: "file:./plugin.tgz",
+                },
+              },
+              "node_modules/plugin": {
+                version: "1.0.0",
+              },
+              "node_modules/plugin/node_modules/runtime-lib": {
+                peerDependencies: {
+                  zod: "^4.0.0",
+                },
+                version: "1.0.0",
+              },
+              "node_modules/plugin/node_modules/zod": {
+                version: "4.4.3",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return successfulSpawn;
+    });
+
+    await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(false);
+
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual({
+      private: true,
+      dependencies: {
+        plugin: "file:./plugin.tgz",
       },
     });
   });

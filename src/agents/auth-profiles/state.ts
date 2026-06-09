@@ -1,9 +1,17 @@
-import fs from "node:fs";
-import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { normalizeProviderId } from "../provider-id.js";
+/**
+ * Runtime-state normalization and persistence for auth profile selection.
+ * This state tracks order, last-good profile, and cooldown/failure metadata
+ * separately from secret-bearing credentials.
+ */
+import { isDeepStrictEqual } from "node:util";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
-import { resolveAuthStatePath } from "./paths.js";
+import { readPersistedAuthProfileStateRaw, writePersistedAuthProfileStateRaw } from "./sqlite.js";
 import type {
   AuthProfileBlockedReason,
   AuthProfileBlockedSource,
@@ -31,12 +39,10 @@ const AUTH_FAILURE_REASONS = new Set<AuthProfileFailureReason>([
 const AUTH_BLOCKED_REASONS = new Set<AuthProfileBlockedReason>(["subscription_limit"]);
 const AUTH_BLOCKED_SOURCES = new Set<AuthProfileBlockedSource>(["codex_rate_limits", "wham"]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
+// Runtime auth state is operator-controlled durability. Coerce every persisted
+// field through closed enums/numbers so bad rows do not poison auth selection.
 function normalizeFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function normalizeEnumValue<T extends string>(value: unknown, allowed: Set<T>): T | undefined {
@@ -76,7 +82,7 @@ function normalizeAuthProfileOrder(raw: unknown): AuthProfileState["order"] {
       if (!providerKey) {
         return acc;
       }
-      const list = value.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
+      const list = normalizeTrimmedStringList(value);
       if (list.length > 0) {
         acc[providerKey] = list;
       }
@@ -146,6 +152,7 @@ function normalizeUsageStats(raw: unknown): AuthProfileState["usageStats"] {
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+/** Coerces persisted auth profile runtime state into the current shape. */
 export function coerceAuthProfileState(raw: unknown): AuthProfileState {
   if (!isRecord(raw)) {
     return {};
@@ -157,6 +164,7 @@ export function coerceAuthProfileState(raw: unknown): AuthProfileState {
   };
 }
 
+/** Merges auth profile runtime state, with override records winning per key. */
 export function mergeAuthProfileState(
   base: AuthProfileState,
   override: AuthProfileState,
@@ -181,11 +189,18 @@ export function mergeAuthProfileState(
   };
 }
 
-export function loadPersistedAuthProfileState(agentDir?: string): AuthProfileState {
-  return coerceAuthProfileState(loadJsonFile(resolveAuthStatePath(agentDir)));
+/** Loads persisted auth profile runtime state from SQLite. */
+export function loadPersistedAuthProfileState(
+  agentDir?: string,
+  database?: OpenClawAgentDatabase,
+): AuthProfileState {
+  return coerceAuthProfileState(readPersistedAuthProfileStateRaw(agentDir, database));
 }
 
-function buildPersistedAuthProfileState(store: AuthProfileState): AuthProfileStateStore | null {
+/** Builds the persisted auth profile runtime state payload. */
+export function buildPersistedAuthProfileState(
+  store: AuthProfileState,
+): AuthProfileStateStore | null {
   const state = coerceAuthProfileState(store);
   if (!state.order && !state.lastGood && !state.usageStats) {
     return null;
@@ -198,22 +213,15 @@ function buildPersistedAuthProfileState(store: AuthProfileState): AuthProfileSta
   };
 }
 
+/** Saves auth profile runtime state when it differs from the persisted payload. */
 export function savePersistedAuthProfileState(
   store: AuthProfileState,
   agentDir?: string,
 ): AuthProfileStateStore | null {
   const payload = buildPersistedAuthProfileState(store);
-  const statePath = resolveAuthStatePath(agentDir);
-  if (!payload) {
-    try {
-      fs.unlinkSync(statePath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        throw error;
-      }
-    }
-    return null;
+  const existingRaw = readPersistedAuthProfileStateRaw(agentDir);
+  if (!payload || !isDeepStrictEqual(existingRaw, payload)) {
+    writePersistedAuthProfileStateRaw(payload, agentDir);
   }
-  saveJsonFile(statePath, payload);
   return payload;
 }

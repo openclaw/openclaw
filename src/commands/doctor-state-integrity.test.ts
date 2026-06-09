@@ -1,3 +1,4 @@
+// Doctor state integrity tests cover state directory checks, migration, and repair diagnostics.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,10 @@ import {
   resolveStorePath,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
+import {
+  readSessionStoreForTest,
+  writeSessionStoreForTest,
+} from "../config/sessions/test-helpers.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   clearTuiLastSessionPointers,
@@ -34,7 +39,6 @@ type EnvSnapshot = {
   OPENCLAW_STATE_DIR?: string;
   OPENCLAW_OAUTH_DIR?: string;
   OPENCLAW_AGENT_DIR?: string;
-  PI_CODING_AGENT_DIR?: string;
 };
 
 function captureEnv(): EnvSnapshot {
@@ -44,7 +48,6 @@ function captureEnv(): EnvSnapshot {
     OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
     OPENCLAW_OAUTH_DIR: process.env.OPENCLAW_OAUTH_DIR,
     OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
-    PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
   };
 }
 
@@ -124,7 +127,7 @@ function writeSessionStore(
 ) {
   setupSessionState(cfg, process.env, process.env.HOME ?? "");
   const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-  fs.writeFileSync(storePath, JSON.stringify(sessions, null, 2));
+  writeSessionStoreForTest(storePath, sessions);
 }
 
 async function runStateIntegrityText(cfg: OpenClawConfig): Promise<string> {
@@ -161,7 +164,6 @@ describe("doctor state integrity oauth dir checks", () => {
     process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
     delete process.env.OPENCLAW_OAUTH_DIR;
     delete process.env.OPENCLAW_AGENT_DIR;
-    delete process.env.PI_CODING_AGENT_DIR;
     fs.mkdirSync(process.env.OPENCLAW_STATE_DIR, { recursive: true, mode: 0o700 });
     noteMock.mockClear();
   });
@@ -277,7 +279,6 @@ describe("doctor state integrity oauth dir checks", () => {
       "agent",
     );
     process.env.OPENCLAW_AGENT_DIR = legacyAgentDir;
-    process.env.PI_CODING_AGENT_DIR = legacyAgentDir;
 
     const text = await runStateIntegrityText({
       agents: {
@@ -342,10 +343,9 @@ describe("doctor state integrity oauth dir checks", () => {
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
     const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-    const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
-      string,
-      { abortedLastRun?: boolean; updatedAt?: number }
-    >;
+    const persisted = readSessionStoreForTest<{ abortedLastRun?: boolean; updatedAt?: number }>(
+      storePath,
+    );
     expect(persisted[sessionKey]?.abortedLastRun).toBe(false);
     expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(0);
     expect(doctorChangesText()).toContain("Cleared aborted restart-recovery flags");
@@ -584,7 +584,7 @@ describe("doctor state integrity oauth dir checks", () => {
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
     const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-    const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+    const store = readSessionStoreForTest(storePath);
     const recoveredKey = Object.keys(store).find((key) =>
       key.startsWith("agent:main:heartbeat-recovered-"),
     );
@@ -628,7 +628,7 @@ describe("doctor state integrity oauth dir checks", () => {
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
     const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-    const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+    const store = readSessionStoreForTest(storePath);
     expect(store["agent:main:main"]?.sessionId).toBe("mixed-session");
     expect(Object.keys(store).filter((key) => key.includes("heartbeat-recovered"))).toEqual([]);
     expect(hasRepairPromptMessage(confirmRuntimeRepair, "Move heartbeat-owned main session")).toBe(

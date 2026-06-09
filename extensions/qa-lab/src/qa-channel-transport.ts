@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements qa channel transport behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -102,7 +103,7 @@ function createQaChannelReportNotes(params: QaTransportReportParams) {
     provider.kind === "mock"
       ? `Runs against qa-channel + qa-lab bus + real gateway child + ${params.providerMode} provider.`
       : `Runs against qa-channel + qa-lab bus + real gateway child + live frontier models (${params.primaryModel}, ${params.alternateModel})${params.fastMode ? " with fast mode enabled" : ""}.`,
-    params.concurrency > 1
+    params.isolatedWorkers === true
       ? `Scenarios run in isolated gateway workers with concurrency ${params.concurrency}.`
       : "Scenarios run serially in one gateway worker.",
     "Cron uses a one-minute schedule assertion plus forced execution for fast verification.",

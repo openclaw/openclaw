@@ -1,3 +1,8 @@
+/**
+ * Playwright-backed browser interaction tools, including clicks, form input,
+ * screenshots, batch actions, and SSRF-aware post-interaction navigation checks.
+ */
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Frame, Page } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -11,12 +16,13 @@ import {
   resolveActWaitTimeoutMs,
 } from "./act-policy.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
+import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import {
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
+import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
   assertPageNavigationCompletedSafely,
   createObservedDialogAbortSignalForPage,
@@ -191,7 +197,7 @@ async function assertObservedDelayedNavigations(opts: {
     });
   }
   if (subframeError) {
-    throw subframeError;
+    throw toLintErrorObject(subframeError, "Non-Error thrown");
   }
 }
 
@@ -275,7 +281,7 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
     const settle = (err?: unknown) => {
       cleanup();
       if (err) {
-        reject(err);
+        reject(toLintErrorObject(err, "Non-Error rejection"));
         return;
       }
       resolve();
@@ -427,11 +433,11 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   }
 
   if (subframeError) {
-    throw subframeError;
+    throw toLintErrorObject(subframeError, "Non-Error thrown");
   }
 
   if (actionError) {
-    throw actionError;
+    throw toLintErrorObject(actionError, "Non-Error thrown");
   }
   return result as T;
 }
@@ -477,12 +483,14 @@ function createAbortPromiseWithListener(
   const abortPromise: Promise<never> = signal.aborted
     ? (() => {
         onAbort?.(signal.reason);
-        return Promise.reject(signal.reason ?? new Error("aborted"));
+        return Promise.reject(
+          toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"),
+        );
       })()
     : new Promise((_, reject) => {
         abortListener = () => {
           onAbort?.(signal.reason);
-          reject(signal.reason ?? new Error("aborted"));
+          reject(toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
         };
         signal.addEventListener("abort", abortListener, { once: true });
       });
@@ -497,6 +505,7 @@ function createAbortPromiseWithListener(
     },
   };
 }
+/** Highlights a role ref in the target page for visual inspection. */
 export async function highlightViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -511,6 +520,7 @@ export async function highlightViaPlaywright(opts: {
   }
 }
 
+/** Clicks or double-clicks a role ref or selector with dialog and navigation guards. */
 export async function clickViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -580,7 +590,9 @@ export async function clickViaPlaywright(opts: {
             abortPromise,
             reconcileRemoteDialog,
           );
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
         }
         if (opts.doubleClick) {
           await awaitActionWithAbort(
@@ -619,6 +631,7 @@ export async function clickViaPlaywright(opts: {
   }
 }
 
+/** Clicks absolute page coordinates with optional double-click and navigation guard. */
 export async function clickCoordsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -655,6 +668,7 @@ export async function clickCoordsViaPlaywright(opts: {
   }).finally(cleanup);
 }
 
+/** Hovers a role ref or selector on the target page. */
 export async function hoverViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -686,6 +700,7 @@ export async function hoverViaPlaywright(opts: {
   }
 }
 
+/** Drags from one role ref or selector to another. */
 export async function dragViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -724,6 +739,7 @@ export async function dragViaPlaywright(opts: {
   }
 }
 
+/** Selects one or more option values on a select-like element. */
 export async function selectOptionViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -770,6 +786,7 @@ export async function selectOptionViaPlaywright(opts: {
   }
 }
 
+/** Presses a keyboard key against a ref, selector, or focused page. */
 export async function pressKeyViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -792,7 +809,7 @@ export async function pressKeyViaPlaywright(opts: {
       action: async () => {
         await awaitActionWithAbort(
           page.keyboard.press(key, {
-            delay: Math.max(0, Math.floor(opts.delayMs ?? 0)),
+            delay: resolveNonNegativeIntegerOption(opts.delayMs, 0),
           }),
           abortPromise,
           reconcileRemoteDialog,
@@ -809,6 +826,7 @@ export async function pressKeyViaPlaywright(opts: {
   }
 }
 
+/** Types text into a ref, selector, or focused page. */
 export async function typeViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -890,6 +908,7 @@ export async function typeViaPlaywright(opts: {
   }
 }
 
+/** Fills multiple form fields with per-field selector/ref/type support. */
 export async function fillFormViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -966,6 +985,7 @@ export async function fillFormViaPlaywright(opts: {
   }
 }
 
+/** Evaluates JavaScript in the page after browser action policy validation. */
 export async function evaluateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -979,6 +999,10 @@ export async function evaluateViaPlaywright(opts: {
   if (!fnText) {
     throw new Error("function is required");
   }
+  const fnSource = normalizeBrowserEvaluateFunctionSource(
+    fnText,
+    opts.ref ? { argumentName: "el" } : undefined,
+  );
   const page = await getRestoredPageForTarget(opts);
   // Clamp evaluate timeout to prevent permanently blocking Playwright's command queue.
   // Without this, a long-running async evaluate blocks all subsequent page operations
@@ -1028,10 +1052,13 @@ export async function evaluateViaPlaywright(opts: {
         "args",
         `
         "use strict";
-        var fnBody = args.fnBody, timeoutMs = args.timeoutMs;
+        var fnSource = args.fnSource, timeoutMs = args.timeoutMs;
         try {
-          var candidate = eval("(" + fnBody + ")");
-          var result = typeof candidate === "function" ? candidate(el) : candidate;
+          var candidate = eval("(" + fnSource + ")");
+          if (typeof candidate !== "function") {
+            throw new Error("evaluate source did not produce a function");
+          }
+          var result = candidate(el);
           if (result && typeof result.then === "function") {
             return Promise.race([
               result,
@@ -1045,9 +1072,9 @@ export async function evaluateViaPlaywright(opts: {
           throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
         }
         `,
-      ) as (el: Element, args: { fnBody: string; timeoutMs: number }) => unknown;
+      ) as (el: Element, args: { fnSource: string; timeoutMs: number }) => unknown;
       const evalPromise = locator.evaluate(elementEvaluator, {
-        fnBody: fnText,
+        fnSource,
         timeoutMs: evaluateTimeout,
       });
       const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
@@ -1067,10 +1094,13 @@ export async function evaluateViaPlaywright(opts: {
       "args",
       `
         "use strict";
-        var fnBody = args.fnBody, timeoutMs = args.timeoutMs;
+        var fnSource = args.fnSource, timeoutMs = args.timeoutMs;
         try {
-          var candidate = eval("(" + fnBody + ")");
-          var result = typeof candidate === "function" ? candidate() : candidate;
+          var candidate = eval("(" + fnSource + ")");
+          if (typeof candidate !== "function") {
+            throw new Error("evaluate source did not produce a function");
+          }
+          var result = candidate();
           if (result && typeof result.then === "function") {
             return Promise.race([
               result,
@@ -1084,9 +1114,9 @@ export async function evaluateViaPlaywright(opts: {
           throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
         }
       `,
-    ) as (args: { fnBody: string; timeoutMs: number }) => unknown;
+    ) as (args: { fnSource: string; timeoutMs: number }) => unknown;
     const evalPromise = page.evaluate(browserEvaluator, {
-      fnBody: fnText,
+      fnSource,
       timeoutMs: evaluateTimeout,
     });
     const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
@@ -1104,6 +1134,7 @@ export async function evaluateViaPlaywright(opts: {
   }
 }
 
+/** Scrolls a role ref or selector into view. */
 export async function scrollIntoViewViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1135,6 +1166,7 @@ export async function scrollIntoViewViaPlaywright(opts: {
   }
 }
 
+/** Waits for load state, timeout, URL, text, ref, or selector conditions. */
 export async function waitForViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1207,6 +1239,7 @@ export async function waitForViaPlaywright(opts: {
   }
 }
 
+/** Captures a screenshot from the target page or element. */
 export async function takeScreenshotViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1244,6 +1277,7 @@ export async function takeScreenshotViaPlaywright(opts: {
   return { buffer };
 }
 
+/** Captures a screenshot with Browser plugin labels over interactive elements. */
 export async function screenshotWithLabelsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1372,6 +1406,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   }
 }
 
+/** Sets file inputs for a role ref or selector with strict existing-path checks. */
 export async function setInputFilesViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1395,15 +1430,11 @@ export async function setInputFilesViaPlaywright(opts: {
   }
 
   const locator = inputRef ? refLocator(page, inputRef) : page.locator(element).first();
-  const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
-    rootDir: DEFAULT_UPLOAD_DIR,
-    requestedPaths: opts.paths,
-    scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-  });
-  if (!uploadPathsResult.ok) {
-    throw new Error(uploadPathsResult.error);
+  const resolvedResult = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
+  if (!resolvedResult.ok) {
+    throw new Error(resolvedResult.error);
   }
-  const resolvedPaths = uploadPathsResult.paths;
+  const resolvedPaths = resolvedResult.paths;
 
   try {
     await locator.setInputFiles(resolvedPaths);
@@ -1609,6 +1640,7 @@ async function executeSingleAction(
   return undefined;
 }
 
+/** Executes one high-level browser act request with bounded recursive actions. */
 export async function executeActViaPlaywright(opts: {
   cdpUrl: string;
   action: BrowserActRequest;
@@ -1667,6 +1699,7 @@ export async function executeActViaPlaywright(opts: {
   }
 }
 
+/** Executes a bounded sequence of browser actions and returns per-step results. */
 export async function batchViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1712,4 +1745,18 @@ export async function batchViaPlaywright(opts: {
     }
   }
   return { results };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

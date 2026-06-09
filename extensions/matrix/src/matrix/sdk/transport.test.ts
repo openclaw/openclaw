@@ -1,3 +1,4 @@
+// Matrix tests cover transport plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { createMatrixGuardedFetch, performMatrixRequest } from "./transport.js";
@@ -52,6 +53,35 @@ describe("performMatrixRequest", () => {
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
     ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
+  });
+
+  it("rejects malformed raw content-length before buffering the body", async () => {
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
+    stubRuntimeFetch(
+      vi.fn(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            headers: new Headers({ "content-length": "0x3" }),
+            arrayBuffer,
+          }) as unknown as Response,
+      ),
+    );
+
+    await expect(
+      performMatrixRequest({
+        homeserver: "http://127.0.0.1:8008",
+        accessToken: "token",
+        method: "GET",
+        endpoint: "/_matrix/media/v3/download/example/id",
+        timeoutMs: 5000,
+        raw: true,
+        maxBytes: 1024,
+        ssrfPolicy: { allowPrivateNetwork: true },
+      }),
+    ).rejects.toThrow("invalid content-length header: 0x3");
+    expect(arrayBuffer).not.toHaveBeenCalled();
   });
 
   it("applies streaming byte limits when raw responses omit content-length", async () => {

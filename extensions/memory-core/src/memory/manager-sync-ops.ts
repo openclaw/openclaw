@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager sync ops behavior.
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -29,28 +30,36 @@ import {
   listMemoryFiles,
   loadSqliteVecExtension,
   normalizeExtraMemoryPaths,
+  retryTransientMemoryRead,
   runWithConcurrency,
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createEmbeddingProvider,
+  resolveEmbeddingProviderAdapterId,
+  resolveEmbeddingProviderFallbackModel,
   type EmbeddingProvider,
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
 import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./manager-db.js";
+import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   applyMemoryFallbackProviderState,
   resolveMemoryFallbackProviderRequest,
+  resolveFallbackCurrentProviderId,
+  type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
 import {
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
-  shouldRunFullMemoryReindex,
+  resolveMemoryIndexIdentityState,
   type MemoryIndexMeta,
+  type MemoryIndexIdentityState,
 } from "./manager-reindex-state.js";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
 import {
@@ -62,7 +71,16 @@ import {
   loadMemorySourceFileState,
   resolveMemorySourceExistingHash,
 } from "./manager-source-state.js";
-import { runMemoryTargetedSessionSync } from "./manager-targeted-sync.js";
+import {
+  markMemoryTargetSessionFilesDirty,
+  runMemoryTargetedSessionSync,
+} from "./manager-targeted-sync.js";
+import {
+  countChokidarWatchedEntries,
+  type MemoryWatchPressureUnit,
+  type MemoryWatchPressureWarningState,
+  warnIfMemoryWatchPressureHigh,
+} from "./watch-pressure.js";
 import {
   recordMemoryWatchEventPath,
   settleMemoryWatchEventPaths,
@@ -94,6 +112,7 @@ const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 const SESSION_SYNC_YIELD_EVERY = 10;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
+const MEMORY_WATCH_PRESSURE_STARTUP_CHECK_DELAY_MS = 10_000;
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
   "node_modules",
@@ -106,6 +125,19 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 
 const log = createSubsystemLogger("memory");
 const TEST_MEMORY_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
+const TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
+
+type NativeMemoryWatchPair = {
+  dir: string;
+  main: fsSync.FSWatcher;
+  parent: fsSync.FSWatcher | null;
+  treeWatchers?: Map<string, LinuxMemoryDirectoryWatcher>;
+};
+
+type LinuxMemoryDirectoryWatcher = {
+  watcher: fsSync.FSWatcher;
+  ino: number;
+};
 
 function resolveMemoryWatchFactory(): typeof chokidar.watch {
   if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
@@ -115,6 +147,18 @@ function resolveMemoryWatchFactory(): typeof chokidar.watch {
     }
   }
   return chokidar.watch.bind(chokidar);
+}
+
+function resolveMemoryNativeWatchFactory(): typeof fsSync.watch {
+  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+    const override = (globalThis as Record<PropertyKey, unknown>)[
+      TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY
+    ];
+    if (typeof override === "function") {
+      return override as typeof fsSync.watch;
+    }
+  }
+  return fsSync.watch.bind(fsSync);
 }
 
 function shouldIgnoreMemoryWatchPath(
@@ -146,7 +190,7 @@ function shouldIgnoreMemoryWatchPath(
 }
 
 export function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
-  void sync().catch((err) => {
+  void sync().catch((err: unknown) => {
     log.warn(`memory sync failed (${reason}): ${String(err)}`);
   });
 }
@@ -170,6 +214,8 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
   protected fallbackFrom?: EmbeddingProviderId;
+  protected abstract providerUnavailableReason?: string;
+  protected abstract providerLifecycle: MemoryProviderLifecycleState;
   protected providerRuntime?: EmbeddingProviderRuntime;
   protected abstract batch: {
     enabled: boolean;
@@ -195,15 +241,18 @@ export abstract class MemoryManagerSyncOps {
   } = { enabled: false, available: false };
   protected vectorReady: Promise<boolean> | null = null;
   protected watcher: FSWatcher | null = null;
+  private nativeMemoryWatchPairs: NativeMemoryWatchPair[] = [];
   protected watchTimer: NodeJS.Timeout | null = null;
   protected sessionWatchTimer: NodeJS.Timeout | null = null;
   protected sessionUnsubscribe: (() => void) | null = null;
   protected fallbackReason?: string;
   protected intervalTimer: NodeJS.Timeout | null = null;
+  protected memoryWatchPressureStartupTimer: NodeJS.Timeout | null = null;
   protected closed = false;
   protected dirty = false;
   protected pendingWatchPaths: MemoryWatchSettleQueue = new Map();
   protected sessionsDirty = false;
+  private readonly memoryWatchPressureWarning: MemoryWatchPressureWarningState = { shown: false };
   protected sessionsDirtyFiles = new Set<string>();
   protected sessionPendingFiles = new Set<string>();
   protected sessionDeltas = new Map<
@@ -230,10 +279,75 @@ export abstract class MemoryManagerSyncOps {
   ): Promise<T>;
   protected abstract getIndexConcurrency(): number;
   protected abstract pruneEmbeddingCacheIfNeeded(): void;
+  protected abstract resetProviderInitializationForRetry(): void;
+  protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
   protected abstract indexFile(
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
   ): Promise<void>;
+
+  protected hasIndexedChunks(): boolean {
+    const row = this.db.prepare(`SELECT 1 as found FROM chunks LIMIT 1`).get() as
+      | { found?: number }
+      | undefined;
+    return row?.found === 1;
+  }
+
+  protected resolveCurrentIndexIdentityState(params?: {
+    meta?: MemoryIndexMeta | null;
+    provider?: { id: string; model: string } | null;
+    providerKeyKnown?: boolean;
+    vectorReady?: boolean;
+    hasIndexedChunks?: boolean;
+  }): MemoryIndexIdentityState {
+    const hasProviderOverride = params && "provider" in params;
+    // Plain status can compare identity before provider init. Mirror provider
+    // init's empty-model fallback so adapter defaults do not look mismatched.
+    const configuredProvider =
+      this.settings.provider === "none"
+        ? null
+        : {
+            id:
+              resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
+              this.settings.provider,
+            model:
+              this.settings.model.trim() ||
+              resolveEmbeddingProviderFallbackModel(this.settings.provider, "", this.cfg),
+          };
+    const provider = hasProviderOverride
+      ? params.provider!
+      : this.provider
+        ? { id: this.provider.id, model: this.provider.model }
+        : configuredProvider;
+    const vectorReady =
+      params && "vectorReady" in params
+        ? Boolean(params.vectorReady)
+        : this.vector.available === true;
+    return resolveMemoryIndexIdentityState({
+      meta: params && "meta" in params ? params.meta! : this.readMeta(),
+      provider,
+      providerKey: params?.providerKeyKnown === false ? undefined : (this.providerKey ?? undefined),
+      providerKeyKnown: params?.providerKeyKnown,
+      configuredSources: resolveConfiguredSourcesForMeta(this.sources),
+      configuredScopeHash: resolveConfiguredScopeHash({
+        workspaceDir: this.workspaceDir,
+        extraPaths: this.settings.extraPaths,
+        multimodal: {
+          enabled: this.settings.multimodal.enabled,
+          modalities: this.settings.multimodal.modalities,
+          maxFileBytes: this.settings.multimodal.maxFileBytes,
+        },
+      }),
+      chunkTokens: this.settings.chunking.tokens,
+      chunkOverlap: this.settings.chunking.overlap,
+      vectorReady,
+      hasIndexedChunks:
+        params && "hasIndexedChunks" in params
+          ? Boolean(params.hasIndexedChunks)
+          : this.hasIndexedChunks(),
+      ftsTokenizer: this.settings.store.fts.tokenizer,
+    });
+  }
 
   protected resetVectorState(): void {
     this.vectorReady = null;
@@ -255,7 +369,7 @@ export abstract class MemoryManagerSyncOps {
         `sqlite-vec load timed out after ${Math.round(VECTOR_LOAD_TIMEOUT_MS / 1000)}s`,
       );
     }
-    let ready = false;
+    let ready;
     try {
       ready = (await this.vectorReady) || false;
     } catch (err) {
@@ -428,13 +542,18 @@ export abstract class MemoryManagerSyncOps {
   }
 
   protected ensureWatcher() {
-    if (!this.sources.has("memory") || !this.settings.sync.watch || this.watcher) {
+    if (!this.sources.has("memory") || !this.settings.sync.watch) {
       return;
     }
-    const watchPaths = new Set<string>([
-      path.join(this.workspaceDir, "MEMORY.md"),
-      path.join(this.workspaceDir, "memory"),
-    ]);
+    if (this.watcher || this.nativeMemoryWatchPairs.length > 0) {
+      // Already initialized — preserve idempotence.
+      return;
+    }
+    // Core paths preserve original symlink-follow behavior (chokidar/fs.watch
+    // resolve through symlinks by default); extraPaths preserves the original
+    // explicit symlink-skip policy.
+    const fileWatchPaths = new Set<string>([path.join(this.workspaceDir, "MEMORY.md")]);
+    const dirWatchPaths = new Set<string>([path.join(this.workspaceDir, "memory")]);
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
     for (const entry of additionalPaths) {
       try {
@@ -443,7 +562,7 @@ export abstract class MemoryManagerSyncOps {
           continue;
         }
         if (stat.isDirectory()) {
-          watchPaths.add(entry);
+          dirWatchPaths.add(entry);
           continue;
         }
         if (
@@ -451,32 +570,590 @@ export abstract class MemoryManagerSyncOps {
           (normalizeLowercaseStringOrEmpty(entry).endsWith(".md") ||
             classifyMemoryMultimodalPath(entry, this.settings.multimodal) !== null)
         ) {
-          watchPaths.add(entry);
+          fileWatchPaths.add(entry);
         }
       } catch {
         // Skip missing/unreadable additional paths.
       }
     }
-    this.watcher = resolveMemoryWatchFactory()(Array.from(watchPaths), {
-      ignoreInitial: true,
-      ignored: (watchPath, stats) =>
-        shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
-    });
     const markDirty = (watchPath?: string, stats?: MemoryWatchEventStats) => {
       recordMemoryWatchEventPath(this.pendingWatchPaths, watchPath, stats);
       this.dirty = true;
       this.scheduleWatchSync();
     };
-    this.watcher.on("add", markDirty);
-    this.watcher.on("change", markDirty);
-    this.watcher.on("unlink", markDirty);
-    this.watcher.on("unlinkDir", markDirty);
-    this.watcher.on("error", (err) => {
-      // File watcher errors (e.g., ENOSPC) should not crash the gateway.
-      // Log the error and continue - memory search still works without auto-sync.
+    // Native recursive fs.watch for directory paths — one watcher per
+    // directory on macOS (FSEvents) and Windows (ReadDirectoryChangesW).
+    // Avoids chokidar's per-file fs.watch fan-out on large memory trees.
+    //
+    // Linux is intentionally handled by a separate directory-tree watcher
+    // below: Node's `fs.watch(dir, { recursive: true })` routes through
+    // `internal/fs/recursive_watch` and watches every file. Watching
+    // directories only preserves Linux inotify semantics while avoiding
+    // per-file watch descriptor fan-out.
+    //
+    // On any other native creation failure (e.g. unsupported filesystem,
+    // ERR_FEATURE_UNAVAILABLE_ON_PLATFORM) the directory also falls back to
+    // chokidar so freshness is preserved on the degraded path.
+    const nativeRecursiveSupported = process.platform === "darwin" || process.platform === "win32";
+    for (const dir of dirWatchPaths) {
+      const attached = nativeRecursiveSupported
+        ? this.attachNativeMemoryWatchForDir(dir, markDirty)
+        : process.platform === "linux"
+          ? this.attachLinuxMemoryDirectoryTreeWatchForDir(dir, markDirty)
+          : false;
+      if (!attached) {
+        // Native creation failed (dir missing, unsupported FS, throw) —
+        // fall back to chokidar so directory coverage isn't dropped.
+        fileWatchPaths.add(dir);
+      }
+    }
+    if (fileWatchPaths.size > 0) {
+      const existingWatcher = this.currentMemoryChokidarWatcher();
+      if (existingWatcher) {
+        existingWatcher.add(Array.from(fileWatchPaths));
+      } else {
+        const watcher = resolveMemoryWatchFactory()(Array.from(fileWatchPaths), {
+          ignoreInitial: true,
+          ignored: (watchPath, stats) =>
+            shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
+        });
+        this.watcher = watcher;
+        watcher.on("add", markDirty);
+        watcher.on("change", markDirty);
+        watcher.on("unlink", markDirty);
+        watcher.on("unlinkDir", markDirty);
+        watcher.on("error", (err) => {
+          // File watcher errors (e.g., ENOSPC) should not crash the gateway.
+          // Log the error and continue - memory search still works without auto-sync.
+          const message = err instanceof Error ? err.message : String(err);
+          log.warn(`memory watcher error: ${message}`);
+        });
+        watcher.once("ready", () => {
+          this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(watcher), "paths");
+        });
+      }
+    }
+    this.scheduleMemoryWatchPressureStartupCheck();
+  }
+
+  private scheduleMemoryWatchPressureStartupCheck(): void {
+    if (
+      this.memoryWatchPressureStartupTimer ||
+      this.memoryWatchPressureWarning.shown ||
+      this.closed ||
+      (this.nativeMemoryWatchPairs.length === 0 && !this.watcher)
+    ) {
+      return;
+    }
+    this.memoryWatchPressureStartupTimer = setTimeout(() => {
+      this.memoryWatchPressureStartupTimer = null;
+      if (this.closed || this.memoryWatchPressureWarning.shown) {
+        return;
+      }
+      if (this.watcher) {
+        this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(this.watcher), "paths");
+      }
+      if (this.memoryWatchPressureWarning.shown) {
+        return;
+      }
+      let directoryCount = 0;
+      for (const pair of this.nativeMemoryWatchPairs) {
+        directoryCount += pair.treeWatchers?.size ?? 0;
+      }
+      this.warnIfMemoryWatchPressure(directoryCount, "directories");
+    }, MEMORY_WATCH_PRESSURE_STARTUP_CHECK_DELAY_MS);
+  }
+
+  private warnIfMemoryWatchPressure(count: number, unit: MemoryWatchPressureUnit): void {
+    warnIfMemoryWatchPressureHigh(
+      this.memoryWatchPressureWarning,
+      count,
+      unit,
+      "Large memory folders or extraPaths can make OpenClaw run out of file watchers or open files.",
+      "Remove large extraPaths, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
+      (message) => log.warn(message),
+    );
+  }
+
+  private currentMemoryChokidarWatcher(): FSWatcher | null {
+    return this.watcher;
+  }
+
+  // Attach a native recursive `fs.watch` to `dir` plus a non-recursive
+  // parent-directory watch that detects root-replacement
+  // (`rm -rf memory && mkdir memory`) by inode comparison. Returns true if
+  // the main native watcher attached. Called from ensureWatcher(); also
+  // re-entered from the parent-watch handler on detected replacement.
+  protected attachNativeMemoryWatchForDir(
+    dir: string,
+    markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
+  ): boolean {
+    if (this.closed) {
+      return false;
+    }
+    let recordedInode: number | null;
+    try {
+      recordedInode = fsSync.statSync(dir).ino;
+    } catch {
+      // Dir doesn't exist; caller will fall back to chokidar.
+      return false;
+    }
+    let mainWatcher: fsSync.FSWatcher;
+    try {
+      mainWatcher = resolveMemoryNativeWatchFactory()(
+        dir,
+        { recursive: true },
+        (_eventType, filename) => {
+          if (filename == null) {
+            // Node docs: filename may be null on some platforms even when
+            // recursive watching is otherwise supported. Be conservative
+            // and mark broadly dirty rather than dropping the event.
+            markDirty();
+            return;
+          }
+          const full = path.join(dir, filename);
+          let stats: fsSync.Stats | undefined;
+          try {
+            const s = fsSync.lstatSync(full, { throwIfNoEntry: false });
+            stats = s ?? undefined;
+          } catch {
+            stats = undefined;
+          }
+          if (shouldIgnoreMemoryWatchPath(full, stats, this.settings.multimodal)) {
+            return;
+          }
+          // Pass stats so the watch-settle queue can debounce rapid
+          // writes; without a snapshot the queue cannot detect stability.
+          markDirty(full, stats);
+        },
+      );
+    } catch (err) {
+      log.warn(
+        `failed to start native recursive watcher on ${dir}: ${String(err)}; falling back to chokidar`,
+      );
+      return false;
+    }
+    const pair: NativeMemoryWatchPair = { dir, main: mainWatcher, parent: null };
+    mainWatcher.on("error", (err) => {
       const message = err instanceof Error ? err.message : String(err);
-      log.warn(`memory watcher error: ${message}`);
+      log.warn(`memory native watcher error on ${dir}: ${message}`);
+      // Per Node docs the FSWatcher is no longer usable after an error.
+      this.closeNativeMemoryWatchPair(pair);
+      if (this.closed) {
+        return;
+      }
+      // Force a broad re-sync to cover the gap, then restore directory
+      // coverage by reattaching to chokidar so subsequent file changes
+      // still drive watch sync (intervalMinutes defaults to 0; without
+      // a watcher the directory would stop being indexed).
+      markDirty();
+      this.attachMemoryChokidarFallback(dir, markDirty);
     });
+    this.nativeMemoryWatchPairs.push(pair);
+    // Non-recursive parent watcher: catches root-directory replacement so
+    // we can reattach the main watcher on the new inode. Without this,
+    // `rm -rf memory && mkdir memory` would leave the main watcher bound
+    // to the dead inode and silently miss subsequent file changes.
+    try {
+      const parentDir = path.dirname(dir);
+      const baseName = path.basename(dir);
+      const parentWatcher = resolveMemoryNativeWatchFactory()(
+        parentDir,
+        { recursive: false },
+        (_eventType, filename) => {
+          // Per Node docs `filename` can be null on some platforms even
+          // when the parent watcher is otherwise supported. Treat null
+          // as an unknown event and re-check the watched directory's inode;
+          // otherwise filter by basename so sibling events don't trigger reattach.
+          if (filename !== null && filename !== baseName) {
+            return;
+          }
+          let currentInode: number | null;
+          try {
+            currentInode = fsSync.statSync(dir).ino;
+          } catch {
+            currentInode = null;
+          }
+          if (currentInode === recordedInode) {
+            return;
+          }
+          // Root was replaced (or removed). Tear down the existing pair
+          // and either reattach (if dir still exists) or fall back to
+          // chokidar (if dir is gone).
+          this.closeNativeMemoryWatchPair(pair);
+          if (this.closed) {
+            return;
+          }
+          markDirty();
+          if (currentInode !== null) {
+            // Re-attach on the new inode (this also installs a fresh
+            // parent watcher closed over the new recordedInode). If the
+            // helper's own statSync races with the dir disappearing
+            // between our inode check and its own check, it returns
+            // false — fall back to chokidar so coverage isn't lost.
+            if (!this.attachNativeMemoryWatchForDir(dir, markDirty)) {
+              this.attachMemoryChokidarFallback(dir, markDirty);
+            }
+          } else {
+            this.attachMemoryChokidarFallback(dir, markDirty);
+          }
+        },
+      );
+      parentWatcher.on("error", (err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`memory native parent watcher error on ${path.dirname(dir)}: ${message}`);
+        try {
+          parentWatcher.close();
+        } catch {
+          // ignore
+        }
+        this.removeNativeMemoryParentWatch(parentWatcher);
+        if (pair.parent === parentWatcher) {
+          pair.parent = null;
+        }
+        // Main watcher still alive — root-replacement detection is lost
+        // but normal events still flow. No fallback needed.
+      });
+      pair.parent = parentWatcher;
+    } catch (err) {
+      // Parent watcher couldn't start (e.g. parentDir not accessible).
+      // The main watcher still works for non-replacement events; just
+      // log and continue.
+      log.warn(
+        `memory native parent watcher could not start on ${path.dirname(dir)}: ${String(err)}`,
+      );
+    }
+    return true;
+  }
+
+  // Linux inotify reports direct child changes from a watched directory, but
+  // it has no native recursive primitive. Watch directories only, then attach
+  // newly-created subdirectories on demand; this avoids per-file watchers.
+  protected attachLinuxMemoryDirectoryTreeWatchForDir(
+    dir: string,
+    markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
+  ): boolean {
+    if (this.closed) {
+      return false;
+    }
+    let recordedInode: number | null;
+    try {
+      recordedInode = fsSync.statSync(dir).ino;
+    } catch {
+      return false;
+    }
+
+    let pair: NativeMemoryWatchPair | null = null;
+    const treeWatchers = new Map<string, LinuxMemoryDirectoryWatcher>();
+
+    const closeAndFallback = (message: string) => {
+      log.warn(message);
+      if (pair) {
+        this.closeNativeMemoryWatchPair(pair);
+      }
+      if (this.closed) {
+        return;
+      }
+      markDirty();
+      this.attachMemoryChokidarFallback(dir, markDirty);
+    };
+
+    const closeDirectorySubtree = (watchDir: string) => {
+      const watchDirPrefix = `${watchDir}${path.sep}`;
+      for (const [entryDir, entry] of Array.from(treeWatchers.entries())) {
+        if (entryDir !== watchDir && !entryDir.startsWith(watchDirPrefix)) {
+          continue;
+        }
+        try {
+          entry.watcher.close();
+        } catch {
+          // ignore close failures
+        }
+        treeWatchers.delete(entryDir);
+      }
+    };
+
+    const attachDirectory = (watchDir: string): fsSync.FSWatcher | null => {
+      if (this.closed) {
+        return null;
+      }
+      let currentInode: number;
+      try {
+        const currentStat = fsSync.statSync(watchDir);
+        if (!currentStat.isDirectory()) {
+          return null;
+        }
+        currentInode = currentStat.ino;
+      } catch {
+        return null;
+      }
+      const existing = treeWatchers.get(watchDir);
+      if (existing) {
+        if (existing.ino === currentInode) {
+          return existing.watcher;
+        }
+        closeDirectorySubtree(watchDir);
+      }
+      let watcher: fsSync.FSWatcher;
+      try {
+        watcher = resolveMemoryNativeWatchFactory()(
+          watchDir,
+          { recursive: false },
+          (eventType, filename) => {
+            if (filename == null) {
+              markDirty();
+              if (!this.attachLinuxMemoryDirectoryTreeSubtree(watchDir, attachDirectory)) {
+                closeAndFallback(
+                  `failed to refresh Linux memory directory watchers under ${watchDir}; falling back to chokidar`,
+                );
+              }
+              return;
+            }
+            const full = path.join(watchDir, filename);
+            let stats: fsSync.Stats | undefined;
+            try {
+              const s = fsSync.lstatSync(full, { throwIfNoEntry: false });
+              stats = s ?? undefined;
+            } catch {
+              stats = undefined;
+            }
+            if (!stats) {
+              closeDirectorySubtree(full);
+            }
+            if (stats?.isDirectory()) {
+              if (eventType === "rename") {
+                closeDirectorySubtree(full);
+              }
+              if (!this.attachLinuxMemoryDirectoryTreeSubtree(full, attachDirectory)) {
+                closeAndFallback(
+                  `failed to attach Linux memory directory watcher under ${full}; falling back to chokidar`,
+                );
+                return;
+              }
+            }
+            if (shouldIgnoreMemoryWatchPath(full, stats, this.settings.multimodal)) {
+              return;
+            }
+            markDirty(full, stats);
+          },
+        );
+      } catch (err) {
+        if (watchDir === dir) {
+          log.warn(
+            `failed to start Linux memory directory watcher on ${watchDir}: ${String(err)}; falling back to chokidar`,
+          );
+        }
+        return null;
+      }
+      treeWatchers.set(watchDir, { watcher, ino: currentInode });
+      watcher.on("error", (err) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        closeAndFallback(`memory Linux directory watcher error on ${watchDir}: ${detail}`);
+      });
+      return watcher;
+    };
+
+    const mainWatcher = attachDirectory(dir);
+    if (!mainWatcher) {
+      return false;
+    }
+    pair = { dir, main: mainWatcher, parent: null, treeWatchers };
+    this.nativeMemoryWatchPairs.push(pair);
+    if (!this.attachLinuxMemoryDirectoryTreeSubtree(dir, attachDirectory)) {
+      closeAndFallback(
+        `failed to attach Linux memory directory watcher subtree under ${dir}; falling back to chokidar`,
+      );
+      return true;
+    }
+
+    try {
+      const parentDir = path.dirname(dir);
+      const baseName = path.basename(dir);
+      const parentWatcher = resolveMemoryNativeWatchFactory()(
+        parentDir,
+        { recursive: false },
+        (_eventType, filename) => {
+          if (filename !== null && filename !== baseName) {
+            return;
+          }
+          let currentInode: number | null;
+          try {
+            currentInode = fsSync.statSync(dir).ino;
+          } catch {
+            currentInode = null;
+          }
+          if (currentInode === recordedInode) {
+            return;
+          }
+          this.closeNativeMemoryWatchPair(pair);
+          if (this.closed) {
+            return;
+          }
+          markDirty();
+          if (currentInode !== null) {
+            if (!this.attachLinuxMemoryDirectoryTreeWatchForDir(dir, markDirty)) {
+              this.attachMemoryChokidarFallback(dir, markDirty);
+            }
+          } else {
+            this.attachMemoryChokidarFallback(dir, markDirty);
+          }
+        },
+      );
+      parentWatcher.on("error", (err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`memory Linux parent watcher error on ${path.dirname(dir)}: ${message}`);
+        try {
+          parentWatcher.close();
+        } catch {
+          // ignore
+        }
+        this.removeNativeMemoryParentWatch(parentWatcher);
+        if (pair?.parent === parentWatcher) {
+          pair.parent = null;
+        }
+      });
+      pair.parent = parentWatcher;
+    } catch (err) {
+      log.warn(
+        `memory Linux parent watcher could not start on ${path.dirname(dir)}: ${String(err)}`,
+      );
+    }
+    return true;
+  }
+
+  private attachLinuxMemoryDirectoryTreeSubtree(
+    root: string,
+    attachDirectory: (dir: string) => fsSync.FSWatcher | null,
+  ): boolean {
+    let rootStats: fsSync.Stats | undefined;
+    try {
+      rootStats = fsSync.lstatSync(root, { throwIfNoEntry: false }) ?? undefined;
+    } catch {
+      return false;
+    }
+    if (
+      !rootStats?.isDirectory() ||
+      shouldIgnoreMemoryWatchPath(root, rootStats, this.settings.multimodal)
+    ) {
+      return true;
+    }
+    if (!attachDirectory(root)) {
+      return false;
+    }
+    let entries: fsSync.Dirent[];
+    try {
+      entries = fsSync.readdirSync(root, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) {
+        continue;
+      }
+      if (
+        !this.attachLinuxMemoryDirectoryTreeSubtree(path.join(root, entry.name), attachDirectory)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private closeNativeMemoryWatchPair(pair: NativeMemoryWatchPair): void {
+    if (pair.treeWatchers) {
+      for (const entry of pair.treeWatchers.values()) {
+        try {
+          entry.watcher.close();
+        } catch {
+          // ignore close failures
+        }
+      }
+      pair.treeWatchers.clear();
+    } else {
+      try {
+        pair.main.close();
+      } catch {
+        // ignore close failures
+      }
+    }
+    if (pair.parent) {
+      try {
+        pair.parent.close();
+      } catch {
+        // ignore close failures
+      }
+      pair.parent = null;
+    }
+    this.removeNativeMemoryWatchPair(pair);
+  }
+
+  protected closeNativeMemoryWatchPairs(): void {
+    while (this.nativeMemoryWatchPairs.length > 0) {
+      const pair = this.nativeMemoryWatchPairs[0];
+      if (!pair) {
+        return;
+      }
+      this.closeNativeMemoryWatchPair(pair);
+    }
+  }
+
+  private removeNativeMemoryParentWatch(w: fsSync.FSWatcher): void {
+    for (const pair of this.nativeMemoryWatchPairs) {
+      if (pair.parent === w) {
+        pair.parent = null;
+        return;
+      }
+    }
+  }
+
+  private removeNativeMemoryWatchPair(pair: NativeMemoryWatchPair): void {
+    const idx = this.nativeMemoryWatchPairs.indexOf(pair);
+    if (idx >= 0) {
+      this.nativeMemoryWatchPairs.splice(idx, 1);
+    }
+  }
+
+  // Reattach `dir` to chokidar after a native recursive watcher dies, so
+  // subsequent memory changes under `dir` continue to drive watch sync.
+  // Called from the native watcher `error` handler in ensureWatcher();
+  // factored out so the fallback shape can be unit-tested in isolation.
+  protected attachMemoryChokidarFallback(
+    dir: string,
+    markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
+  ): void {
+    if (this.closed) {
+      // Manager teardown started — don't create new watcher resources.
+      return;
+    }
+    try {
+      if (this.watcher) {
+        // Existing chokidar watcher (handling MEMORY.md and/or other file
+        // paths) — extend it to cover this directory too.
+        this.watcher.add(dir);
+        return;
+      }
+      // No chokidar watcher exists yet. Spin one up just for this directory
+      // so the periodic-sync gap is closed.
+      const watcher = resolveMemoryWatchFactory()([dir], {
+        ignoreInitial: true,
+        ignored: (watchPath, stats) =>
+          shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
+      });
+      this.watcher = watcher;
+      watcher.on("add", markDirty);
+      watcher.on("change", markDirty);
+      watcher.on("unlink", markDirty);
+      watcher.on("unlinkDir", markDirty);
+      watcher.on("error", (err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`memory watcher error: ${message}`);
+      });
+      watcher.once("ready", () => {
+        this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(watcher), "paths");
+      });
+    } catch (err) {
+      log.warn(`failed to attach chokidar fallback for ${dir}: ${String(err)}`);
+    }
   }
 
   protected ensureSessionListener() {
@@ -499,7 +1176,7 @@ export abstract class MemoryManagerSyncOps {
     if (!this.sources.has("sessions")) {
       return;
     }
-    void this.runSessionStartupCatchup().catch((err) => {
+    void this.runSessionStartupCatchup().catch((err: unknown) => {
       log.warn("memory session startup catch-up failed: " + String(err));
     });
   }
@@ -556,7 +1233,7 @@ export abstract class MemoryManagerSyncOps {
     if (dirtyFiles.length === 0 || this.closed) {
       return dirtyFiles;
     }
-    void this.sync({ reason: "session-startup-catchup" }).catch((err) => {
+    void this.sync({ reason: "session-startup-catchup" }).catch((err: unknown) => {
       log.warn("memory sync failed (session-startup-catchup): " + String(err));
     });
     return dirtyFiles;
@@ -569,7 +1246,7 @@ export abstract class MemoryManagerSyncOps {
     }
     this.sessionWatchTimer = setTimeout(() => {
       this.sessionWatchTimer = null;
-      void this.processSessionDeltaBatch().catch((err) => {
+      void this.processSessionDeltaBatch().catch((err: unknown) => {
         log.warn(`memory session delta failed: ${String(err)}`);
       });
     }, SESSION_DIRTY_DEBOUNCE_MS);
@@ -625,7 +1302,7 @@ export abstract class MemoryManagerSyncOps {
       shouldSync = true;
     }
     if (shouldSync) {
-      void this.sync({ reason: "session-delta" }).catch((err) => {
+      void this.sync({ reason: "session-delta" }).catch((err: unknown) => {
         log.warn(`memory sync failed (session-delta): ${String(err)}`);
       });
     }
@@ -696,7 +1373,10 @@ export abstract class MemoryManagerSyncOps {
     }
     let handle;
     try {
-      handle = await fs.open(absPath, "r");
+      handle = await retryTransientMemoryRead(
+        () => fs.open(absPath, "r"),
+        `open session transcript for newline count ${absPath}`,
+      );
     } catch (err) {
       if (isFileMissingError(err)) {
         return 0;
@@ -709,7 +1389,10 @@ export abstract class MemoryManagerSyncOps {
       const buffer = Buffer.alloc(SESSION_DELTA_READ_CHUNK_BYTES);
       while (offset < end) {
         const toRead = Math.min(buffer.length, end - offset);
-        const { bytesRead } = await handle.read(buffer, 0, toRead, offset);
+        const { bytesRead } = await retryTransientMemoryRead(
+          () => handle.read(buffer, 0, toRead, offset),
+          `count session transcript newlines ${absPath}`,
+        );
         if (bytesRead <= 0) {
           break;
         }
@@ -769,7 +1452,10 @@ export abstract class MemoryManagerSyncOps {
     if (!minutes || minutes <= 0 || this.intervalTimer) {
       return;
     }
-    const ms = minutes * 60 * 1000;
+    const ms = resolveTimerTimeoutMs(minutes * 60 * 1000, 0, 0);
+    if (ms <= 0) {
+      return;
+    }
     this.intervalTimer = setInterval(() => {
       runDetachedMemorySync(() => this.sync({ reason: "interval" }), "interval");
     }, ms);
@@ -930,9 +1616,9 @@ export abstract class MemoryManagerSyncOps {
             `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
           )
         : null;
-    const deleteFtsRowsByPathSourceAndModel =
+    const deleteFtsRowsByPathAndSource =
       this.fts.enabled && this.fts.available
-        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
         : null;
 
     const targetSessionFiles = params.needsFullReindex
@@ -1048,13 +1734,9 @@ export abstract class MemoryManagerSyncOps {
           } catch {}
         }
         deleteChunksByPathAndSource.run(stale.path, "sessions");
-        if (deleteFtsRowsByPathSourceAndModel) {
+        if (deleteFtsRowsByPathAndSource) {
           try {
-            deleteFtsRowsByPathSourceAndModel.run(
-              stale.path,
-              "sessions",
-              this.provider?.model ?? "fts-only",
-            );
+            deleteFtsRowsByPathAndSource.run(stale.path, "sessions");
           } catch {}
         }
       } finally {
@@ -1088,12 +1770,40 @@ export abstract class MemoryManagerSyncOps {
     return state;
   }
 
+  private assertFtsOnlySyncAllowed(): void {
+    if (this.provider) {
+      return;
+    }
+    this.assertRequiredProviderAvailable("sync");
+    const existingMeta = this.readMeta();
+    if (
+      !existingMeta ||
+      existingMeta.model === "fts-only" ||
+      !this.settings.provider ||
+      this.settings.provider === "none"
+    ) {
+      return;
+    }
+    this.resetProviderInitializationForRetry();
+    throw new Error(
+      `Memory sync aborted: embedding provider "${this.settings.provider}" is configured but unavailable. ` +
+        `Refusing to run sync in fts-only fallback mode to protect existing vector index (current model: ${existingMeta.model}).`,
+    );
+  }
+
   protected async runSync(params?: {
     reason?: string;
     force?: boolean;
     sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
+    // Guard: if an embedding provider is configured but currently unavailable,
+    // abort sync to prevent silently degrading an existing semantic vector index
+    // to fts-only and wiping existing semantic vectors.
+    // This only protects existing semantic indexes; fresh or already-fts-only
+    // indexes can safely sync without an embedding provider.
+    this.assertFtsOnlySyncAllowed();
+
     const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
     if (progress) {
       progress.report({
@@ -1104,60 +1814,76 @@ export abstract class MemoryManagerSyncOps {
     }
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
-    const configuredSources = resolveConfiguredSourcesForMeta(this.sources);
-    const configuredScopeHash = resolveConfiguredScopeHash({
-      workspaceDir: this.workspaceDir,
-      extraPaths: this.settings.extraPaths,
-      multimodal: {
-        enabled: this.settings.multimodal.enabled,
-        modalities: this.settings.multimodal.modalities,
-        maxFileBytes: this.settings.multimodal.maxFileBytes,
-      },
-    });
     const targetSessionFiles = this.normalizeTargetSessionFiles(params?.sessionFiles);
     const hasTargetSessionFiles = targetSessionFiles !== null;
     if (params?.reason === "cli" && !params.force && !hasTargetSessionFiles) {
       await this.markSessionStartupCatchupDirtyFiles();
     }
-    const targetedSessionSync = await runMemoryTargetedSessionSync({
-      hasSessionSource: this.sources.has("sessions"),
-      targetSessionFiles,
-      reason: params?.reason,
-      progress: progress ?? undefined,
-      useUnsafeReindex:
-        process.env.OPENCLAW_TEST_FAST === "1" &&
-        process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1",
-      sessionsDirtyFiles: this.sessionsDirtyFiles,
-      syncSessionFiles: async (targetedParams) => {
-        await this.syncSessionFiles(targetedParams);
-      },
-      shouldFallbackOnError: (message) => this.shouldFallbackOnError(message),
-      activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
-      runSafeReindex: async (reindexParams) => {
-        await this.runSafeReindex(reindexParams);
-      },
-      runUnsafeReindex: async (reindexParams) => {
-        await this.runUnsafeReindex(reindexParams);
-      },
+    const indexIdentity = resolveMemoryIndexIdentityState({
+      meta,
+      // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
+      provider: this.provider ? { id: this.provider.id, model: this.provider.model } : null,
+      providerKey: this.providerKey ?? undefined,
+      configuredSources: resolveConfiguredSourcesForMeta(this.sources),
+      configuredScopeHash: resolveConfiguredScopeHash({
+        workspaceDir: this.workspaceDir,
+        extraPaths: this.settings.extraPaths,
+        multimodal: {
+          enabled: this.settings.multimodal.enabled,
+          modalities: this.settings.multimodal.modalities,
+          maxFileBytes: this.settings.multimodal.maxFileBytes,
+        },
+      }),
+      chunkTokens: this.settings.chunking.tokens,
+      chunkOverlap: this.settings.chunking.overlap,
+      vectorReady,
+      hasIndexedChunks: this.hasIndexedChunks(),
+      ftsTokenizer: this.settings.store.fts.tokenizer,
     });
-    if (targetedSessionSync.handled) {
-      this.sessionsDirty = targetedSessionSync.sessionsDirty;
-      return;
-    }
+    const hasIndexedChunks = this.hasIndexedChunks();
+    const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
+    // Missing metadata cannot prove whether existing chunks were semantic.
+    // Wait for the configured provider before replacing them with a rebuilt index.
+    const canRebuildMissingIdentity =
+      this.provider !== null || !this.settings.provider || this.settings.provider === "none";
+    const needsMissingIdentityReindex =
+      indexIdentity.status === "missing" && !hasTargetSessionFiles && canRebuildMissingIdentity;
+    const needsExplicitIdentityReindex =
+      params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetSessionFiles;
     const needsFullReindex =
       (params?.force && !hasTargetSessionFiles) ||
-      shouldRunFullMemoryReindex({
-        meta,
-        // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
-        provider: this.provider ? { id: this.provider.id, model: this.provider.model } : null,
-        providerKey: this.providerKey ?? undefined,
-        configuredSources,
-        configuredScopeHash,
-        chunkTokens: this.settings.chunking.tokens,
-        chunkOverlap: this.settings.chunking.overlap,
-        vectorReady,
-        ftsTokenizer: this.settings.store.fts.tokenizer,
+      needsInitialIndex ||
+      needsMissingIdentityReindex ||
+      needsExplicitIdentityReindex;
+    if (indexIdentity.status !== "valid" && !needsFullReindex) {
+      this.dirty = true;
+      const sessionsDirty = markMemoryTargetSessionFilesDirty({
+        sessionsDirtyFiles: this.sessionsDirtyFiles,
+        targetSessionFiles,
       });
+      if (sessionsDirty) {
+        this.sessionsDirty = true;
+      }
+      return;
+    }
+    if (!needsFullReindex) {
+      const targetedSessionSync = await runMemoryTargetedSessionSync({
+        hasSessionSource: this.sources.has("sessions"),
+        targetSessionFiles,
+        reason: params?.reason,
+        progress: progress ?? undefined,
+        sessionsDirtyFiles: this.sessionsDirtyFiles,
+        syncSessionFiles: async (targetedParams) => {
+          await this.syncSessionFiles(targetedParams);
+        },
+        shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
+        activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
+      });
+      if (targetedSessionSync.handled) {
+        this.sessionsDirty = targetedSessionSync.sessionsDirty;
+        return;
+      }
+    }
     try {
       if (needsFullReindex) {
         if (
@@ -1205,21 +1931,27 @@ export abstract class MemoryManagerSyncOps {
     } catch (err) {
       const reason = formatErrorMessage(err);
       const activated =
-        this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
+        this.shouldFallbackOnError(err) && (await this.activateFallbackProvider(reason));
       if (activated) {
-        await this.runSafeReindex({
-          reason: params?.reason ?? "fallback",
-          force: true,
-          progress: progress ?? undefined,
-        });
+        if (needsFullReindex && !hasTargetSessionFiles) {
+          await this.runSafeReindex({
+            reason: params?.reason ?? "fallback",
+            force: true,
+            progress: progress ?? undefined,
+          });
+        }
+        return;
+      }
+      if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
+        log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
         return;
       }
       throw err;
     }
   }
 
-  private shouldFallbackOnError(message: string): boolean {
-    return /embedding|embeddings|batch/i.test(message);
+  protected shouldFallbackOnError(err: unknown): boolean {
+    return isMemoryEmbeddingOperationError(err);
   }
 
   protected resolveBatchConfig(): {
@@ -1236,23 +1968,26 @@ export abstract class MemoryManagerSyncOps {
       wait: batch?.wait ?? true,
       concurrency: Math.max(1, batch?.concurrency ?? 2),
       pollIntervalMs: batch?.pollIntervalMs ?? 2000,
-      timeoutMs: (batch?.timeoutMinutes ?? 60) * 60 * 1000,
+      timeoutMs: resolveTimerTimeoutMs((batch?.timeoutMinutes ?? 60) * 60 * 1000, 60 * 60_000),
     };
   }
 
-  private async activateFallbackProvider(reason: string): Promise<boolean> {
+  protected async activateFallbackProvider(reason: string): Promise<boolean> {
+    const currentProviderId = resolveFallbackCurrentProviderId({
+      provider: this.provider,
+      lifecycle: this.providerLifecycle,
+    });
     const fallbackRequest = resolveMemoryFallbackProviderRequest({
       cfg: this.cfg,
       settings: this.settings,
-      currentProviderId: this.provider?.id ?? null,
+      currentProviderId,
     });
-    if (!fallbackRequest || !this.provider) {
+    if (!fallbackRequest || !currentProviderId) {
       return false;
     }
     if (this.fallbackFrom) {
       return false;
     }
-    const fallbackFrom = this.provider.id;
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
@@ -1267,8 +2002,9 @@ export abstract class MemoryManagerSyncOps {
         fallbackReason: this.fallbackReason,
         providerUnavailableReason: undefined,
         providerRuntime: this.providerRuntime,
+        lifecycle: this.providerLifecycle,
       },
-      fallbackFrom,
+      fallbackFrom: currentProviderId,
       reason,
       result: fallbackResult,
     });
@@ -1276,6 +2012,8 @@ export abstract class MemoryManagerSyncOps {
     this.fallbackReason = fallbackState.fallbackReason;
     this.provider = fallbackState.provider;
     this.providerRuntime = fallbackState.providerRuntime;
+    this.providerUnavailableReason = fallbackState.providerUnavailableReason;
+    this.providerLifecycle = fallbackState.lifecycle;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallbackRequest.provider})`, {
@@ -1284,11 +2022,13 @@ export abstract class MemoryManagerSyncOps {
     return true;
   }
 
-  private async runSafeReindex(params: {
+  protected async runSafeReindex(params: {
     reason?: string;
     force?: boolean;
     progress?: MemorySyncProgressState;
   }): Promise<void> {
+    this.assertFtsOnlySyncAllowed();
+
     const dbPath = resolveUserPath(this.settings.store.path);
     const tempDbPath = `${dbPath}.tmp-${randomUUID()}`;
     const tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
@@ -1327,7 +2067,7 @@ export abstract class MemoryManagerSyncOps {
     this.fts.loadError = undefined;
     this.ensureSchema();
 
-    let nextMeta: MemoryIndexMeta | null = null;
+    let nextMeta: MemoryIndexMeta | null;
 
     try {
       nextMeta = await runMemoryAtomicReindex({
@@ -1360,6 +2100,9 @@ export abstract class MemoryManagerSyncOps {
             this.sessionsDirty = true;
           } else {
             this.sessionsDirty = false;
+          }
+          if (!shouldSyncMemory) {
+            this.dirty = false;
           }
 
           const meta: MemoryIndexMeta = {
@@ -1441,6 +2184,9 @@ export abstract class MemoryManagerSyncOps {
     } else {
       this.sessionsDirty = false;
     }
+    if (!shouldSyncMemory) {
+      this.dirty = false;
+    }
 
     const nextMeta: MemoryIndexMeta = {
       model: this.provider?.model ?? "fts-only",
@@ -1477,8 +2223,19 @@ export abstract class MemoryManagerSyncOps {
       } catch {}
     }
     this.ensureSchema();
-    this.dropVectorTable();
-    this.vector.dims = undefined;
+    if (this.vector.enabled && this.vector.available) {
+      try {
+        this.db.exec(`DELETE FROM ${VECTOR_TABLE}`);
+      } catch {
+        this.dropVectorTable();
+        this.vector.dims = undefined;
+        this.vector.available = null;
+        this.vectorReady = null;
+      }
+    } else {
+      this.dropVectorTable();
+      this.vector.dims = undefined;
+    }
     this.sessionsDirtyFiles.clear();
   }
 

@@ -1,14 +1,17 @@
+// Tests active reply run registry add, lookup, and cleanup behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
 } from "../../logging/diagnostic-run-activity.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import {
   testing,
   abortActiveReplyRuns,
   createReplyOperation,
   forceClearReplyRunBySessionId,
   isReplyRunActiveForSessionId,
+  isReplyRunAbortableForCompaction,
   queueReplyRunMessage,
   replyRunRegistry,
   resolveActiveReplyRunSessionId,
@@ -54,6 +57,21 @@ describe("reply run registry", () => {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     }
+  });
+
+  it("treats queued reply operations as non-abortable for compaction", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-compact",
+      resetTriggered: false,
+    });
+
+    expect(isReplyRunActiveForSessionId("session-compact")).toBe(true);
+    expect(isReplyRunAbortableForCompaction("session-compact")).toBe(false);
+
+    operation.setPhase("running");
+
+    expect(isReplyRunAbortableForCompaction("session-compact")).toBe(true);
   });
 
   it("mirrors active reply operations into diagnostic work state", () => {
@@ -147,6 +165,30 @@ describe("reply run registry", () => {
       expect(forceClearReplyRunBySessionId("session-running", new Error("stuck"))).toBe(true);
 
       expect(isReplyRunActiveForSessionId("session-running")).toBe(false);
+      await expect(waitPromise).resolves.toBe(true);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized wait timers instead of resolving idle waits immediately", async () => {
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "session-running",
+        resetTriggered: false,
+      });
+
+      const waitPromise = waitForReplyRunEndBySessionId(
+        "session-running",
+        MAX_TIMER_TIMEOUT_MS + 1,
+      );
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      operation.complete();
       await expect(waitPromise).resolves.toBe(true);
     } finally {
       await vi.runOnlyPendingTimersAsync();

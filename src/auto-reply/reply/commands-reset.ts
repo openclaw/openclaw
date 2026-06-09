@@ -1,3 +1,4 @@
+/** Handles /new and /reset command flows, including soft reset and ACP-bound sessions. */
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
@@ -18,6 +19,7 @@ function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: s
   mutableCtx.BodyForCommands = resetTail;
   mutableCtx.BodyForAgent = resetTail;
   mutableCtx.BodyStripped = resetTail;
+  // Mark the context so ACP dispatch continues with the post-reset tail, not the reset command.
   mutableCtx.AcpDispatchTailAfterReset = true;
 }
 
@@ -29,6 +31,7 @@ function isResetAuthorized(params: HandleCommandsParams): boolean {
   });
 }
 
+/** Handles reset/new commands or returns null when another command handler should continue. */
 export async function maybeHandleResetCommand(
   params: HandleCommandsParams,
 ): Promise<CommandHandlerResult | null> {
@@ -106,7 +109,7 @@ export async function maybeHandleResetCommand(
     return null;
   }
 
-  const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
+  const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/i);
   if (!resetMatch) {
     return null;
   }
@@ -117,7 +120,8 @@ export async function maybeHandleResetCommand(
     return { shouldContinue: false };
   }
 
-  const commandAction: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
+  const commandAction: ResetCommandAction =
+    resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
   const resetTail = params.command.commandBodyNormalized.slice(resetMatch[0].length).trimStart();
   const boundAcpSessionKey = resolveBoundAcpThreadSessionKey(params);
   const boundAcpKey =

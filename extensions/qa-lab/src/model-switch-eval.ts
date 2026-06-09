@@ -1,6 +1,7 @@
+// Qa Lab plugin module implements model switch eval behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export function hasModelSwitchContinuityEvidence(text: string) {
+export function hasModelSwitchContinuitySignal(text: string) {
   const lower = normalizeLowercaseStringOrEmpty(text);
   const mentionsHandoff =
     lower.includes("handoff") || lower.includes("model switch") || lower.includes("switched");

@@ -1,3 +1,4 @@
+// Status command report tests cover terminal report line rendering from report sections.
 import { describe, expect, it } from "vitest";
 import { buildStatusCommandReportLines } from "./status.command-report.ts";
 
@@ -16,8 +17,10 @@ describe("buildStatusCommandReportLines", () => {
       overviewRows: [{ Item: "OS", Value: "macOS" }],
       showTaskMaintenanceHint: true,
       taskMaintenanceHint: "maintenance hint",
+      retainedLostTaskLine: "retained lost line",
       pluginCompatibilityLines: ["warn 1"],
       pairingRecoveryLines: ["pairing needed"],
+      modelSelectionLines: ["model warning"],
       securityAuditLines: ["audit line"],
       channelsColumns: [{ key: "Channel", header: "Channel" }],
       channelsRows: [{ Channel: "quietchat" }],
@@ -38,11 +41,15 @@ describe("buildStatusCommandReportLines", () => {
       "table:Item:1",
       "",
       "muted(maintenance hint)",
+      "retained lost line",
       "",
       "# Plugin compatibility",
       "warn 1",
       "",
       "pairing needed",
+      "",
+      "# Model selection",
+      "model warning",
       "",
       "# Security audit",
       "audit line",
@@ -79,6 +86,7 @@ describe("buildStatusCommandReportLines", () => {
       taskMaintenanceHint: "ignored",
       pluginCompatibilityLines: [],
       pairingRecoveryLines: [],
+      modelSelectionLines: [],
       securityAuditLines: ["audit line"],
       channelsColumns: [{ key: "Channel", header: "Channel" }],
       channelsRows: [{ Channel: "quietchat" }],
@@ -105,6 +113,7 @@ describe("buildStatusCommandReportLines", () => {
       taskMaintenanceHint: "ignored",
       pluginCompatibilityLines: [],
       pairingRecoveryLines: [],
+      modelSelectionLines: [],
       securityAuditLines: ["audit line"],
       channelsColumns: [{ key: "Channel", header: "Channel" }],
       channelsRows: [],

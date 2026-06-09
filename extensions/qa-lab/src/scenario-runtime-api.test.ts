@@ -1,3 +1,4 @@
+// Qa Lab tests cover scenario runtime api plugin behavior.
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -83,7 +84,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     hasDiscoveryLabels: fn,
     reportsDiscoveryScopeLeak: fn,
     reportsMissingDiscoveryFiles: fn,
-    hasModelSwitchContinuityEvidence: fn,
+    hasModelSwitchContinuitySignal: fn,
     ...overrides,
   };
 }

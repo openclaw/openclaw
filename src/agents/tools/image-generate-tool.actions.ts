@@ -1,11 +1,20 @@
+/**
+ * image_generate action helpers.
+ *
+ * Handles provider listing, task status, and duplicate-guard output for the image generation tool.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listRuntimeImageGenerationProviders } from "../../image-generation/runtime.js";
 import type { ImageGenerationProvider } from "../../image-generation/types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
+  buildImageGenerationTaskStatusListDetails,
+  buildImageGenerationTaskStatusListText,
   buildImageGenerationTaskStatusDetails,
   buildImageGenerationTaskStatusText,
   findActiveImageGenerationTaskForSession,
+  findDuplicateGuardImageGenerationTaskForSession,
+  listActiveImageGenerationTasksForSession,
 } from "../image-generation-task-status.js";
 import {
   createMediaGenerateProviderListActionResult,
@@ -15,6 +24,7 @@ import {
 
 export type ImageGenerateActionResult = MediaGenerateActionResult;
 
+/** Formats provider auth setup hints for the image generation `list` action. */
 export function formatImageGenerationAuthHint(provider: {
   id: string;
   authEnvVars: readonly string[];
@@ -28,10 +38,12 @@ export function formatImageGenerationAuthHint(provider: {
   return `set ${provider.authEnvVars.join(" / ")} to use ${provider.id}/*`;
 }
 
+/** Lists supported image-generation modes exposed by a provider. */
 export function listSupportedImageGenerationModes(provider: ImageGenerationProvider): string[] {
   return ["generate", ...(provider.capabilities.edit.enabled ? ["edit"] : [])];
 }
 
+/** Formats provider capability details for the image generation `list` action. */
 export function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider): string {
   const caps: string[] = [];
   if (provider.capabilities.edit.enabled) {
@@ -58,8 +70,10 @@ export function summarizeImageGenerationCapabilities(provider: ImageGenerationPr
   return caps.join("; ");
 }
 
+/** Builds the image-generation provider listing result shown to the agent. */
 export function createImageGenerateListActionResult(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
 }): ImageGenerateActionResult {
@@ -69,6 +83,7 @@ export function createImageGenerateListActionResult(params: {
     providers,
     emptyText: "No image-generation providers are registered.",
     cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
     listModes: listSupportedImageGenerationModes,
@@ -84,33 +99,46 @@ const imageGenerateTaskStatusActions = createMediaGenerateTaskStatusActions({
   buildStatusDetails: buildImageGenerationTaskStatusDetails,
 });
 
+/** Builds status output for active image-generation tasks in the current session. */
 export function createImageGenerateStatusActionResult(
   sessionKey?: string,
 ): ImageGenerateActionResult {
+  const activeTasks = listActiveImageGenerationTasksForSession(sessionKey);
+  if (activeTasks.length > 1) {
+    return {
+      content: [{ type: "text", text: buildImageGenerationTaskStatusListText(activeTasks) }],
+      details: {
+        action: "status",
+        ...buildImageGenerationTaskStatusListDetails(activeTasks),
+      },
+    };
+  }
   return imageGenerateTaskStatusActions.createStatusActionResult(sessionKey);
 }
 
+/** Returns duplicate-guard status output when a matching image task is already active. */
 export function createImageGenerateDuplicateGuardResult(
   sessionKey?: string,
-  params?: { prompt?: string },
+  params?: { prompt?: string; requestKey?: string },
 ): ImageGenerateActionResult | undefined {
-  const activeTask = findActiveImageGenerationTaskForSession(sessionKey, {
+  const blockingTask = findDuplicateGuardImageGenerationTaskForSession(sessionKey, {
     prompt: params?.prompt,
+    requestKey: params?.requestKey,
   });
-  if (!activeTask) {
+  if (!blockingTask) {
     return undefined;
   }
   return {
     content: [
       {
         type: "text",
-        text: buildImageGenerationTaskStatusText(activeTask, { duplicateGuard: true }),
+        text: buildImageGenerationTaskStatusText(blockingTask, { duplicateGuard: true }),
       },
     ],
     details: {
       action: "status",
       duplicateGuard: true,
-      ...buildImageGenerationTaskStatusDetails(activeTask),
+      ...buildImageGenerationTaskStatusDetails(blockingTask),
     },
   };
 }

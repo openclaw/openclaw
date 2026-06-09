@@ -1,8 +1,11 @@
+// Builds npm environment overrides for safe project-local installs.
 import { execFileSync } from "node:child_process";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 
+/** Options that scope npm config and cache paths for project-local installs. */
 export type NpmProjectInstallEnvOptions = {
   cacheDir?: string;
   npmConfigCwd?: string;
@@ -42,6 +45,19 @@ type NpmFreshnessConfigScope = {
 };
 
 const NPM_CONFIG_PATH_PROBE_PARENT_ENV_KEYS = ["PATH", "Path", "PATHEXT", "SystemRoot", "ComSpec"];
+const NPM_GLOBAL_CONFIG_PATH_CACHE = new Map<string, string | null>();
+const NPM_GLOBAL_CONFIG_PATH_CACHE_ENV_KEYS = [
+  ...NPM_CONFIG_PATH_PROBE_PARENT_ENV_KEYS,
+  "NPM_CONFIG_GLOBALCONFIG",
+  "npm_config_globalconfig",
+  "NPM_CONFIG_PREFIX",
+  "npm_config_prefix",
+  "NPM_CONFIG_USERCONFIG",
+  "npm_config_userconfig",
+  "HOME",
+  "PREFIX",
+  "USERPROFILE",
+] as const;
 
 function resolveEnvPath(env: NodeJS.ProcessEnv, upperKey: string, lowerKey: string): string | null {
   const raw = env[upperKey]?.trim() || env[lowerKey]?.trim();
@@ -93,6 +109,26 @@ function readNpmGlobalConfigPath(
   env: NodeJS.ProcessEnv,
   scope: NpmFreshnessConfigScope,
 ): string | null {
+  const scopedGlobalConfig = resolveScopedGlobalNpmrc(scope);
+  if (scopedGlobalConfig) {
+    return scopedGlobalConfig;
+  }
+  const configuredGlobalConfig = resolveEnvPath(
+    env,
+    "NPM_CONFIG_GLOBALCONFIG",
+    "npm_config_globalconfig",
+  );
+  if (configuredGlobalConfig) {
+    return configuredGlobalConfig;
+  }
+  const configuredPrefix = resolveEnvPath(env, "NPM_CONFIG_PREFIX", "npm_config_prefix");
+  if (configuredPrefix) {
+    return path.join(configuredPrefix, "etc", "npmrc");
+  }
+  const cacheKey = buildNpmGlobalConfigPathCacheKey(env, scope);
+  if (NPM_GLOBAL_CONFIG_PATH_CACHE.has(cacheKey)) {
+    return NPM_GLOBAL_CONFIG_PATH_CACHE.get(cacheKey) ?? null;
+  }
   try {
     const raw = execFileSync("npm", ["config", "get", "globalconfig"], {
       encoding: "utf-8",
@@ -103,15 +139,69 @@ function readNpmGlobalConfigPath(
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 2_000,
     }).trim();
-    return raw && raw !== "null" && raw !== "undefined" ? raw : null;
+    const resolved = raw && raw !== "null" && raw !== "undefined" ? raw : null;
+    NPM_GLOBAL_CONFIG_PATH_CACHE.set(cacheKey, resolved);
+    return resolved;
   } catch {
+    NPM_GLOBAL_CONFIG_PATH_CACHE.set(cacheKey, null);
     return null;
   }
 }
 
+function buildNpmGlobalConfigPathCacheKey(
+  env: NodeJS.ProcessEnv,
+  scope: NpmFreshnessConfigScope,
+): string {
+  const configFiles = uniqueStrings(
+    [
+      resolveScopedProjectNpmrc(scope),
+      resolveEnvPath(env, "NPM_CONFIG_USERCONFIG", "npm_config_userconfig") ??
+        resolveHomeNpmrc(env),
+      resolveEnvPath(env, "NPM_CONFIG_GLOBALCONFIG", "npm_config_globalconfig"),
+      resolveScopedGlobalNpmrc(scope),
+    ].filter((file): file is string => Boolean(file)),
+  );
+  return JSON.stringify({
+    cwd: scope.npmConfigCwd?.trim() || safeCwd(),
+    prefix: scope.npmConfigPrefix?.trim() ?? "",
+    env: Object.fromEntries(
+      NPM_GLOBAL_CONFIG_PATH_CACHE_ENV_KEYS.map((key) => [key, env[key] ?? process.env[key] ?? ""]),
+    ),
+    configFiles: configFiles.map((filePath) => ({
+      path: filePath,
+      signature: readFileSignature(filePath),
+    })),
+  });
+}
+
+function readFileSignature(filePath: string): string {
+  try {
+    const stat = fsSync.statSync(filePath);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return "missing";
+  }
+}
+
+function safeCwd(): string {
+  try {
+    return process.cwd();
+  } catch {
+    return "";
+  }
+}
+
 function resolveScopedProjectNpmrc(scope: NpmFreshnessConfigScope): string | null {
-  const cwd = scope.npmConfigCwd?.trim() || process.cwd();
-  return cwd ? path.join(cwd, ".npmrc") : null;
+  const scopedCwd = scope.npmConfigCwd?.trim();
+  if (scopedCwd) {
+    return path.join(scopedCwd, ".npmrc");
+  }
+  try {
+    const cwd = process.cwd();
+    return cwd ? path.join(cwd, ".npmrc") : null;
+  } catch {
+    return null;
+  }
 }
 
 function resolveScopedGlobalNpmrc(scope: NpmFreshnessConfigScope): string | null {
@@ -130,7 +220,7 @@ function resolveNpmConfigFiles(
     resolveScopedGlobalNpmrc(scope),
     readNpmGlobalConfigPath(env, scope),
   ];
-  return [...new Set(files.filter((file): file is string => Boolean(file)))];
+  return uniqueStrings(files.filter((file): file is string => Boolean(file)));
 }
 
 function hasNpmrcConfigKey(filePath: string, key: string): boolean {
@@ -156,12 +246,19 @@ function resolveNpmFreshnessBypassMode(
   env: NodeJS.ProcessEnv,
   scope: NpmFreshnessConfigScope,
 ): NpmFreshnessBypassMode {
+  if (process.platform === "win32") {
+    return "before";
+  }
   if (hasRawNpmConfigKey(env, "min-release-age", scope)) {
     return "min-release-age";
   }
   return hasRawNpmConfigKey(env, "before", scope) ? "before" : "min-release-age";
 }
 
+/**
+ * Builds npm args that bypass host freshness policies for OpenClaw-managed installs.
+ * Existing npmrc policy decides whether `before` or `min-release-age` is safer.
+ */
 export function createNpmFreshnessBypassArgs(
   env: NodeJS.ProcessEnv = process.env,
   now = new Date(),
@@ -173,6 +270,7 @@ export function createNpmFreshnessBypassArgs(
   return [`--before=${now.toISOString()}`];
 }
 
+/** Applies the same npm freshness bypass policy through environment variables. */
 export function applyNpmFreshnessBypassEnv(
   env: NodeJS.ProcessEnv,
   now = new Date(),
@@ -180,6 +278,10 @@ export function applyNpmFreshnessBypassEnv(
 ): void {
   const [arg] = createNpmFreshnessBypassArgs(env, now, scope);
   for (const key of NPM_FRESHNESS_BYPASS_KEYS) {
+    if (process.platform === "win32" && key.includes("-")) {
+      delete env[key];
+      continue;
+    }
     env[key] = "";
   }
   if (arg?.startsWith("--before=")) {
@@ -189,6 +291,10 @@ export function applyNpmFreshnessBypassEnv(
   }
 }
 
+/**
+ * Creates npm env for project-local installs, clearing global/workspace config
+ * and adding fetch, freshness, cache, and POSIX script-shell defaults.
+ */
 export function createNpmProjectInstallEnv(
   env: NodeJS.ProcessEnv,
   options: NpmProjectInstallEnvOptions = {},
@@ -218,10 +324,12 @@ export function createNpmProjectInstallEnv(
   return installEnv;
 }
 
+/** Returns true when caller env already pins npm's lifecycle script shell. */
 export function hasNpmScriptShellSetting(env: NodeJS.ProcessEnv): boolean {
   return NPM_CONFIG_SCRIPT_SHELL_KEYS.some((key) => Boolean(env[key]?.trim()));
 }
 
+/** Resolves an absolute POSIX shell for npm lifecycle scripts when one is available. */
 export function resolvePosixNpmScriptShell(env: NodeJS.ProcessEnv): string | null {
   if (process.platform === "win32") {
     return null;
@@ -233,6 +341,7 @@ export function resolvePosixNpmScriptShell(env: NodeJS.ProcessEnv): string | nul
   return shell && path.isAbsolute(shell) && fsSync.existsSync(shell) ? shell : null;
 }
 
+/** Sets npm's script-shell env only when the caller has not configured one. */
 export function applyPosixNpmScriptShellEnv(env: NodeJS.ProcessEnv): void {
   if (hasNpmScriptShellSetting(env)) {
     return;

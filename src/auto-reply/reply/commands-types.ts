@@ -1,14 +1,16 @@
-import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
-import type { SkillCommandSpec } from "../../agents/skills.js";
+/** Shared command handler context and result contracts. */
+import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SkillCommandSpec } from "../../skills/types.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { TypingController } from "./typing.js";
 
+/** Normalized command metadata derived from an inbound message. */
 export type CommandContext = {
   surface: string;
   channel: string;
@@ -30,6 +32,7 @@ export type CommandContext = {
   softResetTail?: string;
 };
 
+/** Full input object passed to each command handler. */
 export type HandleCommandsParams = {
   ctx: MsgContext;
   rootCtx?: MsgContext;
@@ -65,14 +68,17 @@ export type HandleCommandsParams = {
   contextTokens: number;
   isGroup: boolean;
   skillCommands?: SkillCommandSpec[];
+  loadSkillCommands?: () => Promise<SkillCommandSpec[]>;
   typing?: TypingController;
 };
 
+/** Result returned by a command handler. */
 export type CommandHandlerResult = {
   reply?: ReplyPayload;
   shouldContinue: boolean;
 };
 
+/** Command handler function shape. */
 export type CommandHandler = (
   params: HandleCommandsParams,
   allowTextCommands: boolean,

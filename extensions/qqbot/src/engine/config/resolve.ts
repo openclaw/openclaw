@@ -12,7 +12,7 @@ import { getPlatformAdapter } from "../adapter/index.js";
 import {
   asOptionalObjectRecord as asRecord,
   normalizeOptionalLowercaseString,
-  normalizeStringifiedOptionalString,
+  normalizeStringifiedEntries,
   readStringField as readString,
 } from "../utils/string-normalize.js";
 
@@ -142,8 +142,8 @@ export function resolveAccountBase(
   const resolvedAccountId = accountId ?? resolveDefaultAccountId(cfg);
   const qqbot = readQQBotSection(cfg);
 
-  let accountConfig: Record<string, unknown> = {};
-  let appId = "";
+  let accountConfig: Record<string, unknown>;
+  let appId;
 
   if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {
     accountConfig = normalizeAccountConfig(asRecord(qqbot));
@@ -275,9 +275,7 @@ export function describeAccount(account: AccountSnapshot | undefined) {
 
 /** Normalize allowFrom entries into uppercase strings without the qqbot: prefix. */
 export function formatAllowFrom(allowFrom: Array<string | number> | undefined | null): string[] {
-  return (allowFrom ?? [])
-    .map((entry) => normalizeStringifiedOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry))
+  return normalizeStringifiedEntries(allowFrom ?? [])
     .map((entry) => entry.replace(/^qqbot:/i, ""))
     .map((entry) => entry.toUpperCase());
 }

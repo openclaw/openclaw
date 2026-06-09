@@ -1,5 +1,7 @@
+// Sessions command tests cover listing, details, filtering, and transcript display behavior.
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSqliteSessionStoreDatabasePath } from "../config/sessions/store-sqlite.js";
 import {
   makeRuntime,
   mockSessionsConfig,
@@ -36,20 +38,21 @@ describe("sessionsCommand", () => {
         outputTokens: 800,
         totalTokens: 2000,
         totalTokensFresh: true,
-        model: "pi:opus",
+        model: "test:opus",
       },
     });
 
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store);
+    expect(fs.existsSync(store)).toBe(false);
+    fs.rmSync(store, { force: true });
 
     expect(logs.join("\n")).toContain("Tokens (ctx %");
 
     const row = logs.find((line) => line.includes("+15555550123")) ?? "";
     expect(row).toBe(
-      "direct      +15555550123               45m ago   pi:opus        OpenAI Codex       2.0k/32k (6%)        id:abc123",
+      "direct      +15555550123               45m ago   test:opus      OpenAI Codex       2.0k/32k (6%)        id:abc123",
     );
   });
 
@@ -80,7 +83,7 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store);
+    fs.rmSync(store, { force: true });
 
     expect(logs.join("\n")).toContain("Runtime");
 
@@ -117,7 +120,7 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store);
+    fs.rmSync(store, { force: true });
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toBe(
@@ -137,11 +140,11 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store);
+    fs.rmSync(store, { force: true });
 
     const row = logs.find((line) => line.includes("quietchat:group:demo")) ?? "";
     expect(row).toBe(
-      "group       quietchat:group:demo       5m ago    pi:opus        OpenAI Codex       unknown/32k (?%)     think:high id:xyz",
+      "group       quietchat:group:demo       5m ago    test:opus      OpenAI Codex       unknown/32k (?%)     think:high id:xyz",
     );
   });
 
@@ -154,14 +157,14 @@ describe("sessionsCommand", () => {
         outputTokens: 800,
         totalTokens: 2000,
         totalTokensFresh: true,
-        model: "pi:opus",
+        model: "test:opus",
       },
       "quietchat:group:demo": {
         sessionId: "xyz",
         updatedAt: Date.now() - 5 * 60_000,
         inputTokens: 20,
         outputTokens: 10,
-        model: "pi:opus",
+        model: "test:opus",
       },
     });
 
@@ -187,7 +190,7 @@ describe("sessionsCommand", () => {
         updatedAt: Date.now() - 10 * 60_000,
         totalTokens: 2000,
         totalTokensFresh: false,
-        model: "pi:opus",
+        model: "test:opus",
       },
     });
 
@@ -209,12 +212,12 @@ describe("sessionsCommand", () => {
         recent: {
           sessionId: "recent",
           updatedAt: Date.now() - 5 * 60_000,
-          model: "pi:opus",
+          model: "test:opus",
         },
         stale: {
           sessionId: "stale",
           updatedAt: Date.now() - 45 * 60_000,
-          model: "pi:opus",
+          model: "test:opus",
         },
       },
       "sessions-active",
@@ -263,9 +266,9 @@ describe("sessionsCommand", () => {
   it("honors explicit JSON output limits", async () => {
     const store = writeStore(
       {
-        newest: { sessionId: "newest", updatedAt: Date.now(), model: "pi:opus" },
-        middle: { sessionId: "middle", updatedAt: Date.now() - 60_000, model: "pi:opus" },
-        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "pi:opus" },
+        newest: { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
+        middle: { sessionId: "middle", updatedAt: Date.now() - 60_000, model: "test:opus" },
+        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "test:opus" },
       },
       "sessions-explicit-limit",
     );
@@ -288,8 +291,8 @@ describe("sessionsCommand", () => {
   it("allows full JSON output with --limit all", async () => {
     const store = writeStore(
       {
-        newest: { sessionId: "newest", updatedAt: Date.now(), model: "pi:opus" },
-        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "pi:opus" },
+        newest: { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
+        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "test:opus" },
       },
       "sessions-limit-all",
     );
@@ -312,8 +315,8 @@ describe("sessionsCommand", () => {
   it("sorts and slices large explicit limits instead of using top-N insertion", async () => {
     const store = writeStore(
       {
-        newest: { sessionId: "newest", updatedAt: Date.now(), model: "pi:opus" },
-        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "pi:opus" },
+        newest: { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
+        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "test:opus" },
       },
       "sessions-large-limit",
     );
@@ -349,8 +352,30 @@ describe("sessionsCommand", () => {
     expect(errors).toStrictEqual([
       "--active must be a positive number of minutes, for example --active 30.",
     ]);
+    expect(fs.existsSync(store)).toBe(true);
+    expect(fs.existsSync(resolveSqliteSessionStoreDatabasePath(store))).toBe(false);
 
-    fs.rmSync(store);
+    fs.rmSync(store, { force: true });
+  });
+
+  it("rejects partial --active values", async () => {
+    const store = writeStore(
+      {
+        demo: {
+          sessionId: "demo",
+          updatedAt: Date.now() - 5 * 60_000,
+        },
+      },
+      "sessions-active-partial",
+    );
+    const { runtime, errors } = makeRuntime();
+
+    await expect(sessionsCommand({ store, active: "10m" }, runtime)).rejects.toThrow("exit 1");
+    expect(errors).toStrictEqual([
+      "--active must be a positive number of minutes, for example --active 30.",
+    ]);
+
+    fs.rmSync(store, { force: true });
   });
 
   it("rejects invalid --limit values", async () => {
@@ -370,6 +395,6 @@ describe("sessionsCommand", () => {
       '--limit must be a positive integer or "all", for example --limit 25.',
     ]);
 
-    fs.rmSync(store);
+    fs.rmSync(store, { force: true });
   });
 });

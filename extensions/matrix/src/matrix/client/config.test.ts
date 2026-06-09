@@ -1,3 +1,4 @@
+// Matrix tests cover config plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../../runtime-api.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
@@ -83,6 +84,24 @@ describe("Matrix auth/config live surfaces", () => {
     expect(resolved.deviceName).toBe("EnvDevice");
     expect(resolved.initialSyncLimit).toBeUndefined();
     expect(resolved.encryption).toBe(false);
+  });
+
+  it("ignores non-finite initial sync limits", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          initialSyncLimit: Number.NaN,
+          accounts: {
+            ops: {
+              initialSyncLimit: Number.POSITIVE_INFINITY,
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    const resolved = resolveMatrixConfigForAccount(cfg, "ops", {} as NodeJS.ProcessEnv);
+    expect(resolved.initialSyncLimit).toBeUndefined();
   });
 
   it("resolves accessToken SecretRef against the provided env", () => {

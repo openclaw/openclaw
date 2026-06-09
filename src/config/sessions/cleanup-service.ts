@@ -1,3 +1,6 @@
+// Session cleanup service for store entries and transcript/artifact files.
+// Supports dry-run/apply modes, stale pruning, missing transcript fixes, DM-scope retirement, and disk budgets.
+
 import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -95,6 +98,75 @@ export type SessionsCleanupRunResult = {
   appliedSummaries: SessionCleanupSummary[];
 };
 
+const EMPTY_TRANSCRIPT_MAX_BYTES = 4096;
+
+function isTranscriptMessageRole(role: unknown): boolean {
+  return (
+    role === "user" ||
+    role === "assistant" ||
+    role === "tool" ||
+    role === "toolResult" ||
+    role === "system"
+  );
+}
+
+function isTranscriptMessageRecord(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { message?: unknown; role?: unknown; type?: unknown };
+  if (record.type === "message") {
+    return true;
+  }
+  if (
+    record.type === undefined &&
+    record.message &&
+    typeof record.message === "object" &&
+    isTranscriptMessageRole((record.message as { role?: unknown }).role)
+  ) {
+    return true;
+  }
+  return record.type === undefined && isTranscriptMessageRole(record.role);
+}
+
+function transcriptHasNoMessageRecords(transcriptPath: string): boolean {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(transcriptPath);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile() || stat.size > EMPTY_TRANSCRIPT_MAX_BYTES) {
+    // Only inspect small transcript files; larger files are assumed to contain real history.
+    return false;
+  }
+
+  let raw: string;
+  try {
+    raw = fs.readFileSync(transcriptPath, "utf-8");
+  } catch {
+    return false;
+  }
+
+  const lines = raw.split(/\r?\n/u).filter((line) => line.trim().length > 0);
+  if (lines.length === 0) {
+    return true;
+  }
+  for (const line of lines) {
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line) as unknown;
+    } catch {
+      return false;
+    }
+    if (isTranscriptMessageRecord(entry)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Resolves the action label for one session key from cleanup key sets. */
 export function resolveSessionCleanupAction(params: {
   key: string;
   missingKeys: Set<string>;
@@ -207,6 +279,7 @@ function pruneMissingTranscriptEntries(params: {
   for (const [key, entry] of Object.entries(params.store)) {
     if (!entry?.sessionId) {
       if (parseAgentSessionKey(key)) {
+        // Agent-scoped keys without session ids are valid routing entries; keep them.
         continue;
       }
       delete params.store[key];
@@ -220,7 +293,11 @@ function pruneMissingTranscriptEntries(params: {
     } catch {
       // Malformed legacy rows cannot resolve a transcript path; --fix-missing prunes them.
     }
-    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
+    if (
+      !transcriptPath ||
+      !fs.existsSync(transcriptPath) ||
+      transcriptHasNoMessageRecords(transcriptPath)
+    ) {
       delete params.store[key];
       removed += 1;
       params.onPruned?.(key);
@@ -253,6 +330,7 @@ function addEntryArtifactPathsToSet(params: {
 async function previewStoreCleanup(params: {
   cfg: OpenClawConfig;
   target: SessionStoreTarget;
+  beforeStore?: Record<string, SessionEntry>;
   maintenance: ResolvedSessionMaintenanceConfig;
   mode: ResolvedSessionMaintenanceConfig["mode"];
   dryRun: boolean;
@@ -260,7 +338,10 @@ async function previewStoreCleanup(params: {
   fixMissing?: boolean;
   fixDmScope?: boolean;
 }) {
-  const beforeStore = loadSessionStore(params.target.storePath, { skipCache: true });
+  const beforeStore = params.beforeStore
+    ? cloneSessionStoreRecord(params.beforeStore)
+    : loadSessionStore(params.target.storePath, { skipCache: true });
+  // Preview always mutates a clone so dry-run output can report exact counts without touching disk.
   const previewStore = cloneSessionStoreRecord(beforeStore);
   const staleKeys = new Set<string>();
   const cappedKeys = new Set<string>();
@@ -387,10 +468,12 @@ async function previewStoreCleanup(params: {
   };
 }
 
+/** Runs session cleanup preview/apply for the selected store targets. */
 export async function runSessionsCleanup(params: {
   cfg: OpenClawConfig;
   opts: SessionsCleanupOptions;
   targets?: SessionStoreTarget[];
+  previewStores?: ReadonlyMap<string, Record<string, SessionEntry>>;
 }): Promise<SessionsCleanupRunResult> {
   const { cfg, opts } = params;
   const maintenance = resolveMaintenanceConfig();
@@ -408,6 +491,7 @@ export async function runSessionsCleanup(params: {
     const result = await previewStoreCleanup({
       cfg,
       target,
+      beforeStore: params.previewStores?.get(target.storePath),
       maintenance,
       mode,
       dryRun: Boolean(opts.dryRun),
@@ -439,6 +523,7 @@ export async function runSessionsCleanup(params: {
             removed += missingApplied;
           }
           if (opts.fixDmScope) {
+            // DM-scope retirement removes stale main-scope direct entries during apply.
             dmScopeRetiredApplied = retireMainScopeDirectSessionEntries({
               cfg,
               store,
@@ -463,6 +548,7 @@ export async function runSessionsCleanup(params: {
         },
       );
       if (dmScopeRemovedSessionFiles.size > 0) {
+        // Archive removed direct-session transcripts unless still referenced by surviving entries.
         const storeAfterDmScopeRetire = loadSessionStore(target.storePath, { skipCache: true });
         await archiveRemovedSessionTranscripts({
           removedSessionFiles: dmScopeRemovedSessionFiles,

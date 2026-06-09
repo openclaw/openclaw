@@ -1,4 +1,6 @@
+// Discord tests cover rest plugin behavior.
 import { createServer, type Server } from "node:http";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { fetch as undiciFetch } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { serializeRequestBody } from "./rest-body.js";
@@ -69,6 +71,74 @@ describe("RequestClient", () => {
     await expect(first).resolves.toEqual({ id: "u1" });
     await expect(second).resolves.toEqual({ ok: true });
     expect(client.queueSize).toBe(0);
+  });
+
+  it("defaults non-finite REST client numeric options before scheduling requests", async () => {
+    const fetchSpy = vi.fn(async (input: string | URL | Request) => {
+      expect(new URL(readRequestUrl(input)).pathname).toBe("/api/v10/guilds/g1/roles");
+      return createJsonResponse({ ok: true });
+    });
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      apiVersion: Number.NaN,
+      timeout: Number.NaN,
+      maxQueueSize: Number.NaN,
+      scheduler: {
+        maxConcurrency: Number.NaN,
+        maxRateLimitRetries: Number.NaN,
+        lanes: {
+          background: {
+            maxQueueSize: Number.NaN,
+            staleAfterMs: Number.NaN,
+            weight: Number.NaN,
+          },
+        },
+      },
+    });
+
+    await expect(client.get("/guilds/g1/roles")).resolves.toEqual({ ok: true });
+    expect(client.getSchedulerMetrics().maxConcurrentWorkers).toBe(4);
+  });
+
+  it("caps oversized REST client request timeouts before scheduling aborts", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const fetchSpy = vi.fn(async () => createJsonResponse({ ok: true }));
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      queueRequests: false,
+      timeout: Number.MAX_SAFE_INTEGER,
+    });
+
+    await expect(client.get("/guilds/g1/roles")).resolves.toEqual({ ok: true });
+
+    expect(client.options.timeout).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("uses the default background stale timeout for non-finite lane overrides", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const firstResponse = createDeferred<Response>();
+    const fetchSpy = vi.fn(async () => await firstResponse.promise);
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      scheduler: {
+        maxConcurrency: 1,
+        lanes: {
+          background: { staleAfterMs: Number.NaN },
+        },
+      },
+    });
+
+    const first = client.get("/guilds/g1/roles");
+    const stale = client.get("/guilds/g2/roles");
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(20_001);
+    firstResponse.resolve(createJsonResponse({ ok: "first" }));
+
+    await expect(first).resolves.toEqual({ ok: "first" });
+    await expect(stale).rejects.toThrow(/Dropped stale background request/);
   });
 
   it("dispatches critical interaction callbacks before older background requests", async () => {
@@ -501,6 +571,41 @@ describe("RequestClient", () => {
     });
   });
 
+  it("ignores unsafe numeric Discord error code strings", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            message: "Slow down",
+            retry_after: 1,
+            global: false,
+            code: "9007199254740993",
+          }),
+          { status: 429 },
+        ),
+    });
+
+    await expect(client.post("/applications/app/commands", { body: {} })).rejects.toMatchObject({
+      discordCode: undefined,
+    });
+  });
+
+  it("ignores unsafe numeric Discord error codes", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(
+          '{"message":"Slow down","retry_after":1,"global":false,"code":9007199254740993}',
+          { status: 429 },
+        ),
+    });
+
+    await expect(client.post("/applications/app/commands", { body: {} })).rejects.toMatchObject({
+      discordCode: undefined,
+    });
+  });
+
   it("parses HTTP-date Retry-After headers on rate limit errors", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-01T12:00:00.000Z"));
@@ -530,6 +635,41 @@ describe("RequestClient", () => {
     });
 
     await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 7 });
+  });
+
+  it("falls back to Retry-After when the rate limit body value is unsafe", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(
+          JSON.stringify({ message: "Slow down", retry_after: "9007199254741", global: false }),
+          {
+            status: 429,
+            headers: { "Retry-After": "7" },
+          },
+        ),
+    });
+
+    await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 7 });
+  });
+
+  it.each([
+    ["hex", "0x10"],
+    ["fractional", "1.5"],
+    ["unsafe-ms", "9007199254741"],
+    ["unsafe-integer", "9007199254740993"],
+    ["overflow", `1${"0".repeat(309)}`],
+  ])("rejects invalid Retry-After numeric strings: %s", async (_label, header) => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(JSON.stringify({ message: "Slow down", retry_after: "1e3", global: false }), {
+          status: 429,
+          headers: { "Retry-After": header },
+        }),
+    });
+
+    await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 1 });
   });
 
   it("tracks invalid requests and exposes bucket scheduler metrics", async () => {
@@ -578,7 +718,7 @@ describe("RequestClient", () => {
   it("dispatches multipart uploads with a multipart/form-data content type", async () => {
     const fetchSpy = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toBeInstanceOf(Headers);
-      expect((init?.headers as Headers).get("Content-Type")).toMatch(
+      expect((init!.headers as Headers).get("Content-Type")).toMatch(
         /^multipart\/form-data; boundary=/,
       );
       expect(init?.body).not.toBeInstanceOf(FormData);

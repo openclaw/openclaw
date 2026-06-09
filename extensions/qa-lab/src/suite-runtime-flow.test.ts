@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite runtime flow plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 
 const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
@@ -54,7 +55,7 @@ const webEvaluate = vi.hoisted(() => vi.fn());
 const hasDiscoveryLabels = vi.hoisted(() => vi.fn());
 const reportsDiscoveryScopeLeak = vi.hoisted(() => vi.fn());
 const reportsMissingDiscoveryFiles = vi.hoisted(() => vi.fn());
-const hasModelSwitchContinuityEvidence = vi.hoisted(() => vi.fn());
+const hasModelSwitchContinuitySignal = vi.hoisted(() => vi.fn());
 const qaChannelPlugin = vi.hoisted(() => ({ id: "qa-channel" }));
 const scanGatewayLogSentinels = vi.hoisted(() => vi.fn());
 const assertNoGatewayLogSentinels = vi.hoisted(() => vi.fn());
@@ -144,7 +145,7 @@ vi.mock("./runtime-tool-fixture.js", () => ({
 }));
 
 vi.mock("./model-switch-eval.js", () => ({
-  hasModelSwitchContinuityEvidence,
+  hasModelSwitchContinuitySignal,
 }));
 
 vi.mock("./runtime-api.js", () => ({

@@ -1,3 +1,4 @@
+// Memory Core tests cover dreaming phases plugin behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -9,6 +10,7 @@ import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   testing,
@@ -20,7 +22,7 @@ import { previewRemHarness } from "./rem-harness.js";
 import {
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
-  resolveShortTermPhaseSignalStorePath,
+  testing as shortTermTesting,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
@@ -320,7 +322,7 @@ describe("memory-core dreaming phases", () => {
     };
     const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}-${nowMs}`;
+    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}`;
 
     await runDreamingSweepPhases({
       workspaceDir,
@@ -331,11 +333,12 @@ describe("memory-core dreaming phases", () => {
       nowMs,
     });
 
-    expect(subagent.deleteSession).toHaveBeenCalledOnce();
-    expect(subagent.deleteSession).toHaveBeenCalledWith({ sessionKey: expectedSessionKey });
+    expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
+    expect(subagent.deleteSession).toHaveBeenNthCalledWith(1, { sessionKey: expectedSessionKey });
+    expect(subagent.deleteSession).toHaveBeenNthCalledWith(2, { sessionKey: expectedSessionKey });
   });
 
-  it("skips session cleanup after request-scoped narrative fallback", async () => {
+  it("suppresses cleanup warnings during request-scoped narrative fallback", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await writeDailyNote(workspaceDir, [
       `# ${DREAMING_TEST_DAY}`,
@@ -399,12 +402,14 @@ describe("memory-core dreaming phases", () => {
     ).resolves.toBeUndefined();
 
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(dreams).toContain("Move backups to S3 Glacier.");
+    expect(dreams).toContain("A memory trace surfaced, but details were unavailable in this run.");
+    expect(dreams).not.toContain("Move backups to S3 Glacier.");
     expect(logger.error).not.toHaveBeenCalled();
     expectIncludesSubstring(mockStringMessages(logger.info), "request-scoped");
     expectNotIncludesSubstring(mockStringMessages(logger.warn), "request-scoped");
+    expectNotIncludesSubstring(mockStringMessages(logger.warn), "narrative pre-cleanup");
     expectNotIncludesSubstring(mockStringMessages(logger.warn), "narrative session cleanup failed");
-    expect(subagent.deleteSession).not.toHaveBeenCalled();
+    expect(subagent.deleteSession).toHaveBeenCalledOnce();
   });
 
   it("does not re-ingest managed light dreaming blocks from daily notes", async () => {
@@ -568,9 +573,8 @@ describe("memory-core dreaming phases", () => {
       ([target]) => typeof target === "string" && target === dailyPath,
     ).length;
     expect(dailyReadCount).toBeLessThanOrEqual(1);
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "daily-ingestion.json")),
-    ).resolves.toBeUndefined();
+    const dailyIngestion = await testing.readDailyIngestionState(workspaceDir);
+    expect(Object.keys(dailyIngestion.files)).toHaveLength(1);
   });
 
   it("ingests recent daily memory files even before recall traffic exists", async () => {
@@ -882,7 +886,7 @@ describe("memory-core dreaming phases", () => {
     );
 
     const readSpy = vi.spyOn(fs, "readFile");
-    let transcriptReadCount = 0;
+    let transcriptReadCount;
     try {
       await withDreamingTestClock(async () => {
         await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
@@ -898,9 +902,8 @@ describe("memory-core dreaming phases", () => {
 
     expect(transcriptReadCount).toBeLessThanOrEqual(1);
 
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json")),
-    ).resolves.toBeUndefined();
+    const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
+    expect(Object.keys(sessionIngestion.files)).toContain("main:sessions/main/dreaming-main.jsonl");
     await expect(
       fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
     ).resolves.toBeUndefined();
@@ -1170,21 +1173,7 @@ describe("memory-core dreaming phases", () => {
       path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
     );
 
-    const sessionIngestion = JSON.parse(
-      await fs.readFile(
-        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
-        "utf-8",
-      ),
-    ) as {
-      files: Record<
-        string,
-        {
-          lineCount: number;
-          lastContentLine: number;
-          contentHash: string;
-        }
-      >;
-    };
+    const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
     expect(Object.keys(sessionIngestion.files)).toHaveLength(1);
     const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
     expect(ingestionEntry.lineCount).toBe(0);
@@ -1223,16 +1212,16 @@ describe("memory-core dreaming phases", () => {
       ].join("\n") + "\n",
       "utf-8",
     );
-    await fs.writeFile(
+    await saveSessionStore(
       path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
+      {
         "agent:main:dreaming-narrative-light-1775894400455": {
           sessionId: "dreaming-narrative",
           sessionFile: transcriptPath,
           updatedAt: Date.parse("2026-04-05T18:05:00.000Z"),
         },
-      }),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
     const mtime = new Date("2026-04-05T18:05:00.000Z");
     await fs.utimes(transcriptPath, mtime, mtime);
@@ -1280,21 +1269,7 @@ describe("memory-core dreaming phases", () => {
       path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
     );
 
-    const sessionIngestion = JSON.parse(
-      await fs.readFile(
-        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
-        "utf-8",
-      ),
-    ) as {
-      files: Record<
-        string,
-        {
-          lineCount: number;
-          lastContentLine: number;
-          contentHash: string;
-        }
-      >;
-    };
+    const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
     expect(Object.keys(sessionIngestion.files)).toHaveLength(1);
     const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
     expect(ingestionEntry.lineCount).toBe(0);
@@ -1332,16 +1307,16 @@ describe("memory-core dreaming phases", () => {
       ].join("\n") + "\n",
       "utf-8",
     );
-    await fs.writeFile(
+    await saveSessionStore(
       path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
+      {
         "agent:main:cron:job-1:run:run-1": {
           sessionId: "cron-run",
           sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
-      }),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
 
     const { beforeAgentReply } = createHarness(
@@ -1387,21 +1362,7 @@ describe("memory-core dreaming phases", () => {
       path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
     );
 
-    const sessionIngestion = JSON.parse(
-      await fs.readFile(
-        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
-        "utf-8",
-      ),
-    ) as {
-      files: Record<
-        string,
-        {
-          lineCount: number;
-          lastContentLine: number;
-          contentHash: string;
-        }
-      >;
-    };
+    const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
     const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
     expect(ingestionEntry.lineCount).toBe(0);
     expect(ingestionEntry.lastContentLine).toBe(0);
@@ -2525,10 +2486,10 @@ describe("memory-core dreaming phases", () => {
     const reinforcedCandidate = requireCandidateByKey(reinforced, baseline[0].key);
     expect(reinforcedCandidate.score).toBeGreaterThan(baselineScore);
 
-    const phaseSignalPath = resolveShortTermPhaseSignalStorePath(workspaceDir);
-    const phaseSignalStore = JSON.parse(await fs.readFile(phaseSignalPath, "utf-8")) as {
-      entries: Record<string, { lightHits: number; remHits: number }>;
-    };
+    const phaseSignalStore = await shortTermTesting.readPhaseSignalStore(
+      workspaceDir,
+      new Date().toISOString(),
+    );
     const baselineSignals = phaseSignalStore.entries[baseline[0].key];
     expect(baselineSignals?.lightHits).toBe(1);
     expect(baselineSignals?.remHits).toBe(1);
@@ -2610,10 +2571,10 @@ describe("memory-core dreaming phases", () => {
       });
     });
 
-    const phaseSignalPath = resolveShortTermPhaseSignalStorePath(workspaceDir);
-    const phaseSignalStore = JSON.parse(await fs.readFile(phaseSignalPath, "utf-8")) as {
-      entries: Record<string, { remHits: number }>;
-    };
+    const phaseSignalStore = await shortTermTesting.readPhaseSignalStore(
+      workspaceDir,
+      new Date().toISOString(),
+    );
     expect(phaseSignalStore.entries[liveKey]?.remHits).toBe(1);
     expect(phaseSignalStore.entries[staleKey]).toBeUndefined();
 
@@ -2991,5 +2952,76 @@ describe("previewRemHarness", () => {
     expect(preview.rem.candidateTruths).toStrictEqual([]);
     expect(preview.rem.bodyLines).toStrictEqual([]);
     expect(preview.deep.candidates[0]?.snippet).toContain("Always check weather");
+  });
+});
+
+describe("dedupeEntries — CJK-aware snippet similarity (#80613)", () => {
+  // Reuse the same makeEntry helper shape used elsewhere in this file, but
+  // local here so we can vary `snippet` while keeping the rest stable.
+  function makeRecall(key: string, snippet: string): ShortTermRecallEntry {
+    return {
+      key,
+      path: "memory/2026-04-12.md",
+      startLine: 1,
+      endLine: 5,
+      source: "memory",
+      snippet,
+      recallCount: 1,
+      dailyCount: 0,
+      groundedCount: 0,
+      totalScore: 1,
+      maxScore: 1,
+      firstRecalledAt: "2026-04-12T08:00:00.000Z",
+      lastRecalledAt: "2026-04-12T08:00:00.000Z",
+      queryHashes: [],
+      recallDays: ["2026-04-12"],
+      conceptTags: [],
+    };
+  }
+
+  it("merges similar pure-CJK snippets at the same path (was missed by the ASCII-only tokenizer)", () => {
+    // Two close paraphrases of the same Chinese fact. The previous tokenizer
+    // produced empty sets for both, falling back to exact-string match and
+    // returning similarity 0, so both ended up as separate candidates.
+    const a = makeRecall("cjk-a", "教训：配置中实验开关字段是叫做规则");
+    const b = makeRecall("cjk-b", "教训：配置里实验开关的字段叫做规则");
+
+    const deduped = testing.dedupeEntries([a, b], 0.5);
+    expect(deduped).toHaveLength(1);
+    // First entry survives; recall counts merge in.
+    expect(deduped[0]?.key).toBe("cjk-a");
+  });
+
+  it("keeps distinct CJK snippets that only share ASCII tokens (was wrongly merged by the ASCII-only tokenizer)", () => {
+    // Both snippets have ASCII tokens {plan, exrule} but talk about wholly
+    // different facts in the CJK content. The previous tokenizer only saw
+    // those ASCII tokens, returned similarity 1.0, and silently dropped one
+    // of the two distinct memories. The CJK-aware tokenizer keeps them apart.
+    const a = makeRecall("mixed-a", "Plan 实验开关字段叫做 exRule");
+    const b = makeRecall("mixed-b", "Plan 整个产品体系彻底重构 exRule");
+
+    const deduped = testing.dedupeEntries([a, b], 0.7);
+    expect(deduped).toHaveLength(2);
+    expect(deduped.map((entry) => entry.key).toSorted()).toStrictEqual(["mixed-a", "mixed-b"]);
+  });
+
+  it("preserves the existing ASCII paraphrase dedupe behavior", () => {
+    // Sanity check: close English paraphrases at the same path still dedupe,
+    // so the fix does not regress the Latin-script behavior the prior tests
+    // relied on.
+    const a = makeRecall("en-a", "Plan config experiment toggle field is named exRule");
+    const b = makeRecall("en-b", "Plan configuration uses experiment toggle field named exRule");
+
+    const deduped = testing.dedupeEntries([a, b], 0.4);
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0]?.key).toBe("en-a");
+  });
+
+  it("keeps unrelated short snippets separate (does not over-collapse)", () => {
+    const a = makeRecall("short-a", "weather: sunny");
+    const b = makeRecall("short-b", "deploy: blocked");
+
+    const deduped = testing.dedupeEntries([a, b], 0.5);
+    expect(deduped).toHaveLength(2);
   });
 });

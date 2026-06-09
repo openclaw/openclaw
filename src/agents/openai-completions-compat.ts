@@ -1,4 +1,10 @@
-import type { Model } from "@earendil-works/pi-ai";
+/**
+ * OpenAI-completions compatibility defaults.
+ *
+ * Provider transports use these helpers to derive OpenAI-compatible request
+ * behavior from endpoint attribution without scattering provider-specific flags.
+ */
+import type { Model } from "../llm/types.js";
 import type { ProviderEndpointClass, ProviderRequestCapabilities } from "./provider-attribution.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 
@@ -21,6 +27,7 @@ type OpenAICompletionsCompatDefaults = {
   visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
   requiresReasoningContentOnAssistantMessages: boolean;
+  requiresNonEmptyUserOrAssistantMessage: boolean;
 };
 
 type DetectedOpenAICompletionsCompat = {
@@ -32,6 +39,7 @@ function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) 
   return provider !== undefined && ids.includes(provider);
 }
 
+/** Resolves default request flags for an OpenAI-compatible completions endpoint. */
 export function resolveOpenAICompletionsCompatDefaults(
   input: OpenAICompletionsCompatDefaultsInput,
 ): OpenAICompletionsCompatDefaults {
@@ -51,6 +59,10 @@ export function resolveOpenAICompletionsCompatDefaults(
     knownProviderFamily === "modelstudio" ||
     endpointClass === "moonshot-native" ||
     endpointClass === "modelstudio-native";
+  const isModelStudioLike =
+    knownProviderFamily === "modelstudio" ||
+    endpointClass === "modelstudio-native" ||
+    (isDefaultRoute && isDefaultRouteProvider(provider, "dashscope", "modelstudio", "qwen"));
   const isZai =
     endpointClass === "zai-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "zai"));
@@ -112,6 +124,7 @@ export function resolveOpenAICompletionsCompatDefaults(
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
     requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
+    requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
   };
 }
 
@@ -130,6 +143,7 @@ function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
   return resolveOpenAICompletionsCompatDefaults(input);
 }
 
+/** Detects endpoint capabilities and defaults for an OpenAI-completions model. */
 export function detectOpenAICompletionsCompat(
   model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id"> & {
     compat?: { supportsStore?: boolean } | null;

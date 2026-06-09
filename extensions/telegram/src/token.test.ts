@@ -1,11 +1,10 @@
+// Telegram tests cover token plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveTelegramToken } from "./token.js";
-import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 
 describe("resolveTelegramToken", () => {
   const tempDirs: string[] = [];
@@ -101,9 +100,31 @@ describe("resolveTelegramToken", () => {
     fs.symlinkSync(tokenFile, tokenLink);
 
     const cfg = { channels: { telegram: { tokenFile: tokenLink } } } as OpenClawConfig;
-    const res = resolveTelegramToken(cfg);
-    expect(res.token).toBe("");
-    expect(res.source).toBe("none");
+    expect(() => resolveTelegramToken(cfg)).toThrow(
+      /channels\.telegram\.tokenFile.*must not be a symlink/,
+    );
+  });
+
+  it.runIf(process.platform !== "win32")("rejects symlinked account-level tokenFile paths", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    const dir = createTempDir();
+    const tokenFile = path.join(dir, "token.txt");
+    const tokenLink = path.join(dir, "token-link.txt");
+    fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
+    fs.symlinkSync(tokenFile, tokenLink);
+
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            work: { tokenFile: tokenLink },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expect(() => resolveTelegramToken(cfg, { accountId: "work" })).toThrow(
+      /channels\.telegram\.accounts\.work\.tokenFile.*must not be a symlink/,
+    );
   });
 
   it("does not fall back to config when tokenFile is missing", () => {
@@ -407,20 +428,5 @@ describe("resolveTelegramToken", () => {
   it("still blocks fallthrough for unknown accountId when accounts section exists", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     expectNoTokenForUnknownAccount(createUnknownAccountConfig());
-  });
-});
-
-describe("telegram update offset store", () => {
-  it("persists and reloads the last update id", async () => {
-    await withStateDirEnv("openclaw-telegram-", async () => {
-      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBeNull();
-
-      await writeTelegramUpdateOffset({
-        accountId: "primary",
-        updateId: 421,
-      });
-
-      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBe(421);
-    });
   });
 });

@@ -1,7 +1,9 @@
+// Verifies OpenClaw gateway tool schema, restart signaling, and config mutations.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import { testing as restartTesting } from "../infra/restart.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
@@ -18,6 +20,7 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 function requireGatewayTool(agentSessionKey?: string) {
+  // Tests run with restart enabled so schema and execution paths are visible.
   return createGatewayTool({
     ...(agentSessionKey ? { agentSessionKey } : {}),
     config: { commands: { restart: true } },
@@ -25,6 +28,7 @@ function requireGatewayTool(agentSessionKey?: string) {
 }
 
 function collectActionValues(schema: unknown, values: Set<string>): void {
+  // Tool schemas can expose actions through const, enum, or anyOf variants.
   if (!schema || typeof schema !== "object") {
     return;
   }
@@ -65,7 +69,7 @@ function expectGatewayCallFields(
   method: string,
   expectedParams: Record<string, unknown>,
 ): Record<string, unknown> {
-  const [, , params] = gatewayCall(method);
+  const params = gatewayCall(method)[2];
   if (params === undefined) {
     throw new Error(`Expected gateway call params for ${method}`);
   }
@@ -107,7 +111,9 @@ function expectConfigMutationCall(params: {
   action: "config.apply" | "config.patch";
   raw: string;
   sessionKey: string;
+  replacePaths?: string[];
 }) {
+  // Config writes must include the base hash from a preceding config.get read.
   expect(params.callGatewayTool.mock.calls.some(([method]) => method === "config.get")).toBe(true);
   const call = params.callGatewayTool.mock.calls.find(([method]) => method === params.action);
   if (!call) {
@@ -117,6 +123,7 @@ function expectConfigMutationCall(params: {
     raw: params.raw.trim(),
     baseHash: "hash-1",
     sessionKey: params.sessionKey,
+    ...(params.replacePaths ? { replacePaths: params.replacePaths } : {}),
   });
 }
 
@@ -162,11 +169,6 @@ describe("gateway tool", () => {
       }
       return { ok: true };
     });
-  });
-
-  it("marks gateway as owner-only", () => {
-    const tool = requireGatewayTool();
-    expect(tool.ownerOnly).toBe(true);
   });
 
   it("exposes restart and config actions in the gateway tool schema", () => {
@@ -224,7 +226,7 @@ describe("gateway tool", () => {
           };
           expect(parsed.payload?.kind).toBe("restart");
           expect(parsed.payload?.doctorHint).toBe(
-            "Run: openclaw --profile isolated doctor --non-interactive",
+            "Recommended follow-up: run openclaw --profile isolated doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
           );
         },
       );
@@ -255,7 +257,7 @@ describe("gateway tool", () => {
         return {
           ok: true,
           path: "/tmp/openclaw.json",
-          config: { agents: { defaults: { systemPromptOverride: "You are a terse assistant." } } },
+          config: { agents: { defaults: { reasoningDefault: "medium" } } },
           restart: { ok: true, config: "nested field preserved" },
         };
       }
@@ -265,7 +267,7 @@ describe("gateway tool", () => {
     const tool = requireGatewayTool(sessionKey);
 
     const raw =
-      '{\n  agents: { defaults: { systemPromptOverride: "You are a terse assistant." } },\n  tools: { exec: { ask: "on-miss", security: "allowlist" } }\n}\n';
+      '{\n  agents: { defaults: { reasoningDefault: "medium" } },\n  tools: { exec: { ask: "on-miss", security: "allowlist" } }\n}\n';
     const result = await tool.execute("call2", {
       action: "config.apply",
       raw,
@@ -319,6 +321,7 @@ describe("gateway tool", () => {
     const result = await tool.execute("call4", {
       action: "config.patch",
       raw,
+      replacePaths: ["channels.telegram.groups"],
     });
 
     expect(result.details).toEqual({
@@ -334,6 +337,7 @@ describe("gateway tool", () => {
       action: "config.patch",
       raw,
       sessionKey,
+      replacePaths: ["channels.telegram.groups"],
     });
   });
 
@@ -346,6 +350,36 @@ describe("gateway tool", () => {
         raw: '{ tools: { exec: { ask: "off" } } }',
       }),
     ).rejects.toThrow("gateway config.patch cannot change protected config paths: tools.exec.ask");
+    expectGatewayMethodCalled("config.get");
+    expectGatewayMethodNotCalled("config.patch");
+  });
+
+  it("normalizes replacePaths before config.patch policy checks", async () => {
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            agents: {
+              list: [
+                { id: "main", default: true, workspace: "/tmp/main" },
+                { id: "work", workspace: "/tmp/work" },
+              ],
+            },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-indexed-replace-path", {
+        action: "config.patch",
+        raw: '{ agents: { list: [{ id: "main", model: "openai/gpt-5.5" }] } }',
+        replacePaths: ["agents.list[0]"],
+      }),
+    ).rejects.toThrow("gateway config.patch cannot change protected config paths");
     expectGatewayMethodCalled("config.get");
     expectGatewayMethodNotCalled("config.patch");
   });
@@ -503,7 +537,7 @@ describe("gateway tool", () => {
     await expect(
       tool.execute("call-missing-protected", {
         action: "config.apply",
-        raw: '{ agents: { defaults: { systemPromptOverride: "You are a terse assistant." } } }',
+        raw: '{ agents: { defaults: { reasoningDefault: "medium" } } }',
       }),
     ).rejects.toThrow(
       "gateway config.apply cannot change protected config paths: tools.exec.ask, tools.exec.security",
@@ -656,7 +690,7 @@ describe("gateway tool", () => {
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);
 
-    const raw = '{ agents: { defaults: { systemPromptOverride: "You are a terse assistant." } } }';
+    const raw = '{ agents: { defaults: { reasoningDefault: "medium" } } }';
     await tool.execute("call-keep-dangerous", {
       action: "config.patch",
       raw,
@@ -729,5 +763,30 @@ describe("gateway tool", () => {
     const schema = (result.details as { result?: { schema?: { properties?: unknown } } }).result
       ?.schema;
     expect(schema?.properties).toBeUndefined();
+  });
+
+  it("returns an in-band schema lookup miss for unknown paths", async () => {
+    vi.mocked(callGatewayTool).mockRejectedValueOnce(
+      new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "config schema path not found",
+      }),
+    );
+    const tool = requireGatewayTool();
+
+    const result = await tool.execute("call6", {
+      action: "config.schema.lookup",
+      path: "agents.main.authorizedSenders",
+    });
+
+    expect(gatewayCall("config.schema.lookup")[2]).toEqual({
+      path: "agents.main.authorizedSenders",
+    });
+    expect(result.details).toEqual({
+      ok: false,
+      code: "schema_path_not_found",
+      path: "agents.main.authorizedSenders",
+      message: "config schema path not found",
+    });
   });
 });

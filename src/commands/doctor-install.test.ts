@@ -1,11 +1,12 @@
+// Doctor install tests cover install checks, repair notes, and binary/package diagnostics.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { note } from "../terminal/note.js";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { noteSourceInstallIssues } from "./doctor-install.js";
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
 }));
 

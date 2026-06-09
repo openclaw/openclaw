@@ -1,3 +1,6 @@
+/**
+ * Public option and metadata types for agent command execution.
+ */
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
@@ -16,6 +19,7 @@ export type ImageContent = {
 };
 export type { AgentStreamParams } from "./shared-types.js";
 
+/** Metadata overrides for trusted internal agent command callers. */
 export type AgentCommandResultMetaOverrides = {
   transport?: "embedded";
   fallbackFrom?: "gateway";
@@ -24,8 +28,10 @@ export type AgentCommandResultMetaOverrides = {
   fallbackSessionKey?: string;
 };
 
+/** ACP turn source markers accepted by trusted command callsites. */
 export type AcpTurnSource = "manual_spawn";
 
+/** Channel/account/thread context carried into an agent run. */
 export type AgentRunContext = {
   messageChannel?: string;
   accountId?: string;
@@ -34,10 +40,12 @@ export type AgentRunContext = {
   groupSpace?: string | null;
   currentChannelId?: string;
   currentThreadTs?: string;
+  currentInboundAudio?: boolean;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
 };
 
+/** Full trusted option surface for running an agent command. */
 export type AgentCommandOpts = {
   message: string;
   /** User-visible transcript body; defaults to message and excludes runtime-only context. */
@@ -83,7 +91,7 @@ export type AgentCommandOpts = {
   runContext?: AgentRunContext;
   /** Internal trusted exec approval follow-up elevated defaults. */
   bashElevated?: ExecElevatedDefaults;
-  /** Whether this caller is authorized for owner-only tools (defaults true for local CLI calls). */
+  /** Trusted sender identity bit for command/channel-action auth; defaults true for local CLI calls. */
   senderIsOwner?: boolean;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
   allowModelOverride?: boolean;
@@ -106,12 +114,22 @@ export type AgentCommandOpts = {
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;
+  /** Internal runs can execute against a session without updating visible status/model/usage. */
+  sessionEffects?: "visible" | "internal";
+  /** Internal handoffs can write transcript turns without changing user-facing model/usage state. */
+  preserveUserFacingSessionModelState?: boolean;
   /** Visible source replies must be sent through the message tool when set. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Internal runs can omit the channel message tool entirely. */
+  disableMessageTool?: boolean;
+  /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
+  skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
+  /** Explicit task working directory for this run. Bootstrap still uses workspaceDir. */
+  cwd?: string;
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Force long-lived CLI live session teardown when a one-shot local run completes. */
@@ -130,12 +148,13 @@ export type AgentCommandOpts = {
   suppressPromptPersistence?: boolean;
 };
 
+/** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
   "senderIsOwner" | "allowModelOverride" | "resultMetaOverrides"
 > & {
-  /** Ingress callsites must always pass explicit owner-tool authorization state. */
-  senderIsOwner: boolean;
+  /** Trusted sender identity bit for command/channel-action auth; defaults false for ingress. */
+  senderIsOwner?: boolean;
   /** Ingress callsites must always pass explicit model-override authorization state. */
   allowModelOverride: boolean;
 };

@@ -1,3 +1,8 @@
+/**
+ * Public auth-profile barrel for agent/provider auth code.
+ * Keep external callers on these exported contracts instead of deep
+ * auth-profile implementation files.
+ */
 export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 export type {
   AuthCredentialReasonCode,
@@ -21,6 +26,7 @@ export {
 } from "./auth-profiles/oauth.js";
 export {
   isConfiguredAwsSdkAuthProfileForProvider,
+  isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
 } from "./auth-profiles/order.js";
@@ -52,7 +58,9 @@ export {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  getRuntimeAuthProfileStoreSnapshot,
   hasAnyAuthProfileStoreSource,
+  hasLocalAuthProfileStoreSource,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreForRuntime,
@@ -86,4 +94,5 @@ export {
   markAuthProfileFailure,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
+  setAuthProfileFailureHook,
 } from "./auth-profiles/usage.js";

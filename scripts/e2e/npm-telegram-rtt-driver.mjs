@@ -1,61 +1,126 @@
 #!/usr/bin/env node
+// Drives npm Telegram RTT test messages through the fixture server.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readBoundedResponseText } from "./lib/bounded-response-text.mjs";
 
 const groupId = process.env.OPENCLAW_QA_TELEGRAM_GROUP_ID;
 const driverToken = process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN;
 const sutToken = process.env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN;
 const outputDir = process.env.OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR ?? ".artifacts/rtt/raw";
-const timeoutMs = Number(process.env.OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS ?? "180000");
-const canaryTimeoutMs = Number(
-  process.env.OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS ?? String(timeoutMs),
+const telegramApiBaseUrl = (
+  process.env.OPENCLAW_QA_TELEGRAM_API_BASE_URL ?? "https://api.telegram.org"
+).replace(/\/+$/u, "");
+const timeoutMs = readPositiveIntEnv("OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS", 180000);
+const canaryTimeoutMs = readPositiveIntEnv("OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS", timeoutMs);
+const warmSampleCount = readPositiveIntEnv("OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES", 20);
+const sampleTimeoutMs = readPositiveIntEnv("OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS", 30000);
+const botApiTimeoutMs = readPositiveIntEnv("OPENCLAW_NPM_TELEGRAM_BOT_API_TIMEOUT_MS", 30000);
+const botApiBodyMaxBytes = readPositiveIntEnv(
+  "OPENCLAW_NPM_TELEGRAM_BOT_API_BODY_MAX_BYTES",
+  1024 * 1024,
 );
-const warmSampleCount = Number(process.env.OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES ?? "20");
-const sampleTimeoutMs = Number(process.env.OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS ?? "30000");
-const maxWarmFailures = Number(
-  process.env.OPENCLAW_NPM_TELEGRAM_MAX_FAILURES ?? String(warmSampleCount),
-);
+const maxWarmFailures = readPositiveIntEnv("OPENCLAW_NPM_TELEGRAM_MAX_FAILURES", warmSampleCount);
 const successMarker = process.env.OPENCLAW_NPM_TELEGRAM_SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
-const scenarioIds = new Set(
-  (process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS ?? "telegram-mentioned-message-reply")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean),
+const supportedScenarioIds = new Set(["telegram-mentioned-message-reply"]);
+const requestedScenarioIds = (
+  process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS ?? "telegram-mentioned-message-reply"
+)
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+if (requestedScenarioIds.length === 0) {
+  throw new Error("OPENCLAW_NPM_TELEGRAM_SCENARIOS must include at least one RTT scenario");
+}
+
+const unknownScenarioIds = requestedScenarioIds.filter(
+  (scenarioId) => !supportedScenarioIds.has(scenarioId),
 );
+if (unknownScenarioIds.length > 0) {
+  throw new Error(`unknown OPENCLAW_NPM_TELEGRAM_SCENARIOS: ${unknownScenarioIds.join(", ")}`);
+}
+
+const scenarioIds = new Set(requestedScenarioIds);
 
 if (!groupId || !driverToken || !sutToken) {
   throw new Error(
     "missing Telegram env: OPENCLAW_QA_TELEGRAM_GROUP_ID, OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN, OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN",
   );
 }
-if (!Number.isInteger(warmSampleCount) || warmSampleCount < 1) {
-  throw new Error(
-    `OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES must be a positive integer; got: ${warmSampleCount}`,
-  );
+function readPositiveIntEnv(name, fallback) {
+  const text = String(process.env[name] ?? fallback).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
 }
-if (!Number.isInteger(sampleTimeoutMs) || sampleTimeoutMs < 1) {
-  throw new Error(
-    `OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS must be a positive integer; got: ${sampleTimeoutMs}`,
-  );
+
+function taggedError(message, code) {
+  return Object.assign(new Error(message), { code });
 }
-if (!Number.isInteger(maxWarmFailures) || maxWarmFailures < 1) {
-  throw new Error(
-    `OPENCLAW_NPM_TELEGRAM_MAX_FAILURES must be a positive integer; got: ${maxWarmFailures}`,
-  );
+
+function parseJsonPayload(rawPayload, label) {
+  try {
+    return JSON.parse(rawPayload);
+  } catch (error) {
+    throw new Error(`${label} returned invalid JSON`, { cause: error });
+  }
+}
+
+async function fetchTelegramJson(url, init, label) {
+  const controller = new AbortController();
+  const timeoutError = taggedError(`${label} timed out after ${botApiTimeoutMs}ms`, "ETIMEDOUT");
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, botApiTimeoutMs);
+    timeout.unref?.();
+  });
+  try {
+    const response = await Promise.race([
+      fetch(url, {
+        ...init,
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    const rawPayload = await readBoundedResponseText(
+      response,
+      label,
+      botApiBodyMaxBytes,
+      timeoutPromise,
+    );
+    const payload = parseJsonPayload(rawPayload, label);
+    return { payload, response };
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 class TelegramBot {
   constructor(token) {
-    this.baseUrl = `https://api.telegram.org/bot${token}`;
+    this.baseUrl = `${telegramApiBaseUrl}/bot${token}`;
   }
 
   async call(method, body) {
-    const response = await fetch(`${this.baseUrl}/${method}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const payload = await response.json();
+    const { payload, response } = await fetchTelegramJson(
+      `${this.baseUrl}/${method}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      `Telegram Bot API ${method}`,
+    );
     if (!response.ok || payload.ok !== true) {
       throw new Error(`${method} failed: ${JSON.stringify(payload)}`);
     }
@@ -81,7 +146,9 @@ const observedMessages = [];
 let driverUpdateOffset = 0;
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function messageText(message) {
@@ -143,8 +210,8 @@ async function waitForSutReply(params) {
         continue;
       }
       const replyMatches = message.reply_to_message?.message_id === params.requestMessageId;
-      const anySutReplyMatches = params.allowAnySutReply;
-      if (replyMatches || anySutReplyMatches || params.matchText) {
+      const textMatches = params.matchText ? text.includes(params.matchText) : false;
+      if (replyMatches || textMatches) {
         return message;
       }
     }
@@ -304,7 +371,7 @@ async function main() {
 
   const scenarios = [];
   const canary = await runScenario({
-    allowAnySutReply: true,
+    allowAnySutReply: false,
     id: "telegram-canary",
     input: `/status@${sutMe.username}`,
     sutId: sutMe.id,

@@ -1,5 +1,8 @@
+// Feishu plugin module implements send behavior.
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -7,7 +10,7 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { createFeishuApiError, requestFeishuApi } from "./comment-shared.js";
+import { requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
 import { parsePostContent } from "./post.js";
@@ -64,11 +67,12 @@ function isWithdrawnReplyError(err: unknown): boolean {
   ) {
     return true;
   }
+  // Wrapped error shape from createFeishuApiError: err.cause holds the original error.
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause && cause !== err) {
+    return isWithdrawnReplyError(cause);
+  }
   return false;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 type FeishuCreateMessageClient = {
@@ -170,17 +174,22 @@ async function sendReplyOrFallbackDirect(
 
   let response: { code?: number; msg?: string; data?: { message_id?: string } };
   try {
-    response = await client.im.message.reply({
-      path: { message_id: params.replyToMessageId },
-      data: {
-        content: params.content,
-        msg_type: params.msgType,
-        ...(params.replyInThread ? { reply_in_thread: true } : {}),
-      },
-    });
+    response = await requestFeishuApi(
+      () =>
+        client.im.message.reply({
+          path: { message_id: params.replyToMessageId! },
+          data: {
+            content: params.content,
+            msg_type: params.msgType,
+            ...(params.replyInThread ? { reply_in_thread: true } : {}),
+          },
+        }),
+      params.replyErrorPrefix,
+      { includeNestedErrorLogId: true },
+    );
   } catch (err) {
     if (!isWithdrawnReplyError(err)) {
-      throw createFeishuApiError(err, params.replyErrorPrefix, { includeNestedErrorLogId: true });
+      throw err;
     }
     if (replyTargetFallbackError) {
       throw replyTargetFallbackError;
@@ -381,7 +390,7 @@ function parseFeishuMessageItem(
     senderType: item.sender?.sender_type,
     content: parseFeishuMessageContent(rawContent, msgType),
     contentType: msgType,
-    createTime: item.create_time ? Number.parseInt(item.create_time, 10) : undefined,
+    createTime: parseStrictNonNegativeInteger(item.create_time),
     threadId: item.thread_id || undefined,
   };
 }

@@ -1,10 +1,12 @@
+// Gateway HTTP auth helpers.
+// Authenticates HTTP endpoints and derives trusted operator scopes.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { getRuntimeConfig } from "../config/io.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { getRuntimeConfig } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
@@ -27,6 +29,8 @@ export function getHeader(req: IncomingMessage, name: string): string | undefine
 }
 
 export function getBearerToken(req: IncomingMessage): string | undefined {
+  // Bearer parsing is intentionally minimal: callers pass the extracted token
+  // into the shared gateway auth verifier for constant-time comparison.
   const raw = normalizeOptionalString(getHeader(req, "authorization")) ?? "";
   if (!normalizeLowercaseStringOrEmpty(raw).startsWith("bearer ")) {
     return undefined;
@@ -250,8 +254,8 @@ export function resolveOpenAiCompatibleHttpSenderIsOwner(
   if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
     // Shared-secret HTTP bearer auth also carries owner semantics on the compat
     // APIs and direct /tools/invoke. This is intentional: there is no separate
-    // per-request owner primitive on that shared-secret path, so owner-only
-    // tool policy follows the documented trusted-operator contract.
+    // per-request owner primitive on that shared-secret path, so managed
+    // attachment ownership follows the documented trusted-operator contract.
     return true;
   }
   return resolveHttpSenderIsOwner(req, requestAuth);

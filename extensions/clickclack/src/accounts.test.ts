@@ -1,3 +1,4 @@
+// Clickclack tests cover accounts plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   listClickClackAccountIds,
@@ -105,7 +106,6 @@ describe("ClickClack account resolution", () => {
       enabled: true,
       reconnectMs: 1_500,
       replyMode: "agent",
-      senderIsOwner: false,
       token: "ccb_live",
       workspace: "wsp_1",
     });
@@ -125,7 +125,6 @@ describe("ClickClack account resolution", () => {
               replyMode: "model",
               model: "openai/gpt-5.4-mini",
               toolsAllow: ["web_search"],
-              senderIsOwner: true,
             },
           },
         },
@@ -144,7 +143,6 @@ describe("ClickClack account resolution", () => {
         enabled: true,
         model: "openai/gpt-5.4-mini",
         replyMode: "model",
-        senderIsOwner: true,
         token: "ccb_peter",
         toolsAllow: ["web_search"],
         workspace: "wsp_1",
@@ -155,10 +153,31 @@ describe("ClickClack account resolution", () => {
       model: "openai/gpt-5.4-mini",
       reconnectMs: 1_500,
       replyMode: "model",
-      senderIsOwner: true,
       token: "ccb_peter",
       toolsAllow: ["web_search"],
       workspace: "wsp_1",
     });
+  });
+
+  it("normalizes reconnect intervals to the public config bounds", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          token: "ccb_global",
+          workspace: "wsp_1",
+          reconnectMs: 1,
+          accounts: {
+            slow: {
+              reconnectMs: 1_000_000,
+            },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    expect(resolveClickClackAccount({ cfg }).reconnectMs).toBe(100);
+    expect(resolveClickClackAccount({ cfg, accountId: "slow" }).reconnectMs).toBe(60_000);
   });
 });

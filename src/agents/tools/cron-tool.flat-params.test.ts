@@ -1,3 +1,5 @@
+// Cron flat-parameter tests cover model-friendly shorthand recovery before
+// gateway cron RPC dispatch.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { callGatewayToolMock } = vi.hoisted(() => ({
@@ -90,6 +92,26 @@ describe("cron tool flat-params", () => {
       expr: "0 18 * * *",
       tz: "Asia/Shanghai",
     });
+  });
+
+  it("leaves out-of-range flat atMs for gateway validation", async () => {
+    // The gateway owns final schedule validation; flat recovery should preserve
+    // the supplied value instead of silently coercing an invalid date.
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+    const invalidAtMs = 8_640_000_000_000_001;
+
+    await tool.execute("call-flat-invalid-atms-add", {
+      action: "add",
+      name: "bad date",
+      atMs: invalidAtMs,
+      message: "send reminder",
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      schedule?: { at?: unknown; kind?: unknown };
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.schedule).toEqual({ kind: "at", at: invalidAtMs });
   });
 
   it("recovers flat cron schedule shorthand for update", async () => {

@@ -1,14 +1,15 @@
+// Commander wiring for `openclaw update`, its status/finalize subcommands, and help text.
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
-import {
-  type UpdateCommandOptions,
-  type UpdateFinalizeOptions,
-  type UpdateStatusOptions,
-  type UpdateWizardOptions,
+import type {
+  UpdateCommandOptions,
+  UpdateFinalizeOptions,
+  UpdateStatusOptions,
+  UpdateWizardOptions,
 } from "./update-cli/shared.js";
 import { updateStatusCommand } from "./update-cli/status.js";
 import { updateCommand, updateFinalizeCommand } from "./update-cli/update-command.js";
@@ -37,6 +38,7 @@ function inheritedUpdateTimeout(
   return inheritOptionFromParent<string>(command, "timeout");
 }
 
+/** Attach the update command group to the root CLI. */
 export function registerUpdateCli(program: Command) {
   program.enablePositionalOptions();
   const update = program
@@ -58,7 +60,7 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update --channel beta", "Switch to beta channel (git + npm)"],
         ["openclaw update --channel dev", "Switch to dev channel (git + npm)"],
         ["openclaw update --tag beta", "One-off update to a dist-tag or version"],
-        ["openclaw update --tag main", "One-off package install from GitHub main"],
+        ["openclaw update --tag main", "One-off package update from GitHub main"],
         ["openclaw update --dry-run", "Preview actions without changing anything"],
         ["openclaw update --no-restart", "Update without restarting the service"],
         ["openclaw update --json", "Output result as JSON"],
@@ -78,6 +80,7 @@ ${theme.heading("Switch channels:")}
   - Use --channel stable|beta|dev to persist the update channel in config
   - Run openclaw update status to see the active channel and source
   - Use --tag <dist-tag|version|spec> for a one-off package update without persisting
+  - Use --tag main for a one-off package update from GitHub main
 
 ${theme.heading("Non-interactive:")}
   - Use --yes to accept downgrade prompts
@@ -130,7 +133,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           channel: opts.channel as string | undefined,
           timeout: inheritedUpdateTimeout(opts, command),
           yes: Boolean(opts.yes),
-          restart: Boolean(opts.restart),
+          restart: false,
         });
       } catch (err) {
         defaultRuntime.error(String(err));

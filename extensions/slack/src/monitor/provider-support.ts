@@ -1,3 +1,5 @@
+// Slack provider module implements model/runtime integration.
+import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackChannelResolution } from "../resolve-channels.js";
 import type { SlackUserResolution } from "../resolve-users.js";
 import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-policy.js";
@@ -103,7 +105,7 @@ function installSlackNativeReconnectFailureObserver(receiver: unknown) {
               resolve(undefined);
               return;
             }
-            reject(error);
+            reject(toLintErrorObject(error, "Non-Error rejection"));
           });
         }, delayMs);
       });
@@ -265,12 +267,6 @@ export function createSlackSocketModeLogger(
   };
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 export function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boolean {
   const botId = args.context?.botId;
   const botUserId = args.context?.botUserId;
@@ -397,10 +393,10 @@ export async function startSlackSocketAndWaitForDisconnect(params: {
     await Promise.resolve();
     const disconnect = disconnectWaiter.getLatest();
     disconnectWaiter.cancel();
-    if ((err === undefined || err === null || err === "") && disconnect?.error !== undefined) {
-      throw disconnect.error;
+    if (isMissingSocketStartErrorDetail(err) && disconnect?.error !== undefined) {
+      throw toLintErrorObject(disconnect.error, "Non-Error thrown");
     }
-    if (err === undefined || err === null || err === "") {
+    if (isMissingSocketStartErrorDetail(err)) {
       const suffix = disconnect ? ` after ${disconnect.event}` : "";
       throw new Error(`Slack Socket Mode start failed${suffix} without error detail`, {
         cause: err,
@@ -408,6 +404,12 @@ export async function startSlackSocketAndWaitForDisconnect(params: {
     }
     throw err;
   }
+}
+
+function isMissingSocketStartErrorDetail(err: unknown): boolean {
+  return (
+    err === undefined || err === null || err === "" || (err instanceof Error && err.message === "")
+  );
 }
 
 export function resolveSlackSocketShutdownClient(
@@ -465,4 +467,18 @@ export function formatSlackUserResolved(entry: SlackUserResolution): string {
     name: entry.name,
     extra: entry.note ? [entry.note] : [],
   });
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

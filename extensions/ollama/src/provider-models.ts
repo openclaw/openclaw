@@ -1,3 +1,4 @@
+// Ollama provider module implements model/runtime integration.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -117,14 +118,19 @@ export function parseOllamaNumCtxParameter(parameters: unknown): number | undefi
 export async function queryOllamaModelShowInfo(
   apiBase: string,
   modelName: string,
+  opts?: { apiKey?: string },
 ): Promise<OllamaModelShowInfo> {
   const normalizedApiBase = resolveOllamaApiBase(apiBase);
   try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (opts?.apiKey) {
+      headers.Authorization = `Bearer ${opts.apiKey}`;
+    }
     const { response, release } = await fetchWithSsrFGuard({
       url: `${normalizedApiBase}/api/show`,
       init: {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ name: modelName }),
         signal: AbortSignal.timeout(3000),
       },
@@ -255,7 +261,7 @@ export function buildOllamaModelDefinition(
       : capabilities.includes("thinking"));
   const compat =
     capabilities === undefined
-      ? { supportsUsageInStreaming: true }
+      ? { supportsTools: true, supportsUsageInStreaming: true }
       : {
           supportsTools: capabilities.includes("tools"),
           supportsUsageInStreaming: true,

@@ -1,3 +1,4 @@
+// Channels status command-flow tests cover gateway calls, config fallback, and timeout validation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { channelsStatusCommand } from "./channels/status.js";
@@ -225,6 +226,16 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
       params: { channel: "imsg", probe: true, timeoutMs: 30000 },
       timeoutMs: 30000,
     });
+  });
+
+  it("rejects malformed timeouts before gateway status requests", async () => {
+    const { runtime } = createCapturingTestRuntime();
+
+    await expect(
+      channelsStatusCommand({ channel: "imsg", timeout: "10s", probe: true }, runtime as never),
+    ).rejects.toThrow('Received: "10s"');
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("keeps read-only fallback output when SecretRefs are unresolved", async () => {

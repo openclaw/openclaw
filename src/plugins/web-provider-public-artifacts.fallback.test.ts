@@ -1,7 +1,9 @@
+/** Tests web provider fallback loading from bundled public artifacts. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
+  resolvePluginMetadataSnapshot: vi.fn(),
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: vi.fn(() => null),
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: vi.fn(() => null),
   loadBundledWebSearchProviderEntriesFromDir: vi.fn(),
@@ -10,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
 vi.mock("./web-search-providers.shared.js", () => ({
@@ -58,6 +61,10 @@ describe("web provider public artifact manifest fallback", () => {
         },
       ],
     });
+    mocks.resolvePluginMetadataSnapshot.mockImplementation(
+      (params?: { pluginMetadataSnapshot?: unknown }) =>
+        params?.pluginMetadataSnapshot ?? mocks.loadPluginMetadataSnapshot(params),
+    );
     mocks.loadBundledWebSearchProviderEntriesFromDir.mockReturnValue([
       { id: "fallback-search", pluginId: "fallback-search" },
     ]);
@@ -105,10 +112,38 @@ describe("web provider public artifact manifest fallback", () => {
       config: {
         plugins: {
           allow: ["fallback-search"],
-          bundledDiscovery: "allowlist",
         },
       },
       onlyPluginIds: ["blocked-search", "fallback-search"],
+    });
+
+    expect(providers).toEqual([{ id: "fallback-search", pluginId: "fallback-search" }]);
+    expect(mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts).toHaveBeenCalledWith({
+      onlyPluginIds: ["fallback-search"],
+    });
+  });
+
+  it("keeps deprecated bundledDiscovery compat discovery outside plugin allowlists", () => {
+    const resolveExplicitWebSearchProviders =
+      mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts as unknown as {
+        mockImplementation: (
+          implementation: (params: {
+            onlyPluginIds: readonly string[];
+          }) => { id: string; pluginId: string }[],
+        ) => void;
+      };
+    resolveExplicitWebSearchProviders.mockImplementation((params) =>
+      params.onlyPluginIds.map((pluginId) => ({ id: pluginId, pluginId })),
+    );
+
+    const providers = resolveBundledWebSearchProvidersFromPublicArtifacts({
+      config: {
+        plugins: {
+          allow: ["some-other-plugin"],
+          bundledDiscovery: "compat",
+        },
+      },
+      onlyPluginIds: ["fallback-search"],
     });
 
     expect(providers).toEqual([{ id: "fallback-search", pluginId: "fallback-search" }]);
@@ -140,7 +175,6 @@ describe("web provider public artifact manifest fallback", () => {
       config: {
         plugins: {
           allow: ["fallback-fetch"],
-          bundledDiscovery: "allowlist",
         },
       },
     });
@@ -174,7 +208,6 @@ describe("web provider public artifact manifest fallback", () => {
       config: {
         plugins: {
           allow: ["google-gemini-cli"],
-          bundledDiscovery: "allowlist",
         },
       },
     });

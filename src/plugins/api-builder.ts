@@ -1,3 +1,4 @@
+// Builds plugin API objects from config, registries, and runtime helpers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { attachPluginApiFacades, type OpenClawPluginApiWithoutFacades } from "./api-facades.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -39,10 +40,12 @@ export type BuildPluginApiParams = {
       | "registerAutoEnableProbe"
       | "registerProvider"
       | "registerModelCatalogProvider"
+      | "registerEmbeddingProvider"
       | "registerSpeechProvider"
       | "registerRealtimeTranscriptionProvider"
       | "registerRealtimeVoiceProvider"
       | "registerMediaUnderstandingProvider"
+      | "registerTranscriptSourceProvider"
       | "registerImageGenerationProvider"
       | "registerVideoGenerationProvider"
       | "registerMusicGenerationProvider"
@@ -108,12 +111,15 @@ const noopRegisterAutoEnableProbe: OpenClawPluginApi["registerAutoEnableProbe"] 
 const noopRegisterProvider: OpenClawPluginApi["registerProvider"] = () => {};
 const noopRegisterModelCatalogProvider: OpenClawPluginApi["registerModelCatalogProvider"] =
   () => {};
+const noopRegisterEmbeddingProvider: OpenClawPluginApi["registerEmbeddingProvider"] = () => {};
 const noopRegisterSpeechProvider: OpenClawPluginApi["registerSpeechProvider"] = () => {};
 const noopRegisterRealtimeTranscriptionProvider: OpenClawPluginApi["registerRealtimeTranscriptionProvider"] =
   () => {};
 const noopRegisterRealtimeVoiceProvider: OpenClawPluginApi["registerRealtimeVoiceProvider"] =
   () => {};
 const noopRegisterMediaUnderstandingProvider: OpenClawPluginApi["registerMediaUnderstandingProvider"] =
+  () => {};
+const noopRegisterTranscriptsSourceProvider: OpenClawPluginApi["registerTranscriptSourceProvider"] =
   () => {};
 const noopRegisterImageGenerationProvider: OpenClawPluginApi["registerImageGenerationProvider"] =
   () => {};
@@ -218,6 +224,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerProvider: handlers.registerProvider ?? noopRegisterProvider,
     registerModelCatalogProvider:
       handlers.registerModelCatalogProvider ?? noopRegisterModelCatalogProvider,
+    registerEmbeddingProvider: handlers.registerEmbeddingProvider ?? noopRegisterEmbeddingProvider,
     registerSpeechProvider: handlers.registerSpeechProvider ?? noopRegisterSpeechProvider,
     registerRealtimeTranscriptionProvider:
       handlers.registerRealtimeTranscriptionProvider ?? noopRegisterRealtimeTranscriptionProvider,
@@ -225,6 +232,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.registerRealtimeVoiceProvider ?? noopRegisterRealtimeVoiceProvider,
     registerMediaUnderstandingProvider:
       handlers.registerMediaUnderstandingProvider ?? noopRegisterMediaUnderstandingProvider,
+    registerTranscriptSourceProvider:
+      handlers.registerTranscriptSourceProvider ?? noopRegisterTranscriptsSourceProvider,
     registerImageGenerationProvider:
       handlers.registerImageGenerationProvider ?? noopRegisterImageGenerationProvider,
     registerVideoGenerationProvider:

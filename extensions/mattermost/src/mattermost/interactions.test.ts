@@ -1,4 +1,5 @@
-import { type IncomingMessage, type ServerResponse } from "node:http";
+// Mattermost tests cover interactions plugin behavior.
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMattermostRuntime } from "../runtime.js";

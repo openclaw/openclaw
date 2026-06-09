@@ -1,9 +1,13 @@
+// Shell argv helpers quote and parse shell-style argument strings.
 const DOUBLE_QUOTE_ESCAPES = new Set(["\\", '"', "$", "`", "\n", "\r"]);
 
+// POSIX double quotes only consume the backslash before a small escape set;
+// preserving other backslashes keeps command-risk analysis byte-faithful.
 function isDoubleQuoteEscape(next: string | undefined): next is string {
   return Boolean(next && DOUBLE_QUOTE_ESCAPES.has(next));
 }
 
+/** Splits a shell-like argv string into tokens, returning null for unterminated quotes or escapes. */
 export function splitShellArgs(raw: string): string[] | null {
   const tokens: string[] = [];
   let buf = "";
@@ -39,6 +43,7 @@ export function splitShellArgs(raw: string): string[] | null {
     }
     if (inDouble) {
       const next = raw[i + 1];
+      // Inside double quotes, only POSIX-recognized escapes consume the backslash.
       if (ch === "\\" && isDoubleQuoteEscape(next)) {
         buf += next;
         i += 1;
@@ -59,7 +64,8 @@ export function splitShellArgs(raw: string): string[] | null {
       inDouble = true;
       continue;
     }
-    // In POSIX shells, "#" starts a comment only when it begins a word.
+    // In POSIX shells, "#" starts a comment only when it begins a word; keep
+    // inline hashes inside tokens so URLs/fragments are not truncated.
     if (ch === "#" && buf.length === 0) {
       break;
     }

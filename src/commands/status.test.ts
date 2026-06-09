@@ -1,3 +1,4 @@
+// Status command tests cover text/JSON output, gateway health, compatibility notices, and update state.
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
@@ -27,7 +28,7 @@ function createDefaultSessionStoreEntry() {
     totalTokens: 5_000,
     totalTokensFresh: true as boolean,
     contextTokens: 10_000,
-    model: "pi:opus",
+    model: "test:opus",
     sessionId: "abc123",
     systemSent: true,
   };
@@ -40,7 +41,7 @@ function createUnknownUsageSessionStore() {
       inputTokens: 2_000,
       outputTokens: 3_000,
       contextTokens: 10_000,
-      model: "pi:opus",
+      model: "test:opus",
     },
   };
 }
@@ -262,7 +263,7 @@ function createSessionStatusRows() {
     paths: byAgent.map((entry) => entry.path),
     count: recent.length,
     defaults: {
-      model: recent[0]?.model ?? "pi:opus",
+      model: recent[0]?.model ?? "test:opus",
       contextTokens: recent[0]?.contextTokens ?? 10_000,
     },
     recent,
@@ -464,6 +465,7 @@ const mocks = vi.hoisted(() => ({
       inconsistent_timestamps: 0,
     },
   }),
+  getInspectableTaskAuditFindings: vi.fn().mockReturnValue([]),
   resolveGatewayService: vi.fn().mockReturnValue({
     label: "LaunchAgent",
     loadedText: "loaded",
@@ -730,6 +732,7 @@ vi.mock("../node-host/config.js", () => ({
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
   getInspectableTaskRegistrySummary: mocks.getInspectableTaskRegistrySummary,
   getInspectableTaskAuditSummary: mocks.getInspectableTaskAuditSummary,
+  getInspectableTaskAuditFindings: mocks.getInspectableTaskAuditFindings,
 }));
 vi.mock("../security/audit.js", () => ({
   runSecurityAudit: mocks.runSecurityAudit,
@@ -855,31 +858,31 @@ vi.mock("./status.daemon.js", () => ({
   getDaemonStatusSummary: vi.fn(async () => {
     const service = mocks.resolveGatewayService();
     const loaded = await service.isLoaded();
-    const runtime = await service.readRuntime();
+    const runtimeValue = await service.readRuntime();
     const command = await service.readCommand();
     return {
       label: service.label,
-      installed: Boolean(command) || runtime?.status === "running",
+      installed: Boolean(command) || runtimeValue?.status === "running",
       loaded,
       managedByOpenClaw: Boolean(command),
-      externallyManaged: !command && runtime?.status === "running",
+      externallyManaged: !command && runtimeValue?.status === "running",
       loadedText: loaded ? service.loadedText : service.notLoadedText,
-      runtimeShort: runtime?.pid ? `pid ${runtime.pid}` : null,
+      runtimeShort: runtimeValue?.pid ? `pid ${runtimeValue.pid}` : null,
     };
   }),
   getNodeDaemonStatusSummary: vi.fn(async () => {
     const service = mocks.resolveNodeService();
     const loaded = await service.isLoaded();
-    const runtime = await service.readRuntime();
+    const runtimeLocal = await service.readRuntime();
     const command = await service.readCommand();
     return {
       label: service.label,
-      installed: Boolean(command) || runtime?.status === "running",
+      installed: Boolean(command) || runtimeLocal?.status === "running",
       loaded,
       managedByOpenClaw: Boolean(command),
-      externallyManaged: !command && runtime?.status === "running",
+      externallyManaged: !command && runtimeLocal?.status === "running",
       loadedText: loaded ? service.loadedText : service.notLoadedText,
-      runtimeShort: runtime?.pid ? `pid ${runtime.pid}` : null,
+      runtimeShort: runtimeLocal?.pid ? `pid ${runtimeLocal.pid}` : null,
     };
   }),
 }));
@@ -949,6 +952,8 @@ describe("statusCommand", () => {
         inconsistent_timestamps: 0,
       },
     });
+    mocks.getInspectableTaskAuditFindings.mockReset();
+    mocks.getInspectableTaskAuditFindings.mockReturnValue([]);
     mocks.runSecurityAudit.mockReset();
     mocks.runSecurityAudit.mockResolvedValue(createDefaultSecurityAuditResult());
     mocks.resolveGatewayService.mockReset();
@@ -1002,7 +1007,7 @@ describe("statusCommand", () => {
     expect(payload.memoryPlugin.slot).toBe("memory-core");
     expect(payload.sessions.count).toBe(1);
     expect(payload.sessions.paths).toContain("/tmp/sessions.json");
-    expect(payload.sessions.defaults.model).toBe("pi:opus");
+    expect(payload.sessions.defaults.model).toBe("test:opus");
     expect(payload.sessions.defaults.contextTokens).toBeGreaterThan(0);
     expect(payload.sessions.recent[0].percentUsed).toBe(50);
     expect(payload.sessions.recent[0].cacheRead).toBe(2_000);
@@ -1102,7 +1107,7 @@ describe("statusCommand", () => {
         totalTokens: 5_000,
         totalTokensFresh: false,
         contextTokens: 10_000,
-        model: "pi:opus",
+        model: "test:opus",
       },
     });
     runtimeLogMock.mockClear();
@@ -1130,7 +1135,7 @@ describe("statusCommand", () => {
       "Plugin compatibility",
       "Channels",
       "WhatsApp",
-      "bootstrap files",
+      "no workspaces bootstrapping",
       "Tasks",
       "Sessions",
       "+1000",
@@ -1148,6 +1153,7 @@ describe("statusCommand", () => {
     expectLogsInclude(logs, "Cache");
     expectLogsInclude(logs, "40% hit");
     expectLogsInclude(logs, "read 2.0k");
+    expect(logs.join("\n")).not.toContain("no bootstrap files");
   });
 
   it("shows a maintenance hint when task audit errors are present", async () => {
@@ -1185,6 +1191,25 @@ describe("statusCommand", () => {
         inconsistent_timestamps: 0,
       },
     });
+    mocks.getInspectableTaskAuditFindings.mockReturnValue([
+      {
+        severity: "error",
+        code: "stale_running",
+        detail: "running task appears stuck",
+        task: {
+          taskId: "stale-running-task",
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          requesterSessionKey: "agent:main:main",
+          scopeKind: "session",
+          task: "Stale task",
+          status: "running",
+          deliveryStatus: "pending",
+          notifyPolicy: "done_only",
+          createdAt: Date.now() - 60_000,
+        },
+      },
+    ]);
 
     const joined = await runStatusAndGetJoinedLogs();
 
@@ -1442,7 +1467,7 @@ describe("statusCommand", () => {
             outputTokens: 1_000,
             totalTokens: 2_000,
             contextTokens: 10_000,
-            model: "pi:opus",
+            model: "test:opus",
           },
         };
       }

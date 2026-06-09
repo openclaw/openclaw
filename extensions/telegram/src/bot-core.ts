@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot core behavior.
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -55,6 +56,19 @@ export function resolveTelegramScopedGroupConfig(
   chatId: string | number,
   messageThreadId?: number,
 ) {
+  const resolveTopicConfig = <T extends object>(
+    scopedConfig: { topics?: Record<string, T | undefined> } | undefined,
+  ): T | undefined => {
+    if (!scopedConfig || messageThreadId == null) {
+      return undefined;
+    }
+    const defaultConfig = scopedConfig.topics?.["*"];
+    const exactConfig = scopedConfig.topics?.[String(messageThreadId)];
+    if (defaultConfig && exactConfig) {
+      return { ...defaultConfig, ...exactConfig };
+    }
+    return exactConfig ?? defaultConfig;
+  };
   const groups = telegramCfg.groups;
   const direct = telegramCfg.direct;
   const chatIdStr = String(chatId);
@@ -62,18 +76,12 @@ export function resolveTelegramScopedGroupConfig(
 
   if (isDm) {
     const groupConfig = direct?.[chatIdStr] ?? direct?.["*"];
-    const topicConfig =
-      groupConfig && messageThreadId != null
-        ? groupConfig.topics?.[String(messageThreadId)]
-        : undefined;
+    const topicConfig = resolveTopicConfig(groupConfig);
     return { groupConfig, topicConfig };
   }
 
   const groupConfig = groups?.[chatIdStr] ?? groups?.["*"];
-  const topicConfig =
-    groupConfig && messageThreadId != null
-      ? groupConfig.topics?.[String(messageThreadId)]
-      : undefined;
+  const topicConfig = resolveTopicConfig(groupConfig);
   return { groupConfig, topicConfig };
 }
 
@@ -203,12 +211,12 @@ export function createTelegramBotCore(
     if (!begin.accepted) {
       return;
     }
-    let completed = false;
     try {
       await next();
-      completed = true;
-    } finally {
-      updateTracker.finishUpdate(begin.update, { completed });
+      updateTracker.finishUpdate(begin.update, { completed: true });
+    } catch (error) {
+      updateTracker.finishUpdate(begin.update, { completed: false });
+      throw error;
     }
   });
 
@@ -372,6 +380,7 @@ export function createTelegramBotCore(
     groupAllowFrom,
     replyToMode,
     textLimit,
+    mediaMaxBytes,
     useAccessGroups,
     nativeEnabled,
     nativeSkillsEnabled,

@@ -1,3 +1,5 @@
+// Agent mutation tests cover create/update/delete handlers, safe workspace file
+// access, config preconditions, trash cleanup, and attestation handling.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { FsSafeError } from "../../infra/fs-safe.js";
 /* ------------------------------------------------------------------ */
@@ -20,16 +22,21 @@ const mocks = vi.hoisted(() => ({
     }),
   ),
   isWorkspaceSetupCompleted: vi.fn(async () => false),
+  resolveWorkspaceAttestationPaths: vi.fn((_workspaceDir: string) => [
+    "/state/workspace-attestations/test-agent.attested",
+  ]),
+  shouldRemoveWorkspaceAttestation: vi.fn(async () => true),
   resolveAgentDir: vi.fn((_cfg?: unknown, _agentId?: string) => "/agents/test-agent"),
   resolveAgentWorkspaceDir: vi.fn((_cfg?: unknown, _agentId?: string) => "/workspace/test-agent"),
   resolveSessionTranscriptsDirForAgent: vi.fn((_agentId?: string) => "/transcripts/test-agent"),
+  closeSqliteSessionStoreDatabase: vi.fn(),
   listAgentsForGateway: vi.fn(() => ({
     defaultId: "main",
     mainKey: "agent:main:main",
     scope: "global",
     agents: [],
   })),
-  movePathToTrash: vi.fn(async () => "/trashed"),
+  movePathToTrash: vi.fn(async (_pathname: string) => "/trashed"),
   fsAccess: vi.fn(async () => {}),
   fsMkdir: vi.fn(async () => undefined),
   fsAppendFile: vi.fn(async () => {}),
@@ -117,16 +124,34 @@ vi.mock("../../agents/workspace.js", async () => {
     ...actual,
     ensureAgentWorkspace: mocks.ensureAgentWorkspace,
     isWorkspaceSetupCompleted: mocks.isWorkspaceSetupCompleted,
+    resolveWorkspaceAttestationPaths: mocks.resolveWorkspaceAttestationPaths,
+    shouldRemoveWorkspaceAttestation: mocks.shouldRemoveWorkspaceAttestation,
   };
 });
 
-vi.mock("../../config/sessions/paths.js", () => ({
+vi.mock("../../config/sessions/paths.js", async () => ({
+  ...(await vi.importActual<typeof import("../../config/sessions/paths.js")>(
+    "../../config/sessions/paths.js",
+  )),
   resolveSessionTranscriptsDirForAgent: mocks.resolveSessionTranscriptsDirForAgent,
 }));
 
 vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   movePathToTrash: mocks.movePathToTrash,
 }));
+
+vi.mock("../../config/sessions/store-sqlite.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/store-sqlite.js")>(
+    "../../config/sessions/store-sqlite.js",
+  );
+  return {
+    ...actual,
+    closeSqliteSessionStoreDatabase: (storePath: string) => {
+      mocks.closeSqliteSessionStoreDatabase(storePath);
+      return actual.closeSqliteSessionStoreDatabase(storePath);
+    },
+  };
+});
 
 vi.mock("../../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
@@ -210,6 +235,10 @@ beforeEach(() => {
   mocks.resolveAgentWorkspaceDir.mockImplementation((cfg: unknown, agentId?: string) =>
     resolveMockWorkspaceDir(cfg, agentId),
   );
+  mocks.resolveWorkspaceAttestationPaths.mockImplementation((_workspaceDir: string) => [
+    "/state/workspace-attestations/test-agent.attested",
+  ]);
+  mocks.shouldRemoveWorkspaceAttestation.mockResolvedValue(true);
   mocks.rootOpen.mockResolvedValue({
     handle: { close: vi.fn(async () => {}) },
     realPath: "/workspace/test-agent/AGENTS.md",
@@ -319,22 +348,6 @@ function expectStringNotContaining(value: unknown, text: string) {
   expect(typeof value).toBe("string");
   expect(value as string).not.toContain(text);
 }
-
-function findMockCallArg(
-  mock: ReturnType<typeof vi.fn>,
-  predicate: (arg: Record<string, unknown>) => boolean,
-  argIndex = 0,
-) {
-  const call = mock.mock.calls.find((candidate) => {
-    const arg = candidate[argIndex];
-    return typeof arg === "object" && arg !== null && predicate(arg as Record<string, unknown>);
-  });
-  if (!call) {
-    throw new Error("Expected matching mock call");
-  }
-  return call[argIndex];
-}
-
 function createEnoentError() {
   const err = new Error("ENOENT") as NodeJS.ErrnoException;
   err.code = "ENOENT";
@@ -1129,6 +1142,56 @@ describe("agents.delete", () => {
     expect(mocks.writeConfigFile).toHaveBeenCalled();
     // moveToTrashBestEffort calls fs.access then movePathToTrash for each dir
     expect(mocks.movePathToTrash).toHaveBeenCalled();
+  });
+
+  it("closes the session SQLite handle before trashing the agent directory", async () => {
+    const { respond, promise } = makeCall("agents.delete", {
+      agentId: "test-agent",
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true });
+    expect(mocks.closeSqliteSessionStoreDatabase).toHaveBeenCalledOnce();
+    const agentTrashCallIndex = mocks.movePathToTrash.mock.calls.findIndex(
+      ([pathname]) => pathname === "/agents/test-agent",
+    );
+    expect(agentTrashCallIndex).toBeGreaterThanOrEqual(0);
+    expect(mocks.closeSqliteSessionStoreDatabase.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.movePathToTrash.mock.invocationCallOrder[agentTrashCallIndex] ?? 0,
+    );
+  });
+
+  it("trashes workspace attestations when deleting the last workspace owner", async () => {
+    const { respond, promise } = makeCall("agents.delete", {
+      agentId: "test-agent",
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true });
+    expect(mocks.resolveWorkspaceAttestationPaths).toHaveBeenCalledWith("/workspace/test-agent");
+    expect(mocks.shouldRemoveWorkspaceAttestation).toHaveBeenCalledWith(
+      "/state/workspace-attestations/test-agent.attested",
+      { trustUnknown: true },
+    );
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(
+      "/state/workspace-attestations/test-agent.attested",
+    );
+  });
+
+  it("keeps workspace attestations when another agent still owns the workspace", async () => {
+    mocks.pruneAgentConfig.mockReturnValue({
+      config: { agents: { list: [{ id: "other", workspace: "/workspace/test-agent" }] } },
+      removedBindings: 2,
+    });
+
+    const { respond, promise } = makeCall("agents.delete", {
+      agentId: "test-agent",
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true });
+    expect(mocks.resolveWorkspaceAttestationPaths).not.toHaveBeenCalled();
+    expect(mocks.movePathToTrash).not.toHaveBeenCalledWith("/workspace/test-agent");
   });
 
   it("skips file deletion when deleteFiles is false", async () => {

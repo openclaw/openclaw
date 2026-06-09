@@ -1,7 +1,8 @@
-import fs from "node:fs/promises";
+// Covers heartbeat handling of queued reminder system events.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   seedMainSessionStore,
@@ -83,17 +84,14 @@ describe("Ghost reminder bug (issue #13317)", () => {
     sessionKey: string,
     overrides: Record<string, unknown>,
   ): Promise<void> => {
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "sid",
-          updatedAt: Date.now(),
-          lastChannel: "telegram",
-          ...overrides,
-        },
-      }),
-    );
+    await writeSessionStoreForTestAsync(storePath, {
+      [sessionKey]: {
+        sessionId: "sid",
+        updatedAt: Date.now(),
+        lastChannel: "telegram",
+        ...overrides,
+      },
+    });
   };
 
   const expectCronEventPrompt = (
@@ -132,7 +130,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
     SessionKey?: string;
     MessageThreadId?: number;
     Body?: string;
-    ForceSenderIsOwnerFalse?: boolean;
   } => {
     const [ctx] = mockCallAt(replySpy, 0, "heartbeat reply");
     if (!ctx || typeof ctx !== "object") {
@@ -143,7 +140,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       SessionKey?: string;
       MessageThreadId?: number;
       Body?: string;
-      ForceSenderIsOwnerFalse?: boolean;
     };
   };
 
@@ -170,7 +166,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
   ): Promise<{
     result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
     sendTelegram: ReturnType<typeof vi.fn>;
-    calledCtx: { Provider?: string; Body?: string; ForceSenderIsOwnerFalse?: boolean } | null;
+    calledCtx: { Provider?: string; Body?: string } | null;
   }> => {
     return runHeartbeatCase({
       tmpPrefix,
@@ -194,7 +190,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       Provider?: string;
       Body?: string;
       SessionKey?: string;
-      ForceSenderIsOwnerFalse?: boolean;
     } | null;
     sessionKey: string;
     replyCallCount: number;
@@ -230,35 +225,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       },
       { prefix: params.tmpPrefix },
     );
-  };
-
-  const expectUntrustedEventOwnership = async (params: {
-    tmpPrefix: string;
-    reason: "hook:wake" | "interval";
-    isolatedSession?: boolean;
-    forceSenderIsOwnerFalse: boolean;
-  }): Promise<void> => {
-    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
-      tmpPrefix: params.tmpPrefix,
-      replyText: "Handled internally",
-      reason: params.reason,
-      target: "none",
-      isolatedSession: params.isolatedSession,
-      enqueue: (sessionKey) => {
-        enqueueSystemEvent("GitHub issue opened: untrusted webhook content", {
-          sessionKey,
-          forceSenderIsOwnerFalse: true,
-        });
-      },
-    });
-
-    expect(result.status).toBe("ran");
-    expect(calledCtx?.Provider).toBe("heartbeat");
-    if (params.isolatedSession === true) {
-      expect(calledCtx?.SessionKey).toContain(":heartbeat");
-    }
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(params.forceSenderIsOwnerFalse);
-    expect(sendTelegram).not.toHaveBeenCalled();
   };
 
   it("does not use CRON_EVENT_PROMPT when only a HEARTBEAT_OK event is present", async () => {
@@ -410,7 +376,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("exec-event");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("Handle the result internally");
     expect(sendTelegram).not.toHaveBeenCalled();
   });
@@ -427,7 +392,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("exec-event");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("exec finished: deploy succeeded");
     expect(sendTelegram).toHaveBeenCalled();
   });
@@ -465,7 +429,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("exec-event");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("Handle the result internally");
     expect(sendTelegram).not.toHaveBeenCalled();
   });
@@ -485,42 +448,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("heartbeat");
     expect(calledCtx?.SessionKey).toContain(":heartbeat");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(false);
     expect(sendTelegram).not.toHaveBeenCalled();
-  });
-
-  it("forces owner downgrade for hook:wake system events with downgrade metadata", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-hook-event-",
-      reason: "hook:wake",
-      forceSenderIsOwnerFalse: true,
-    });
-  });
-
-  it("forces owner downgrade for interval events with downgrade metadata", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-interval-event-",
-      reason: "interval",
-      forceSenderIsOwnerFalse: true,
-    });
-  });
-
-  it("does not force owner downgrade for base-session hook:wake events with isolated sessions", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-hook-event-isolated-",
-      reason: "hook:wake",
-      isolatedSession: true,
-      forceSenderIsOwnerFalse: false,
-    });
-  });
-
-  it("does not force owner downgrade for isolated interval runs with only base-session downgrade events", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-interval-event-isolated-",
-      reason: "interval",
-      isolatedSession: true,
-      forceSenderIsOwnerFalse: false,
-    });
   });
 
   it("routes wake-triggered heartbeat replies using queued system-event delivery context", async () => {
@@ -539,15 +467,12 @@ describe("Ghost reminder bug (issue #13317)", () => {
         session: { store: storePath },
       };
       const sessionKey = resolveMainSessionKey(cfg);
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-          },
-        }),
-      );
+      await writeSessionStoreForTestAsync(storePath, {
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+        },
+      });
 
       const sendTelegram = vi.fn().mockResolvedValue({
         messageId: "m1",
@@ -640,18 +565,10 @@ describe("Ghost reminder bug (issue #13317)", () => {
         session: { store: storePath },
       };
       const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-            lastChannel: "telegram",
-            lastTo: "telegram:-1003774691294:topic:2175",
-            lastThreadId: 2175,
-          },
-        }),
-      );
+      await writeTelegramSessionStore(storePath, sessionKey, {
+        lastTo: "telegram:-1003774691294:topic:2175",
+        lastThreadId: 2175,
+      });
 
       const sendTelegram = vi.fn().mockResolvedValue({
         messageId: "m1",
@@ -705,18 +622,10 @@ describe("Ghost reminder bug (issue #13317)", () => {
         session: { store: storePath },
       };
       const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-            lastChannel: "telegram",
-            lastTo: "telegram:-1003774691294:topic:2175",
-            lastThreadId: 2175,
-          },
-        }),
-      );
+      await writeTelegramSessionStore(storePath, sessionKey, {
+        lastTo: "telegram:-1003774691294:topic:2175",
+        lastThreadId: 2175,
+      });
 
       const sendTelegram = vi.fn();
       const getReplySpy = vi.fn().mockResolvedValue({
