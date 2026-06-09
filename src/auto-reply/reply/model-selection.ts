@@ -392,7 +392,7 @@ export async function createModelSelectionState(params: {
     // different profile on a later turn — flapping the CLI session's auth
     // profile and invalidating it. Mirror session-override.ts's check.
     const overrideStillEligible =
-      !!profile &&
+      profile != null &&
       acceptedAuthProviders.some((accepted) =>
         isStoredCredentialCompatibleWithAuthProvider({
           cfg,
