@@ -6,7 +6,7 @@ import {
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import {
   isValidControlUiChatMessageMaxWidth,
   normalizeControlUiChatMessageMaxWidth,
@@ -1324,7 +1324,11 @@ export const OpenClawSchema = z
           continue;
         }
         const agentId = (binding as { agentId?: unknown }).agentId;
-        if (typeof agentId === "string" && !effectiveAgentIds.has(normalizeAgentId(agentId))) {
+        if (
+          typeof agentId === "string" &&
+          !effectiveAgentIds.has(normalizeAgentId(agentId)) &&
+          agentId !== DEFAULT_AGENT_ID
+        ) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["bindings", idx, "agentId"],

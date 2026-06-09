@@ -475,6 +475,67 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts explicit main agent bindings when agents.list is non-empty (openclaw#89419)", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [{ id: "alpha", model: "anthropic/claude-3-5-sonnet" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects normalize-equivalent variants of main when not in agents.list (openclaw#89419 strict bypass)", () => {
+    // Per Sweeper feedback, only the explicit "main" string should bypass the unknown-agent check,
+    // not any value that normalizes to "main" (e.g., "  MAIN " or "Main").
+    for (const variant of ["MAIN", "  main ", "Main"]) {
+      const res = validateConfigObject({
+        agents: {
+          list: [{ id: "alpha", model: "anthropic/claude-3-5-sonnet" }],
+        },
+        bindings: [
+          {
+            type: "route",
+            agentId: variant,
+            match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+          },
+        ],
+      });
+
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.issues.some((iss) => iss.message.includes("Unknown agent id"))).toBe(true);
+      }
+    }
+  });
+
+  it("rejects bindings with a non-main invalid agentId when agents.list is non-empty", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [{ id: "alpha", model: "anthropic/claude-3-5-sonnet" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "ghost",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((iss) => iss.message.includes('Unknown agent id "ghost"'))).toBe(true);
+    }
+  });
+
   it("skips binding agentId check when agents.list is empty (legacy passthrough)", () => {
     const res = validateConfigObject({
       bindings: [

@@ -3149,3 +3149,34 @@ describe("legacy model compat migrate", () => {
     ]);
   });
 });
+
+describe("legacy config migration: binding pruning (openclaw#89419)", () => {
+  it("preserves explicit main bindings while pruning invalid ids", () => {
+    const cfg = normalizeCompatibilityConfigValues({
+      agents: { list: [{ id: "alpha", model: "anthropic/claude-3-5-sonnet" }] },
+      bindings: [
+        { type: "route" as const, agentId: "main", match: { channel: "telegram" } },
+        { type: "route" as const, agentId: "alpha", match: { channel: "discord" } },
+        { type: "route" as const, agentId: "ghost", match: { channel: "slack" } },
+      ],
+    } as any);
+    expect(cfg.config.bindings).toHaveLength(2);
+    const agents = cfg.config.bindings!.map((b: any) => b.agentId);
+    expect(agents).toContain("main");
+    expect(agents).toContain("alpha");
+    expect(cfg.changes.some((c: string) => c.includes("Removed 1 binding"))).toBe(true);
+  });
+
+  it("prunes normalize-equivalent variants of main (strict bypass)", () => {
+    const cfg = normalizeCompatibilityConfigValues({
+      agents: { list: [{ id: "alpha", model: "anthropic/claude-3-5-sonnet" }] },
+      bindings: [
+        { type: "route" as const, agentId: "MAIN", match: { channel: "telegram" } },
+        { type: "route" as const, agentId: "main", match: { channel: "discord" } },
+      ],
+    } as any);
+    expect(cfg.config.bindings).toHaveLength(1);
+    expect(cfg.config.bindings![0]).toMatchObject({ agentId: "main" });
+    expect(cfg.changes.some((c: string) => c.includes("Removed 1 binding"))).toBe(true);
+  });
+});
