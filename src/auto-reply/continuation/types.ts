@@ -39,6 +39,7 @@ export type ContinuationSignal =
       delayMs?: number;
       silent?: boolean;
       silentWake?: boolean;
+      postCompaction?: boolean;
       targetSessionKey?: string;
       targetSessionKeys?: string[];
       fanoutMode?: ContinuationDelegateFanoutMode;

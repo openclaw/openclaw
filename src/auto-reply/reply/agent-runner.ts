@@ -2528,7 +2528,41 @@ export async function runReplyAgent(replyParams: {
     // `effectiveContinuationSignal` is either the parsed bracket signal or the
     // structured continue_work tool request captured during the run.
     let bracketTokensAccumulated = false;
-    if (effectiveContinuationSignal && sessionKey) {
+    // Token-form parity with the continue_delegate tool: a bracket
+    // [[CONTINUE_DELEGATE: ... | post-compaction]] signal stages a delegate
+    // for release after the next compaction seam, same as the tool's
+    // mode="post-compaction" branch (see continue-delegate-tool.ts). Staging
+    // happens before the bracket cap-gate because the chain/cost caps are
+    // re-applied at release time inside dispatchPostCompactionDelegates, and
+    // the tool form also skips the bracket cap-gate.
+    if (
+      effectiveContinuationSignal &&
+      sessionKey &&
+      effectiveContinuationSignal.kind === "delegate" &&
+      effectiveContinuationSignal.postCompaction
+    ) {
+      stagePostCompactionDelegate(sessionKey, {
+        task: effectiveContinuationSignal.task,
+        createdAt: Date.now(),
+        ...(effectiveContinuationSignal.targetSessionKey
+          ? { targetSessionKey: effectiveContinuationSignal.targetSessionKey }
+          : {}),
+        ...(effectiveContinuationSignal.targetSessionKeys &&
+        effectiveContinuationSignal.targetSessionKeys.length > 0
+          ? { targetSessionKeys: effectiveContinuationSignal.targetSessionKeys }
+          : {}),
+        ...(effectiveContinuationSignal.fanoutMode
+          ? { fanoutMode: effectiveContinuationSignal.fanoutMode }
+          : {}),
+        ...(effectiveContinuationSignal.traceparent
+          ? { traceparent: effectiveContinuationSignal.traceparent }
+          : {}),
+      });
+      enqueueSystemEvent(
+        `[continuation:delegate-staged-post-compaction] Bracket delegate staged for post-compaction release: ${effectiveContinuationSignal.task}`,
+        { sessionKey, trusted: true },
+      );
+    } else if (effectiveContinuationSignal && sessionKey) {
       const {
         maxChainLength,
         defaultDelayMs,
