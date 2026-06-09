@@ -43,14 +43,12 @@
 
 <!-- AUTOSCAN:START -->
 
-_Last automated scan: 2026-06-08 21:17:37 UTC · hosts:eu us_
+_Last automated scan: 2026-06-09 22:26:13 UTC · hosts:eu us_
 
-| Pri | Host | Agent          | Issue                            | Detail                                                                                                  |
-| --- | ---- | -------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| P1  | us   | productguy     | Auth/token failure (401)         | 401/Unauthorized in logs — bot token or API key likely invalid.                                         |
-| P1  | us   | projectmanager | Model not responding             | typing-TTL / no-reply / timeout in logs — primary model may be hanging or invalid.                      |
-| P2  | us   | -              | No docker log rotation           | /etc/docker/daemon.json lacks max-size; container logs grow unbounded (disk-fill risk on a crash loop). |
-| P2  | us   | projectmanager | Model-provider discovery timeout | A provider (e.g. venice) discovery is timing out; fallback may be impaired.                             |
-| P3  | us   | projectmanager | mcp-bridge no servers            | mcp-bridge loaded with no servers (log noise; harmless).                                                |
+| Pri | Host | Agent      | Issue                    | Detail                                                                                                  |
+| --- | ---- | ---------- | ------------------------ | ------------------------------------------------------------------------------------------------------- |
+| P1  | us   | -          | Heavy swap usage         | 1475MiB swap in use; host is memory-pressured. Consider a RAM rescale.                                  |
+| P1  | us   | productguy | Auth/token failure (401) | 401/Unauthorized in logs — bot token or API key likely invalid.                                         |
+| P2  | us   | -          | No docker log rotation   | /etc/docker/daemon.json lacks max-size; container logs grow unbounded (disk-fill risk on a crash loop). |
 
 <!-- AUTOSCAN:END -->
