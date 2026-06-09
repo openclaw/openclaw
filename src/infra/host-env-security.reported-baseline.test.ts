@@ -114,6 +114,10 @@ describe("host env reported baseline coverage", () => {
     for (const key of baseline.reportedDangerousEverywhereKeys) {
       expect(isDangerousHostEnvVarName(key)).toBe(true);
       expect(isDangerousHostInheritedEnvVarName(key)).toBe(true);
+      if (key === "GIT_ALLOW_PROTOCOL") {
+        expect(inheritedSanitized[key]).toBe("");
+        continue;
+      }
       expect(inheritedSanitized[key]).toBeUndefined();
     }
 

@@ -99,12 +99,13 @@ enum HostEnvSanitizer {
             || normalized == "off"
     }
 
-    private static func isRestrictiveGitAllowProtocolValue(_ value: String) -> Bool {
+    private static func sanitizeInheritedGitAllowProtocolValue(_ value: String) -> String {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if normalized.isEmpty { return true }
-        return normalized.split(separator: ":", omittingEmptySubsequences: false).allSatisfy {
-            self.gitDefaultAlwaysAllowedProtocols.contains(String($0))
-        }
+        if normalized.isEmpty { return "" }
+        let safeProtocols = normalized
+            .split(separator: ":", omittingEmptySubsequences: false)
+            .filter { self.gitDefaultAlwaysAllowedProtocols.contains(String($0)) }
+        return safeProtocols.joined(separator: ":")
     }
 
     static func inspectOverrides(
@@ -145,12 +146,10 @@ enum HostEnvSanitizer {
             let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty else { continue }
             let upper = key.uppercased()
-            // Preserve inherited allowlists that only narrow Git to protocols it already treats
-            // as safe. Values such as `ext`, `file`, or custom helpers are still dropped below.
-            if upper == self.gitAllowProtocolKey,
-               self.isRestrictiveGitAllowProtocolValue(value)
-            {
-                merged[key] = value
+            // Preserve inherited Git allowlists without widening malformed or unsafe entries by
+            // deletion. Protocols outside Git's safe default set are removed instead.
+            if upper == self.gitAllowProtocolKey {
+                merged[key] = self.sanitizeInheritedGitAllowProtocolValue(value)
                 continue
             }
             // Preserve Git's restrictive mode when already inherited from the trusted host.

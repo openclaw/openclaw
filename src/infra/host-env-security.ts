@@ -162,13 +162,15 @@ function isRestrictiveGitProtocolFromUserValue(value: string): boolean {
   return false;
 }
 
-function isRestrictiveGitAllowProtocolValue(value: string): boolean {
+function sanitizeInheritedGitAllowProtocolValue(value: string): string {
   const normalized = value.trim();
   if (!normalized) {
-    return true;
+    return "";
   }
-  const protocols = normalized.split(":");
-  return protocols.every((protocol) => GIT_DEFAULT_ALWAYS_ALLOWED_PROTOCOLS.has(protocol));
+  const safeProtocols = normalized
+    .split(":")
+    .filter((protocol) => GIT_DEFAULT_ALWAYS_ALLOWED_PROTOCOLS.has(protocol));
+  return safeProtocols.join(":");
 }
 
 function sanitizeHostEnvOverridesWithDiagnostics(params?: {
@@ -233,13 +235,10 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
 
   const merged: Record<string, string> = {};
   for (const [key, value] of listNormalizedEnvEntries(baseEnv)) {
-    // Preserve inherited allowlists that only narrow Git to protocols it already treats as safe.
-    // Values such as `ext`, `file`, or custom helpers are still dropped by the policy below.
-    if (
-      key.toUpperCase() === GIT_ALLOW_PROTOCOL_ENV_KEY &&
-      isRestrictiveGitAllowProtocolValue(value)
-    ) {
-      merged[key] = value;
+    // Preserve inherited Git allowlists without widening malformed or unsafe entries by deletion.
+    // Protocols outside Git's safe default set are removed instead of being passed through.
+    if (key.toUpperCase() === GIT_ALLOW_PROTOCOL_ENV_KEY) {
+      merged[key] = sanitizeInheritedGitAllowProtocolValue(value);
       continue;
     }
     // Preserve Git's restrictive mode when already inherited from the trusted host.

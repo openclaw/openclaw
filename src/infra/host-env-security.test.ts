@@ -365,6 +365,7 @@ describe("sanitizeHostExecEnv", () => {
       SSL_CERT_DIR: "/tmp/evil-cert-dir",
       DOCKER_CONTEXT: "trusted-remote",
       DOCKER_HOST: "tcp://docker.example.test:2376",
+      GIT_ALLOW_PROTOCOL: "",
       OK: "1",
     });
   });
@@ -384,10 +385,10 @@ describe("sanitizeHostExecEnv", () => {
     }
   });
 
-  it("preserves inherited restrictive GIT_ALLOW_PROTOCOL values", () => {
-    const restrictiveValues = ["", "git", "https:ssh", "git:http:https:ssh"];
+  it("preserves inherited safe GIT_ALLOW_PROTOCOL allowlist values", () => {
+    const safeValues = ["", "git", "https:ssh", "git:http:https:ssh"];
 
-    for (const value of restrictiveValues) {
+    for (const value of safeValues) {
       const env = sanitizeHostExecEnv({
         baseEnv: {
           PATH: "/usr/bin:/bin",
@@ -399,10 +400,17 @@ describe("sanitizeHostExecEnv", () => {
     }
   });
 
-  it("removes inherited permissive GIT_ALLOW_PROTOCOL values", () => {
-    const permissiveValues = ["ext", "https:ext", "file", "https:file", "hg", "https::ssh"];
+  it("filters inherited GIT_ALLOW_PROTOCOL allowlists to Git safe defaults", () => {
+    const cases = [
+      ["ext", ""],
+      ["https:ext", "https"],
+      ["file", ""],
+      ["https:file", "https"],
+      ["hg", ""],
+      ["https::ssh", "https:ssh"],
+    ] as const;
 
-    for (const value of permissiveValues) {
+    for (const [value, expected] of cases) {
       const env = sanitizeHostExecEnv({
         baseEnv: {
           PATH: "/usr/bin:/bin",
@@ -410,7 +418,7 @@ describe("sanitizeHostExecEnv", () => {
         },
       });
 
-      expect(env.GIT_ALLOW_PROTOCOL).toBeUndefined();
+      expect(env.GIT_ALLOW_PROTOCOL).toBe(expected);
     }
   });
 
