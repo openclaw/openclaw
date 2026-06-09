@@ -3297,7 +3297,10 @@ export function renderApp(state: AppViewState) {
           : nothing}
         ${state.tab === "skillWorkshop"
           ? renderLazyView(lazySkillWorkshop, (m) => {
-              const workshopAgentId = resolveAgentIdFromSessionKey(state.sessionKey);
+              const parsedWorkshopAgent = parseAgentSessionKey(state.sessionKey);
+              const workshopAgentId = parsedWorkshopAgent
+                ? normalizeAgentId(parsedWorkshopAgent.agentId)
+                : undefined;
               const visibleProposals = m.filterSkillWorkshopProposals(
                 state.skillWorkshopProposals,
                 state.skillWorkshopStatusFilter,

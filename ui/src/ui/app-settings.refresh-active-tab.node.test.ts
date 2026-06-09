@@ -53,6 +53,7 @@ const mocks = vi.hoisted(() => ({
   loadPresenceMock: vi.fn(async () => {}),
   loadSessionsMock: vi.fn(async () => {}),
   loadSkillsMock: vi.fn(async () => {}),
+  loadSkillWorkshopProposalsMock: vi.fn(async () => {}),
   loadUsageMock: vi.fn(async () => {}),
   loadWorkboardMock: vi.fn(async () => {}),
   startDebugPollingMock: vi.fn(),
@@ -136,6 +137,9 @@ vi.mock("./controllers/sessions.ts", () => ({
 }));
 vi.mock("./controllers/skills.ts", () => ({
   loadSkills: mocks.loadSkillsMock,
+}));
+vi.mock("./controllers/skill-workshop.ts", () => ({
+  loadSkillWorkshopProposals: mocks.loadSkillWorkshopProposalsMock,
 }));
 vi.mock("./controllers/usage.ts", () => ({
   loadUsage: mocks.loadUsageMock,
@@ -627,5 +631,41 @@ describe("refreshActiveTab", () => {
           (entry as { event?: unknown }).event === "control-ui.cron.runs",
       ),
     ).toBe(false);
+  });
+
+  it("passes the scoped agent id when refreshing the skill workshop tab from an agent session", async () => {
+    const host = createHost();
+    host.tab = "skillWorkshop";
+    host.sessionKey = "agent:research:main";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadSkillWorkshopProposalsMock).toHaveBeenCalledWith(host, "research", {
+      force: true,
+    });
+  });
+
+  it("leaves agent id undefined for the skill workshop tab on default sessions", async () => {
+    const host = createHost();
+    host.tab = "skillWorkshop";
+    host.sessionKey = "main";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadSkillWorkshopProposalsMock).toHaveBeenCalledWith(host, undefined, {
+      force: true,
+    });
+  });
+
+  it("leaves agent id undefined for the skill workshop tab on global sessions", async () => {
+    const host = createHost();
+    host.tab = "skillWorkshop";
+    host.sessionKey = "global";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadSkillWorkshopProposalsMock).toHaveBeenCalledWith(host, undefined, {
+      force: true,
+    });
   });
 });

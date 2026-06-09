@@ -476,7 +476,8 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
         await loadSkills(app);
         break;
       case "skillWorkshop": {
-        const workshopAgentId = resolveAgentIdFromSessionKey(host.sessionKey);
+        const parsed = parseAgentSessionKey(host.sessionKey);
+        const workshopAgentId = parsed ? normalizeAgentId(parsed.agentId) : undefined;
         await loadSkillWorkshopProposals(app, workshopAgentId, { force: true });
         break;
       }
