@@ -353,6 +353,25 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedAg
       await closeClaudeLiveSessionForContext(context);
     }
     if (params.cleanupBundleMcpOnRunEnd === true) {
+      const { retireSessionMcpRuntime, retireSessionMcpRuntimeForSessionKey } =
+        await import("./agent-bundle-mcp-tools.js");
+      const onError = (error: unknown, sessionId: string) => {
+        log.warn(
+          `bundle-mcp cleanup failed after CLI run for ${sessionId}: ${formatErrorMessage(error)}`,
+        );
+      };
+      const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
+        sessionKey: params.sessionKey,
+        reason: "cli-run-end",
+        onError,
+      });
+      if (!retiredBySessionKey) {
+        await retireSessionMcpRuntime({
+          sessionId: params.sessionId,
+          reason: "cli-run-end",
+          onError,
+        });
+      }
       const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
       await closeMcpLoopbackServer();
     }
