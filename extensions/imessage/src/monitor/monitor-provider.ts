@@ -14,6 +14,7 @@ import {
 import {
   deliverInboundReplyWithMessageSendContext,
   createChannelMessageReplyPipeline,
+  resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
@@ -1132,6 +1133,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           },
         } as const)
       : {};
+    const configuredBlockStreaming = resolveChannelStreamingBlockEnabled(accountInfo.config);
     const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
       route: decision.route,
       sessionKey: decision.route.sessionKey,
@@ -1205,8 +1207,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                 replyOptions: {
                   ...typingReplyOptions,
                   disableBlockStreaming:
-                    typeof accountInfo.config.blockStreaming === "boolean"
-                      ? !accountInfo.config.blockStreaming
+                    typeof configuredBlockStreaming === "boolean"
+                      ? !configuredBlockStreaming
                       : undefined,
                   onModelSelected,
                   ...directToolTypingOptions,

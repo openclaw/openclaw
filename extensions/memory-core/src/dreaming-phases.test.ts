@@ -10,6 +10,7 @@ import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   testing,
@@ -1211,16 +1212,16 @@ describe("memory-core dreaming phases", () => {
       ].join("\n") + "\n",
       "utf-8",
     );
-    await fs.writeFile(
+    await saveSessionStore(
       path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
+      {
         "agent:main:dreaming-narrative-light-1775894400455": {
           sessionId: "dreaming-narrative",
           sessionFile: transcriptPath,
           updatedAt: Date.parse("2026-04-05T18:05:00.000Z"),
         },
-      }),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
     const mtime = new Date("2026-04-05T18:05:00.000Z");
     await fs.utimes(transcriptPath, mtime, mtime);
@@ -1306,16 +1307,16 @@ describe("memory-core dreaming phases", () => {
       ].join("\n") + "\n",
       "utf-8",
     );
-    await fs.writeFile(
+    await saveSessionStore(
       path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
+      {
         "agent:main:cron:job-1:run:run-1": {
           sessionId: "cron-run",
           sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
-      }),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
 
     const { beforeAgentReply } = createHarness(

@@ -619,6 +619,25 @@ describe("resolveChunkMode", () => {
     { cfg: accountCfg, provider: "slack", accountId: "primary", expected: "newline" },
     { cfg: accountCfg, provider: "slack", accountId: "other", expected: "length" },
     {
+      cfg: { channels: { imessage: { streaming: { chunkMode: "newline" as const } } } },
+      provider: "imessage",
+      accountId: undefined,
+      expected: "newline",
+    },
+    {
+      cfg: {
+        channels: {
+          imessage: {
+            streaming: { chunkMode: "length" as const },
+            accounts: { personal: { streaming: { chunkMode: "newline" as const } } },
+          },
+        },
+      },
+      provider: "imessage",
+      accountId: "personal",
+      expected: "newline",
+    },
+    {
       cfg: { channels: { webchat: { chunkMode: "newline" as const } } },
       provider: "webchat",
       accountId: undefined,

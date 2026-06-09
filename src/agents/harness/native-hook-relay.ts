@@ -111,7 +111,10 @@ export type NativeHookRelayRegistration = {
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
   generation?: string;
   shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
-  commandForEvent: (event: NativeHookRelayEvent) => string;
+  commandForEvent: (
+    event: NativeHookRelayEvent,
+    options?: NativeHookRelayCommandForEventOptions,
+  ) => string;
   renew: (ttlMs?: number) => void;
   unregister: () => void;
 };
@@ -137,6 +140,10 @@ export type NativeHookRelayCommandOptions = {
   executable?: string;
   nice?: number | false;
   nodeExecutable?: string;
+  timeoutMs?: number;
+};
+
+export type NativeHookRelayCommandForEventOptions = {
   timeoutMs?: number;
 };
 
@@ -436,7 +443,7 @@ export function registerNativeHookRelay(
   const handle: ActiveNativeHookRelayRegistrationHandle = {
     ...registration,
     shouldRelayEvent: (event) => nativeHookRelayEventHasLocalWork(registration, event),
-    commandForEvent: (event) =>
+    commandForEvent: (event, options) =>
       buildNativeHookRelayCommand({
         provider: params.provider,
         relayId,
@@ -447,7 +454,10 @@ export function registerNativeHookRelay(
             ? "noop"
             : undefined,
         nice: params.command?.nice,
-        timeoutMs: params.command?.timeoutMs,
+        timeoutMs: resolveNativeHookRelayCommandTimeoutMs(
+          params.command?.timeoutMs,
+          options?.timeoutMs,
+        ),
         executable: params.command?.executable,
         nodeExecutable: params.command?.nodeExecutable,
       }),
@@ -517,6 +527,21 @@ function resolveNativeHookRelayNicePrefix(value: number | false | undefined): st
     return [];
   }
   return ["nice", "-n", String(nice)];
+}
+
+function resolveNativeHookRelayCommandTimeoutMs(
+  configuredTimeoutMs: number | undefined,
+  overrideTimeoutMs: number | undefined,
+): number | undefined {
+  const configured = normalizeOptionalPositiveInteger(configuredTimeoutMs);
+  const override = normalizeOptionalPositiveInteger(overrideTimeoutMs);
+  if (configured === undefined) {
+    return override;
+  }
+  if (override === undefined) {
+    return configured;
+  }
+  return Math.min(configured, override);
 }
 
 export function buildNativeHookRelayCommand(params: {
@@ -2155,6 +2180,12 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : fallback;
+}
+
+function normalizeOptionalPositiveInteger(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 function shellQuoteArgs(args: readonly string[]): string {

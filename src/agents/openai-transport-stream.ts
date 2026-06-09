@@ -1578,7 +1578,6 @@ async function processResponsesStream(
           type: "text_delta",
           contentIndex: blockIndex(),
           delta: stringifyUnknown(event.delta),
-          partial: output,
         });
       }
     } else if (type === "response.function_call_arguments.delta") {
@@ -2740,7 +2739,6 @@ async function processOpenAICompletionsStream(
       type: "text_delta",
       contentIndex: blockIndex(),
       delta: text,
-      partial: output,
     });
   };
   const flushPendingPostToolCallDeltas = () => {
