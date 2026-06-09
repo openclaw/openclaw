@@ -70,6 +70,7 @@ type ResolvePluginNodeCapabilityRoute = (
 ) => PluginNodeCapabilitySurface | undefined;
 
 let identityAvatarModulePromise: Promise<typeof import("../agents/identity-avatar.js")> | undefined;
+let audioSpeechHttpModulePromise: Promise<typeof import("./audio-speech-http.js")> | undefined;
 let controlUiModulePromise: Promise<typeof import("./control-ui.js")> | undefined;
 let embeddingsHttpModulePromise: Promise<typeof import("./embeddings-http.js")> | undefined;
 let managedImageAttachmentsModulePromise:
@@ -99,6 +100,11 @@ function getIdentityAvatarModule() {
 function getControlUiModule() {
   controlUiModulePromise ??= import("./control-ui.js");
   return controlUiModulePromise;
+}
+
+function getAudioSpeechHttpModule() {
+  audioSpeechHttpModulePromise ??= import("./audio-speech-http.js");
+  return audioSpeechHttpModulePromise;
 }
 
 function getEmbeddingsHttpModule() {
@@ -207,6 +213,10 @@ function isOpenAiModelsPath(pathname: string): boolean {
 
 function isEmbeddingsPath(pathname: string): boolean {
   return pathname === "/v1/embeddings";
+}
+
+function isAudioSpeechPath(pathname: string): boolean {
+  return pathname === "/v1/audio/speech";
 }
 
 function isOpenAiChatCompletionsPath(pathname: string): boolean {
@@ -489,6 +499,8 @@ export function createGatewayHttpServer(opts: {
   openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
+  audioSpeechEnabled?: boolean;
+  audioSpeechConfig?: import("../config/types.gateway.js").GatewayHttpAudioSpeechConfig;
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
@@ -512,6 +524,7 @@ export function createGatewayHttpServer(opts: {
     openAiChatCompletionsConfig,
     openResponsesEnabled,
     openResponsesConfig,
+    audioSpeechConfig,
     strictTransportSecurityHeader,
     handleHooksRequest,
     handlePluginRequest,
@@ -524,6 +537,7 @@ export function createGatewayHttpServer(opts: {
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   const loadGatewayConfig = opts.getRuntimeConfig ?? getRuntimeConfig;
   const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
+  const audioSpeechEnabled = opts.audioSpeechEnabled ?? false;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
         void handleRequestWithTrace(req, res);
@@ -604,7 +618,7 @@ export function createGatewayHttpServer(opts: {
           run: () => handleHooksRequest(req, res),
         },
       ];
-      if (openAiCompatEnabled && isOpenAiModelsPath(scopedRequestPath)) {
+      if ((openAiCompatEnabled || audioSpeechEnabled) && isOpenAiModelsPath(scopedRequestPath)) {
         requestStages.push({
           name: "models",
           run: async () =>
@@ -613,6 +627,7 @@ export function createGatewayHttpServer(opts: {
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
+              audioSpeechEnabled,
             }),
         });
       }
@@ -622,6 +637,19 @@ export function createGatewayHttpServer(opts: {
           run: async () =>
             (await getEmbeddingsHttpModule()).handleOpenAiEmbeddingsHttpRequest(req, res, {
               auth: resolvedAuthValue,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        });
+      }
+      if (audioSpeechEnabled && isAudioSpeechPath(scopedRequestPath)) {
+        requestStages.push({
+          name: "audio-speech",
+          run: async () =>
+            (await getAudioSpeechHttpModule()).handleOpenAiAudioSpeechHttpRequest(req, res, {
+              auth: resolvedAuthValue,
+              maxBodyBytes: audioSpeechConfig?.maxBodyBytes,
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,

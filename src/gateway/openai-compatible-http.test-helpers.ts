@@ -10,11 +10,13 @@ export async function startOpenAiCompatGatewayServer(options: {
   port: number;
   auth: GatewayServerOptions["auth"];
   openAiChatCompletionsEnabled?: boolean;
+  audioSpeechEnabled?: boolean;
 }) {
   return await options.startGatewayServer(options.port, {
     host: "127.0.0.1",
     auth: options.auth,
     controlUiEnabled: false,
     openAiChatCompletionsEnabled: options.openAiChatCompletionsEnabled ?? false,
+    audioSpeechEnabled: options.audioSpeechEnabled ?? false,
   });
 }
