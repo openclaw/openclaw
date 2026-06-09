@@ -244,7 +244,6 @@ describe("registerSubCliCommands", () => {
   it.each([
     ["plugins update", ["plugins", "update", "lossless-claw"]],
     ["plugins update --all", ["plugins", "update", "--all"]],
-    ["plugins install", ["plugins", "install", "lossless-claw"]],
     ["plugins list", ["plugins", "list"]],
     ["plugins inspect", ["plugins", "inspect", "lossless-claw"]],
     ["plugins registry --refresh", ["plugins", "registry", "--refresh"]],
@@ -258,6 +257,16 @@ describe("registerSubCliCommands", () => {
 
     expect(registerPluginsCli).toHaveBeenCalledTimes(1);
     expect(registerPluginCliCommandsFromValidatedConfig).not.toHaveBeenCalled();
+  });
+
+  it("preloads plugin CLI registrations for builtin plugins install", async () => {
+    process.argv = ["node", "openclaw", "plugins", "install", "lossless-claw"];
+    const program = new Command().name("openclaw");
+
+    await registerSubCliByName(program, "plugins");
+
+    expect(registerPluginsCli).toHaveBeenCalledTimes(1);
+    expect(registerPluginCliCommandsFromValidatedConfig).toHaveBeenCalledTimes(1);
   });
 
   it("does not preload plugin CLI registrations for bare plugin parent help", async () => {
