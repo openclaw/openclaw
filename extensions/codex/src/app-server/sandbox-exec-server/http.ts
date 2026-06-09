@@ -252,7 +252,7 @@ function readStreamingSandboxHttpResponse(params: {
   });
 }
 
-const SANDBOX_HTTP_REQUEST_SCRIPT = String.raw`
+export const SANDBOX_HTTP_REQUEST_SCRIPT = String.raw`
 tmp=$(mktemp "$TMPDIR/openclaw-http.XXXXXX.py" 2>/dev/null || mktemp "/tmp/openclaw-http.XXXXXX.py") || exit 1
 trap 'rm -f "$tmp"' EXIT
 cat > "$tmp" <<'PY'
@@ -276,6 +276,27 @@ BLOCKED_HOSTNAMES = {
     "localhost.localdomain",
     "metadata.google.internal",
 }
+CLOUD_METADATA_IP_ADDRESSES = {
+    "100.100.100.200",
+    "fd00:ec2::254",
+}
+BLOCKED_IPV4_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in (
+        "100.64.0.0/10",
+        "198.18.0.0/15",
+    )
+)
+BLOCKED_IPV6_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in (
+        "100::/64",
+        "2001:2::/48",
+        "2001:20::/28",
+        "2001:db8::/32",
+        "fec0::/10",
+    )
+)
 PINNED_ADDRESSES = {}
 
 def normalize_hostname(hostname):
@@ -295,6 +316,17 @@ def is_blocked_ip(address):
         parsed = ipaddress.ip_address(address)
     except ValueError:
         return False
+    embedded_ipv4 = extract_embedded_ipv4(parsed)
+    if embedded_ipv4 is not None and is_blocked_ip(str(embedded_ipv4)):
+        return True
+    if str(parsed).lower() in CLOUD_METADATA_IP_ADDRESSES:
+        return True
+    if isinstance(parsed, ipaddress.IPv4Address):
+        if any(parsed in network for network in BLOCKED_IPV4_NETWORKS):
+            return True
+    else:
+        if any(parsed in network for network in BLOCKED_IPV6_NETWORKS):
+            return True
     return (
         parsed.is_loopback
         or parsed.is_private
@@ -303,6 +335,30 @@ def is_blocked_ip(address):
         or parsed.is_reserved
         or parsed.is_unspecified
     )
+
+def ipv4_from_int(value):
+    return ipaddress.IPv4Address(value & 0xffffffff)
+
+def extract_embedded_ipv4(address):
+    if not isinstance(address, ipaddress.IPv6Address):
+        return None
+    if address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    value = int(address)
+    hextets = [(value >> shift) & 0xffff for shift in range(112, -1, -16)]
+    if hextets[:6] == [0, 0, 0, 0, 0, 0]:
+        return ipv4_from_int(value)
+    if hextets[:6] == [0x64, 0xff9b, 0, 0, 0, 0]:
+        return ipv4_from_int(value)
+    if hextets[:6] == [0x64, 0xff9b, 1, 0, 0, 0]:
+        return ipv4_from_int(value)
+    if hextets[0] == 0x2002:
+        return ipv4_from_int((hextets[1] << 16) | hextets[2])
+    if hextets[0] == 0x2001 and hextets[1] == 0:
+        return ipv4_from_int(((hextets[6] << 16) | hextets[7]) ^ 0xffffffff)
+    if (hextets[4] & 0xfcff) == 0 and hextets[5] == 0x5efe:
+        return ipv4_from_int((hextets[6] << 16) | hextets[7])
+    return None
 
 def assert_url_allowed(url):
     parsed = urllib.parse.urlparse(url)
