@@ -33,8 +33,13 @@
     "CC",
     "CXX",
     "CARGO_BUILD_RUSTC",
+    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
     "CARGO_BUILD_RUSTC_WRAPPER",
+    "CARGO_BUILD_RUSTDOC",
+    "RUSTC",
+    "RUSTC_WORKSPACE_WRAPPER",
     "RUSTC_WRAPPER",
+    "RUSTDOC",
     "CMAKE_C_COMPILER",
     "CMAKE_CXX_COMPILER",
     "SHELL",
@@ -285,6 +290,12 @@
     "XDG_STATE_HOME",
     "ZDOTDIR"
   ],
-  "blockedOverridePrefixes": ["GIT_CONFIG_", "NPM_CONFIG_", "CARGO_REGISTRIES_", "TF_VAR_"],
+  "blockedOverridePrefixes": [
+    "GIT_CONFIG_",
+    "NPM_CONFIG_",
+    "CARGO_REGISTRIES_",
+    "CARGO_TARGET_",
+    "TF_VAR_"
+  ],
   "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_"]
 }

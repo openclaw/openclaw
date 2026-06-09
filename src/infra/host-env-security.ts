@@ -37,6 +37,11 @@ const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Ob
 const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_PREFIX_VALUES: readonly string[] = Object.freeze([
   "LC_",
 ]);
+const CARGO_TARGET_EXECUTABLE_CONFIG_ENV_PREFIX = "CARGO_TARGET_";
+const CARGO_TARGET_EXECUTABLE_CONFIG_ENV_SUFFIXES: readonly string[] = Object.freeze([
+  "_LINKER",
+  "_RUNNER",
+]);
 const HOST_DANGEROUS_ENV_KEYS = new Set<string>(HOST_DANGEROUS_ENV_KEY_VALUES);
 const HOST_DANGEROUS_INHERITED_ENV_KEYS = new Set<string>(HOST_DANGEROUS_INHERITED_ENV_KEY_VALUES);
 const HOST_DANGEROUS_OVERRIDE_ENV_KEYS = new Set<string>(HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES);
@@ -56,6 +61,13 @@ function isShellWrapperAllowedOverrideEnvVarName(rawKey: string): boolean {
   return HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_PREFIX_VALUES.some((prefix) =>
     upper.startsWith(prefix),
   );
+}
+
+function isDangerousCargoTargetExecutableConfigEnvVarName(upperKey: string): boolean {
+  if (!upperKey.startsWith(CARGO_TARGET_EXECUTABLE_CONFIG_ENV_PREFIX)) {
+    return false;
+  }
+  return CARGO_TARGET_EXECUTABLE_CONFIG_ENV_SUFFIXES.some((suffix) => upperKey.endsWith(suffix));
 }
 
 type HostExecEnvSanitizationResult = {
@@ -103,6 +115,9 @@ export function isDangerousHostEnvVarName(rawKey: string): boolean {
   if (HOST_DANGEROUS_ENV_KEYS.has(upper)) {
     return true;
   }
+  if (isDangerousCargoTargetExecutableConfigEnvVarName(upper)) {
+    return true;
+  }
   return HOST_DANGEROUS_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
 }
 
@@ -115,6 +130,9 @@ export function isDangerousHostInheritedEnvVarName(rawKey: string): boolean {
   if (HOST_DANGEROUS_INHERITED_ENV_KEYS.has(upper)) {
     return true;
   }
+  if (isDangerousCargoTargetExecutableConfigEnvVarName(upper)) {
+    return true;
+  }
   return HOST_DANGEROUS_INHERITED_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
 }
 
@@ -125,6 +143,9 @@ export function isDangerousHostEnvOverrideVarName(rawKey: string): boolean {
   }
   const upper = key.toUpperCase();
   if (HOST_DANGEROUS_OVERRIDE_ENV_KEYS.has(upper)) {
+    return true;
+  }
+  if (isDangerousCargoTargetExecutableConfigEnvVarName(upper)) {
     return true;
   }
   return HOST_DANGEROUS_OVERRIDE_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));

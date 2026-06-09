@@ -9,7 +9,11 @@
     "BZR_PLUGIN_PATH",
     "BZR_SSH",
     "CARGO_BUILD_RUSTC",
+    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
     "CARGO_BUILD_RUSTC_WRAPPER",
+    "CARGO_BUILD_RUSTDOC",
+    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER",
     "CATALINA_OPTS",
     "CC",
     "CMAKE_CXX_COMPILER",
@@ -81,7 +85,10 @@
     "RUBYLIB",
     "RUBYOPT",
     "RUBYSHELL",
+    "RUSTC",
+    "RUSTC_WORKSPACE_WRAPPER",
     "RUSTC_WRAPPER",
+    "RUSTDOC",
     "R_ENVIRON",
     "R_ENVIRON_USER",
     "R_PROFILE",
@@ -248,5 +255,5 @@
     "YARN_RC_FILENAME",
     "ZDOTDIR"
   ],
-  "expectedTotalReportedEntries": 243
+  "expectedTotalReportedEntries": 250
 }

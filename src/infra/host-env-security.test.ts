@@ -157,15 +157,23 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("cxx")).toBe(true);
     expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC")).toBe(true);
     expect(isDangerousHostEnvVarName("cargo_build_rustc")).toBe(true);
+    expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER")).toBe(true);
     expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC_WRAPPER")).toBe(true);
     expect(isDangerousHostEnvVarName("cargo_build_rustc_wrapper")).toBe(true);
+    expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTDOC")).toBe(true);
+    expect(isDangerousHostEnvVarName("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER")).toBe(true);
+    expect(isDangerousHostEnvVarName("cargo_target_x86_64_unknown_linux_gnu_runner")).toBe(true);
+    expect(isDangerousHostEnvVarName("CARGO_TARGET_DIR")).toBe(false);
     expect(isDangerousHostEnvVarName("cargo_home")).toBe(false);
     expect(isDangerousHostEnvVarName("CMAKE_C_COMPILER")).toBe(true);
     expect(isDangerousHostEnvVarName("cmake_c_compiler")).toBe(true);
     expect(isDangerousHostEnvVarName("CMAKE_CXX_COMPILER")).toBe(true);
     expect(isDangerousHostEnvVarName("cmake_cxx_compiler")).toBe(true);
+    expect(isDangerousHostEnvVarName("RUSTC")).toBe(true);
+    expect(isDangerousHostEnvVarName("rustc_workspace_wrapper")).toBe(true);
     expect(isDangerousHostEnvVarName("RUSTC_WRAPPER")).toBe(true);
     expect(isDangerousHostEnvVarName("rustc_wrapper")).toBe(true);
+    expect(isDangerousHostEnvVarName("RUSTDOC")).toBe(true);
     expect(isDangerousHostEnvVarName("HELM_HOME")).toBe(false);
     expect(isDangerousHostEnvVarName("SHELLOPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ps4")).toBe(true);
@@ -316,8 +324,16 @@ describe("sanitizeHostExecEnv", () => {
         GIT_NAMESPACE: "evil-namespace",
         GIT_SEQUENCE_EDITOR: "/tmp/pwn-sequence-editor",
         HGRCPATH: "/tmp/evil-hgrc",
+        CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER: "/tmp/evil-rustc-workspace-wrapper",
         CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+        CARGO_BUILD_RUSTDOC: "/tmp/evil-rustdoc",
+        CARGO_TARGET_DIR: "/tmp/trusted-target",
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: "/tmp/evil-linker",
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "/tmp/evil-runner",
+        RUSTC: "/tmp/evil-rustc",
+        RUSTC_WORKSPACE_WRAPPER: "/tmp/evil-rustc-workspace-wrapper",
         RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+        RUSTDOC: "/tmp/evil-rustdoc",
         JAVA_OPTS: "-javaagent:/tmp/evil.jar",
         MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
         MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
@@ -361,6 +377,7 @@ describe("sanitizeHostExecEnv", () => {
       SSL_CERT_DIR: "/tmp/evil-cert-dir",
       DOCKER_CONTEXT: "trusted-remote",
       DOCKER_HOST: "tcp://docker.example.test:2376",
+      CARGO_TARGET_DIR: "/tmp/trusted-target",
       OK: "1",
     });
   });
@@ -383,10 +400,18 @@ describe("sanitizeHostExecEnv", () => {
         CC: "/tmp/evil-cc",
         CXX: "/tmp/evil-cxx",
         CARGO_BUILD_RUSTC: "/tmp/evil-rustc",
+        CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER: "/tmp/evil-rustc-workspace-wrapper",
         CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+        CARGO_BUILD_RUSTDOC: "/tmp/evil-rustdoc",
+        CARGO_TARGET_DIR: "/tmp/evil-target",
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: "/tmp/evil-linker",
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "/tmp/evil-runner",
         CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
         CMAKE_CXX_COMPILER: "/tmp/evil-cxx-compiler",
+        RUSTC: "/tmp/evil-rustc",
+        RUSTC_WORKSPACE_WRAPPER: "/tmp/evil-rustc-workspace-wrapper",
         RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+        RUSTDOC: "/tmp/evil-rustdoc",
         HGRCPATH: "/tmp/evil-hgrc",
         GIT_SSH_COMMAND: "touch /tmp/pwned",
         GIT_EDITOR: "/tmp/git-editor",
@@ -477,10 +502,18 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.CC).toBeUndefined();
     expect(env.CXX).toBeUndefined();
     expect(env.CARGO_BUILD_RUSTC).toBeUndefined();
+    expect(env.CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER).toBeUndefined();
     expect(env.CARGO_BUILD_RUSTC_WRAPPER).toBeUndefined();
+    expect(env.CARGO_BUILD_RUSTDOC).toBeUndefined();
+    expect(env.CARGO_TARGET_DIR).toBeUndefined();
+    expect(env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER).toBeUndefined();
+    expect(env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER).toBeUndefined();
     expect(env.CMAKE_C_COMPILER).toBeUndefined();
     expect(env.CMAKE_CXX_COMPILER).toBeUndefined();
+    expect(env.RUSTC).toBeUndefined();
+    expect(env.RUSTC_WORKSPACE_WRAPPER).toBeUndefined();
     expect(env.RUSTC_WRAPPER).toBeUndefined();
+    expect(env.RUSTDOC).toBeUndefined();
     expect(env.HGRCPATH).toBeUndefined();
     expect(env.GIT_TEMPLATE_DIR).toBeUndefined();
     expect(env.GIT_INDEX_FILE).toBeUndefined();
@@ -822,6 +855,13 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("git_config_global")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CARGO_REGISTRIES_CRATES_IO_INDEX")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("cargo_registries_internal_index")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CARGO_TARGET_DIR")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER")).toBe(
+      true,
+    );
+    expect(isDangerousHostEnvOverrideVarName("cargo_target_x86_64_unknown_linux_gnu_runner")).toBe(
+      true,
+    );
     expect(isDangerousHostEnvOverrideVarName("GRADLE_USER_HOME")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("gradle_user_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("PIP_INDEX_URL")).toBe(true);
@@ -998,7 +1038,12 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         GOPRIVATE: "example.invalid/*",
         GOENV: "/tmp/evil-goenv",
         GOPATH: "/tmp/evil-go",
+        CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER: "/tmp/evil-rustc-workspace-wrapper",
+        CARGO_BUILD_RUSTDOC: "/tmp/evil-rustdoc",
         CARGO_HOME: "/tmp/evil-cargo",
+        CARGO_TARGET_DIR: "/tmp/evil-target",
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: "/tmp/evil-linker",
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "/tmp/evil-runner",
         HGRCPATH: "/tmp/evil-hgrc",
         MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
         MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
@@ -1008,7 +1053,10 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         NODE_REPL_HISTORY: "/tmp/node-repl-history",
         NODE_V8_COVERAGE: "/tmp/coverage",
         PYTHONUSERBASE: "/tmp/evil-python-userbase",
+        RUSTC: "/tmp/evil-rustc",
+        RUSTC_WORKSPACE_WRAPPER: "/tmp/evil-rustc-workspace-wrapper",
         RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+        RUSTDOC: "/tmp/evil-rustdoc",
         RUSTFLAGS: "-C link-args=-l/tmp/evil.so",
         VIRTUAL_ENV: "/tmp/evil-venv",
         JAVA_OPTS: "-javaagent:/tmp/evil.jar",
@@ -1027,9 +1075,14 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "AWS_SHARED_CREDENTIALS_FILE",
       "AWS_WEB_IDENTITY_TOKEN_FILE",
       "AZURE_AUTH_LOCATION",
+      "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
       "CARGO_BUILD_RUSTC_WRAPPER",
+      "CARGO_BUILD_RUSTDOC",
       "CARGO_HOME",
       "CARGO_REGISTRIES_CRATES_IO_INDEX",
+      "CARGO_TARGET_DIR",
+      "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+      "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER",
       "CLASSPATH",
       "CMAKE_C_COMPILER",
       "CPATH",
@@ -1083,7 +1136,10 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "PIP_TRUSTED_HOST",
       "PYTHONUSERBASE",
       "REQUESTS_CA_BUNDLE",
+      "RUSTC",
+      "RUSTC_WORKSPACE_WRAPPER",
       "RUSTC_WRAPPER",
+      "RUSTDOC",
       "RUSTFLAGS",
       "SSL_CERT_DIR",
       "SSL_CERT_FILE",
@@ -1102,7 +1158,12 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.CXX).toBeUndefined();
     expect(result.env.CMAKE_C_COMPILER).toBeUndefined();
     expect(result.env.CARGO_BUILD_RUSTC_WRAPPER).toBeUndefined();
+    expect(result.env.CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER).toBeUndefined();
+    expect(result.env.CARGO_BUILD_RUSTDOC).toBeUndefined();
     expect(result.env.CARGO_REGISTRIES_CRATES_IO_INDEX).toBeUndefined();
+    expect(result.env.CARGO_TARGET_DIR).toBeUndefined();
+    expect(result.env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER).toBeUndefined();
+    expect(result.env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER).toBeUndefined();
     expect(result.env.PIP_INDEX_URL).toBeUndefined();
     expect(result.env.PIP_PYPI_URL).toBeUndefined();
     expect(result.env.PIP_EXTRA_INDEX_URL).toBeUndefined();
@@ -1163,7 +1224,10 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.MFLAGS).toBeUndefined();
     expect(result.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
     expect(result.env.PYTHONUSERBASE).toBeUndefined();
+    expect(result.env.RUSTC).toBeUndefined();
+    expect(result.env.RUSTC_WORKSPACE_WRAPPER).toBeUndefined();
     expect(result.env.RUSTC_WRAPPER).toBeUndefined();
+    expect(result.env.RUSTDOC).toBeUndefined();
     expect(result.env.RUSTFLAGS).toBeUndefined();
     expect(result.env.VIRTUAL_ENV).toBeUndefined();
     expect(result.env.YARN_RC_FILENAME).toBeUndefined();

@@ -14,6 +14,11 @@ enum HostEnvSanitizer {
     private static let blockedPrefixes = HostEnvSecurityPolicy.blockedPrefixes
     private static let blockedOverrideKeys = HostEnvSecurityPolicy.blockedOverrideKeys
     private static let blockedOverridePrefixes = HostEnvSecurityPolicy.blockedOverridePrefixes
+    private static let cargoTargetExecutableConfigPrefix = "CARGO_TARGET_"
+    private static let cargoTargetExecutableConfigSuffixes = [
+        "_LINKER",
+        "_RUNNER",
+    ]
     private static let shellWrapperAllowedOverrideKeys: Set<String> = [
         "TERM",
         "LANG",
@@ -27,17 +32,25 @@ enum HostEnvSanitizer {
 
     private static func isBlocked(_ upperKey: String) -> Bool {
         if self.blockedKeys.contains(upperKey) { return true }
+        if self.isCargoTargetExecutableConfig(upperKey) { return true }
         return self.blockedPrefixes.contains(where: { upperKey.hasPrefix($0) })
     }
 
     private static func isBlockedInherited(_ upperKey: String) -> Bool {
         if self.blockedInheritedKeys.contains(upperKey) { return true }
+        if self.isCargoTargetExecutableConfig(upperKey) { return true }
         return self.blockedInheritedPrefixes.contains(where: { upperKey.hasPrefix($0) })
     }
 
     private static func isBlockedOverride(_ upperKey: String) -> Bool {
         if self.blockedOverrideKeys.contains(upperKey) { return true }
+        if self.isCargoTargetExecutableConfig(upperKey) { return true }
         return self.blockedOverridePrefixes.contains(where: { upperKey.hasPrefix($0) })
+    }
+
+    private static func isCargoTargetExecutableConfig(_ upperKey: String) -> Bool {
+        guard upperKey.hasPrefix(self.cargoTargetExecutableConfigPrefix) else { return false }
+        return self.cargoTargetExecutableConfigSuffixes.contains(where: { upperKey.hasSuffix($0) })
     }
 
     private static func filterOverridesForShellWrapper(_ overrides: [String: String]?) -> [String: String]? {
