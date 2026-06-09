@@ -488,9 +488,11 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
         ...(identity
           ? {
               identity: {
-                username: identity.name,
-                iconUrl: identity.avatarUrl,
-                iconEmoji: identity.emoji,
+                ...(identity.name?.trim() ? { username: identity.name.trim() } : {}),
+                ...(identity.avatarUrl?.trim() ? { iconUrl: identity.avatarUrl.trim() } : {}),
+                ...(normalizeOptionalString(identity.emoji)
+                  ? { iconEmoji: normalizeOptionalString(identity.emoji) }
+                  : {}),
               },
             }
           : {}),
@@ -525,9 +527,11 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
         ...(identity
           ? {
               identity: {
-                username: identity.name,
-                iconUrl: identity.avatarUrl,
-                iconEmoji: identity.emoji,
+                ...(identity.name?.trim() ? { username: identity.name.trim() } : {}),
+                ...(identity.avatarUrl?.trim() ? { iconUrl: identity.avatarUrl.trim() } : {}),
+                ...(normalizeOptionalString(identity.emoji)
+                  ? { iconEmoji: normalizeOptionalString(identity.emoji) }
+                  : {}),
               },
             }
           : {}),
