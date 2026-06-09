@@ -11,7 +11,11 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
 } from "./auth-profiles/store.js";
-import type { OAuthCredential } from "./auth-profiles/types.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  OAuthCredential,
+} from "./auth-profiles/types.js";
 import { resolveInlineProviderApiKeyUsageId } from "./auth-profiles/usage.js";
 import type { ClaudeCliCredential } from "./cli-credentials.js";
 import {
@@ -994,10 +998,12 @@ describe("getApiKeyForModel", () => {
         providers: {
           "demo-local": {
             apiKey: "demo-key",
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [testModelDefinition("demo-model")],
           },
         },
       },
-    };
+    } as unknown as OpenClawConfig;
 
     // Initially available
     await expect(
@@ -1010,7 +1016,7 @@ describe("getApiKeyForModel", () => {
 
     // Mark failure to trigger cooldown
     const usageId = resolveInlineProviderApiKeyUsageId("demo-local");
-    store.usageStats[usageId] = {
+    store.usageStats![usageId] = {
       disabledUntil: Date.now() + 60_000,
       disabledReason: "billing",
     };
