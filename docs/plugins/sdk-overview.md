@@ -227,8 +227,8 @@ The contracts intentionally split authority:
   metadata, next-turn injections, and normal hooks.
 - Trusted tool policies run before ordinary `before_tool_call` hooks and are
   host-trusted. Bundled policies run first; installed-plugin policies require
-  their ids in `contracts.trustedToolPolicies` and run next in plugin-load
-  order.
+  their local ids in `contracts.trustedToolPolicies` and run next in
+  plugin-load order. Policy ids are scoped to the registering plugin.
 - Reserved command ownership is bundled-only. External plugins should use their
   own command names or aliases.
 - `allowPromptInjection=false` disables prompt-mutating hooks including

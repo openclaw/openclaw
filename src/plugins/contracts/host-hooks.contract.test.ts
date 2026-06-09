@@ -226,6 +226,74 @@ describe("host-hook fixture plugin contract", () => {
     expect(diagnostics[0]?.message).toContain("only bundled plugins can claim reserved command");
   });
 
+  it("scopes installed trusted policy ids to the registering plugin", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    for (const pluginId of ["budget-policy-a", "budget-policy-b"]) {
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({
+          id: pluginId,
+          name: pluginId,
+          origin: "workspace",
+          contracts: { trustedToolPolicies: ["workflow-budget"] },
+        }),
+        register(api) {
+          api.registerTrustedToolPolicy({
+            id: "workflow-budget",
+            description: `${pluginId} workflow budget policy`,
+            evaluate: () => undefined,
+          });
+        },
+      });
+    }
+
+    expect(
+      (registry.registry.trustedToolPolicies ?? []).map((entry) => [
+        entry.pluginId,
+        entry.policy.id,
+      ]),
+    ).toEqual([
+      ["budget-policy-a", "workflow-budget"],
+      ["budget-policy-b", "workflow-budget"],
+    ]);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([]);
+  });
+
+  it("rejects duplicate trusted policy ids from the same plugin", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "duplicate-policy",
+        name: "Duplicate Policy",
+        origin: "workspace",
+        contracts: { trustedToolPolicies: ["workflow-budget"] },
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "workflow-budget",
+          description: "First workflow budget policy",
+          evaluate: () => undefined,
+        });
+        api.registerTrustedToolPolicy({
+          id: "workflow-budget",
+          description: "Duplicate workflow budget policy",
+          evaluate: () => undefined,
+        });
+      },
+    });
+
+    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(1);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "duplicate-policy",
+        message: "trusted tool policy already registered: workflow-budget (duplicate-policy)",
+      },
+    ]);
+  });
+
   it("runs bundled trusted policies before declared external trusted policies", async () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
@@ -271,7 +339,7 @@ describe("host-hook fixture plugin contract", () => {
     expect(result?.blockReason).toBe("bundled policy");
   });
 
-  it("lets bundled trusted policies replace declared external policies with the same id", async () => {
+  it("keeps same-id bundled and installed trusted policies owner-scoped", async () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
       registry,
@@ -308,15 +376,13 @@ describe("host-hook fixture plugin contract", () => {
     });
     setActivePluginRegistry(registry.registry);
 
-    expect(registry.registry.trustedToolPolicies).toHaveLength(1);
-    expect(registry.registry.trustedToolPolicies?.[0]?.pluginId).toBe("bundled-policy");
-    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
-      {
-        pluginId: "external-policy",
-        message:
-          "trusted tool policy shared-deny from external-policy was replaced by bundled policy bundled-policy",
-      },
+    expect(
+      registry.registry.trustedToolPolicies?.map((entry) => [entry.pluginId, entry.policy.id]),
+    ).toEqual([
+      ["bundled-policy", "shared-deny"],
+      ["external-policy", "shared-deny"],
     ]);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([]);
 
     const result = await runTrustedToolPolicies(
       { toolName: "exec", params: {} },

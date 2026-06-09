@@ -652,26 +652,26 @@ read without importing the plugin runtime.
 
 Each list is optional:
 
-| Field                            | Type       | What it means                                                                                                           |
-| -------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids, currently `codex-app-server`.                                                   |
-| `agentToolResultMiddleware`      | `string[]` | Runtime ids this plugin may register tool-result middleware for.                                                        |
-| `trustedToolPolicies`            | `string[]` | Trusted pre-tool policy ids an installed plugin may register. Bundled plugins may register policies without this field. |
-| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.                                                         |
-| `embeddingProviders`             | `string[]` | General embedding provider ids this plugin owns for reusable vector embedding use, including memory.                    |
-| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                                                                   |
-| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                                                                   |
-| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                                           |
-| `memoryEmbeddingProviders`       | `string[]` | Deprecated memory-specific embedding provider ids this plugin owns.                                                     |
-| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                                      |
-| `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                                        |
-| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                                         |
-| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                                         |
-| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                                                |
-| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                                               |
-| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                                            |
-| `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                     |
-| `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                                      |
+| Field                            | Type       | What it means                                                                                                                        |
+| -------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids, currently `codex-app-server`.                                                                |
+| `agentToolResultMiddleware`      | `string[]` | Runtime ids this plugin may register tool-result middleware for.                                                                     |
+| `trustedToolPolicies`            | `string[]` | Plugin-local trusted pre-tool policy ids an installed plugin may register. Bundled plugins may register policies without this field. |
+| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.                                                                      |
+| `embeddingProviders`             | `string[]` | General embedding provider ids this plugin owns for reusable vector embedding use, including memory.                                 |
+| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                                                                                |
+| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                                                                                |
+| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                                                        |
+| `memoryEmbeddingProviders`       | `string[]` | Deprecated memory-specific embedding provider ids this plugin owns.                                                                  |
+| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                                                   |
+| `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                                                     |
+| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                                                      |
+| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                                                      |
+| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                                                             |
+| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                                                            |
+| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                                                         |
+| `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                                  |
+| `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                                                   |
 
 `contracts.embeddedExtensionFactories` is retained for bundled Codex
 app-server-only extension factories. Bundled tool-result transforms should
@@ -681,9 +681,11 @@ the same middleware seam only for runtimes they declare in
 `contracts.agentToolResultMiddleware`.
 
 Installed plugins that need the host-trusted pre-tool policy tier must declare
-each registered id in `contracts.trustedToolPolicies`. Bundled plugins keep the
-existing trusted-policy path, but installed plugins with undeclared policy ids
-are rejected before registration.
+each registered local id in `contracts.trustedToolPolicies`. Bundled plugins
+keep the existing trusted-policy path, but installed plugins with undeclared
+policy ids are rejected before registration. Policy ids are scoped to the
+registering plugin, so two plugins may both declare and register
+`workflow-budget`; a single plugin may not register the same local id twice.
 
 Runtime `api.registerTool(...)` registrations must match `contracts.tools`.
 Tool discovery uses this list to load only the plugin runtimes that can own the

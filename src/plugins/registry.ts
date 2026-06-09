@@ -2040,9 +2040,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     const policies = (registry.trustedToolPolicies ??= []);
-    const existingPolicyIndex = policies.findIndex((entry) => entry.policy.id === id);
-    const existing = existingPolicyIndex >= 0 ? policies[existingPolicyIndex] : undefined;
-    if (existing && (record.origin !== "bundled" || existing.origin === "bundled")) {
+    const existing = policies.find(
+      (entry) => entry.pluginId === record.id && entry.policy.id === id,
+    );
+    if (existing) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -2050,17 +2051,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         message: `trusted tool policy already registered: ${id} (${existing.pluginId})`,
       });
       return;
-    }
-    if (existing) {
-      policies.splice(existingPolicyIndex, 1);
-      const message = `trusted tool policy ${id} from ${existing.pluginId} was replaced by bundled policy ${record.id}`;
-      pushDiagnostic({
-        level: "warn",
-        pluginId: existing.pluginId,
-        source: existing.source,
-        message,
-      });
-      registryParams.logger.warn(`[plugins] ${message}`);
     }
     const registration: PluginTrustedToolPolicyRegistryRegistration = {
       pluginId: record.id,

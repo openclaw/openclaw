@@ -234,8 +234,9 @@ policies run first; installed-plugin trusted policies run next in plugin-load
 order; ordinary `before_tool_call` hooks run after them. Bundled plugins keep
 the existing trusted-policy path. Installed plugins must declare every policy id
 in `contracts.trustedToolPolicies`; undeclared ids are rejected before
-registration. Use this tier only for host-trusted gates such as workspace
-policy, budget enforcement, or reserved workflow safety.
+registration. Policy ids are scoped to the registering plugin, so different
+plugins may reuse the same local id. Use this tier only for host-trusted gates
+such as workspace policy, budget enforcement, or reserved workflow safety.
 
 ### Exec environment hook
 
