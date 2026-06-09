@@ -1,4 +1,5 @@
 import type { PluginLogger, PluginRuntime } from "../api.js";
+import { extractMessageText } from "./message-text.js";
 import type { TopicInfo } from "./topic-resolver.js";
 
 /**
@@ -52,40 +53,6 @@ function buildMessage(requirement: string, candidates: TopicInfo[]): string {
     "若没有任何项目能明确对应，topicId 返回 null。",
     '只输出一个 JSON 对象：{"topicId": <项目id 或 null>}',
   ].join("\n");
-}
-
-/**
- * Extract plain text from a session message's content, which is a string in
- * simple sessions but an array of content blocks ([{type:"text", text}, ...])
- * in tool-using sessions. Mirrors report-generator's extractMessageText (each
- * extension is self-contained, so the small helper is duplicated by design).
- *
- * Handling the array form is essential: the classifier's "{topicId: N}" answer
- * arrives as content blocks, and reading only string content silently dropped
- * it — the picker then fell back to substring matching even though the model
- * had answered correctly.
- */
-function extractMessageText(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content)) {
-    return content
-      .map((block) => {
-        if (typeof block === "string") {
-          return block;
-        }
-        if (block && typeof block === "object") {
-          const b = block as { text?: unknown };
-          if (typeof b.text === "string") {
-            return b.text;
-          }
-        }
-        return "";
-      })
-      .join("");
-  }
-  return "";
 }
 
 /** The latest assistant turn's text, or null when there is none. */

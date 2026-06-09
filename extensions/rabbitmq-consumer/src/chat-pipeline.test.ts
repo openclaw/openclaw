@@ -298,6 +298,33 @@ describe("processChatMessage", () => {
     expect(updateResponse).toHaveBeenCalledWith(1, "full canonical answer");
   });
 
+  it("extracts text from array-form (block) assistant content without throwing", async () => {
+    // Regression: tool-using sessions return content as content blocks, not a
+    // string. The pipeline used to assign the raw array to fullResponse, which
+    // crashed once the output sanitizer called .replace ("text.replace is not a
+    // function"). It must extract the text and persist the string.
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      sessionMessages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: [{ type: "text", text: "块状内容答案" }] },
+      ],
+    });
+    const { historyManager, updateResponse } = createHistoryManagerMock();
+
+    const result = await processChatMessage(
+      createChatMessage(),
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+    );
+
+    expect(result).toBe("块状内容答案");
+    expect(updateResponse).toHaveBeenCalledWith(1, "块状内容答案");
+  });
+
   it("injects the resolved topic ownership into the subagent message", async () => {
     // Regression: the chat path used to pass only [userId:...], forcing the
     // agent to guess project ownership from the DB (it once reused a stale

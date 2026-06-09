@@ -53,6 +53,14 @@ describe("sanitizeInternalRefs", () => {
     expect(sanitizeInternalRefs("")).toBe("");
   });
 
+  it("never throws on non-string input (defensive)", () => {
+    // A raw content-block array used to crash the pipeline via .replace.
+    expect(() => sanitizeInternalRefs([{ text: "x" }] as never)).not.toThrow();
+    expect(sanitizeInternalRefs([{ text: "x" }] as never)).toBe("");
+    expect(sanitizeInternalRefs(null as never)).toBe("");
+    expect(sanitizeInternalRefs(undefined as never)).toBe("");
+  });
+
   it("collapses whitespace and dangling punctuation left by removals", () => {
     const out = sanitizeInternalRefs("结论：A。\n\n\n保存在 `memory/x.md`。\n\n下一步：B。");
     expect(out).not.toContain("memory");

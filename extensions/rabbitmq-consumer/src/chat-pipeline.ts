@@ -3,6 +3,7 @@ import type { DownloadManager } from "./download-manager.js";
 import type { FeedCounter } from "./feed-counter.js";
 import type { HistoryManager } from "./history-manager.js";
 import { MercurePusher, StreamingMercurePusher } from "./mercure-pusher.js";
+import { extractMessageText } from "./message-text.js";
 import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import type { ReportTemplateLookup } from "./report-template-lookup.js";
 import { computeDateScope, detectReportRequest, type ReportPeriod } from "./report-trigger.js";
@@ -509,10 +510,16 @@ export async function processChatMessage(
       let fullResponse = "";
       if (sessionMessages.messages && Array.isArray(sessionMessages.messages)) {
         for (const msg of [...sessionMessages.messages].toReversed()) {
-          const m = msg as { role?: string; content?: string };
-          if (m.role === "assistant" && m.content) {
-            fullResponse = m.content;
-            break;
+          const m = msg as { role?: string; content?: unknown };
+          if (m.role === "assistant") {
+            // content is a string in simple sessions but an array of content
+            // blocks in tool-using ones; extract text so downstream sanitizing
+            // (and storage) always works on a string, never a raw array.
+            const text = extractMessageText(m.content).trim();
+            if (text) {
+              fullResponse = text;
+              break;
+            }
           }
         }
       }

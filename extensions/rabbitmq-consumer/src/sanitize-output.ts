@@ -73,8 +73,10 @@ function tidy(text: string): string {
  * persisted response.
  */
 export function sanitizeInternalRefs(text: string): string {
-  if (!text) {
-    return text;
+  // Defensive: callers should pass a string, but a non-string (e.g. a raw
+  // content-block array) must never crash the chat pipeline via `.replace`.
+  if (typeof text !== "string" || !text) {
+    return typeof text === "string" ? text : "";
   }
   const stripped = text
     .replace(BACKTICKED_INTERNAL, "")
