@@ -163,7 +163,10 @@ import {
   buildWebchatAssistantMessageFromReplyPayloads,
   buildWebchatAudioContentBlocksFromReplyPayloads,
 } from "./chat-webchat-media.js";
-import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
+import {
+  loadOptionalServerMethodModelCatalog,
+  startOptionalServerMethodModelCatalogLoad,
+} from "./optional-model-catalog.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
@@ -514,6 +517,7 @@ export { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+const CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 25;
 const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
 let chatHistoryPlaceholderEmitCount = 0;
 const chatHistoryManagedImageCleanupState = new Map<string, Promise<void>>();
@@ -2475,14 +2479,26 @@ async function handleChatHistoryRequest({
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
     return;
   }
+  const startupModelCatalogLoad =
+    method === "chat.startup" ? startOptionalServerMethodModelCatalogLoad(context) : undefined;
   const modelCatalogPromise = measureDiagnosticsTimelineSpan(
     `gateway.${method}.model_catalog`,
-    () => loadOptionalServerMethodModelCatalog(context, method),
+    () =>
+      startupModelCatalogLoad
+        ? loadOptionalServerMethodModelCatalog(context, method, {
+            logOnceKey: "chat.startup",
+            startedLoad: startupModelCatalogLoad,
+            timeoutMs: CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS,
+          })
+        : loadOptionalServerMethodModelCatalog(context, method),
     {
       config: cfg,
       phase: method,
     },
   );
+  if (startupModelCatalogLoad) {
+    void modelCatalogPromise.catch(() => undefined);
+  }
   const sessionId = entry?.sessionId;
   const sessionAgentId = resolveSessionAgentId({
     sessionKey,
