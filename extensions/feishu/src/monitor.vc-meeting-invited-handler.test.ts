@@ -15,6 +15,21 @@ const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 const maybeCreateDynamicAgentMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
+const conversationBindingMocks = vi.hoisted(() => ({
+  resolveConfiguredBindingRoute: vi.fn(({ route }) => ({
+    bindingResolution: null,
+    route,
+  })),
+  resolveRuntimeConversationBindingRoute: vi.fn(
+    ({ route }: { route: Record<string, unknown>; conversation?: unknown }) => ({
+      bindingRecord: null as null | { bindingId: string; targetSessionKey: string },
+      route,
+      boundSessionKey: undefined as string | undefined,
+      boundAgentId: undefined as string | undefined,
+    }),
+  ),
+  ensureConfiguredBindingRouteReady: vi.fn(async () => ({ ok: true })),
+}));
 const replyDispatcherMocks = vi.hoisted(() => {
   const markDispatchIdle = vi.fn();
   const dispatcher = {
@@ -68,6 +83,13 @@ vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", () => ({
+  resolveConfiguredBindingRoute: conversationBindingMocks.resolveConfiguredBindingRoute,
+  resolveRuntimeConversationBindingRoute:
+    conversationBindingMocks.resolveRuntimeConversationBindingRoute,
+  ensureConfiguredBindingRouteReady: conversationBindingMocks.ensureConfiguredBindingRouteReady,
+}));
+
 vi.mock("./reply-dispatcher.js", () => ({
   createFeishuReplyDispatcher: replyDispatcherMocks.createFeishuReplyDispatcher,
 }));
@@ -87,6 +109,7 @@ afterAll(() => {
   vi.doUnmock("./thread-bindings.js");
   vi.doUnmock("./dynamic-agent.js");
   vi.doUnmock("./send.js");
+  vi.doUnmock("openclaw/plugin-sdk/conversation-binding-runtime");
   vi.doUnmock("./reply-dispatcher.js");
   vi.resetModules();
 });
@@ -315,6 +338,19 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     });
     maybeCreateDynamicAgentMock.mockResolvedValue({ created: false });
     sendMessageFeishuMock.mockResolvedValue({ messageId: "om_pair", chatId: "oc_dm" });
+    conversationBindingMocks.resolveConfiguredBindingRoute.mockImplementation(({ route }) => ({
+      bindingResolution: null,
+      route,
+    }));
+    conversationBindingMocks.resolveRuntimeConversationBindingRoute.mockImplementation(
+      ({ route }: { route: Record<string, unknown>; conversation?: unknown }) => ({
+        bindingRecord: null,
+        route,
+        boundSessionKey: undefined,
+        boundAgentId: undefined,
+      }),
+    );
+    conversationBindingMocks.ensureConfiguredBindingRouteReady.mockResolvedValue({ ok: true });
   });
 
   it("dispatches the VC invite through a synthetic no-reply inbound turn", async () => {
@@ -402,6 +438,80 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     expect(dispatchArgs?.dispatcher).toBe(replyDispatcherMocks.dispatcher);
     expect(dispatchArgs?.replyOptions).toEqual({ sourceReplyDeliveryMode: "automatic" });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves bound Feishu DM routes for VC invite turns", async () => {
+    const runtime = createTestRuntime({
+      readAllowFromStore: async () => ["ou_inviter_1"],
+    });
+    conversationBindingMocks.resolveRuntimeConversationBindingRoute.mockImplementation(
+      ({ route, conversation }) => {
+        expect(conversation).toEqual({
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "ou_inviter_1",
+        });
+        return {
+          bindingRecord: {
+            bindingId: "bind-feishu-dm",
+            targetSessionKey: "agent:bound:feishu:direct:ou_inviter_1",
+          },
+          boundSessionKey: "agent:bound:feishu:direct:ou_inviter_1",
+          boundAgentId: "bound",
+          route: {
+            ...route,
+            agentId: "bound",
+            sessionKey: "agent:bound:feishu:direct:ou_inviter_1",
+            mainSessionKey: "agent:bound:feishu",
+            matchedBy: "binding.channel",
+          },
+        };
+      },
+    );
+    setFeishuRuntime(runtime);
+    const handler = createFeishuVcMeetingInvitedHandler({
+      cfg: buildConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            dmPolicy: "pairing",
+            allowFrom: [],
+          },
+        },
+      }),
+      accountId: "default",
+      fireAndForget: false,
+    });
+
+    await handler(vcEvent);
+
+    expect(conversationBindingMocks.resolveConfiguredBindingRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversation: {
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "ou_inviter_1",
+        },
+      }),
+    );
+    const finalizedContext = mockCallArg(
+      runtime.channel.reply.finalizeInboundContext as ReturnType<typeof vi.fn>,
+      "finalizeInboundContext",
+    ) as Record<string, unknown>;
+    expect(finalizedContext.SessionKey).toBe("agent:bound:feishu:direct:ou_inviter_1");
+    expect(runtime.channel.session.resolveStorePath).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        agentId: "bound",
+      }),
+    );
+    expect(replyDispatcherMocks.createFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "bound",
+        chatId: "user:ou_inviter_1",
+        sessionKey: "agent:bound:feishu:direct:ou_inviter_1",
+      }),
+    );
   });
 
   it("sends a pairing challenge to the inviter when pairing mode blocks dispatch", async () => {

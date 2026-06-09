@@ -1,5 +1,10 @@
 import * as crypto from "node:crypto";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
+import {
+  ensureConfiguredBindingRouteReady,
+  resolveConfiguredBindingRoute,
+  resolveRuntimeConversationBindingRoute,
+} from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { createChannelPairingController } from "../runtime-api.js";
@@ -230,6 +235,53 @@ async function dispatchVcMeetingInvitedTurn(params: {
           },
         });
       }
+    }
+  }
+
+  const conversation = {
+    channel: "feishu",
+    accountId: account.accountId,
+    conversationId: params.turn.inviter.senderId,
+  };
+  const configuredRoute = resolveConfiguredBindingRoute({
+    cfg: effectiveCfg,
+    route,
+    conversation,
+  });
+  let configuredBinding = configuredRoute.bindingResolution;
+  route = configuredRoute.route;
+
+  const runtimeRoute = resolveRuntimeConversationBindingRoute({
+    route,
+    conversation,
+  });
+  route = runtimeRoute.route;
+  if (runtimeRoute.bindingRecord) {
+    configuredBinding = null;
+    log(
+      runtimeRoute.boundSessionKey
+        ? `feishu[${account.accountId}]: routed vc meeting invite via bound conversation ${params.turn.inviter.senderId} -> ${runtimeRoute.boundSessionKey}`
+        : `feishu[${account.accountId}]: plugin-bound vc meeting invite conversation ${params.turn.inviter.senderId}`,
+    );
+  }
+
+  if (configuredBinding) {
+    const ensured = await ensureConfiguredBindingRouteReady({
+      cfg: effectiveCfg,
+      bindingResolution: configuredBinding,
+    });
+    if (!ensured.ok) {
+      await sendMessageFeishu({
+        cfg: effectiveCfg,
+        to: `user:${params.turn.inviter.openId ?? params.turn.inviter.senderId}`,
+        text: `⚠️ Failed to initialize the configured ACP session for this Feishu conversation: ${ensured.error}`,
+        accountId: account.accountId,
+      }).catch((err: unknown) => {
+        log(
+          `feishu[${account.accountId}]: failed to send VC invite ACP init error reply: ${String(err)}`,
+        );
+      });
+      return;
     }
   }
 
