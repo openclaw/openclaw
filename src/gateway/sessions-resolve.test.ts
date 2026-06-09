@@ -177,6 +177,29 @@ describe("resolveSessionKeyFromResolveParams", () => {
     });
   });
 
+  it("resolves ACP harness session keys even when harness id is not in agents.list", async () => {
+    const acpKey = "agent:claude:acp:11111111-1111-4111-8111-111111111111";
+    hoisted.resolveGatewaySessionStoreTargetMock.mockReturnValue({
+      canonicalKey: acpKey,
+      storeKeys: [acpKey],
+      storePath,
+    });
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      [acpKey]: { sessionId: "sess-acp", updatedAt: 1, label: "claude-delegate-test" },
+    });
+    hoisted.listAgentIdsMock.mockReturnValue(["main"]);
+
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { key: acpKey },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      key: acpKey,
+    });
+  });
+
   it("rejects non-alias agent:main sessions when main is no longer configured", async () => {
     const staleMainKey = "agent:main:guildchat:direct:u1";
     hoisted.resolveGatewaySessionStoreTargetMock.mockReturnValue({

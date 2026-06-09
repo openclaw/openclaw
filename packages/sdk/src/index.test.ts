@@ -54,6 +54,18 @@ class FakeTransport implements OpenClawTransport {
   }
 }
 
+class EventsOnlyTransport implements OpenClawTransport {
+  constructor(private readonly eventSource: AsyncIterable<GatewayEvent>) {}
+
+  async request<T = unknown>(): Promise<T> {
+    return {} as T;
+  }
+
+  events(): AsyncIterable<GatewayEvent> {
+    return this.eventSource;
+  }
+}
+
 function requireTransportCall(calls: readonly RequestCall[], index: number): RequestCall {
   const call = calls[index];
   if (!call) {
@@ -681,6 +693,84 @@ describe("OpenClaw SDK", () => {
     }
 
     expect(seen).toEqual(["run.started", "assistant.delta", "run.completed"]);
+  });
+
+  it("rejects normalized event streams when the event pump fails before yielding", async () => {
+    const failure = new Error("synthetic transport event failure");
+    const transport = new EventsOnlyTransport({
+      [Symbol.asyncIterator](): AsyncIterator<GatewayEvent> {
+        return {
+          next: async () => {
+            throw failure;
+          },
+        };
+      },
+    });
+    const oc = new OpenClaw({ transport });
+    const iterator = oc.events()[Symbol.asyncIterator]();
+    let futureIterator: AsyncIterator<OpenClawEvent> | undefined;
+
+    try {
+      await expect(iterator.next()).rejects.toThrow("synthetic transport event failure");
+
+      futureIterator = oc.events()[Symbol.asyncIterator]();
+      await expect(futureIterator.next()).rejects.toThrow("synthetic transport event failure");
+    } finally {
+      await futureIterator?.return?.();
+      await iterator.return?.();
+      await oc.close();
+    }
+  });
+
+  it("rejects run event streams after replaying events when the event pump fails", async () => {
+    const failure = new Error("synthetic post-yield transport event failure");
+    const rawEvent: GatewayEvent = {
+      event: "agent",
+      seq: 1,
+      payload: {
+        runId: "run_pump_failure",
+        stream: "lifecycle",
+        ts: 1_777_000_000_050,
+        data: { phase: "start" },
+      },
+    };
+    const transport = new EventsOnlyTransport({
+      async *[Symbol.asyncIterator]() {
+        yield rawEvent;
+        throw failure;
+      },
+    });
+    const oc = new OpenClaw({ transport });
+    const run = await oc.runs.get("run_pump_failure");
+    const iterator = run.events()[Symbol.asyncIterator]();
+    let futureIterator: AsyncIterator<OpenClawEvent> | undefined;
+
+    try {
+      const first = await iterator.next();
+      expect(first.done).toBe(false);
+      if (first.done !== false) {
+        throw new Error("expected first run event");
+      }
+      expect(first.value.type).toBe("run.started");
+      expect(first.value.runId).toBe("run_pump_failure");
+
+      await expect(iterator.next()).rejects.toThrow("synthetic post-yield transport event failure");
+
+      futureIterator = run.events()[Symbol.asyncIterator]();
+      const replayed = await futureIterator.next();
+      expect(replayed.done).toBe(false);
+      if (replayed.done !== false) {
+        throw new Error("expected replayed run event");
+      }
+      expect(replayed.value.type).toBe("run.started");
+      await expect(futureIterator.next()).rejects.toThrow(
+        "synthetic post-yield transport event failure",
+      );
+    } finally {
+      await futureIterator?.return?.();
+      await iterator.return?.();
+      await oc.close();
+    }
   });
 
   it("does not surface raw chat projection events in per-run streams", async () => {

@@ -1,65 +1,34 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "ModelListResponse",
-  "type": "object",
-  "required": [
-    "data"
-  ],
-  "properties": {
-    "data": {
-      "type": "array",
-      "items": {
-        "$ref": "#/definitions/Model"
-      }
-    },
-    "nextCursor": {
-      "description": "Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
-      "type": [
-        "string",
-        "null"
-      ]
-    }
-  },
   "definitions": {
     "InputModality": {
       "description": "Canonical user-input modality tags advertised by a model.",
       "oneOf": [
         {
           "description": "Plain text turns and tool payloads.",
-          "type": "string",
           "enum": [
             "text"
-          ]
+          ],
+          "type": "string"
         },
         {
           "description": "Image attachments included in user turns.",
-          "type": "string",
           "enum": [
             "image"
-          ]
+          ],
+          "type": "string"
         }
       ]
     },
     "Model": {
-      "type": "object",
-      "required": [
-        "defaultReasoningEffort",
-        "description",
-        "displayName",
-        "hidden",
-        "id",
-        "isDefault",
-        "model",
-        "supportedReasoningEfforts"
-      ],
       "properties": {
         "additionalSpeedTiers": {
-          "description": "Deprecated: use `serviceTiers` instead.",
           "default": [],
-          "type": "array",
+          "description": "Deprecated: use `serviceTiers` instead.",
           "items": {
             "type": "string"
-          }
+          },
+          "type": "array"
         },
         "availabilityNux": {
           "anyOf": [
@@ -73,6 +42,14 @@
         },
         "defaultReasoningEffort": {
           "$ref": "#/definitions/ReasoningEffort"
+        },
+        "defaultServiceTier": {
+          "default": null,
+          "description": "Catalog default service tier id for this model, when one is configured.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "description": {
           "type": "string"
@@ -91,10 +68,10 @@
             "text",
             "image"
           ],
-          "type": "array",
           "items": {
             "$ref": "#/definitions/InputModality"
-          }
+          },
+          "type": "array"
         },
         "isDefault": {
           "type": "boolean"
@@ -104,16 +81,16 @@
         },
         "serviceTiers": {
           "default": [],
-          "type": "array",
           "items": {
             "$ref": "#/definitions/ModelServiceTier"
-          }
+          },
+          "type": "array"
         },
         "supportedReasoningEfforts": {
-          "type": "array",
           "items": {
             "$ref": "#/definitions/ReasoningEffortOption"
-          }
+          },
+          "type": "array"
         },
         "supportsPersonality": {
           "default": false,
@@ -135,26 +112,31 @@
             }
           ]
         }
-      }
+      },
+      "required": [
+        "defaultReasoningEffort",
+        "description",
+        "displayName",
+        "hidden",
+        "id",
+        "isDefault",
+        "model",
+        "supportedReasoningEfforts"
+      ],
+      "type": "object"
     },
     "ModelAvailabilityNux": {
-      "type": "object",
-      "required": [
-        "message"
-      ],
       "properties": {
         "message": {
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "message"
+      ],
+      "type": "object"
     },
     "ModelServiceTier": {
-      "type": "object",
-      "required": [
-        "description",
-        "id",
-        "name"
-      ],
       "properties": {
         "description": {
           "type": "string"
@@ -165,13 +147,15 @@
         "name": {
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "description",
+        "id",
+        "name"
+      ],
+      "type": "object"
     },
     "ModelUpgradeInfo": {
-      "type": "object",
-      "required": [
-        "model"
-      ],
       "properties": {
         "migrationMarkdown": {
           "type": [
@@ -194,11 +178,14 @@
             "null"
           ]
         }
-      }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
-      "type": "string",
       "enum": [
         "none",
         "minimal",
@@ -206,14 +193,10 @@
         "medium",
         "high",
         "xhigh"
-      ]
+      ],
+      "type": "string"
     },
     "ReasoningEffortOption": {
-      "type": "object",
-      "required": [
-        "description",
-        "reasoningEffort"
-      ],
       "properties": {
         "description": {
           "type": "string"
@@ -221,7 +204,32 @@
         "reasoningEffort": {
           "$ref": "#/definitions/ReasoningEffort"
         }
-      }
+      },
+      "required": [
+        "description",
+        "reasoningEffort"
+      ],
+      "type": "object"
     }
-  }
+  },
+  "properties": {
+    "data": {
+      "items": {
+        "$ref": "#/definitions/Model"
+      },
+      "type": "array"
+    },
+    "nextCursor": {
+      "description": "Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "data"
+  ],
+  "title": "ModelListResponse",
+  "type": "object"
 }

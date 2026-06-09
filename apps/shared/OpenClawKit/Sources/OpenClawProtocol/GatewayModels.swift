@@ -2773,6 +2773,7 @@ public struct ConfigPatchParams: Codable, Sendable {
     public let deliverycontext: [String: AnyCodable]?
     public let note: String?
     public let restartdelayms: Int?
+    public let replacepaths: [String]?
 
     public init(
         raw: String,
@@ -2780,7 +2781,8 @@ public struct ConfigPatchParams: Codable, Sendable {
         sessionkey: String?,
         deliverycontext: [String: AnyCodable]?,
         note: String?,
-        restartdelayms: Int?)
+        restartdelayms: Int?,
+        replacepaths: [String]?)
     {
         self.raw = raw
         self.basehash = basehash
@@ -2788,6 +2790,7 @@ public struct ConfigPatchParams: Codable, Sendable {
         self.deliverycontext = deliverycontext
         self.note = note
         self.restartdelayms = restartdelayms
+        self.replacepaths = replacepaths
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2797,6 +2800,7 @@ public struct ConfigPatchParams: Codable, Sendable {
         case deliverycontext = "deliveryContext"
         case note
         case restartdelayms = "restartDelayMs"
+        case replacepaths = "replacePaths"
     }
 }
 
