@@ -7,6 +7,7 @@ import {
 } from "../../../packages/normalization-core/src/string-coerce.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
+import { redactIdentifier } from "../../logging/redact-identifier.js";
 import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -142,6 +143,11 @@ function sanitizeContextValue(value: string): string {
     .trim();
 }
 
+function redactContextIdentifier(value: string): string | undefined {
+  const sanitizedValue = sanitizeContextValue(value);
+  return sanitizedValue ? redactIdentifier(sanitizedValue, { len: 12 }) : undefined;
+}
+
 export function buildTransientErrorContext(raw: string, opts?: TransientErrorContextOpts): string {
   const parts: string[] = [];
   const provider = opts?.provider ? sanitizeContextValue(opts.provider) : "";
@@ -151,7 +157,7 @@ export function buildTransientErrorContext(raw: string, opts?: TransientErrorCon
     parts.push(providerModel);
   }
   if (opts?.profileId) {
-    const profileId = sanitizeContextValue(opts.profileId);
+    const profileId = redactContextIdentifier(opts.profileId);
     if (profileId) {
       parts.push(`profile=${profileId}`);
     }
@@ -163,16 +169,16 @@ export function buildTransientErrorContext(raw: string, opts?: TransientErrorCon
     }
   }
   if (opts?.sessionKey) {
-    const sessionKey = sanitizeContextValue(opts.sessionKey);
+    const sessionKey = redactContextIdentifier(opts.sessionKey);
     if (sessionKey) {
       parts.push(`session=${sessionKey}`);
     }
   }
   const requestId = extractRequestId(raw);
   if (requestId) {
-    const sanitizedRequestId = sanitizeContextValue(requestId);
-    if (sanitizedRequestId) {
-      parts.push(`req=${sanitizedRequestId}`);
+    const redactedRequestId = redactContextIdentifier(requestId);
+    if (redactedRequestId) {
+      parts.push(`req=${redactedRequestId}`);
     }
   }
   return parts.length > 0 ? ` [${parts.join(", ")}]` : "";

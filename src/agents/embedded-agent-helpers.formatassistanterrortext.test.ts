@@ -39,7 +39,7 @@ describe("formatAssistantErrorText", () => {
         },
       ),
     ).toBe(
-      " [anthropic/claude-sonnet-4-6, profile=anthropic:manual, trigger=heartbeat, session=agent:main:telegram:group:g1, req=req_123]",
+      " [anthropic/claude-sonnet-4-6, profile=sha256:05de48835ed0, trigger=heartbeat, session=sha256:a1d807d08d9f, req=sha256:30c7954a8957]",
     );
   });
 
@@ -54,7 +54,7 @@ describe("formatAssistantErrorText", () => {
         model: "claude\tsonnet\n4",
         profileId: "manual\rprofile",
       }),
-    ).toBe(" [anthropic/claude sonnet 4, profile=manual profile]");
+    ).toBe(" [anthropic/claude sonnet 4, profile=sha256:6f218d6ffc65]");
   });
 
   it("returns a friendly message for context overflow", () => {
@@ -99,7 +99,7 @@ describe("formatAssistantErrorText", () => {
       '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_123"}',
     );
     expect(formatAssistantErrorText(msg)).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment. [test-model, req=req_123]",
+      "The AI service is temporarily overloaded. Please try again in a moment. [test-model, req=sha256:30c7954a8957]",
     );
   });
 
@@ -116,7 +116,7 @@ describe("formatAssistantErrorText", () => {
         sessionKey: "agent:main:telegram:group:g1",
       }),
     ).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment. [anthropic/claude-sonnet-4-6, profile=anthropic:manual, trigger=heartbeat, session=agent:main:telegram:group:g1]",
+      "The AI service is temporarily overloaded. Please try again in a moment. [anthropic/claude-sonnet-4-6, profile=sha256:05de48835ed0, trigger=heartbeat, session=sha256:a1d807d08d9f]",
     );
   });
   it("rewrites generic provider internal errors without support request ids", () => {
@@ -353,8 +353,10 @@ describe("formatAssistantErrorText", () => {
       sessionKey: "agent:main:cron:job1",
     });
     expect(result).toBe(
-      "⚠️ Rate limit reached. Try again in 30 seconds. [openai/gpt-5.4, profile=openai:primary, trigger=cron, session=agent:main:cron:job1]",
+      "⚠️ Rate limit reached. Try again in 30 seconds. [openai/gpt-5.4, profile=sha256:926fa0a366f6, trigger=cron, session=sha256:397dee418e88]",
     );
+    expect(result).not.toContain("openai:primary");
+    expect(result).not.toContain("agent:main:cron:job1");
   });
 
   it("strips leading HTTP status code prefix from non-JSON rate limit messages", () => {

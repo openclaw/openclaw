@@ -14,7 +14,7 @@ import {
 describe("buildEmbeddedRunPayloads", () => {
   const OVERLOADED_FALLBACK_BASE =
     "The AI service is temporarily overloaded. Please try again in a moment.";
-  const OVERLOADED_FALLBACK_TEXT = `${OVERLOADED_FALLBACK_BASE} [test-model, session=session:telegram, req=req_011CX7DwS7tSvggaNHmefwWg]`;
+  const OVERLOADED_FALLBACK_TEXT = `${OVERLOADED_FALLBACK_BASE} [test-model, session=sha256:6b256722820e, req=sha256:6f9a7829c4ad]`;
   const errorJson =
     '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
   const errorJsonPretty = `{
@@ -108,7 +108,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectOverloadedFallback(
       payloads,
-      `${OVERLOADED_FALLBACK_BASE} [test-model, session=agent:main:telegram:direct:u123, req=req_011CX7DwS7tSvggaNHmefwWg]`,
+      `${OVERLOADED_FALLBACK_BASE} [test-model, session=sha256:23ce2bdababa, req=sha256:6f9a7829c4ad]`,
     );
     expect(payloads[0]?.isError).toBe(true);
     expectNoPayloadTextContaining(payloads, "Edit");
@@ -367,9 +367,11 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "⚠️ API rate limit reached. Please try again later. [openai/gpt-5.4, profile=openai:primary, trigger=heartbeat, session=agent:main:telegram:group:g1]",
+      text: "⚠️ API rate limit reached. Please try again later. [openai/gpt-5.4, profile=sha256:926fa0a366f6, trigger=heartbeat, session=sha256:a1d807d08d9f]",
       isError: true,
     });
+    expectNoPayloadTextContaining(payloads, "openai:primary");
+    expectNoPayloadTextContaining(payloads, "agent:main:telegram:group:g1");
   });
 
   it("does not emit a synthetic billing error for successful turns with stale errorMessage", () => {
