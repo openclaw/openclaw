@@ -38,11 +38,11 @@ const STEP_LABELS: Record<string, string> = {
   "global install": "Installing global package",
 };
 
-function getStepLabel(step: UpdateStepInfo): string {
+function getStepLabel(step: Pick<UpdateStepInfo, "name">): string {
   return STEP_LABELS[step.name] ?? step.name;
 }
 
-function isAdvisoryStep(step: UpdateStepInfo): boolean {
+function isAdvisoryStep(step: { name: string; exitCode: number | null }): boolean {
   return step.exitCode === 0 && step.name.endsWith("(warning)");
 }
 
