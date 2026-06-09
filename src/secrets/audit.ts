@@ -224,6 +224,9 @@ function collectConfigSecrets(params: {
     if (!hasPlaintext) {
       continue;
     }
+    if (isNonSecretApiKeyMarker(target.value)) {
+      continue;
+    }
     addFinding(params.collector, {
       code: "PLAINTEXT_FOUND",
       severity: "warn",
@@ -718,3 +721,4 @@ export function resolveSecretsAuditExitCode(report: SecretsAuditReport, check: b
   }
   return 0;
 }
+
