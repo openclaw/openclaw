@@ -4186,14 +4186,14 @@ export class WorkboardStore {
           latest = await this.recordDispatch(latest, now);
         }
         if (await this.shouldAutoOrchestrate(latest)) {
-          const boardId = cardBoardId(latest);
-          const board = await this.boardStore.lookup(boardId);
+          const latestBoardId = cardBoardId(latest);
+          const board = await this.boardStore.lookup(latestBoardId);
           const cap = board?.board.orchestration?.autoDecomposePerDispatch ?? 3;
-          const boardCount = orchestratedByBoard.get(boardId) ?? 0;
+          const boardCount = orchestratedByBoard.get(latestBoardId) ?? 0;
           if (boardCount < cap) {
             latest = await this.recordOrchestrationCandidate(latest, now);
             orchestrated.push(latest);
-            orchestratedByBoard.set(boardId, boardCount + 1);
+            orchestratedByBoard.set(latestBoardId, boardCount + 1);
           }
         }
         if (wasPromoted && latest.status !== "blocked") {
