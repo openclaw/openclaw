@@ -137,5 +137,19 @@ export function resolveContextConfigProviderForRuntime(params: {
   runtimeId?: string;
   config?: OpenClawConfig;
 }): string {
-  return isOpenAIProvider(params.provider) ? OPENAI_PROVIDER_ID : params.provider;
+  if (!isOpenAIProvider(params.provider)) {
+    return params.provider;
+  }
+  // Preserve legacy openai-codex context overrides after provider unification.
+  // When the Codex runtime is active and the canonical openai provider has no
+  // model-level context overrides, fall back to the openai-codex provider entry
+  // so that pre-6.1 configs retain their configured context window caps.
+  if (params.runtimeId === "codex" && params.config) {
+    const codexOverride = params.config.models?.providers?.["openai-codex"];
+    const openaiOverride = params.config.models?.providers?.openai;
+    if (codexOverride?.models?.length && !openaiOverride?.models?.length) {
+      return "openai-codex";
+    }
+  }
+  return OPENAI_PROVIDER_ID;
 }
