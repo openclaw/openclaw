@@ -317,7 +317,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     runtime.log?.(
       warn(
         `[${account.accountId}] slack auth.test failed at boot (${authTestError ?? "unknown error"}); ` +
-          "explicit bot-mention detection will be disabled until restart with a valid bot token",
+          "explicit bot-mention detection will be disabled until restart with a valid bot token; " +
+          "required-mention channels will fail closed for non-app-mention messages",
       ),
     );
   }

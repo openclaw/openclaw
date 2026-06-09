@@ -974,7 +974,18 @@ export async function prepareSlackMessage(params: {
   }
 
   if (isRoom && shouldRequireMention && messageIngress.activationAccess.shouldSkip) {
-    ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
+    ctx.logger.info(
+      {
+        channel: message.channel,
+        reason: "no-mention",
+        requireMention: shouldRequireMention,
+        canDetectMention,
+        effectiveWasMentioned,
+        shouldBypassMention,
+        mentionSource,
+      },
+      "skipping channel message",
+    );
     const pendingText = (message.text ?? "").trim();
     const historyMediaCandidate = buildSlackHistoryMediaCandidateMessage(message);
     const fallbackFile = message.files?.length

@@ -253,9 +253,12 @@ describe("unavailable mention detection", () => {
           },
         }).shouldSkip,
     },
-  ])("does not skip when mention detection is unavailable for $name", ({ check }) => {
-    expect(check()).toBe(false);
-  });
+  ])(
+    "skips required mentions closed when mention detection is unavailable for $name",
+    ({ check }) => {
+      expect(check()).toBe(true);
+    },
+  );
 });
 
 describe("implicitMentionKindWhen", () => {

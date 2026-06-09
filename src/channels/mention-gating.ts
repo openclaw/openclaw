@@ -116,7 +116,7 @@ function resolveMentionDecisionCore(params: {
   const implicitMention = matchedImplicitMentionKinds.length > 0;
   const effectiveWasMentioned =
     params.wasMentioned || implicitMention || params.shouldBypassMention;
-  const shouldSkip = params.requireMention && params.canDetectMention && !effectiveWasMentioned;
+  const shouldSkip = params.requireMention && !effectiveWasMentioned;
   return {
     implicitMention,
     matchedImplicitMentionKinds,
