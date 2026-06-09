@@ -321,7 +321,7 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
   lines.push("## Scorecard Taxonomy", "");
   lines.push(`- Fixture: ${report.taxonomyPath ?? "missing"}`);
   lines.push(`- Taxonomy: ${report.taxonomyId ?? "missing"} (${mode})`);
-  lines.push(`- Maturity taxonomy: ${report.taxonomyRef ?? "missing"}`);
+  lines.push(`- Maturity taxonomy: ${report.taxonomy?.sourcePath ?? "missing"}`);
   if (report.scoreSnapshotRef) {
     lines.push(`- Maturity score snapshot: ${report.scoreSnapshotRef}`);
   }

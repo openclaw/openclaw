@@ -55,6 +55,16 @@ const qaScorecardFreshnessRuleSchema = z.enum([
 
 const qaScorecardSupportStatusSchema = z.enum(["lts-included", "deferred", "advisory"]);
 
+const qaScorecardTaxonomyRefSchema = z
+  .object({
+    sourcePath: qaScorecardRepoRefSchema,
+    version: z.number().int().positive(),
+    processVersion: z.number().int().positive(),
+    snapshotDate: z.string().trim().min(1),
+    sourceRef: z.string().trim().min(1),
+  })
+  .strict();
+
 const qaScorecardProfileSchema = z.object({
   id: qaScorecardIdSchema,
   description: z.string().trim().min(1),
@@ -86,8 +96,7 @@ const qaScorecardTaxonomySchema = z
     version: z.literal(1),
     id: qaScorecardIdSchema,
     title: z.string().trim().min(1),
-    sourceRef: qaScorecardRepoRefSchema,
-    taxonomyRef: qaScorecardRepoRefSchema,
+    taxonomy: qaScorecardTaxonomyRefSchema,
     scoreSnapshotRef: qaScorecardRepoRefSchema.optional(),
     status: z.enum(["initial", "candidate", "active"]),
     mappingAuthority: z.enum(["scaffold", "authoritative"]),
@@ -200,7 +209,6 @@ export type QaScorecardValidationIssueCode =
   | "scenario-ref-not-covered-by-category"
   | "docs-ref-not-found"
   | "code-ref-not-found"
-  | "source-ref-not-found"
   | "taxonomy-ref-not-found"
   | "taxonomy-category-ref-not-found"
   | "profile-category-ref-not-found"
@@ -247,7 +255,13 @@ export type QaScorecardTaxonomyReport = {
   taxonomyPath: string | null;
   taxonomyId: string | null;
   title: string | null;
-  taxonomyRef: string | null;
+  taxonomy: {
+    sourcePath: string;
+    version: number;
+    processVersion: number;
+    snapshotDate: string;
+    sourceRef: string;
+  } | null;
   scoreSnapshotRef: string | null;
   status: string | null;
   mappingAuthority: string | null;
@@ -337,14 +351,16 @@ function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PA
   throw new Error(`${label}: ${issues}`);
 }
 
-function readQaMaturityTaxonomy(repoRoot: string | undefined, taxonomyRef: string) {
-  const taxonomyPath = repoRoot ? path.join(repoRoot, taxonomyRef) : resolveRepoPath(taxonomyRef);
+function readQaMaturityTaxonomy(repoRoot: string | undefined, taxonomySourcePath: string) {
+  const taxonomyPath = repoRoot
+    ? path.join(repoRoot, taxonomySourcePath)
+    : resolveRepoPath(taxonomySourcePath);
   if (!taxonomyPath || !fs.existsSync(taxonomyPath)) {
     return null;
   }
   return parseQaMaturityTaxonomy(
     YAML.parse(fs.readFileSync(taxonomyPath, "utf8")) as unknown,
-    taxonomyRef,
+    taxonomySourcePath,
   );
 }
 
@@ -415,7 +431,7 @@ export function buildQaScorecardTaxonomyReport(params: {
       taxonomyPath: params.taxonomyPath ?? null,
       taxonomyId: null,
       title: null,
-      taxonomyRef: null,
+      taxonomy: null,
       scoreSnapshotRef: null,
       status: null,
       mappingAuthority: null,
@@ -458,7 +474,10 @@ export function buildQaScorecardTaxonomyReport(params: {
   const mappedCoverageIds = new Set<string>();
   const mappedScenarioRefs = new Set<string>();
   const categoryIds = new Set(params.taxonomy.categories.map((category) => category.id));
-  const maturityTaxonomy = readQaMaturityTaxonomy(params.repoRoot, params.taxonomy.taxonomyRef);
+  const maturityTaxonomy = readQaMaturityTaxonomy(
+    params.repoRoot,
+    params.taxonomy.taxonomy.sourcePath,
+  );
   const maturityCategoryKeys = buildMaturityCategoryKeys(maturityTaxonomy);
   const profileCategoryIdsByCategoryId = new Map<string, Set<string>>();
   const profiles = params.taxonomy.profiles.map((profile) => {
@@ -498,20 +517,12 @@ export function buildQaScorecardTaxonomyReport(params: {
     };
   });
 
-  if (!pathExists(params.repoRoot, params.taxonomy.sourceRef)) {
-    issues.push({
-      code: "source-ref-not-found",
-      severity: "warning",
-      ref: params.taxonomy.sourceRef,
-      message: `Scorecard taxonomy references missing source ref ${params.taxonomy.sourceRef}`,
-    });
-  }
-  if (!pathExists(params.repoRoot, params.taxonomy.taxonomyRef) || !maturityTaxonomy) {
+  if (!pathExists(params.repoRoot, params.taxonomy.taxonomy.sourcePath) || !maturityTaxonomy) {
     issues.push({
       code: "taxonomy-ref-not-found",
       severity: "warning",
-      ref: params.taxonomy.taxonomyRef,
-      message: `Scorecard executable mapping references missing maturity taxonomy ${params.taxonomy.taxonomyRef}`,
+      ref: params.taxonomy.taxonomy.sourcePath,
+      message: `Scorecard executable mapping references missing maturity taxonomy ${params.taxonomy.taxonomy.sourcePath}`,
     });
   }
   if (
@@ -736,7 +747,7 @@ export function buildQaScorecardTaxonomyReport(params: {
     taxonomyPath: params.taxonomyPath ?? QA_SCORECARD_TAXONOMY_PATH,
     taxonomyId: params.taxonomy.id,
     title: params.taxonomy.title,
-    taxonomyRef: params.taxonomy.taxonomyRef,
+    taxonomy: params.taxonomy.taxonomy,
     scoreSnapshotRef: params.taxonomy.scoreSnapshotRef ?? null,
     status: params.taxonomy.status,
     mappingAuthority: params.taxonomy.mappingAuthority,
