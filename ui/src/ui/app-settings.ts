@@ -71,11 +71,7 @@ import {
   tabFromPath,
   type Tab,
 } from "./navigation.ts";
-import {
-  normalizeAgentId,
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "./session-key.ts";
+import { normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
 import {
   normalizeTextScale,
   saveLocalUserIdentity,
