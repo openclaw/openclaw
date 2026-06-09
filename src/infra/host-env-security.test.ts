@@ -74,6 +74,25 @@ async function runGitCommand(
   });
 }
 
+async function runGitCommandExitCode(
+  gitPath: string,
+  args: string[],
+  options?: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<number | null> {
+  return await new Promise<number | null>((resolve) => {
+    const child = spawn(gitPath, args, {
+      cwd: options?.cwd,
+      env: options?.env,
+      stdio: "ignore",
+    });
+    child.once("error", () => resolve(null));
+    child.once("close", (code) => resolve(code));
+  });
+}
+
 async function runGitClone(
   gitPath: string,
   source: string,
@@ -1688,6 +1707,71 @@ describe("git env exploit regression", () => {
     } finally {
       fs.rmSync(helperDir, { recursive: true, force: true });
       fs.rmSync(marker, { force: true });
+    }
+  });
+
+  it("filters inherited GIT_ALLOW_PROTOCOL without widening file transport access", async () => {
+    const gitPath = getSystemGitPath();
+    if (!gitPath) {
+      return;
+    }
+
+    const repoDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-git-allow-protocol-source-${process.pid}-${Date.now()}-`),
+    );
+    const cloneDir = path.join(
+      os.tmpdir(),
+      `openclaw-git-allow-protocol-clone-${process.pid}-${Date.now()}`,
+    );
+
+    try {
+      await runGitCommand(gitPath, ["init", repoDir]);
+      await runGitCommand(
+        gitPath,
+        [
+          "-C",
+          repoDir,
+          "-c",
+          "user.name=OpenClaw Test",
+          "-c",
+          "user.email=test@example.com",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "init",
+        ],
+        {
+          env: {
+            PATH: process.env.PATH ?? "/usr/bin:/bin",
+          },
+        },
+      );
+
+      const inheritedEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        GIT_ALLOW_PROTOCOL: "https::ssh",
+        GIT_TERMINAL_PROMPT: "0",
+      };
+      const unsafeExitCode = await runGitCommandExitCode(gitPath, ["clone", repoDir, cloneDir], {
+        env: inheritedEnv,
+      });
+
+      expect(unsafeExitCode).not.toBe(0);
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv: inheritedEnv,
+      });
+
+      expect(safeEnv.GIT_ALLOW_PROTOCOL).toBe("https:ssh");
+
+      const safeExitCode = await runGitCommandExitCode(gitPath, ["clone", repoDir, cloneDir], {
+        env: safeEnv,
+      });
+
+      expect(safeExitCode).not.toBe(0);
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+      fs.rmSync(cloneDir, { recursive: true, force: true });
     }
   });
 
