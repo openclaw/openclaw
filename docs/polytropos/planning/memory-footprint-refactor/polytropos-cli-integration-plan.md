@@ -59,10 +59,15 @@ Examples:
 
 Important nuance:
 
-- the current upstream plugin model is additive-first, not override-first
-- there is already a limited takeover seam: `registerPluginCliCommands(..., { primary })`
-  can remove an existing command root and let a plugin claim it for that parse path
-- this is the closest existing pattern to preserve when we add wrapper-level overrides
+- the current upstream plugin registration model is additive-first, not declarative-override-first
+- there is already a real takeover seam in the loader path:
+  `registerPluginCliCommands(..., { primary })` can remove an existing command root
+  from the `Commander` program and let a plugin registrar claim it for that parse path
+- however, that takeover is selected by the caller of `registerPluginCliCommands`,
+  not by the plugin manifest/registration itself
+- duplicate CLI roots are still rejected in the registry, so upstream does not
+  currently model "multiple plugins may declare the same root and one wins"
+- this is the closest existing core behavior to reuse for Polytropos root overrides
 
 ## Proposed Wrapper Resolution Model
 
@@ -73,34 +78,41 @@ The wrapper CLI should resolve commands in this order:
 3. If a plugin claims it, dispatch to the plugin-owned implementation.
 4. Otherwise forward argv to the core OpenClaw CLI unchanged.
 
-This suggests two plugin concepts:
+This can and should reuse upstream code as much as possible.
 
-- additive plugin commands
-- explicit wrapper overrides for built-in roots
+The most promising reuse path is:
 
-The wrapper override concept should be new and explicit. It should not silently
-change the meaning of existing upstream `registerCli` behavior.
+- use upstream plugin CLI metadata/registration loading
+- identify the selected root early in the wrapper
+- if a Polytropos plugin owns that root, call
+  `registerPluginCliCommands(..., { primary: <root> })`
+- otherwise forward argv to the core CLI
 
-One likely shape:
+What still needs wrapper-specific logic:
 
-- preserve upstream-like `registerCli(...)` for additive commands and metadata
-- add a Polytropos wrapper-specific registration for override roots
-- keep the override surface narrow and auditable
+- a lightweight pre-Commander root selection phase
+- a lightweight way to know whether Polytropos wants to claim a given root
+- fallback execution when no plugin claims the root
 
-## Polytropos Plugin Namespace
+So the likely split is:
 
-We should add a Polytropos CLI plugin with a dedicated namespace:
+- reuse upstream `registerCli(...)` and `registerPluginCliCommands(...)`
+- add only a small Polytropos wrapper layer around root selection and fallback
 
-- `openclaw polytropos ...`
+## Polytropos Plugin Shape
 
-That namespace can hold:
+For the first cut, the Polytropos plugin should be framed as a fork of selected
+core OpenClaw CLI roots rather than as a separate `polytropos` namespace.
 
-- Polytropos-only commands
-- operator/debug commands for the wrapper and daemon
-- forked versions of upstream CLI flows before they graduate into direct root overrides
+Why:
 
-This gives us a safe place to land replacement behavior before deciding whether a
-given root should fully override an upstream command.
+- it avoids changing Codex hook config just to reach the replacement path
+- it keeps the installed command surface identical from the caller's perspective
+- it tests the direct-root-override design immediately instead of staging through
+  an intermediate namespace
+
+This means the first plugin-owned command path should override an existing root
+directly rather than introducing `openclaw polytropos ...`.
 
 ## What the Codex Hook Relay Path Is
 
@@ -188,33 +200,29 @@ smaller:
 
 Recommended first wave:
 
-1. Hook relay path
+1. Hook relay path only
    - target: `openclaw hooks relay ...`
    - goal: replace repeated short-lived CLI startup with a thin wrapper + daemon RPC
+   - constraint: preserve the existing hook command contract so Codex config does
+     not need to change
 
-2. ACP bridge path
-   - target: `openclaw acp`
-   - goal: move ACP bridge startup and shared context into the daemon where practical
+Follow-on candidates after the hook experiment:
 
-3. Agent path
-   - target: `openclaw agent`
-   - goal: evaluate later, after relay and ACP results are measured
-
-Possible namespace-first landing:
-
-- `openclaw polytropos hooks relay`
-- `openclaw polytropos acp`
-- `openclaw polytropos agent`
-
-Then, once stable:
-
-- claim the upstream roots through wrapper override rules
+- `openclaw acp`
+- `openclaw agent`
 
 ## Daemon Role
 
-The daemon should not try to host the whole upstream CLI unchanged.
+The daemon should try to reuse OpenClaw core code as much as possible.
 
-Instead, it should host:
+That means the design work should explicitly separate:
+
+- reusable upstream CLI/runtime code we can call or host directly
+- wrapper-only code needed for root selection, fallback, and daemon transport
+- any code that must be reimplemented because it is too process-shaped or too
+  expensive to invoke in the hot path
+
+The daemon should ideally host:
 
 - shared execution context for the forked Polytropos command paths
 - request routing for claimed roots
@@ -252,14 +260,16 @@ Non-goals:
    - RSS
    - invocation frequency during representative Codex runs
 
-2. Define a Polytropos wrapper command registry.
-   - additive roots
-   - explicit override roots
-   - fallback behavior
+2. Analyze reuse boundaries for the hook relay path.
+   - what in upstream hook/plugin loading can be reused directly
+   - what wrapper logic must exist before calling into upstream code
+   - what must be reimplemented in the daemon hot path
 
-3. Build the Polytropos CLI plugin namespace.
-   - start with `openclaw polytropos ...`
-   - expose diagnostics for wrapper resolution and daemon health
+3. Define the lightweight wrapper root-selection flow.
+   - identify command root early
+   - decide whether Polytropos claims it
+   - when claimed, drive upstream plugin registration with `primary`
+   - otherwise fall through to the core CLI
 
 4. Fork the hook relay path first.
    - preserve the hook contract
@@ -272,11 +282,10 @@ Non-goals:
 
 ## Open Questions
 
-- Should wrapper overrides be declared in the existing plugin manifest/registration
-  model, or in a Polytropos-only extension to that model?
-- Should `openclaw polytropos ...` remain user-visible long term, or only serve as
-  a staging namespace before root takeover?
-- Is `openclaw agent` worth forking in the first wave, or should hook relay and ACP
-  prove out the design first?
+- Is upstream plugin CLI metadata loading light enough for the wrapper hot path,
+  or do we need an even cheaper snapshot/index for claimed roots?
+- For `hooks relay`, which portions of upstream hook/plugin loading can be hosted
+  inside the daemon unchanged, and which portions assume one-shot CLI process
+  lifecycle too strongly?
 - Should the fallback boundary be process-level only, or can some core CLI paths be
   linked directly as libraries later if they are sufficiently request-shaped?
