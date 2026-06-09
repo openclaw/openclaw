@@ -289,7 +289,6 @@ describe("xai provider plugin", () => {
     expect(result.provider.auth).toBe("oauth");
     expect(result.provider.apiKey).toBeUndefined();
     expect(result.provider.models.map((model) => model.id)).toContain("grok-build-0.1");
-    expect(result.provider.models.map((model) => model.id)).toContain("grok-composer-2.5-fast");
   });
 
   it("falls back to API-key discovery when xAI OAuth credential resolution fails", async () => {

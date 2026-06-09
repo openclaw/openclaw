@@ -791,8 +791,6 @@ API key auth, and dynamic model resolution.
             connect: async () => {},
             sendAudio: () => {},
             setMediaTimestamp: () => {},
-            sendUserMessage: () => {},
-            speakText: () => {},
             handleBargeIn: () => {},
             submitToolResult: () => {},
             acknowledgeMark: () => {},
@@ -806,13 +804,7 @@ API key auth, and dynamic model resolution.
         transports, audio formats, and feature flags to browser and native Talk
         clients. Implement `handleBargeIn` when a transport can detect that a
         human is interrupting assistant playback and the provider supports
-        truncating or clearing the active audio response. Implement `speakText`
-        when the provider can schedule assistant speech from OpenClaw-owned text;
-        `RealtimeVoiceSpeakTextOptions.mode: "exact"` means the provider should
-        preserve wording, while `"natural"` allows provider-side verbal polish.
-        Providers that omit `speakText` should implement `sendUserMessage` so
-        Gateway relay sessions can fall back to normal provider response
-        generation.
+        truncating or clearing the active audio response.
       </Tab>
       <Tab title="Media understanding">
         ```typescript

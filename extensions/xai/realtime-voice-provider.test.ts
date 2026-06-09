@@ -9,7 +9,6 @@ import {
 
 const {
   FakeWebSocket,
-  fetchWithSsrFGuardMock,
   isProviderAuthProfileConfiguredMock,
   resolveApiKeyForProviderMock,
 } = vi.hoisted(() => {
@@ -63,7 +62,6 @@ const {
 
   return {
     FakeWebSocket: MockWebSocket,
-    fetchWithSsrFGuardMock: vi.fn(),
     isProviderAuthProfileConfiguredMock: vi.fn(() => false),
     resolveApiKeyForProviderMock: vi.fn(
       async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: undefined }),
@@ -75,10 +73,6 @@ vi.mock("ws", () => ({
   default: FakeWebSocket,
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-}));
-
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: isProviderAuthProfileConfiguredMock,
 }));
@@ -88,9 +82,6 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 }));
 
 type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
-type RealtimeVoiceBridgeWithSpeakText = RealtimeVoiceBridge & {
-  speakText?: (text: string, options?: { mode?: "exact" | "natural"; source?: string }) => void;
-};
 type SentRealtimeEvent = {
   type: string;
   audio?: string;
@@ -128,29 +119,6 @@ function parseSent(socket: FakeWebSocketInstance): SentRealtimeEvent[] {
   return socket.sent.map((payload: string) => JSON.parse(payload) as SentRealtimeEvent);
 }
 
-function createJsonResponse(payload: unknown): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-function requireFetchRequest(): { url?: string; init?: RequestInit } {
-  const [request] = fetchWithSsrFGuardMock.mock.calls.at(-1) ?? [];
-  if (!request || typeof request !== "object") {
-    throw new Error("expected fetchWithSsrFGuard request");
-  }
-  return request as { url?: string; init?: RequestInit };
-}
-
-function requireFetchJsonBody(): Record<string, unknown> {
-  const body = requireFetchRequest().init?.body;
-  if (typeof body !== "string") {
-    throw new Error("expected JSON fetch body");
-  }
-  return JSON.parse(body) as Record<string, unknown>;
-}
-
 async function connectBridge(bridge: RealtimeVoiceBridge): Promise<FakeWebSocketInstance> {
   const connecting = bridge.connect();
   await vi.waitFor(() => {
@@ -180,7 +148,6 @@ describe("xai realtime voice provider", () => {
     FakeWebSocket.instances.length = 0;
     isProviderAuthProfileConfiguredMock.mockReset();
     isProviderAuthProfileConfiguredMock.mockReturnValue(false);
-    fetchWithSsrFGuardMock.mockReset();
     resolveApiKeyForProviderMock.mockReset();
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: undefined });
     delete process.env.XAI_API_KEY;
@@ -197,8 +164,8 @@ describe("xai realtime voice provider", () => {
     expect(provider.id).toBe("xai");
     expect(provider.defaultModel).toBe("grok-voice-latest");
     expect(provider.models).toContain("grok-voice-latest");
-    expect(provider.capabilities?.transports).toEqual(["provider-websocket", "gateway-relay"]);
-    expect(provider.capabilities?.supportsBrowserSession).toBe(true);
+    expect(provider.capabilities?.transports).toEqual(["gateway-relay"]);
+    expect(provider.capabilities?.supportsBrowserSession).toBeUndefined();
     expect(provider.capabilities?.supportsToolCalls).toBe(true);
     expect(provider.capabilities?.supportsBargeIn).toBe(true);
     expect(
@@ -288,77 +255,6 @@ describe("xai realtime voice provider", () => {
     expect(session.tool_choice).toBe("auto");
     expect(session.tools).toHaveLength(1);
     expect(bridge.isConnected()).toBe(true);
-  });
-
-  it("creates documented xAI browser websocket sessions with ephemeral client secrets", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: createJsonResponse({
-        value: "xai-realtime-client-secret-test",
-        expires_at: 1_765_000_000,
-      }),
-      release: vi.fn(async () => undefined),
-    });
-    const provider = buildXaiRealtimeVoiceProvider();
-    if (!provider.createBrowserSession) {
-      throw new Error("expected xAI realtime provider to support browser sessions");
-    }
-
-    const session = await provider.createBrowserSession({
-      providerConfig: { apiKey: "xai-test-key", vadThreshold: 0.6 },
-      instructions: "Keep it short.",
-      tools: [
-        {
-          type: "function",
-          name: "openclaw_agent_consult",
-          description: "Consult OpenClaw",
-          parameters: { type: "object", properties: {} },
-        },
-      ],
-    });
-
-    expect(requireFetchRequest().url).toBe("https://api.x.ai/v1/realtime/client_secrets");
-    expect(requireFetchRequest().init?.method).toBe("POST");
-    expect(requireFetchRequest().init?.headers).toMatchObject({
-      Authorization: "Bearer xai-test-key",
-      "Content-Type": "application/json",
-    });
-    expect(requireFetchJsonBody()).toEqual({ expires_after: { seconds: 300 } });
-    expect(session).toMatchObject({
-      provider: "xai",
-      transport: "provider-websocket",
-      protocol: "xai-realtime",
-      clientSecret: "xai-realtime-client-secret-test",
-      websocketUrl: "wss://api.x.ai/v1/realtime?model=grok-voice-latest",
-      model: "grok-voice-latest",
-      voice: "leo",
-      expiresAt: 1_765_000_000_000,
-    });
-    expect((session as { initialMessage?: SentRealtimeEvent }).initialMessage?.session?.voice).toBe(
-      "leo",
-    );
-    expect(
-      (session as { initialMessage?: SentRealtimeEvent }).initialMessage?.session?.audio?.input
-        ?.transcription,
-    ).toEqual({ model: "grok-transcribe" });
-  });
-
-  it("rejects custom xAI baseUrl values for browser websocket sessions", async () => {
-    const provider = buildXaiRealtimeVoiceProvider();
-    if (!provider.createBrowserSession) {
-      throw new Error("expected xAI realtime provider to support browser sessions");
-    }
-
-    await expect(
-      provider.createBrowserSession({
-        providerConfig: {
-          apiKey: "xai-test-key",
-          baseUrl: "http://127.0.0.1:9999/v1",
-        },
-      }),
-    ).rejects.toThrow(
-      'xAI provider-websocket sessions require the native https://api.x.ai/v1 baseUrl. Use talk.realtime.transport="gateway-relay"',
-    );
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
   it("emits inbound speech transcript updates for meeting and voice surfaces", async () => {
@@ -467,33 +363,6 @@ describe("xai realtime voice provider", () => {
     ]);
   });
 
-  it("uses xAI force_message for exact provider speech", async () => {
-    const provider = buildXaiRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "xai-test-key" },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-    const socket = await connectBridge(bridge);
-
-    (bridge as RealtimeVoiceBridgeWithSpeakText).speakText?.("This call is being recorded.", {
-      mode: "exact",
-      source: "agent-final",
-    });
-
-    expect(parseSent(socket).slice(-1)).toEqual([
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "force_message",
-          role: "assistant",
-          interruptible: true,
-          content: [{ type: "output_text", text: "This call is being recorded." }],
-        },
-      },
-    ]);
-  });
-
   it("resolves xAI OAuth/profile auth when no API key is configured", async () => {
     delete process.env.XAI_API_KEY;
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "oauth-bearer" });
@@ -533,8 +402,5 @@ describe("xai realtime voice provider", () => {
         model: "grok-voice-think-fast-1.0",
       }),
     ).toBe("ws://127.0.0.1:9999/v1/realtime?model=grok-voice-think-fast-1.0");
-    expect(
-      xaiRealtimeVoiceProviderInternalsForTest.toXaiRealtimeClientSecretsUrl("https://api.x.ai/v1"),
-    ).toBe("https://api.x.ai/v1/realtime/client_secrets");
   });
 });

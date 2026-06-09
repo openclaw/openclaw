@@ -66,7 +66,7 @@ export function buildRealtimeVoiceAgentConsultWorkingResponse(
   return {
     status: "working",
     tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-    message: `Internal status only: OpenClaw is still working for the ${audienceLabel}. Do not say this aloud. Wait for the final OpenClaw result, then answer only with that result.`,
+    message: `Tell the ${audienceLabel} briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.`,
   };
 }
 
@@ -210,9 +210,6 @@ export function buildRealtimeVoiceAgentConsultPrompt(params: {
     `Live voice request from the ${questionSourceLabel} during ${params.surface}.`,
     "Act as the configured OpenClaw agent on behalf of this user. Use available tools when the request asks you to do work.",
     "When finished, return only the concise result the realtime voice agent should speak back.",
-    "Do not greet the user, introduce yourself, use the user's name, or add a preface before the answer.",
-    'Do not say phrases like "Hey Tim", "Sam here", "I\'m here", "same guardrail", or "checking with OpenClaw".',
-    "Do not mention realtime, providers, forced consults, routing, tool calls, transcripts, or internal OpenClaw mechanics unless the user explicitly asks about them.",
     "Do not include markdown, tool logs, or private reasoning. Include citations only when the spoken answer needs them.",
     parsed.responseStyle ? `Spoken style: ${parsed.responseStyle}` : undefined,
     transcript ? `Recent voice transcript for context:\n${transcript}` : undefined,

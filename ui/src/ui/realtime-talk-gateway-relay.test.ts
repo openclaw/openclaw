@@ -444,18 +444,15 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
 
     await vi.waitFor(() =>
-      expect(client["request"]).toHaveBeenCalledWith("talk.client.toolCall", {
-        sessionKey: "main",
+      expect(client["request"]).toHaveBeenCalledWith("talk.session.submitToolResult", {
+        sessionId: "relay-1",
         callId: "call-1",
-        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-        args: { question: "status?" },
-        relaySessionId: "relay-1",
-      }),
-    );
-    expect(client["request"]).not.toHaveBeenCalledWith(
-      "talk.session.submitToolResult",
-      expect.objectContaining({
-        callId: "call-1",
+        result: {
+          status: "working",
+          tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+          message:
+            "Tell the person briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.",
+        },
         options: { willContinue: true },
       }),
     );

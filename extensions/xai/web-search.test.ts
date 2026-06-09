@@ -135,8 +135,6 @@ function expectCatalogEntry(
   modelId: string,
   expected: {
     id?: string;
-    api?: string;
-    baseUrl?: string;
     reasoning?: boolean;
     input?: string[];
     contextWindow?: number;
@@ -146,12 +144,6 @@ function expectCatalogEntry(
 ) {
   const entry = resolveXaiCatalogEntry(modelId);
   expect(entry?.id).toBe(expected.id ?? modelId);
-  if (expected.api) {
-    expect(entry?.api).toBe(expected.api);
-  }
-  if (expected.baseUrl) {
-    expect(entry?.baseUrl).toBe(expected.baseUrl);
-  }
   if ("reasoning" in expected) {
     expect(entry?.reasoning).toBe(expected.reasoning);
   }
@@ -1049,19 +1041,6 @@ describe("xai provider models", () => {
       "grok-4.20-beta-latest-reasoning",
       "grok-4.20-beta-latest-non-reasoning",
     ]);
-  });
-
-  it("resolves Composer 2.5 as an OAuth-backed Grok Build model", () => {
-    expectCatalogEntry("grok-composer-2.5-fast", {
-      id: "grok-composer-2.5-fast",
-      api: "openai-responses",
-      baseUrl: "https://cli-chat-proxy.grok.com/v1",
-      reasoning: false,
-      input: ["text"],
-      contextWindow: 200_000,
-      maxTokens: 30_000,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    });
   });
 
   it("publishes Grok 4.3 as the default chat model", () => {

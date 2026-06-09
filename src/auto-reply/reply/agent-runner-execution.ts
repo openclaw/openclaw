@@ -1297,17 +1297,6 @@ function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
   );
 }
 
-function isReplyOperationSupersededAbort(replyOperation?: ReplyOperation): boolean {
-  return (
-    replyOperation?.abortSignal.aborted === true &&
-    (replyOperation.result === null || isReplyOperationUserAbort(replyOperation))
-  );
-}
-
-function isAbortErrorLike(err: unknown): boolean {
-  return err instanceof Error && err.name === "AbortError";
-}
-
 function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean {
   return (
     replyOperation?.result?.kind === "aborted" &&
@@ -2813,15 +2802,6 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       if (isReplyOperationUserAbort(params.replyOperation)) {
-        return {
-          kind: "final",
-          payload: {
-            text: SILENT_REPLY_TOKEN,
-          },
-        };
-      }
-
-      if (isAbortErrorLike(err) && isReplyOperationSupersededAbort(params.replyOperation)) {
         return {
           kind: "final",
           payload: {

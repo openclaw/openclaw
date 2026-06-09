@@ -32,7 +32,6 @@ const DIST_ENTRY = "dist/entry.js";
 const BUILD_STAMP = `dist/${BUILD_STAMP_FILE}`;
 const RUNTIME_POSTBUILD_STAMP = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
 const DIST_PLUGIN_SDK_INDEX = "dist/plugin-sdk/index.js";
-const DIST_PLUGIN_SDK_STRING_COERCE = "dist/plugin-sdk/string-coerce-runtime.js";
 const DIST_PLUGIN_SDK_ROOT_ALIAS = "dist/plugin-sdk/root-alias.cjs";
 const DIST_CHANNEL_CATALOG = "dist/channel-catalog.json";
 const DIST_LEGACY_CLI_EXIT_COMPAT = "dist/memory-state-CcqRgDZU.js";
@@ -1877,42 +1876,6 @@ describe("run-node script", () => {
       expect(requirement).toEqual({
         shouldBuild: false,
         reason: "clean",
-      });
-    });
-  });
-
-  it("rebuilds when package-exported plugin SDK dist outputs are missing", async () => {
-    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
-      await setupTrackedProject(tmp, {
-        files: {
-          [ROOT_SRC]: "export const value = 1;\n",
-          [ROOT_PACKAGE]: JSON.stringify(
-            {
-              name: "openclaw-test",
-              exports: {
-                "./plugin-sdk/string-coerce-runtime": "./dist/plugin-sdk/string-coerce-runtime.js",
-              },
-            },
-            null,
-            2,
-          ),
-          [DIST_PLUGIN_SDK_STRING_COERCE]: "export const publicRuntime = true;\n",
-        },
-        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
-        buildPaths: [DIST_ENTRY, DIST_PLUGIN_SDK_STRING_COERCE, BUILD_STAMP],
-      });
-      await fs.rm(resolvePath(tmp, DIST_PLUGIN_SDK_STRING_COERCE));
-
-      const requirement = resolveBuildRequirement(
-        createBuildRequirementDeps(tmp, {
-          gitHead: "abc123\n",
-          gitStatus: "",
-        }),
-      );
-
-      expect(requirement).toEqual({
-        shouldBuild: true,
-        reason: "missing_plugin_sdk_dist_entry",
       });
     });
   });

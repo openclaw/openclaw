@@ -1,21 +1,13 @@
-// Xai provider module implements realtime voice provider integration.
-import { resolveExpiresAtMsFromEpochSeconds } from "openclaw/plugin-sdk/number-runtime";
 import {
   isProviderAuthProfileConfigured,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import {
-  createProviderHttpError,
-  resolveProviderRequestHeaders,
-} from "openclaw/plugin-sdk/provider-http";
 import type {
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
-  RealtimeVoiceBrowserSession,
-  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
@@ -26,7 +18,6 @@ import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeOptionalString,
   parseFiniteNumber as readFiniteNumber,
@@ -58,10 +49,6 @@ type XaiRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   prefixPaddingMs?: number;
   interruptResponseOnInputAudio?: boolean;
   minBargeInAudioEndMs?: number;
-};
-
-type XaiRealtimeSpeakTextOptions = {
-  mode?: "exact" | "natural";
 };
 
 type XaiRealtimeAudioFormatConfig =
@@ -131,7 +118,6 @@ type XaiRealtimeEvent = {
 const XAI_REALTIME_DEFAULT_MODEL = "grok-voice-latest";
 const XAI_REALTIME_DEFAULT_VOICE = "leo";
 const XAI_REALTIME_TRANSCRIPTION_MODEL = "grok-transcribe";
-const XAI_REALTIME_BROWSER_CLIENT_SECRET_TTL_SECONDS = 300;
 const XAI_REALTIME_CONNECT_TIMEOUT_MS = 10_000;
 const XAI_REALTIME_MAX_RECONNECT_ATTEMPTS = 3;
 const XAI_REALTIME_BASE_RECONNECT_DELAY_MS = 500;
@@ -140,8 +126,6 @@ const XAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX =
   "Conversation already has an active response in progress:";
 const XAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
   "Cancellation failed: no active response found";
-const XAI_REALTIME_BROWSER_WS_HOST = "api.x.ai";
-const XAI_REALTIME_BROWSER_WS_PATH = "/v1/realtime";
 
 const XAI_REALTIME_MODELS = [
   "grok-voice-latest",
@@ -207,29 +191,6 @@ function toXaiRealtimeWsUrl(config: { baseUrl?: string; model: string }): string
   return url.toString();
 }
 
-function isNativeXaiRealtimeBrowserBaseUrl(baseUrl?: string): boolean {
-  const url = new URL(
-    toXaiRealtimeWsUrl({
-      baseUrl,
-      model: XAI_REALTIME_DEFAULT_MODEL,
-    }),
-  );
-  return (
-    url.protocol === "wss:" &&
-    url.hostname.toLowerCase() === XAI_REALTIME_BROWSER_WS_HOST &&
-    url.pathname === XAI_REALTIME_BROWSER_WS_PATH &&
-    !url.username &&
-    !url.password
-  );
-}
-
-function toXaiRealtimeClientSecretsUrl(baseUrl?: string): string {
-  const url = new URL(normalizeXaiRealtimeBaseUrl(baseUrl));
-  url.pathname = `${url.pathname.replace(/\/+$/, "")}/realtime/client_secrets`;
-  url.search = "";
-  return url.toString();
-}
-
 function toXaiAudioFormat(format: RealtimeVoiceAudioFormat): XaiRealtimeAudioFormatConfig {
   if (format.encoding === "pcm16") {
     return { type: "audio/pcm", rate: 24000 };
@@ -270,13 +231,6 @@ function readRealtimeErrorDetail(value: unknown): string {
     normalizeOptionalString(record?.code) ??
     "xAI realtime voice error"
   );
-}
-
-function readStringField(value: unknown, key: string): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  return normalizeOptionalString((value as Record<string, unknown>)[key]);
 }
 
 function buildXaiRealtimeSessionUpdate(params: {
@@ -321,61 +275,6 @@ function buildXaiRealtimeSessionUpdate(params: {
           }
         : {}),
     },
-  };
-}
-
-async function createXaiRealtimeClientSecret(params: {
-  apiKey: string;
-  baseUrl?: string;
-}): Promise<{ value: string; expiresAt?: number }> {
-  const url = toXaiRealtimeClientSecretsUrl(params.baseUrl);
-  const { response, release } = await fetchWithSsrFGuard({
-    url,
-    init: {
-      method: "POST",
-      headers: resolveProviderRequestHeaders({
-        provider: "xai",
-        baseUrl: url,
-        capability: "audio",
-        transport: "http",
-        defaultHeaders: {
-          Authorization: `Bearer ${params.apiKey}`,
-          "Content-Type": "application/json",
-        },
-      }) ?? {
-        Authorization: `Bearer ${params.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        expires_after: {
-          seconds: XAI_REALTIME_BROWSER_CLIENT_SECRET_TTL_SECONDS,
-        },
-      }),
-    },
-    auditContext: "xai-realtime-browser-session",
-  });
-  const payload = await (async () => {
-    try {
-      if (!response.ok) {
-        throw await createProviderHttpError(response, "xAI Realtime client secret failed");
-      }
-      return (await response.json()) as unknown;
-    } finally {
-      await release();
-    }
-  })();
-  const value = readStringField(payload, "value");
-  if (!value) {
-    throw new Error("xAI Realtime client secret response did not include a value");
-  }
-  const expiresAt =
-    payload && typeof payload === "object"
-      ? (payload as Record<string, unknown>).expires_at
-      : undefined;
-  const expiresAtMs = resolveExpiresAtMsFromEpochSeconds(expiresAt);
-  return {
-    value,
-    ...(expiresAtMs === undefined ? {} : { expiresAt: expiresAtMs }),
   };
 }
 
@@ -459,24 +358,6 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
       },
     });
     this.requestResponseCreate();
-  }
-
-  speakText(text: string, options?: XaiRealtimeSpeakTextOptions): void {
-    const mode = options?.mode ?? "exact";
-    this.sendEvent({
-      type: "conversation.item.create",
-      item: {
-        type: "force_message",
-        role: "assistant",
-        interruptible: true,
-        content: [
-          {
-            type: "output_text",
-            text: mode === "natural" ? text : text.trim(),
-          },
-        ],
-      },
-    });
   }
 
   triggerGreeting(instructions?: string): void {
@@ -1020,51 +901,6 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 }
 
-async function createXaiRealtimeBrowserSession(
-  req: RealtimeVoiceBrowserSessionCreateRequest,
-): Promise<RealtimeVoiceBrowserSession> {
-  const config = normalizeProviderConfig(req.providerConfig);
-  const model = normalizeOptionalString(req.model) ?? config.model ?? XAI_REALTIME_DEFAULT_MODEL;
-  const voice = normalizeOptionalString(req.voice) ?? config.voice ?? XAI_REALTIME_DEFAULT_VOICE;
-  const baseUrl = normalizeXaiRealtimeBaseUrl(config.baseUrl);
-  if (!isNativeXaiRealtimeBrowserBaseUrl(baseUrl)) {
-    throw new Error(
-      'xAI provider-websocket sessions require the native https://api.x.ai/v1 baseUrl. Use talk.realtime.transport="gateway-relay" for custom xAI Realtime baseUrl or proxy endpoints.',
-    );
-  }
-  const apiKey = await resolveXaiRealtimeApiKey({
-    configApiKey: config.apiKey,
-    cfg: req.cfg,
-  });
-  const clientSecret = await createXaiRealtimeClientSecret({ apiKey, baseUrl });
-  return {
-    provider: "xai",
-    transport: "provider-websocket",
-    protocol: "xai-realtime",
-    clientSecret: clientSecret.value,
-    websocketUrl: toXaiRealtimeWsUrl({ baseUrl, model }),
-    audio: {
-      inputEncoding: "pcm16",
-      inputSampleRateHz: 24_000,
-      outputEncoding: "pcm16",
-      outputSampleRateHz: 24_000,
-    },
-    initialMessage: buildXaiRealtimeSessionUpdate({
-      instructions: req.instructions,
-      voice,
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-      tools: req.tools,
-      vadThreshold: req.vadThreshold ?? config.vadThreshold,
-      silenceDurationMs: req.silenceDurationMs ?? config.silenceDurationMs,
-      prefixPaddingMs: req.prefixPaddingMs ?? config.prefixPaddingMs,
-      interruptResponseOnInputAudio: config.interruptResponseOnInputAudio,
-    }),
-    model,
-    voice,
-    ...(typeof clientSecret.expiresAt === "number" ? { expiresAt: clientSecret.expiresAt } : {}),
-  };
-}
-
 export function buildXaiRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
   return {
     id: "xai",
@@ -1073,7 +909,7 @@ export function buildXaiRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
     models: XAI_REALTIME_MODELS,
     autoSelectOrder: 25,
     capabilities: {
-      transports: ["provider-websocket", "gateway-relay"],
+      transports: ["gateway-relay"],
       inputAudioFormats: [
         REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
         REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
@@ -1082,7 +918,6 @@ export function buildXaiRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
         REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
         REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       ],
-      supportsBrowserSession: true,
       supportsBargeIn: true,
       supportsToolCalls: true,
     },
@@ -1106,13 +941,10 @@ export function buildXaiRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
         minBargeInAudioEndMs: config.minBargeInAudioEndMs,
       });
     },
-    createBrowserSession: createXaiRealtimeBrowserSession,
   };
 }
 
 export const xaiRealtimeVoiceProviderInternalsForTest = {
-  isNativeXaiRealtimeBrowserBaseUrl,
   normalizeProviderConfig,
-  toXaiRealtimeClientSecretsUrl,
   toXaiRealtimeWsUrl,
 };

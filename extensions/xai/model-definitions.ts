@@ -3,18 +3,15 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-s
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const XAI_BASE_URL = "https://api.x.ai/v1";
-export const XAI_GROK_OAUTH_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 export const XAI_DEFAULT_IMAGE_MODEL = "grok-imagine-image";
 export const XAI_IMAGE_MODELS = ["grok-imagine-image", "grok-imagine-image-quality"] as const;
 export const XAI_DEFAULT_CONTEXT_WINDOW = 1_000_000;
 const XAI_LARGE_CONTEXT_WINDOW = 2_000_000;
 const XAI_GROK_4_CONTEXT_WINDOW = 256_000;
 const XAI_CODE_CONTEXT_WINDOW = 256_000;
-const XAI_COMPOSER_CONTEXT_WINDOW = 200_000;
 export const XAI_DEFAULT_MAX_TOKENS = 64_000;
 const XAI_LEGACY_CONTEXT_WINDOW = 131_072;
 const XAI_LEGACY_MAX_TOKENS = 8_192;
-const XAI_COMPOSER_MAX_TOKENS = 30_000;
 export const XAI_DEFAULT_MODEL_ID = "grok-4.3";
 export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
 
@@ -23,8 +20,6 @@ type XaiCost = ModelDefinitionConfig["cost"];
 type XaiCatalogEntry = {
   id: string;
   name: string;
-  api?: ModelDefinitionConfig["api"];
-  baseUrl?: string;
   reasoning: boolean;
   input?: ModelDefinitionConfig["input"];
   contextWindow: number;
@@ -73,27 +68,6 @@ const XAI_CODE_FAST_COST = {
   cacheRead: 0.02,
   cacheWrite: 0,
 } satisfies XaiCost;
-
-const XAI_SUBSCRIPTION_COST_UNKNOWN = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-} satisfies XaiCost;
-
-const XAI_OAUTH_MODEL_CATALOG = [
-  {
-    id: "grok-composer-2.5-fast",
-    name: "Composer 2.5",
-    api: "openai-responses",
-    baseUrl: XAI_GROK_OAUTH_BASE_URL,
-    reasoning: false,
-    input: ["text"],
-    contextWindow: XAI_COMPOSER_CONTEXT_WINDOW,
-    maxTokens: XAI_COMPOSER_MAX_TOKENS,
-    cost: XAI_SUBSCRIPTION_COST_UNKNOWN,
-  },
-] as const satisfies readonly XaiCatalogEntry[];
 
 const XAI_MODEL_CATALOG = [
   {
@@ -262,8 +236,6 @@ function toModelDefinition(entry: XaiCatalogEntry): ModelDefinitionConfig {
   return {
     id: entry.id,
     name: entry.name,
-    ...(entry.api ? { api: entry.api } : {}),
-    ...(entry.baseUrl ? { baseUrl: entry.baseUrl } : {}),
     reasoning: entry.reasoning,
     input: entry.input ?? ["text"],
     cost: entry.cost,
@@ -292,17 +264,10 @@ export function buildXaiCatalogModels(): ModelDefinitionConfig[] {
   );
 }
 
-export function buildXaiOAuthCatalogModels(): ModelDefinitionConfig[] {
-  return [
-    ...XAI_OAUTH_MODEL_CATALOG.map((entry) => toModelDefinition(entry)),
-    ...buildXaiCatalogModels(),
-  ];
-}
-
 export function resolveXaiCatalogEntry(modelId: string) {
   const trimmed = modelId.trim();
   const lower = normalizeXaiCatalogModelId(modelId);
-  const exact = [...XAI_OAUTH_MODEL_CATALOG, ...XAI_MODEL_CATALOG].find(
+  const exact = XAI_MODEL_CATALOG.find(
     (entry) => normalizeOptionalLowercaseString(entry.id) === lower,
   );
   if (exact) {

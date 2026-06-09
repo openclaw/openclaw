@@ -116,13 +116,13 @@ Defaults:
 - `providers.elevenlabs.apiKey`: falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available).
 - `consultThinkingLevel`: optional thinking level override for the full OpenClaw agent run behind realtime `openclaw_agent_consult` calls.
 - `consultFastMode`: optional fast-mode override for realtime `openclaw_agent_consult` calls.
-- `realtime.provider`: selects the active browser/server realtime voice provider. Use `openai` for WebRTC, `google` for provider WebSocket, `xai` for Grok Voice through provider WebSocket or Gateway relay, or another bridge-only provider through Gateway relay.
+- `realtime.provider`: selects the active browser/server realtime voice provider. Use `openai` for WebRTC, `google` for provider WebSocket, `xai` for Grok Voice through Gateway relay, or another bridge-only provider through Gateway relay.
 - `realtime.providers.<provider>` stores provider-owned realtime config. The browser receives only ephemeral or constrained session credentials, never a standard API key.
 - `realtime.providers.openai.voice`: built-in OpenAI Realtime voice id. Current `gpt-realtime-2` voices are `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, and `cedar`; `marin` and `cedar` are recommended for best quality.
 - `realtime.providers.xai.voice` / `speakerVoice` / `voiceId` / `speakerVoiceId`: xAI Grok Voice id. Built-in xAI voices include `eve`, `ara`, `rex`, `sal`, and `leo`; default is `leo`.
 - `realtime.transport`: `webrtc` and `provider-websocket` are browser realtime transports. Android uses realtime relay only when this is `gateway-relay`; otherwise Android Talk uses its native STT/TTS loop.
-- `realtime.providers.xai.vadThreshold`, `silenceDurationMs`, and `prefixPaddingMs`: forwarded to xAI server VAD for provider WebSocket and Gateway relay sessions.
-- `realtime.providers.xai.baseUrl`: custom xAI-compatible Realtime base URL for `gateway-relay` only. Browser-owned xAI `provider-websocket` sessions require the native `https://api.x.ai/v1` endpoint.
+- `realtime.providers.xai.vadThreshold`, `silenceDurationMs`, and `prefixPaddingMs`: forwarded to xAI server VAD for Gateway relay sessions.
+- `realtime.providers.xai.baseUrl`: custom xAI-compatible Realtime base URL for `gateway-relay`.
 - `realtime.brain`: `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility behavior; `none` is for transcription or external orchestration.
 - `realtime.consultRouting`: `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` makes Gateway relay route finalized user transcripts through OpenClaw instead.
 - `realtime.instructions`: appends provider-facing system instructions to OpenClaw's built-in realtime prompt. Use it for voice style and tone; OpenClaw keeps the default `openclaw_agent_consult` guidance.

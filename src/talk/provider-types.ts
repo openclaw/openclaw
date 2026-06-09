@@ -59,21 +59,6 @@ export type RealtimeVoiceToolResultOptions = {
   willContinue?: boolean;
 };
 
-export type RealtimeVoiceSpeakTextOptions = {
-  /**
-   * Stable key for providers that can dedupe externally scheduled speech.
-   */
-  idempotencyKey?: string;
-  /**
-   * Logical origin for observability, for example "agent-final" or "control".
-   */
-  source?: string;
-  /**
-   * "exact" means preserve wording; "natural" allows provider-side verbal polish.
-   */
-  mode?: "exact" | "natural";
-};
-
 export type RealtimeVoiceBridgeEvent = {
   direction: "client" | "server";
   type: string;
@@ -202,16 +187,7 @@ export type RealtimeVoiceBridge = {
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   setMediaTimestamp(ts: number): void;
-  /**
-   * Sends normal provider input text. Relay code uses this as a compatibility
-   * fallback for providers that cannot schedule exact assistant speech.
-   */
   sendUserMessage?(text: string): void;
-  /**
-   * Speaks provider-owned text without treating it as user input.
-   * Use `mode: "exact"` when OpenClaw has already produced the final wording.
-   */
-  speakText?(text: string, options?: RealtimeVoiceSpeakTextOptions): void;
   triggerGreeting?(instructions?: string): void;
   handleBargeIn?(options?: RealtimeVoiceBargeInOptions): void;
   submitToolResult(callId: string, result: unknown, options?: RealtimeVoiceToolResultOptions): void;

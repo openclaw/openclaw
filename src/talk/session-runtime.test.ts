@@ -250,47 +250,6 @@ describe("realtime voice bridge session runtime", () => {
     );
   });
 
-  it("forwards exact speech requests to providers that support text speech", () => {
-    const bridge = makeBridge({ speakText: vi.fn() });
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: () => bridge,
-    };
-    const session = createRealtimeVoiceBridgeSession({
-      provider,
-      providerConfig: {},
-      audioSink: { sendAudio: vi.fn() },
-    });
-
-    session.speakText("Done", { source: "agent-final", mode: "exact" });
-
-    expect(bridge["speakText"]).toHaveBeenCalledWith("Done", {
-      source: "agent-final",
-      mode: "exact",
-    });
-  });
-
-  it("throws when exact speech is requested from a provider without text speech", () => {
-    const bridge = makeBridge();
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
-      createBridge: () => bridge,
-    };
-    const session = createRealtimeVoiceBridgeSession({
-      provider,
-      providerConfig: {},
-      audioSink: { sendAudio: vi.fn() },
-    });
-
-    expect(() => session.speakText("Done", { source: "agent-final" })).toThrow(
-      "Realtime voice provider does not support text speech",
-    );
-  });
-
   it("does not expose session callbacks until the provider returns its bridge", () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const bridge = makeBridge();

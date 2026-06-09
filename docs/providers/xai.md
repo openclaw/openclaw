@@ -127,12 +127,11 @@ remote process polls xAI for the completed token exchange.
 OpenClaw includes the current xAI chat models out of the box, ordered newest
 first in model pickers:
 
-| Family               | Model ids                                                                |
-| -------------------- | ------------------------------------------------------------------------ |
-| Composer 2.5 (OAuth) | `grok-composer-2.5-fast`                                                 |
-| Grok Build 0.1       | `grok-build-0.1`                                                         |
-| Grok 4.3             | `grok-4.3`                                                               |
-| Grok 4.20 Beta       | `grok-4.20-beta-latest-reasoning`, `grok-4.20-beta-latest-non-reasoning` |
+| Family         | Model ids                                                                |
+| -------------- | ------------------------------------------------------------------------ |
+| Grok Build 0.1 | `grok-build-0.1`                                                         |
+| Grok 4.3       | `grok-4.3`                                                               |
+| Grok 4.20 Beta | `grok-4.20-beta-latest-reasoning`, `grok-4.20-beta-latest-non-reasoning` |
 
 The plugin still forward-resolves older Grok 3, Grok 4, Grok 4 Fast, Grok 4.1
 Fast, and Grok Code slugs for existing configs. Official Grok Code Fast aliases
@@ -140,9 +139,8 @@ normalize to `grok-build-0.1`; OpenClaw no longer shows the other retired
 upstream slugs in the selectable catalog.
 
 <Tip>
-Use `grok-4.3` for the public xAI API default. Use `grok-composer-2.5-fast`
-or `grok-build-0.1` for Grok OAuth / Grok Build coding workloads unless you
-explicitly need a Grok 4.20 beta alias.
+Use `grok-4.3` for general chat and `grok-build-0.1` for build/coding-focused
+workloads unless you explicitly need a Grok 4.20 beta alias.
 </Tip>
 
 ## OpenClaw feature coverage
@@ -424,22 +422,16 @@ Legacy aliases still normalize to the canonical bundled ids:
 
   <Accordion title="Realtime voice">
     The bundled `xai` plugin registers a realtime voice provider for Talk
-    browser WebSocket and Gateway relay sessions.
+    Gateway relay sessions.
 
     - Provider id: `xai`
-    - Transports: `provider-websocket`, `gateway-relay`
+    - Transports: `gateway-relay`
     - Default model: `grok-voice-latest`
     - Models: `grok-voice-latest`, `grok-voice-think-fast-1.0`,
       `grok-voice-fast-1.0`
     - Default voice: `leo`
     - Voices: `eve`, `ara`, `rex`, `sal`, `leo`, or another xAI voice id
     - Audio formats: PCM16 24 kHz or G.711 µ-law 8 kHz
-    - Browser auth: OpenClaw creates an ephemeral xAI Realtime client secret
-      with `POST /v1/realtime/client_secrets`; the browser connects with the
-      `xai-client-secret.<token>` WebSocket subprotocol.
-    - Browser transport origin: `provider-websocket` is limited to the native
-      `https://api.x.ai/v1` Realtime endpoint. Use `gateway-relay` for custom
-      `baseUrl` or proxy endpoints.
     - Inbound speech transcripts: xAI's cumulative
       `conversation.item.input_audio_transcription.updated` event is exposed as
       user transcript updates, so Talk and meeting surfaces can consume live
@@ -453,7 +445,7 @@ Legacy aliases still normalize to the canonical bundled ids:
           model: "grok-voice-latest",
           speakerVoice: "leo",
           mode: "realtime",
-          transport: "provider-websocket",
+          transport: "gateway-relay",
           brain: "agent-consult",
           providers: {
             xai: {
@@ -473,15 +465,12 @@ Legacy aliases still normalize to the canonical bundled ids:
     `voiceId`, `speakerVoiceId`, `vadThreshold`, `silenceDurationMs`,
     `prefixPaddingMs`, `interruptResponseOnInputAudio`, and
     `minBargeInAudioEndMs`. When `apiKey` is omitted, OpenClaw tries
-    `XAI_API_KEY` and then the configured xAI auth profile. `baseUrl` is a
-    server-side option for `gateway-relay`; browser-owned `provider-websocket`
-    sessions require the native xAI Realtime endpoint.
+    `XAI_API_KEY` and then the configured xAI auth profile.
 
     <Note>
-    Browser-owned xAI Realtime sessions use ephemeral client secrets. Gateway
-    relay remains available when you need the vendor WebSocket to stay
-    server-side, such as native clients, backend-owned meeting capture, or
-    custom/proxy `baseUrl` deployments.
+    Gateway relay keeps the vendor WebSocket server-side, which is the supported
+    xAI realtime voice path for native clients, backend-owned meeting capture,
+    and custom/proxy `baseUrl` deployments.
     </Note>
 
   </Accordion>
@@ -570,10 +559,8 @@ Legacy aliases still normalize to the canonical bundled ids:
     - `grok-4.20-multi-agent-experimental-beta-0304` is not supported on the
       normal xAI provider path because it requires a different upstream API
       surface than the standard OpenClaw xAI transport.
-    - xAI Realtime voice supports Talk Gateway relay and browser-owned
-      provider-WebSocket sessions. Custom or proxy `baseUrl` values are
-      Gateway relay only; browser-owned provider-WebSocket sessions require
-      xAI's native `https://api.x.ai/v1` endpoint.
+    - xAI Realtime voice supports Talk Gateway relay. Browser-owned
+      provider-WebSocket sessions are not registered for xAI.
     - xAI image `quality`, image `mask`, and extra native-only aspect ratios are
       not exposed until the shared `image_generate` tool has corresponding
       cross-provider controls.

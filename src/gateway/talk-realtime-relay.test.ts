@@ -184,20 +184,6 @@ describe("talk realtime gateway relay", () => {
     return event.payload as Record<string, unknown>;
   }
 
-  function hasEventPayload(
-    events: Array<{ payload: unknown }>,
-    predicate: (payload: Record<string, unknown>) => boolean,
-  ) {
-    return events.some((entry) => {
-      const payload = entry.payload;
-      return (
-        typeof payload === "object" &&
-        payload !== null &&
-        predicate(payload as Record<string, unknown>)
-      );
-    });
-  }
-
   function expectChatAbortPayload(mock: ReturnType<typeof vi.fn>, stopReason: string) {
     expect(mockCallArg(mock)).toBe("chat");
     expectRecordFields(mockCallArg(mock, 0, 1), {
@@ -233,7 +219,6 @@ describe("talk realtime gateway relay", () => {
       sendAudio: vi.fn(),
       setMediaTimestamp: vi.fn(),
       sendUserMessage: vi.fn(),
-      speakText: vi.fn(),
       triggerGreeting: vi.fn(),
       handleBargeIn: vi.fn(),
       submitToolResult: vi.fn(),
@@ -415,7 +400,7 @@ describe("talk realtime gateway relay", () => {
         status: "working",
         tool: "openclaw_agent_consult",
         message:
-          "Internal status only: OpenClaw is still working for the person. Do not say this aloud. Wait for the final OpenClaw result, then answer only with that result.",
+          "Tell the person briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.",
       },
       { willContinue: true },
     );
@@ -749,7 +734,6 @@ describe("talk realtime gateway relay", () => {
       sendAudio: vi.fn(),
       setMediaTimestamp: vi.fn(),
       sendUserMessage: vi.fn(),
-      speakText: vi.fn(),
       triggerGreeting: vi.fn(),
       handleBargeIn: vi.fn(),
       submitToolResult: vi.fn(),
@@ -810,7 +794,6 @@ describe("talk realtime gateway relay", () => {
       sendAudio: vi.fn(),
       setMediaTimestamp: vi.fn(),
       sendUserMessage: vi.fn(),
-      speakText: vi.fn(),
       triggerGreeting: vi.fn(),
       handleBargeIn: vi.fn(),
       submitToolResult: vi.fn(),
@@ -849,45 +832,8 @@ describe("talk realtime gateway relay", () => {
 
     bridgeRequest?.onTranscript?.("user", "Can you check this?", true);
     expect(bridge.sendUserMessage).not.toHaveBeenCalledWith("Can you check this?");
-    bridgeRequest?.onEvent?.({
-      direction: "server",
-      type: "response.audio.delta",
-      itemId: "filler-item",
-      responseId: "filler-response",
-    });
-    bridgeRequest?.onAudio(Buffer.from("provider-filler"));
-    bridgeRequest?.onTranscript?.("assistant", "Hey Tim, I am checking.", true);
-    bridgeRequest?.onEvent?.({
-      direction: "server",
-      type: "response.done",
-      itemId: "filler-item",
-      responseId: "filler-response",
-    });
-    expect(
-      hasEventPayload(
-        events,
-        (payload) =>
-          payload.type === "audio" &&
-          payload.audioBase64 === Buffer.from("provider-filler").toString("base64"),
-      ),
-    ).toBe(false);
-    expect(
-      hasEventPayload(
-        events,
-        (payload) =>
-          payload.type === "transcript" &&
-          payload.role === "assistant" &&
-          payload.text === "Hey Tim, I am checking.",
-      ),
-    ).toBe(false);
-    expect(
-      hasEventPayload(
-        events,
-        (payload) => payload.type === "audioDone" && payload.responseId === "filler-response",
-      ),
-    ).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(3_100);
+    await vi.advanceTimersByTimeAsync(250);
 
     const forcedToolCall = findEventPayload(
       events,
@@ -899,11 +845,10 @@ describe("talk realtime gateway relay", () => {
       name: "openclaw_agent_consult",
       forced: true,
     });
-    expect(forcedToolCall.args).toStrictEqual({
+    expectRecordFields(forcedToolCall.args, {
       question: "Can you check this?",
+      responseStyle: "Reply in a concise spoken tone.",
     });
-    expect(JSON.stringify(forcedToolCall.args)).not.toContain("realtime provider");
-    expect(JSON.stringify(forcedToolCall.args)).not.toContain("Spoken style");
     expectRecordFields(forcedToolCall.talkEvent, { type: "tool.call" });
     expectRecordFields((forcedToolCall.talkEvent as Record<string, unknown>).payload, {
       forced: true,
@@ -921,7 +866,9 @@ describe("talk realtime gateway relay", () => {
       result: { status: "working" },
       options: { willContinue: true },
     });
-    expect(bridge.sendUserMessage).not.toHaveBeenCalled();
+    expect(bridge.sendUserMessage).toHaveBeenLastCalledWith(
+      "Briefly tell the person that you are checking with OpenClaw. Do not answer the request yet. Wait for the OpenClaw result before giving the actual answer.",
+    );
 
     bridgeRequest?.onToolCall?.({
       itemId: "native-item",
@@ -935,7 +882,7 @@ describe("talk realtime gateway relay", () => {
         status: "working",
         tool: "openclaw_agent_consult",
         message:
-          "Internal status only: OpenClaw is still working for the person. Do not say this aloud. Wait for the final OpenClaw result, then answer only with that result.",
+          "Tell the person briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.",
       },
       { willContinue: true },
     );
@@ -954,20 +901,21 @@ describe("talk realtime gateway relay", () => {
       },
       { suppressResponse: true },
     );
-    expect(bridge.speakText).toHaveBeenLastCalledWith(
-      "Here is the checked answer.",
-      expect.objectContaining({
-        source: "forced-agent-final",
-        mode: "exact",
-      }),
+    expect(bridge.sendUserMessage).toHaveBeenLastCalledWith(
+      [
+        "OpenClaw finished checking. Speak this result naturally and concisely.",
+        "Do not mention tool calls, JSON, or internal routing.",
+        "",
+        "Here is the checked answer.",
+      ].join("\n"),
     );
     expect(
       bridge.submitToolResult.mock.invocationCallOrder[
         bridge.submitToolResult.mock.invocationCallOrder.length - 1
       ],
     ).toBeLessThan(
-      bridge.speakText.mock.invocationCallOrder[
-        bridge.speakText.mock.invocationCallOrder.length - 1
+      bridge.sendUserMessage.mock.invocationCallOrder[
+        bridge.sendUserMessage.mock.invocationCallOrder.length - 1
       ] ?? 0,
     );
     expect(
@@ -980,100 +928,6 @@ describe("talk realtime gateway relay", () => {
           (payload as Record<string, unknown>).callId === "native-call"
         );
       }),
-    ).toBe(false);
-    bridgeRequest?.onEvent?.({
-      direction: "server",
-      type: "response.audio.delta",
-      itemId: "final-item",
-      responseId: "final-response",
-    });
-    bridgeRequest?.onAudio(Buffer.from("final-answer-audio"));
-    bridgeRequest?.onTranscript?.("assistant", "Here is the checked answer.", true);
-    bridgeRequest?.onEvent?.({
-      direction: "server",
-      type: "response.audio.delta",
-      itemId: "extra-item",
-      responseId: "extra-response",
-    });
-    bridgeRequest?.onAudio(Buffer.from("extra-answer-audio"));
-    bridgeRequest?.onTranscript?.("assistant", "Hey Tim, one more thing.", true);
-    bridgeRequest?.onEvent?.({
-      direction: "server",
-      type: "response.done",
-      itemId: "final-item",
-      responseId: "final-response",
-    });
-    const finalAudio = findEventPayload(
-      events,
-      (payload) =>
-        payload.type === "audio" &&
-        payload.audioBase64 === Buffer.from("final-answer-audio").toString("base64"),
-    );
-    expectRecordFields(finalAudio, {
-      relaySessionId: session.relaySessionId,
-      type: "audio",
-      itemId: "final-item",
-      responseId: "final-response",
-    });
-    const finalTranscript = findEventPayload(
-      events,
-      (payload) =>
-        payload.type === "transcript" &&
-        payload.role === "assistant" &&
-        payload.text === "Here is the checked answer.",
-    );
-    expectRecordFields(finalTranscript.talkEvent, { type: "output.text.done", final: true });
-    expect(
-      hasEventPayload(
-        events,
-        (payload) =>
-          payload.type === "audio" &&
-          payload.audioBase64 === Buffer.from("extra-answer-audio").toString("base64"),
-      ),
-    ).toBe(false);
-    expect(
-      hasEventPayload(
-        events,
-        (payload) =>
-          payload.type === "transcript" &&
-          payload.role === "assistant" &&
-          payload.text === "Hey Tim, one more thing.",
-      ),
-    ).toBe(false);
-    const finalAudioDone = findEventPayload(
-      events,
-      (payload) => payload.type === "audioDone" && payload.responseId === "final-response",
-    );
-    expectRecordFields(finalAudioDone, {
-      relaySessionId: session.relaySessionId,
-      type: "audioDone",
-      itemId: "final-item",
-      responseId: "final-response",
-    });
-    bridgeRequest?.onEvent?.({
-      direction: "server",
-      type: "response.audio.delta",
-      itemId: "late-item",
-      responseId: "late-response",
-    });
-    bridgeRequest?.onAudio(Buffer.from("late-answer-audio"));
-    bridgeRequest?.onTranscript?.("assistant", "Hey Tim, late follow-up.", true);
-    expect(
-      hasEventPayload(
-        events,
-        (payload) =>
-          payload.type === "audio" &&
-          payload.audioBase64 === Buffer.from("late-answer-audio").toString("base64"),
-      ),
-    ).toBe(false);
-    expect(
-      hasEventPayload(
-        events,
-        (payload) =>
-          payload.type === "transcript" &&
-          payload.role === "assistant" &&
-          payload.text === "Hey Tim, late follow-up.",
-      ),
     ).toBe(false);
 
     bridgeRequest?.onToolCall?.({
@@ -1088,7 +942,7 @@ describe("talk realtime gateway relay", () => {
         status: "working",
         tool: "openclaw_agent_consult",
         message:
-          "Internal status only: OpenClaw is still working for the person. Do not say this aloud. Wait for the final OpenClaw result, then answer only with that result.",
+          "Tell the person briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.",
       },
       { willContinue: true },
     );
@@ -1103,411 +957,6 @@ describe("talk realtime gateway relay", () => {
       name: "openclaw_agent_consult",
       args: { question: "Can you check something else?" },
     });
-    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
-  });
-
-  it("falls back to provider message delivery when exact final speech is unsupported", async () => {
-    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
-    const bridge = {
-      supportsToolResultContinuation: true,
-      connect: vi.fn(async () => undefined),
-      sendAudio: vi.fn(),
-      setMediaTimestamp: vi.fn(),
-      sendUserMessage: vi.fn(),
-      handleBargeIn: vi.fn(),
-      submitToolResult: vi.fn(),
-      acknowledgeMark: vi.fn(),
-      close: vi.fn(),
-      isConnected: vi.fn(() => true),
-    };
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "relay-test",
-      label: "Relay Test",
-      isConfigured: () => true,
-      createBridge: (req) => {
-        bridgeRequest = req;
-        return bridge;
-      },
-    };
-    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
-    const context = {
-      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
-        events.push({ event, payload, connIds: [...connIds] });
-      },
-    } as never;
-
-    const session = createTalkRealtimeRelaySession({
-      context,
-      connId: "conn-1",
-      provider,
-      providerConfig: {},
-      instructions: "brief",
-      tools: [],
-    });
-    expect(bridgeRequest).toBeDefined();
-    registerTalkRealtimeRelayAgentRun({
-      relaySessionId: session.relaySessionId,
-      connId: "conn-1",
-      sessionKey: "main",
-      runId: "run-1",
-      callId: "call-1",
-    });
-
-    submitTalkRealtimeRelayToolResult({
-      relaySessionId: session.relaySessionId,
-      connId: "conn-1",
-      callId: "call-1",
-      result: { result: "Here is the final relay answer." },
-    });
-
-    expect(bridge.submitToolResult).toHaveBeenLastCalledWith(
-      "call-1",
-      {
-        status: "already_delivered",
-        message: "OpenClaw already delivered this consult result internally. Do not repeat it.",
-      },
-      { suppressResponse: true },
-    );
-    expect(bridge.sendUserMessage).toHaveBeenCalledWith("Here is the final relay answer.");
-    expectRecordFields(
-      findEventPayload(
-        events,
-        (payload) => payload.type === "finalSpeech" && payload.status === "speaking",
-      ),
-      {
-        relaySessionId: session.relaySessionId,
-        type: "finalSpeech",
-        detail: "Scheduled through realtime voice provider fallback.",
-      },
-    );
-  });
-
-  it("debounces incremental final transcript fragments before forcing a consult", async () => {
-    vi.useFakeTimers();
-
-    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
-    const bridge = {
-      supportsToolResultContinuation: true,
-      connect: vi.fn(async () => undefined),
-      sendAudio: vi.fn(),
-      setMediaTimestamp: vi.fn(),
-      sendUserMessage: vi.fn(),
-      triggerGreeting: vi.fn(),
-      handleBargeIn: vi.fn(),
-      submitToolResult: vi.fn(),
-      acknowledgeMark: vi.fn(),
-      close: vi.fn(),
-      isConnected: vi.fn(() => true),
-    };
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "relay-test",
-      label: "Relay Test",
-      isConfigured: () => true,
-      createBridge: (req) => {
-        bridgeRequest = req;
-        return bridge;
-      },
-    };
-    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
-    const context = {
-      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
-        events.push({ event, payload, connIds: [...connIds] });
-      },
-    } as never;
-
-    const session = createTalkRealtimeRelaySession({
-      context,
-      connId: "conn-1",
-      provider,
-      providerConfig: {},
-      instructions: "be brief",
-      tools: [],
-      forceAgentConsultOnFinalTranscript: true,
-    });
-    await Promise.resolve();
-
-    bridgeRequest?.onTranscript?.("user", "Hey Sam", true);
-    await vi.advanceTimersByTimeAsync(900);
-    bridgeRequest?.onTranscript?.("user", "Hey Sam, tell me what you", true);
-    await vi.advanceTimersByTimeAsync(900);
-    bridgeRequest?.onTranscript?.(
-      "user",
-      "Hey Sam, tell me what you think is interesting about my work.",
-      true,
-    );
-    await vi.advanceTimersByTimeAsync(3_100);
-
-    const forcedToolCalls = events
-      .map((entry) => entry.payload)
-      .filter(
-        (payload) =>
-          typeof payload === "object" &&
-          payload !== null &&
-          (payload as Record<string, unknown>).type === "toolCall" &&
-          (payload as Record<string, unknown>).forced === true,
-      );
-    expect(forcedToolCalls).toHaveLength(1);
-    expectRecordFields((forcedToolCalls[0] as Record<string, unknown>).args, {
-      question: "Hey Sam, tell me what you think is interesting about my work.",
-    });
-    expect(bridge.handleBargeIn).toHaveBeenCalledTimes(1);
-
-    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
-  });
-
-  it("drops duplicate final user transcripts before broadcasting or forcing another consult", async () => {
-    vi.useFakeTimers();
-
-    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
-    const bridge = {
-      supportsToolResultContinuation: true,
-      connect: vi.fn(async () => undefined),
-      sendAudio: vi.fn(),
-      setMediaTimestamp: vi.fn(),
-      sendUserMessage: vi.fn(),
-      triggerGreeting: vi.fn(),
-      handleBargeIn: vi.fn(),
-      submitToolResult: vi.fn(),
-      acknowledgeMark: vi.fn(),
-      close: vi.fn(),
-      isConnected: vi.fn(() => true),
-    };
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "relay-test",
-      label: "Relay Test",
-      isConfigured: () => true,
-      createBridge: (req) => {
-        bridgeRequest = req;
-        return bridge;
-      },
-    };
-    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
-    const context = {
-      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
-        events.push({ event, payload, connIds: [...connIds] });
-      },
-    } as never;
-
-    const session = createTalkRealtimeRelaySession({
-      context,
-      connId: "conn-1",
-      provider,
-      providerConfig: {},
-      instructions: "be brief",
-      tools: [],
-      forceAgentConsultOnFinalTranscript: true,
-    });
-    await Promise.resolve();
-
-    bridgeRequest?.onTranscript?.("user", "Hey Sam.", true);
-    await vi.advanceTimersByTimeAsync(3_400);
-    bridgeRequest?.onTranscript?.("user", "Hey Sam", true);
-    await vi.advanceTimersByTimeAsync(3_100);
-
-    const finalUserTranscripts = events
-      .map((entry) => entry.payload)
-      .filter(
-        (payload) =>
-          typeof payload === "object" &&
-          payload !== null &&
-          (payload as Record<string, unknown>).type === "transcript" &&
-          (payload as Record<string, unknown>).role === "user" &&
-          (payload as Record<string, unknown>).final === true,
-      );
-    expect(finalUserTranscripts).toHaveLength(1);
-    expectRecordFields(finalUserTranscripts[0], { text: "Hey Sam." });
-
-    const forcedToolCalls = events
-      .map((entry) => entry.payload)
-      .filter(
-        (payload) =>
-          typeof payload === "object" &&
-          payload !== null &&
-          (payload as Record<string, unknown>).type === "toolCall" &&
-          (payload as Record<string, unknown>).forced === true,
-      );
-    expect(forcedToolCalls).toHaveLength(1);
-    expectRecordFields((forcedToolCalls[0] as Record<string, unknown>).args, {
-      question: "Hey Sam.",
-    });
-    expect(bridge.handleBargeIn).toHaveBeenCalledTimes(1);
-
-    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
-  });
-
-  it("suppresses a started forced consult when a later transcript extends the same utterance", async () => {
-    vi.useFakeTimers();
-
-    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
-    const bridge = {
-      supportsToolResultContinuation: true,
-      connect: vi.fn(async () => undefined),
-      sendAudio: vi.fn(),
-      setMediaTimestamp: vi.fn(),
-      sendUserMessage: vi.fn(),
-      speakText: vi.fn(),
-      triggerGreeting: vi.fn(),
-      handleBargeIn: vi.fn(),
-      submitToolResult: vi.fn(),
-      acknowledgeMark: vi.fn(),
-      close: vi.fn(),
-      isConnected: vi.fn(() => true),
-    };
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "relay-test",
-      label: "Relay Test",
-      isConfigured: () => true,
-      createBridge: (req) => {
-        bridgeRequest = req;
-        return bridge;
-      },
-    };
-    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
-    const abortController = new AbortController();
-    const broadcast = vi.fn();
-    const nodeSendToSession = vi.fn();
-    const removeChatRun = vi.fn(() => ({ sessionKey: "main", clientRunId: "run-1" }));
-    const chatRunBuffers = new Map([["run-1", "partial answer"]]);
-    const chatDeltaSentAt = new Map<string, number>();
-    const chatDeltaLastBroadcastLen = new Map<string, number>();
-    const chatDeltaLastBroadcastText = new Map<string, string>();
-    const agentDeltaSentAt = new Map([["run-1:assistant", Date.now()]]);
-    const bufferedAgentEvents = new Map([
-      [
-        "run-1:assistant",
-        {
-          payload: {
-            runId: "run-1",
-            seq: 1,
-            stream: "assistant",
-            ts: Date.now(),
-            data: { text: "pending", delta: "pending" },
-          },
-        },
-      ],
-    ]);
-    const context = {
-      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
-        events.push({ event, payload, connIds: [...connIds] });
-      },
-      broadcast,
-      nodeSendToSession,
-      chatAbortControllers: new Map([
-        [
-          "run-1",
-          {
-            controller: abortController,
-            sessionId: "run-1",
-            sessionKey: "main",
-            startedAtMs: 1,
-            expiresAtMs: Date.now() + 60_000,
-          },
-        ],
-      ]),
-      chatRunBuffers,
-      chatDeltaSentAt,
-      chatDeltaLastBroadcastLen,
-      chatDeltaLastBroadcastText,
-      agentDeltaSentAt,
-      bufferedAgentEvents,
-      chatAbortedRuns: new Map(),
-      clearChatRunState: (runId: string) => {
-        chatRunBuffers.delete(runId);
-        chatDeltaSentAt.delete(runId);
-        chatDeltaLastBroadcastLen.delete(runId);
-        chatDeltaLastBroadcastText.delete(runId);
-        for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
-          agentDeltaSentAt.delete(key);
-          bufferedAgentEvents.delete(key);
-        }
-      },
-      removeChatRun,
-      agentRunSeq: new Map(),
-    } as never;
-
-    const session = createTalkRealtimeRelaySession({
-      context,
-      connId: "conn-1",
-      provider,
-      providerConfig: {},
-      instructions: "be brief",
-      tools: [],
-      forceAgentConsultOnFinalTranscript: true,
-    });
-    await Promise.resolve();
-
-    bridgeRequest?.onTranscript?.(
-      "user",
-      "Hey Sam, as you work through Inbox Zero, put the HUD request in with Dave.",
-      true,
-    );
-    await vi.advanceTimersByTimeAsync(3_100);
-    const firstForcedToolCall = findEventPayload(
-      events,
-      (payload) => payload.type === "toolCall" && payload.forced === true,
-    );
-    const firstCallId = String(firstForcedToolCall.callId);
-    registerTalkRealtimeRelayAgentRun({
-      relaySessionId: session.relaySessionId,
-      connId: "conn-1",
-      sessionKey: "main",
-      runId: "run-1",
-      callId: firstCallId,
-    });
-
-    bridgeRequest?.onTranscript?.(
-      "user",
-      "Hey Sam, as you work through Inbox Zero, put the HUD request in with Dave. I want that display tabbed with where each workstream lives.",
-      true,
-    );
-    expect(abortController.signal.aborted).toBe(true);
-    expect(agentDeltaSentAt.has("run-1:assistant")).toBe(false);
-    expect(bufferedAgentEvents.has("run-1:assistant")).toBe(false);
-    expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "main");
-    expectChatAbortPayload(broadcast, "forced-consult-superseded");
-    expectNodeAbortPayload(nodeSendToSession);
-
-    submitTalkRealtimeRelayToolResult({
-      relaySessionId: session.relaySessionId,
-      connId: "conn-1",
-      callId: firstCallId,
-      result: { result: "Authority noted. Continuing Inbox Zero delivery." },
-    });
-    expect(bridge.speakText).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(3_100);
-    const forcedToolCalls = events
-      .map((entry) => entry.payload)
-      .filter(
-        (payload): payload is Record<string, unknown> =>
-          typeof payload === "object" &&
-          payload !== null &&
-          (payload as Record<string, unknown>).type === "toolCall" &&
-          (payload as Record<string, unknown>).forced === true,
-      );
-    expect(forcedToolCalls).toHaveLength(2);
-    const secondForcedToolCall = forcedToolCalls[1];
-    expect(secondForcedToolCall.callId).not.toBe(firstCallId);
-    expect(secondForcedToolCall.args).toStrictEqual({
-      question:
-        "Hey Sam, as you work through Inbox Zero, put the HUD request in with Dave. I want that display tabbed with where each workstream lives.",
-    });
-
-    submitTalkRealtimeRelayToolResult({
-      relaySessionId: session.relaySessionId,
-      connId: "conn-1",
-      callId: String(secondForcedToolCall.callId),
-      result: { result: "I will request the tabbed HUD surface through Dave." },
-    });
-    expect(bridge.speakText).toHaveBeenCalledTimes(1);
-    expect(bridge.speakText).toHaveBeenLastCalledWith(
-      "I will request the tabbed HUD surface through Dave.",
-      expect.objectContaining({
-        source: "forced-agent-final",
-        mode: "exact",
-      }),
-    );
-
     stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
   });
 
@@ -1561,7 +1010,7 @@ describe("talk realtime gateway relay", () => {
       name: "openclaw_agent_consult",
       args: { question: "Can you check this for me?" },
     });
-    await vi.advanceTimersByTimeAsync(3_100);
+    await vi.advanceTimersByTimeAsync(250);
 
     expect(
       events.some((entry) => {
@@ -1596,7 +1045,7 @@ describe("talk realtime gateway relay", () => {
       name: "openclaw_agent_consult",
       args: { question: "проверь статус" },
     });
-    await vi.advanceTimersByTimeAsync(3_100);
+    await vi.advanceTimersByTimeAsync(250);
     expect(
       events.some((entry) => {
         const payload = entry.payload;
@@ -1629,7 +1078,7 @@ describe("talk realtime gateway relay", () => {
       connId: "conn-1",
       reason: "barge-in",
     });
-    await vi.advanceTimersByTimeAsync(3_100);
+    await vi.advanceTimersByTimeAsync(250);
     expect(
       events.some((entry) => {
         const payload = entry.payload;
@@ -1968,7 +1417,7 @@ describe("talk realtime gateway relay", () => {
     await Promise.resolve();
 
     bridgeRequest?.onTranscript?.("user", "Can you check this?", true);
-    await vi.advanceTimersByTimeAsync(3_100);
+    await vi.advanceTimersByTimeAsync(250);
     const forcedToolCall = findEventPayload(
       events,
       (payload) => payload.type === "toolCall" && payload.forced === true,
