@@ -1,0 +1,8 @@
+{
+  "name": "@openeyes/openclaw-whatsapp-group",
+  "version": "1.0.0",
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.js"]
+  }
+}

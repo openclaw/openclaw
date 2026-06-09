@@ -1,0 +1,15 @@
+{
+  "id": "whatsapp-group",
+  "name": "WhatsApp Group Management",
+  "description": "Create and manage WhatsApp groups via the live Baileys socket",
+  "contracts": {
+    "tools": ["whatsapp_group"]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}
