@@ -5001,6 +5001,81 @@ describe("update-cli", () => {
     ).toContain("updated install entrypoint not found");
   });
 
+  it("tries the updated install restart when package service refresh fails", async () => {
+    const updatedRoot = createCaseDir("openclaw-updated-root");
+    const updatedEntrypoint = path.join(updatedRoot, "dist", "entry.js");
+    setupUpdatedRootRefresh({
+      entrypoints: [updatedEntrypoint],
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: updatedRoot,
+          before: { version: "2026.4.23" },
+          after: { version: "2026.4.24" },
+        }),
+    });
+    serviceLoaded.mockResolvedValue(true);
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => ({
+      stdout: "",
+      stderr:
+        argv[1] === updatedEntrypoint && argv[2] === "gateway" && argv[3] === "install"
+          ? "launchctl bootstrap failed"
+          : "",
+      code: argv[1] === updatedEntrypoint && argv[2] === "gateway" && argv[3] === "install" ? 1 : 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    }));
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        close: null,
+        server: {
+          version: "2026.4.23",
+          connId: "old-gateway",
+        },
+        auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+        connectLatencyMs: 1,
+        error: null,
+        url: "ws://127.0.0.1:18789",
+      })
+      .mockResolvedValue({
+        ok: true,
+        close: null,
+        server: {
+          version: "2026.4.24",
+          connId: "updated-gateway",
+        },
+        auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+        connectLatencyMs: 1,
+        error: null,
+        url: "ws://127.0.0.1:18789",
+      });
+
+    await updateCommand({ yes: true });
+
+    expect(gatewayCommandCall(updatedEntrypoint, "install")).toBeDefined();
+    const restartCall = gatewayCommandCall(updatedEntrypoint, "restart");
+    expect(restartCall?.[0].slice(1)).toEqual([updatedEntrypoint, "gateway", "restart"]);
+    expect(restartCall?.[1].cwd).toBe(updatedRoot);
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expect(
+      vi
+        .mocked(defaultRuntime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n"),
+    ).toContain("Gateway: restarted and verified.");
+  });
+
   it("fails a JSON package update when fallback restart leaves the old gateway running", async () => {
     const updatedRoot = createCaseDir("openclaw-updated-root");
     const updatedEntrypoint = path.join(updatedRoot, "dist", "entry.js");

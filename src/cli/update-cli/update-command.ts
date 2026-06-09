@@ -2089,6 +2089,7 @@ async function maybeRestartService(params: {
       let restarted = false;
       let restartInitiated = false;
       let refreshedGatewayAlreadyHealthy = false;
+      let serviceEnvRefreshFailed = false;
       if (params.refreshServiceEnv) {
         try {
           await refreshGatewayServiceEnv({
@@ -2108,9 +2109,7 @@ async function maybeRestartService(params: {
           } else {
             defaultRuntime.log(theme.warn(message));
           }
-          if (isPackageUpdate) {
-            return false;
-          }
+          serviceEnvRefreshFailed = true;
         }
         if (isPackageUpdate && expectedGatewayVersion) {
           const health = await waitForGatewayHealthyRestart({
@@ -2134,7 +2133,11 @@ async function maybeRestartService(params: {
       // Service refresh can bootstrap a RunAtLoad LaunchAgent directly. When
       // that already produced the expected gateway version, a second kickstart
       // would only race the healthy supervisor-owned process.
-      if (!refreshedGatewayAlreadyHealthy && params.restartScriptPath) {
+      if (
+        !refreshedGatewayAlreadyHealthy &&
+        params.restartScriptPath &&
+        !(isPackageUpdate && serviceEnvRefreshFailed)
+      ) {
         await createUpdateConfigSnapshot();
         await runRestartScript(params.restartScriptPath);
         restartInitiated = true;
