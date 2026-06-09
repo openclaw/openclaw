@@ -1,6 +1,10 @@
 // Session patch applier for gateway session metadata and model/runtime overrides.
 import { randomUUID } from "node:crypto";
-import { findHubDelegatedLabelConflictInStore } from "@openclaw/acp-core";
+import {
+  findHubDelegatedLabelConflictInStore,
+  isHubDelegatedAcpSessionEntry,
+  resolveHubDelegatedLineageMismatch,
+} from "@openclaw/acp-core";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -739,5 +743,11 @@ export async function applySessionsPatchToStore(params: {
   }
 
   store[storeKey] = next;
+  if (isHubDelegatedAcpSessionEntry(next)) {
+    const lineageMismatch = resolveHubDelegatedLineageMismatch(next);
+    if (lineageMismatch) {
+      return invalid(lineageMismatch);
+    }
+  }
   return { ok: true, entry: next };
 }

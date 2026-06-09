@@ -113,6 +113,18 @@ describe("isRequesterParentOfBackgroundAcpSession", () => {
     ).toBe(true);
   });
 
+  it("returns false when only mismatched spawnedBy matches requester on hub-delegated sessions", () => {
+    expect(
+      isRequesterParentOfBackgroundAcpSession(
+        {
+          hubDelegated: { ownerSessionKey: parentKey, createdAt: 1 },
+          spawnedBy: otherKey,
+        },
+        otherKey,
+      ),
+    ).toBe(false);
+  });
+
   it("returns true when requester matches spawnedBy", () => {
     expect(
       isRequesterParentOfBackgroundAcpSession(

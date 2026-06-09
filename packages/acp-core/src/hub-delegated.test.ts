@@ -11,6 +11,7 @@ import {
   resolveHubDelegatedAutoLabel,
   resolveHubDelegatedExpiry,
   resolveHubDelegatedLabelLookup,
+  resolveHubDelegatedLineageMismatch,
 } from "./hub-delegated.js";
 
 describe("resolveHubDelegatedAcpPolicy", () => {
@@ -57,6 +58,39 @@ describe("isHubDelegatedOwnedByRequester", () => {
         requesterSessionKey: "agent:peer:main",
       }),
     ).toBe(false);
+  });
+
+  it("does not grant ownership via mismatched spawnedBy lineage", () => {
+    expect(
+      isHubDelegatedOwnedByRequester({
+        entry: {
+          hubDelegated: { ownerSessionKey: "agent:main:main", createdAt: 1 },
+          spawnedBy: "agent:attacker:main",
+        },
+        requesterSessionKey: "agent:attacker:main",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("resolveHubDelegatedLineageMismatch", () => {
+  it("accepts matching owner and lineage fields", () => {
+    expect(
+      resolveHubDelegatedLineageMismatch({
+        hubDelegated: { ownerSessionKey: "agent:main:main", createdAt: 1 },
+        spawnedBy: "agent:main:main",
+        parentSessionKey: "agent:main:main",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("rejects spawnedBy drift from hubDelegated owner", () => {
+    expect(
+      resolveHubDelegatedLineageMismatch({
+        hubDelegated: { ownerSessionKey: "agent:main:main", createdAt: 1 },
+        spawnedBy: "agent:attacker:main",
+      }),
+    ).toContain("spawnedBy");
   });
 });
 

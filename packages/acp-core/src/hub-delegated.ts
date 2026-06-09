@@ -57,13 +57,30 @@ export function isHubDelegatedOwnedByRequester(params: {
     return false;
   }
   const requester = normalizeOptionalString(params.requesterSessionKey);
-  if (!requester) {
+  const owner = normalizeOptionalString(params.entry.hubDelegated.ownerSessionKey);
+  if (!requester || !owner) {
     return false;
   }
-  const owner = normalizeOptionalString(params.entry.hubDelegated.ownerSessionKey);
-  const spawnedBy = normalizeOptionalString(params.entry.spawnedBy);
-  const parentSessionKey = normalizeOptionalString(params.entry.parentSessionKey);
-  return requester === owner || requester === spawnedBy || requester === parentSessionKey;
+  return requester === owner;
+}
+
+/** Rejects drifted lineage fields that could widen delegate authorization beyond the owner. */
+export function resolveHubDelegatedLineageMismatch(
+  entry: HubDelegatedSessionEntry & { hubDelegated: HubDelegatedSessionMeta },
+): string | undefined {
+  const ownerSessionKey = normalizeOptionalString(entry.hubDelegated.ownerSessionKey);
+  if (!ownerSessionKey) {
+    return undefined;
+  }
+  const spawnedBy = normalizeOptionalString(entry.spawnedBy);
+  if (spawnedBy && spawnedBy !== ownerSessionKey) {
+    return "hubDelegated lineage mismatch: spawnedBy must match hubDelegated.ownerSessionKey";
+  }
+  const parentSessionKey = normalizeOptionalString(entry.parentSessionKey);
+  if (parentSessionKey && parentSessionKey !== ownerSessionKey) {
+    return "hubDelegated lineage mismatch: parentSessionKey must match hubDelegated.ownerSessionKey";
+  }
+  return undefined;
 }
 
 type HubDelegatedLabelStoreEntry = HubDelegatedSessionEntry & {

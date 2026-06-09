@@ -64,8 +64,11 @@ export function isRequesterParentOfBackgroundAcpSession(
   if (!requester) {
     return false;
   }
+  const ownerSessionKey = normalizeOptionalString(entry?.hubDelegated?.ownerSessionKey);
+  if (ownerSessionKey) {
+    return requester === ownerSessionKey;
+  }
   const spawnedBy = normalizeOptionalString(entry?.spawnedBy);
   const parentSessionKey = normalizeOptionalString(entry?.parentSessionKey);
-  const ownerSessionKey = normalizeOptionalString(entry?.hubDelegated?.ownerSessionKey);
-  return requester === spawnedBy || requester === parentSessionKey || requester === ownerSessionKey;
+  return requester === spawnedBy || requester === parentSessionKey;
 }

@@ -743,6 +743,48 @@ describe("gateway sessions patch", () => {
     });
   });
 
+  test("rejects hub-delegated marker when spawnedBy drifts from owner", async () => {
+    const result = await runPatch({
+      storeKey: "agent:codex:acp:child",
+      patch: {
+        key: "agent:codex:acp:child",
+        hubDelegated: {
+          ownerSessionKey: "agent:main:main",
+          createdAt: 1_700_000_000_000,
+        },
+        spawnedBy: "agent:attacker:main",
+      },
+    });
+    expectPatchError(
+      result,
+      "hubDelegated lineage mismatch: spawnedBy must match hubDelegated.ownerSessionKey",
+    );
+  });
+
+  test("rejects spawnedBy patch that drifts from existing hub-delegated owner", async () => {
+    const result = await runPatch({
+      storeKey: "agent:codex:acp:child",
+      store: {
+        "agent:codex:acp:child": {
+          sessionId: "sess-1",
+          updatedAt: 1,
+          hubDelegated: {
+            ownerSessionKey: "agent:main:main",
+            createdAt: 1,
+          },
+        },
+      },
+      patch: {
+        key: "agent:codex:acp:child",
+        spawnedBy: "agent:attacker:main",
+      },
+    });
+    expectPatchError(
+      result,
+      "hubDelegated lineage mismatch: spawnedBy must match hubDelegated.ownerSessionKey",
+    );
+  });
+
   test("rejects hub-delegated labels found in another harness store", async () => {
     const result = await runPatch({
       storeKey: "agent:codex:acp:child",
