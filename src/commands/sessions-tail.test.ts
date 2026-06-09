@@ -18,6 +18,13 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
+vi.mock("./session-state-migration.js", async () => ({
+  ...(await vi.importActual<typeof import("./session-state-migration.js")>(
+    "./session-state-migration.js",
+  )),
+  ensureSessionStateMigratedForCommand: vi.fn(async () => {}),
+}));
+
 const sessionKey = "agent:main:telegram:direct:owner";
 
 function makeRuntime(): RuntimeEnv {
