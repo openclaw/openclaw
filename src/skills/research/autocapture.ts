@@ -1,6 +1,12 @@
 // Research autocapture helpers decide when skill research signals should be captured.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  isCronSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../sessions/session-key-utils.js";
 import { readWorkspaceSkillFile } from "../lifecycle/workspace-skill-write.js";
 import { resolveSkillWorkshopConfig } from "../workshop/config.js";
 import { listSkillProposals, proposeCreateSkill, proposeUpdateSkill } from "../workshop/service.js";
@@ -15,9 +21,34 @@ type SkillResearchAgentEndEvent = {
 type SkillResearchAgentContext = {
   agentId?: string;
   workspaceDir?: string;
+  trigger?: string;
+  sessionKey?: string;
 };
 
 const log = createSubsystemLogger("skills/research");
+const AUTOMATIC_CAPTURE_TRIGGERS = new Set(["cron", "heartbeat", "memory", "overflow"]);
+
+function isHookScopedSessionKey(sessionKey: string | undefined): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
+  if (normalized.startsWith("hook:") || normalized.startsWith("cron:")) {
+    return true;
+  }
+  return normalizeLowercaseStringOrEmpty(parseAgentSessionKey(sessionKey)?.rest).startsWith(
+    "hook:",
+  );
+}
+
+function shouldSkipSkillResearchAutoCapture(ctx: SkillResearchAgentContext): boolean {
+  const trigger = normalizeLowercaseStringOrEmpty(ctx.trigger);
+  if (AUTOMATIC_CAPTURE_TRIGGERS.has(trigger)) {
+    return true;
+  }
+  return (
+    isCronSessionKey(ctx.sessionKey) ||
+    isSubagentSessionKey(ctx.sessionKey) ||
+    isHookScopedSessionKey(ctx.sessionKey)
+  );
+}
 
 // Captured updates append below existing skill text so learned context stays auditable.
 function buildAutoCaptureUpdateContent(existingSkill: string, capturedContent: string): string {
@@ -37,6 +68,9 @@ export async function runSkillResearchAutoCapture(params: {
     return;
   }
   if (params.event.success === false) {
+    return;
+  }
+  if (shouldSkipSkillResearchAutoCapture(params.ctx)) {
     return;
   }
   const workspaceDir = params.ctx.workspaceDir;

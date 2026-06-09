@@ -101,6 +101,70 @@ describe("skill research auto-capture", () => {
     expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);
   });
 
+  it("skips automatic agent_end sessions before creating workshop proposals", async () => {
+    const workspaceDir = await makeWorkspace();
+
+    await runSkillResearchAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content: "Remember to always verify generated screenshots before replying.",
+          },
+        ],
+      },
+      ctx: {
+        workspaceDir,
+        trigger: "cron",
+        sessionKey: "cron:daily-summary",
+      },
+      config: {
+        skills: {
+          workshop: {
+            autonomous: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);
+  });
+
+  it("skips hook-scoped helper sessions before creating workshop proposals", async () => {
+    const workspaceDir = await makeWorkspace();
+
+    await runSkillResearchAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content: "Remember to always verify generated screenshots before replying.",
+          },
+        ],
+      },
+      ctx: {
+        workspaceDir,
+        trigger: "user",
+        sessionKey: "hook:gmail:msg-1",
+      },
+      config: {
+        skills: {
+          workshop: {
+            autonomous: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);
+  });
+
   it("preserves existing skill content when auto-capturing an update", async () => {
     const workspaceDir = await makeWorkspace();
     const skillFile = path.join(workspaceDir, "skills", "github-pr-workflow", "SKILL.md");
