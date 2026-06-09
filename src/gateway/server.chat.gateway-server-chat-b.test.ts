@@ -464,6 +464,74 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.startup does not wait for slow optional model catalog metadata", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            modelProvider: "test-provider",
+            model: "slow-catalog-model",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const catalog =
+        createDeferred<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
+          .mockReturnValue(catalog.promise),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        chatAbortControllers: new Map(),
+        chatRunBuffers: new Map(),
+        getRuntimeConfig: () => ({}),
+      } as unknown as GatewayRequestContext;
+      const { chatHandlers } = await import("./server-methods/chat.js");
+
+      await chatHandlers["chat.startup"]({
+        req: {
+          type: "req",
+          id: "startup-slow-catalog",
+          method: "chat.startup",
+          params: { sessionKey: "main" },
+        },
+        params: { sessionKey: "main" },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      expect(responses).toHaveLength(1);
+      expect(responses[0]?.ok).toBe(true);
+      const payload = responses[0]?.payload as
+        | {
+            agentsList?: { agents?: Array<{ id?: string }> };
+            metadata?: unknown;
+            sessionInfo?: { sessionId?: string };
+          }
+        | undefined;
+      expect(payload?.sessionInfo?.sessionId).toBe("sess-main");
+      expect(payload?.agentsList?.agents?.map((agent) => agent.id)).toContain("main");
+      expect(payload?.metadata).toBeUndefined();
+    } finally {
+      testState.sessionStorePath = undefined;
+      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
   test("chat.startup omits metadata when configured model visibility needs full discovery", async () => {
     await withGatewayChatHarness(async ({ ws }) => {
       await writeGatewayConfig({
@@ -497,8 +565,18 @@ describe("gateway server chat", () => {
   });
 
   test("chat.startup scopes metadata to agent session keys without explicit agentId", async () => {
-    await withGatewayChatHarness(async ({ ws }) => {
-      await writeGatewayConfig({
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          "agent:work:main": {
+            sessionId: "sess-work",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const config = {
         agents: {
           defaults: {
             model: {
@@ -515,6 +593,9 @@ describe("gateway server chat", () => {
               model: {
                 primary: "minimax/MiniMax-M2.7-highspeed",
               },
+              models: {
+                "minimax/MiniMax-M2.7-highspeed": {},
+              },
             },
           ],
         },
@@ -530,17 +611,74 @@ describe("gateway server chat", () => {
             },
           },
         },
+      };
+      await writeGatewayConfig(config);
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
+          .mockImplementation(async () => {
+            await Promise.resolve();
+            await Promise.resolve();
+            return [
+              {
+                id: "gpt-main",
+                name: "GPT Main",
+                provider: "openai",
+                input: ["text"],
+              },
+              {
+                id: "MiniMax-M2.7-highspeed",
+                name: "MiniMax M2.7 Highspeed",
+                provider: "minimax",
+                input: ["text"],
+              },
+            ];
+          }),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        chatAbortControllers: new Map(),
+        chatRunBuffers: new Map(),
+        getRuntimeConfig: () => config,
+      } as unknown as GatewayRequestContext;
+      const { chatHandlers } = await import("./server-methods/chat.js");
+
+      await chatHandlers["chat.startup"]({
+        req: {
+          type: "req",
+          id: "startup-agent-scoped-metadata",
+          method: "chat.startup",
+          params: { sessionKey: "agent:work:main" },
+        },
+        params: { sessionKey: "agent:work:main" },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
       });
-      await connectOk(ws);
 
-      const startup = await rpcReq<{
-        metadata?: {
-          models?: Array<{ id?: string; provider?: string }>;
-        };
-      }>(ws, "chat.startup", { sessionKey: "agent:work:main" });
-
-      expect(startup.ok).toBe(true);
-      expect(startup.payload?.metadata?.models).toEqual(
+      expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      expect(responses).toHaveLength(1);
+      expect(responses[0]?.ok).toBe(true);
+      const payload = responses[0]?.payload as
+        | {
+            metadata?: {
+              models?: Array<{ id?: string; provider?: string }>;
+            };
+            sessionInfo?: { key?: string; sessionId?: string };
+          }
+        | undefined;
+      expect(payload?.sessionInfo).toMatchObject({
+        key: "agent:work:main",
+        sessionId: "sess-work",
+      });
+      expect(payload?.metadata?.models).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             id: "MiniMax-M2.7-highspeed",
@@ -548,7 +686,10 @@ describe("gateway server chat", () => {
           }),
         ]),
       );
-    });
+    } finally {
+      testState.sessionStorePath = undefined;
+      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
   });
 
   test("chat.metadata coalesces configured models and text commands", async () => {
