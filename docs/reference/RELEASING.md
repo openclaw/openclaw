@@ -392,9 +392,10 @@ dispatches standalone package Telegram E2E when `release_profile=full` with
 `npm_telegram_package_spec` is set. `OpenClaw Release
 Checks` then fans out install smoke, cross-OS release checks, live/E2E Docker
 release-path coverage when soak is enabled, Package Acceptance with Telegram
-package QA, QA Lab parity, live Matrix, and live Telegram. A full run is only acceptable when the
-`Full Release Validation`
-summary shows `normal_ci` and `release_checks` as successful. In full/all mode,
+package QA, QA Lab parity, live Matrix, and live Telegram. A full/all run is
+only acceptable when the `Full Release Validation` summary shows `normal_ci`,
+`plugin_prerelease`, and `release_checks` as successful, unless a focused rerun
+intentionally skipped the separate `Plugin Prerelease` child. In full/all mode,
 the `npm_telegram` child must also be successful; outside full/all it is skipped
 unless a published `release_package_spec` or `npm_telegram_package_spec` was
 provided. The final
