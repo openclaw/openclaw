@@ -1,7 +1,7 @@
 // Covers exec command resolution and allowlist paths.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileSafeRegex, compileSafeRegexDetailed } from "../security/safe-regex.js";
 import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
@@ -695,6 +695,36 @@ describe("exec-command-resolution", () => {
       expect(elapsed, "must complete in < 500 ms (guard rejects at compile time)").toBeLessThan(
         500,
       );
+    });
+
+    it("emits a console.warn diagnostic when rejecting an unsafe argPattern", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const redosEntry: ExecAllowlistEntry = {
+          pattern: "/usr/bin/python3",
+          argPattern: "(a+)+$",
+        };
+        matchAllowlist([redosEntry], resolution, ["python3", "input"]);
+        expect(warnSpy).toHaveBeenCalledOnce();
+        expect(warnSpy.mock.calls[0]?.[0]).toContain("[exec-approvals]");
+        expect(warnSpy.mock.calls[0]?.[0]).toContain("(a+)+$");
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("does not emit a warning for safe argPattern entries", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const safeEntry: ExecAllowlistEntry = {
+          pattern: "/usr/bin/python3",
+          argPattern: "^script\\.py$",
+        };
+        matchAllowlist([safeEntry], resolution, ["python3", "script.py"]);
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
   });
 });
