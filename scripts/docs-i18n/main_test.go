@@ -278,6 +278,31 @@ func TestTranslateSnippetFallsBackWhenFrontmatterTranslatorFails(t *testing.T) {
 	}
 }
 
+func TestTranslateSnippetCachesDocumentSourcePath(t *testing.T) {
+	t.Parallel()
+
+	tm := &TranslationMemory{entries: map[string]TMEntry{}}
+	source := "Gateway"
+	segmentID := "gateway/index.md:frontmatter:title"
+
+	translated, err := translateSnippet(context.Background(), fakeDocsTranslator{}, tm, segmentID, source, "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("translateSnippet returned error: %v", err)
+	}
+	if translated != source {
+		t.Fatalf("unexpected translation %q", translated)
+	}
+
+	cacheKey := cacheKey(cacheNamespace(), "en", "zh-CN", segmentID, hashText(source))
+	entry, ok := tm.Get(cacheKey)
+	if !ok {
+		t.Fatal("expected successful frontmatter translation to be cached")
+	}
+	if entry.SourcePath != "gateway/index.md" {
+		t.Fatalf("expected document source path, got %q", entry.SourcePath)
+	}
+}
+
 func TestValidateNoTranslationTranscriptArtifacts(t *testing.T) {
 	t.Parallel()
 

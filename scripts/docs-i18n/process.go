@@ -223,10 +223,14 @@ func translateSnippet(ctx context.Context, translator docsTranslator, tm *Transl
 		translated = textValue
 		shouldCache = false
 	}
+	sourcePath := segmentID
+	if path, _, ok := strings.Cut(segmentID, ":frontmatter:"); ok {
+		sourcePath = path
+	}
 	entry := TMEntry{
 		CacheKey:   ck,
 		SegmentID:  segmentID,
-		SourcePath: segmentID,
+		SourcePath: sourcePath,
 		TextHash:   textHash,
 		Text:       textValue,
 		Translated: translated,
