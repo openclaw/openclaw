@@ -25,13 +25,14 @@ import {
   resolveVisibleModelCatalog,
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { resolveModelIntegrationLabel } from "../../agents/model-selection-cli.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isSecretRef } from "../../config/types.secrets.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ModelsListView = ModelCatalogBrowseView;
-type ModelsListEntry = ModelCatalogEntry & { available?: boolean };
+type ModelsListEntry = ModelCatalogEntry & { available?: boolean; runtimeLabel?: string };
 type ModelsListAvailability = boolean | undefined;
 type ModelsListProviderAuthChecker = (
   provider: string,
@@ -220,24 +221,34 @@ async function resolveModelsListEntryAvailability(
 async function buildPublicModelsListEntry(params: {
   entry: ModelCatalogEntry;
   cfg: OpenClawConfig;
+  agentDir?: string;
   providerAuthChecker?: ModelsListProviderAuthChecker;
 }): Promise<ModelsListEntry> {
   const publicEntry = omitRuntimeModelParams(params.entry);
+  const runtimeLabel = resolveModelIntegrationLabel({
+    provider: params.entry.provider,
+    modelId: params.entry.id,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+  });
+  const withRuntimeLabel: ModelsListEntry = runtimeLabel
+    ? { ...publicEntry, runtimeLabel }
+    : publicEntry;
   if (modelCatalogEntryHasUnknownSecretRefAvailability(params.cfg, params.entry)) {
     return {
-      ...publicEntry,
+      ...withRuntimeLabel,
       available: false,
     };
   }
   if (!params.providerAuthChecker) {
-    return publicEntry;
+    return withRuntimeLabel;
   }
   const available = await resolveModelsListEntryAvailability(
     params.providerAuthChecker,
     params.entry,
   );
   return {
-    ...publicEntry,
+    ...withRuntimeLabel,
     available: available ?? false,
   };
 }
@@ -249,11 +260,13 @@ async function buildPublicModelsListEntries(params: {
   workspaceDir: string;
 }): Promise<ModelsListEntry[]> {
   const providerAuthChecker = createModelsListProviderAuthChecker(params);
+  const agentDir = resolveAgentDir(params.cfg, params.agentId);
   return await Promise.all(
     params.catalog.map((entry) =>
       buildPublicModelsListEntry({
         entry,
         cfg: params.cfg,
+        agentDir,
         providerAuthChecker,
       }),
     ),

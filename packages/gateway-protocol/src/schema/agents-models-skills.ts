@@ -21,6 +21,7 @@ export const ModelChoiceSchema = Type.Object(
     available: Type.Optional(Type.Boolean()),
     contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
     reasoning: Type.Optional(Type.Boolean()),
+    runtimeLabel: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

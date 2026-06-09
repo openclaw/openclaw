@@ -87,11 +87,16 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentDir: () => "/tmp/test-agent-dir",
   resolveDefaultAgentId: (cfg?: {
     agents?: { list?: Array<{ id?: string; default?: boolean }> };
   }) =>
     cfg?.agents?.list?.find((agent) => agent.default)?.id ?? cfg?.agents?.list?.[0]?.id ?? "main",
   resolveSessionAgentId: () => "main",
+}));
+
+vi.mock("../agents/model-selection-cli.js", () => ({
+  resolveModelIntegrationLabel: () => undefined,
 }));
 
 vi.mock("../agents/defaults.js", () => ({

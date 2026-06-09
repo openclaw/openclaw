@@ -111,6 +111,12 @@ export type TuiModelChoice = {
   provider: string;
   contextWindow?: number;
   reasoning?: boolean;
+  /**
+   * Optional integration-route label shown as the picker description (e.g.
+   * "CLI" for models routed through a local CLI backend). When set, takes
+   * precedence over the human-readable model name.
+   */
+  runtimeLabel?: string;
 };
 
 /** Result shape returned by session mutation commands. */
