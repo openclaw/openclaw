@@ -61,6 +61,7 @@ import {
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
+  resolveRunFastModeForFallbackCandidate,
   resolveRunAuthProfile,
 } from "./agent-runner-utils.js";
 import {
@@ -831,6 +832,13 @@ export function createFollowupRunner(params: {
             const suppressAssistantErrorPersistenceForCandidate =
               assistantErrorPersistedAcrossFallback;
             const candidateRun = resolveRunForFallbackCandidate(provider, model);
+            const candidateFastMode = resolveRunFastModeForFallbackCandidate({
+              run: candidateRun,
+              config: runtimeConfig,
+              provider,
+              model,
+              sessionEntry: activeSessionEntry,
+            });
             const activeProbe = run.autoFallbackPrimaryProbe;
             if (activeProbe && provider === activeProbe.provider && model === activeProbe.model) {
               markAutoFallbackPrimaryProbe({
@@ -996,9 +1004,9 @@ export function createFollowupRunner(params: {
                       config: runtimeConfig,
                     }),
                     thinkLevel: run.thinkLevel,
-                    fastMode: candidateRun.fastMode,
+                    fastMode: candidateFastMode.fastMode,
                     fastModeStartedAtMs,
-                    fastModeAutoOnSeconds: candidateRun.fastModeAutoOnSeconds,
+                    fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
                     fastModeAutoProgressState,
                     timeoutMs: run.timeoutMs,
                     runTimeoutOverrideMs: run.runTimeoutOverrideMs,
@@ -1111,9 +1119,9 @@ export function createFollowupRunner(params: {
                 model,
                 ...selectedAuthProfile,
                 thinkLevel: run.thinkLevel,
-                fastMode: candidateRun.fastMode,
+                fastMode: candidateFastMode.fastMode,
                 fastModeStartedAtMs,
-                fastModeAutoOnSeconds: candidateRun.fastModeAutoOnSeconds,
+                fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
                 fastModeAutoProgressState,
                 verboseLevel: run.verboseLevel,
                 reasoningLevel: run.reasoningLevel,

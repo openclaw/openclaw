@@ -5250,6 +5250,50 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeRequestParams?.approvalsReviewer).toBe("guardian_subagent");
   });
 
+  it.each([
+    { name: "fast on", fastMode: true, expectedServiceTier: "priority" },
+    {
+      name: "fast off",
+      fastMode: false,
+      configuredServiceTier: "priority",
+    },
+    {
+      name: "fast auto active",
+      fastMode: () => true,
+      expectedServiceTier: "priority",
+    },
+  ] satisfies Array<{
+    name: string;
+    fastMode: EmbeddedRunAttemptParams["fastMode"];
+    configuredServiceTier?: "priority";
+    expectedServiceTier?: "priority";
+  }>)(
+    "maps $name to app-server resume and turn service tier",
+    async ({ fastMode, configuredServiceTier, expectedServiceTier }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
+      const { requests, waitForMethod, completeTurn } = createResumeHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      params.fastMode = fastMode;
+
+      const run = runCodexAppServerAttempt(params, {
+        ...(configuredServiceTier
+          ? { pluginConfig: { appServer: { serviceTier: configuredServiceTier } } }
+          : {}),
+      });
+      await waitForMethod("turn/start");
+      await completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+      await run;
+
+      for (const method of ["thread/resume", "turn/start"]) {
+        const request = requests.find((entry) => entry.method === method);
+        const requestParams = request?.params as Record<string, unknown> | undefined;
+        expect(requestParams?.serviceTier).toBe(expectedServiceTier);
+      }
+    },
+  );
+
   it("reuses the bound auth profile for app-server startup when params omit it", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
