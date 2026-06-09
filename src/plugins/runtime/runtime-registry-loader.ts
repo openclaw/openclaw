@@ -131,6 +131,7 @@ export function ensurePluginRegistryLoaded(options?: {
   workspaceDir?: string;
   onlyPluginIds?: string[];
   onlyChannelIds?: string[];
+  throwOnLoadError?: boolean;
 }): void {
   const scope = options?.scope ?? "all";
   const requestedPluginIdsFromOptions = normalizePluginIdScope(options?.onlyPluginIds);
@@ -213,7 +214,7 @@ export function ensurePluginRegistryLoaded(options?: {
       activationSourceConfig: scopedActivationSourceConfig,
     },
     {
-      throwOnLoadError: true,
+      throwOnLoadError: options?.throwOnLoadError ?? true,
       ...(hasExplicitPluginIdScope(requestedPluginIds) ||
       shouldForwardChannelScope({ scope, scopedLoad }) ||
       hasNonEmptyPluginIdScope(expectedPluginIds) ||

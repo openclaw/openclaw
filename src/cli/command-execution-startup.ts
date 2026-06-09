@@ -66,6 +66,7 @@ export async function ensureCliExecutionBootstrap(params: {
   startupPolicy: CliStartupPolicy;
   allowInvalid?: boolean;
   loadPlugins?: boolean;
+  throwOnPluginLoadError?: boolean;
   skipConfigGuard?: boolean;
 }) {
   await ensureCliCommandBootstrap({
@@ -74,6 +75,7 @@ export async function ensureCliExecutionBootstrap(params: {
     suppressDoctorStdout: params.startupPolicy.suppressDoctorStdout,
     allowInvalid: params.allowInvalid,
     loadPlugins: params.loadPlugins ?? params.startupPolicy.loadPlugins,
+    throwOnPluginLoadError: params.throwOnPluginLoadError,
     pluginRegistry: params.startupPolicy.pluginRegistry,
     skipConfigGuard: params.skipConfigGuard ?? params.startupPolicy.skipConfigGuard,
   });

@@ -325,6 +325,33 @@ describe("ensurePluginRegistryLoaded", () => {
     });
   });
 
+  it("can keep recovery installs off the fail-fast plugin load path", () => {
+    const config = {
+      plugins: { enabled: true },
+      channels: { "demo-channel-a": { enabled: true } },
+    };
+
+    mocks.resolvePluginRuntimeLoadContext.mockReturnValue({
+      rawConfig: config,
+      config,
+      activationSourceConfig: config,
+      autoEnabledReasons: {},
+      workspaceDir: "/tmp/workspace",
+      env: process.env,
+      logger,
+    } as never);
+
+    ensurePluginRegistryLoaded({ scope: "all", throwOnLoadError: false });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expectLoadOpenClawPluginsCall(0, {
+      config,
+      onlyPluginIds: ["demo"],
+      throwOnLoadError: false,
+      workspaceDir: "/tmp/workspace",
+    });
+  });
+
   it("does not treat a tools-only pre-seeded registry as channel scope", () => {
     const config = {
       plugins: { enabled: true },

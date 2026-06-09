@@ -32,15 +32,27 @@ function setProcessTitleForCommand(actionCommand: Command) {
   process.title = `${cliName}-${name}`;
 }
 
+function resolvePluginInstallPreactionPolicy(actionCommand: Command, commandPath: string[]) {
+  return resolvePluginInstallInvalidConfigPolicy(
+    resolvePluginInstallPreactionRequest({
+      actionCommand,
+      commandPath,
+      argv: process.argv,
+    }),
+  );
+}
+
 function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
   return (
-    resolvePluginInstallInvalidConfigPolicy(
-      resolvePluginInstallPreactionRequest({
-        actionCommand,
-        commandPath,
-        argv: process.argv,
-      }),
-    ) === "allow-plugin-recovery"
+    resolvePluginInstallPreactionPolicy(actionCommand, commandPath) === "allow-plugin-recovery"
+  );
+}
+
+function shouldThrowOnPluginLoadError(actionCommand: Command, commandPath: string[]): boolean {
+  // Recovery reinstalls need hook bootstrap, but a fail-fast registry load would
+  // abort the repair command before the install action can replace the bad plugin.
+  return (
+    resolvePluginInstallPreactionPolicy(actionCommand, commandPath) !== "allow-plugin-recovery"
   );
 }
 
@@ -135,6 +147,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       commandPath,
       startupPolicy,
       allowInvalid: shouldAllowInvalidConfigForAction(actionCommand, commandPath),
+      throwOnPluginLoadError: shouldThrowOnPluginLoadError(actionCommand, commandPath),
       skipConfigGuard: shouldBypassConfigGuardForCommandPath(commandPath),
     });
   });

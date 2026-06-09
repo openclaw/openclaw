@@ -213,6 +213,7 @@ describe("command-execution-startup", () => {
       },
       allowInvalid: true,
       loadPlugins: true,
+      throwOnPluginLoadError: false,
     });
 
     expect(ensureCliCommandBootstrapMock).toHaveBeenLastCalledWith({
@@ -221,6 +222,7 @@ describe("command-execution-startup", () => {
       suppressDoctorStdout: false,
       allowInvalid: true,
       loadPlugins: true,
+      throwOnPluginLoadError: false,
       pluginRegistry: { scope: "all" },
       skipConfigGuard: false,
     });

@@ -76,6 +76,18 @@ describe("plugin-registry-loader", () => {
     });
   });
 
+  it("forwards explicit plugin load failure policy overrides", async () => {
+    await ensureCliPluginRegistryLoaded({
+      scope: "all",
+      throwOnLoadError: false,
+    });
+
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+      throwOnLoadError: false,
+    });
+  });
+
   it("forwards configured-channel load scope without startup dependency repair", async () => {
     await ensureCliPluginRegistryLoaded({
       scope: "configured-channels",

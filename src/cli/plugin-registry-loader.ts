@@ -19,6 +19,7 @@ export type CliPluginRegistryLoadPolicy = {
 export async function ensureCliPluginRegistryLoaded(params: {
   scope: CliPluginRegistryScope;
   routeLogsToStderr?: boolean;
+  throwOnLoadError?: boolean;
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
 }) {
@@ -30,6 +31,9 @@ export async function ensureCliPluginRegistryLoaded(params: {
   try {
     ensurePluginRegistryLoaded({
       scope: params.scope,
+      ...(params.throwOnLoadError !== undefined
+        ? { throwOnLoadError: params.throwOnLoadError }
+        : {}),
       ...(params.config ? { config: params.config } : {}),
       ...(params.activationSourceConfig
         ? { activationSourceConfig: params.activationSourceConfig }

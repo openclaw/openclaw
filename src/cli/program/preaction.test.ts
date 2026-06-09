@@ -252,6 +252,7 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
+      throwOnLoadError: true,
     });
   });
 
@@ -268,6 +269,7 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
+      throwOnLoadError: true,
     });
   });
 
@@ -361,6 +363,7 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
+      throwOnLoadError: false,
     });
 
     vi.clearAllMocks();
@@ -376,6 +379,7 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
+      throwOnLoadError: false,
     });
 
     vi.clearAllMocks();
@@ -391,6 +395,7 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
+      throwOnLoadError: false,
     });
 
     vi.clearAllMocks();
@@ -405,6 +410,7 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
+      throwOnLoadError: true,
     });
 
     vi.clearAllMocks();
@@ -420,6 +426,7 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
+      throwOnLoadError: false,
     });
 
     vi.clearAllMocks();
@@ -442,6 +449,7 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
+      throwOnLoadError: true,
     });
   });
 
@@ -607,6 +615,7 @@ describe("registerPreActionHooks", () => {
 
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "configured-channels",
+      throwOnLoadError: true,
     });
     expect(stderrDuringPluginLoad).toBe(true);
     // Flag must be restored after plugin loading completes

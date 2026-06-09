@@ -99,6 +99,21 @@ describe("ensureCliCommandBootstrap", () => {
     });
   });
 
+  it("allows recovery installs to tolerate configured plugin load failures", async () => {
+    await ensureCliCommandBootstrap({
+      runtime: {} as never,
+      commandPath: ["plugins", "install"],
+      loadPlugins: true,
+      throwOnPluginLoadError: false,
+    });
+
+    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+      routeLogsToStderr: undefined,
+      throwOnLoadError: false,
+    });
+  });
+
   it("does nothing extra when plugin loading is disabled", async () => {
     await ensureCliCommandBootstrap({
       runtime: {} as never,

@@ -19,6 +19,7 @@ export async function ensureCliCommandBootstrap(params: {
   skipConfigGuard?: boolean;
   allowInvalid?: boolean;
   loadPlugins?: boolean;
+  throwOnPluginLoadError?: boolean;
   pluginRegistry?: CliPluginRegistryPolicy;
 }) {
   if (!params.skipConfigGuard) {
@@ -38,5 +39,8 @@ export async function ensureCliCommandBootstrap(params: {
   await ensureCliPluginRegistryLoaded({
     scope: pluginRegistryLoadPolicy.scope,
     routeLogsToStderr: params.suppressDoctorStdout,
+    ...(params.throwOnPluginLoadError !== undefined
+      ? { throwOnLoadError: params.throwOnPluginLoadError }
+      : {}),
   });
 }
