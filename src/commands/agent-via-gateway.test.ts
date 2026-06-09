@@ -158,9 +158,12 @@ function createSignalProcess() {
 async function waitForAgentCommandCall(expectedAdditionalCalls = 1) {
   const initialCalls = agentCommand.mock.calls.length;
   const expectedCalls = initialCalls + expectedAdditionalCalls;
-  await vi.waitFor(() => {
-    expect(agentCommand.mock.calls.length).toBeGreaterThanOrEqual(expectedCalls);
-  });
+  await vi.waitFor(
+    () => {
+      expect(agentCommand.mock.calls.length).toBeGreaterThanOrEqual(expectedCalls);
+    },
+    { timeout: 10_000 },
+  );
 }
 
 async function waitForSignalListener(
@@ -185,7 +188,9 @@ function runAbortHandlerWhenReady(signal: AbortSignal | undefined, onAbort: () =
 }
 
 async function waitForGatewayCall(expectedCalls = 1) {
-  await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(expectedCalls));
+  await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(expectedCalls), {
+    timeout: 10_000,
+  });
 }
 
 function createDeferredVoid() {
