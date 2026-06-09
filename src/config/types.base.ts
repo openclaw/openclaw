@@ -9,6 +9,8 @@ export type TypingMode = "never" | "instant" | "thinking" | "message";
 export type SessionScope = "per-sender" | "global";
 /** DM session-key granularity across peers, channels, and accounts. */
 export type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+/** Group session-key granularity: fold group chats into the agent main session, or keep per-group. */
+export type GroupScope = "main" | "per-group";
 /** Which source messages outbound replies should thread or quote against. */
 export type ReplyToMode = "off" | "first" | "all" | "batched";
 /** Group-chat admission policy for channels with allowlists. */
@@ -213,6 +215,8 @@ export type SessionConfig = {
   scope?: SessionScope;
   /** DM session scoping (default: "main"). */
   dmScope?: DmScope;
+  /** Group session scoping (default: "per-group"). "main" folds group chats into the agent main session. */
+  groupScope?: GroupScope;
   /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
   identityLinks?: Record<string, string[]>;
   resetTriggers?: string[];

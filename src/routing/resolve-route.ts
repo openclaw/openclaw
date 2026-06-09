@@ -98,6 +98,8 @@ export function buildAgentSessionKey(params: {
   peer?: RoutePeer | null;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  /** Group session scope. "main" folds group chats into the agent main session. */
+  groupScope?: "main" | "per-group";
   identityLinks?: Record<string, string[]>;
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
@@ -110,6 +112,7 @@ export function buildAgentSessionKey(params: {
     peerKind: peer?.kind ?? "direct",
     peerId: peer ? normalizeId(peer.id) || "unknown" : null,
     dmScope: params.dmScope,
+    groupScope: params.groupScope,
     identityLinks: params.identityLinks,
   });
 }
@@ -622,6 +625,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const memberRoleIds = input.memberRoleIds ?? [];
   const memberRoleIdSet = new Set(memberRoleIds);
   const dmScope = input.cfg.session?.dmScope ?? "main";
+  const groupScope = input.cfg.session?.groupScope;
   const identityLinks = input.cfg.session?.identityLinks;
   const shouldLogDebug = shouldLogVerbose();
   const parentPeer = input.parentPeer
@@ -658,16 +662,21 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const choose = (
     agentId: string,
     matchedBy: ResolvedAgentRoute["matchedBy"],
-    sessionOverride?: { dmScope?: Parameters<typeof buildAgentSessionKey>[0]["dmScope"] },
+    sessionOverride?: {
+      dmScope?: Parameters<typeof buildAgentSessionKey>[0]["dmScope"];
+      groupScope?: Parameters<typeof buildAgentSessionKey>[0]["groupScope"];
+    },
   ) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     const effectiveDmScope = sessionOverride?.dmScope ?? dmScope;
+    const effectiveGroupScope = sessionOverride?.groupScope ?? groupScope;
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
       channel,
       accountId,
       peer,
       dmScope: effectiveDmScope,
+      groupScope: effectiveGroupScope,
       identityLinks,
     });
     const mainSessionKey = normalizeLowercaseStringOrEmpty(

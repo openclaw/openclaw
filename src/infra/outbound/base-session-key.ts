@@ -22,6 +22,7 @@ export function buildOutboundBaseSessionKey(params: {
     accountId: params.accountId,
     peer: params.peer,
     dmScope: params.cfg.session?.dmScope ?? "main",
+    groupScope: params.cfg.session?.groupScope,
     identityLinks: params.cfg.session?.identityLinks,
   });
 }
