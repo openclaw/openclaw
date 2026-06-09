@@ -2175,7 +2175,6 @@ async function agentCommandInternal(
       const resolveFreshSessionEntryForDelivery =
         sessionStore && sessionKey && !suppressVisibleSessionEffects
           ? async (): Promise<SessionEntry | undefined> => {
-              const { loadSessionStore } = await loadSessionStoreRuntime();
               const freshStore = loadSessionStore(storePath, {
                 skipCache: true,
                 clone: false,
