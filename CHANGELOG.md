@@ -107,6 +107,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: add `session.groupScope` (and a per-binding `bindings[].session.groupScope` override) mirroring `dmScope`. Set `groupScope: "main"` to fold group chats into the agent's main session; the default `per-group` keeps each group its own session.
 - Docs: add a dedicated Skill Workshop guide covering governed skill creation, reviewable proposals, CLI, Gateway, agent tool behavior, approval policy, support files, and recovery; refresh ClawHub cards; and add ClawHub CLI, iMessage SSH-wrapper TCC, Android helper, diff-language, and host-local media-send guidance. (#79658, #88734, #88758, #88865, #89297) Thanks @simplyclever914, @shakkernerd, @vyctorbrzezowski, @TurboTheTurtle, @RomneyDa, and @Wang-Yeah623.
 - Skills: let the `skill_workshop` agent tool apply, reject, and quarantine explicit proposals through the guarded review flow. Thanks @shakkernerd.
 - Skills: let proposals carry approved support files under standard skill folders, with scanner, hash, and rollback safeguards. Thanks @shakkernerd.

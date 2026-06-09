@@ -681,6 +681,145 @@ test.each([
   expect(route.sessionKey).toBe(expected);
 });
 
+describe("groupScope", () => {
+  test.each([
+    {
+      name: "groupScope=main folds a group peer into the agent main session",
+      groupScope: "main" as const,
+      expected: "agent:main:main",
+      expectedPolicy: "main" as const,
+    },
+    {
+      name: "groupScope=per-group keeps the group's own session key",
+      groupScope: "per-group" as const,
+      expected: "agent:main:telegram:group:-1001234567890",
+      expectedPolicy: "session" as const,
+    },
+  ] as const)("$name", ({ groupScope, expected, expectedPolicy }) => {
+    const route = resolveAgentRoute({
+      cfg: {
+        session: { groupScope },
+      },
+      channel: "telegram",
+      accountId: null,
+      peer: { kind: "group", id: "-1001234567890" },
+    });
+    expect(route.sessionKey).toBe(expected);
+    expect(route.lastRoutePolicy).toBe(expectedPolicy);
+  });
+
+  test("default (unset) groupScope keeps the group's own session key", () => {
+    const route = resolveAgentRoute({
+      cfg: {},
+      channel: "telegram",
+      accountId: null,
+      peer: { kind: "group", id: "-1001234567890" },
+    });
+    expect(route.sessionKey).toBe("agent:main:telegram:group:-1001234567890");
+    expect(route.lastRoutePolicy).toBe("session");
+  });
+
+  test("route binding session groupScope folds a selected group into main against a per-group default", () => {
+    const cfg: OpenClawConfig = {
+      session: { groupScope: "per-group" },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "group", id: "-100folded" },
+          },
+          session: { groupScope: "main" },
+        },
+      ],
+    };
+
+    // Bound group folds into main per its override.
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "telegram",
+        accountId: "default",
+        peer: { kind: "group", id: "-100folded" },
+      }),
+      {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        matchedBy: "binding.peer",
+        lastRoutePolicy: "main",
+      },
+    );
+
+    // Other groups keep their own key under the per-group default.
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "telegram",
+        accountId: "default",
+        peer: { kind: "group", id: "-100other" },
+      }),
+      {
+        agentId: "main",
+        sessionKey: "agent:main:telegram:group:-100other",
+        matchedBy: "default",
+        lastRoutePolicy: "session",
+      },
+    );
+  });
+
+  test("route binding session groupScope keeps a selected group separate against a main default", () => {
+    const cfg: OpenClawConfig = {
+      session: { groupScope: "main" },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "group", id: "-100separate" },
+          },
+          session: { groupScope: "per-group" },
+        },
+      ],
+    };
+
+    // Bound group stays on its own key per its override.
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "telegram",
+        accountId: "default",
+        peer: { kind: "group", id: "-100separate" },
+      }),
+      {
+        agentId: "main",
+        sessionKey: "agent:main:telegram:group:-100separate",
+        matchedBy: "binding.peer",
+        lastRoutePolicy: "session",
+      },
+    );
+
+    // Other groups fold into main under the global default.
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "telegram",
+        accountId: "default",
+        peer: { kind: "group", id: "-100other" },
+      }),
+      {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        matchedBy: "default",
+        lastRoutePolicy: "main",
+      },
+    );
+  });
+});
+
 describe("parentPeer binding inheritance (thread support)", () => {
   const threadPeer = { kind: "channel" as const, id: "thread-456" };
   const defaultParentPeer = { kind: "channel" as const, id: "parent-channel-123" };

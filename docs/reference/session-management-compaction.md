@@ -144,7 +144,7 @@ A `sessionKey` identifies _which conversation bucket_ you're in (routing + isola
 Common patterns:
 
 - Main/direct chat (per agent): `agent:<agentId>:<mainKey>` (default `main`)
-- Group: `agent:<agentId>:<channel>:group:<id>`
+- Group: `agent:<agentId>:<channel>:group:<id>` (with `session.groupScope: "main"`, group chats fold into the agent main key instead)
 - Room/channel (Discord/Slack): `agent:<agentId>:<channel>:channel:<id>` or `...:room:<id>`
 - Cron: `cron:<job.id>`
 - Webhook: `hook:<uuid>` (unless overridden)
