@@ -5,8 +5,8 @@ import {
   extractContentFromMessage,
   extractTextFromMessage,
   extractThinkingFromMessage,
-  formatConnectionHostFooter,
   formatGoalFooter,
+  formatRemoteConnectionHostFooter,
   isCommandMessage,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
@@ -46,16 +46,20 @@ describe("formatGoalFooter", () => {
   });
 });
 
-describe("formatConnectionHostFooter", () => {
-  it("renders only the connection hostname", () => {
-    expect(formatConnectionHostFooter("ws://gateway-host:18789")).toBe("host gateway-host");
+describe("formatRemoteConnectionHostFooter", () => {
+  it("renders only the remote connection hostname", () => {
+    expect(formatRemoteConnectionHostFooter("ws://gateway-host:18789")).toBe("host gateway-host");
     expect(
-      formatConnectionHostFooter("wss://user:secret@example.com:443/path?token=redacted"),
+      formatRemoteConnectionHostFooter("wss://user:secret@example.com:443/path?token=redacted"),
     ).toBe("host example.com");
   });
 
-  it("skips non-url local connection labels", () => {
-    expect(formatConnectionHostFooter("local embedded")).toBeNull();
+  it("skips local and non-url connection labels", () => {
+    expect(formatRemoteConnectionHostFooter("local embedded")).toBeNull();
+    expect(formatRemoteConnectionHostFooter("ws://localhost:18789")).toBeNull();
+    expect(formatRemoteConnectionHostFooter("ws://127.0.0.1:18789")).toBeNull();
+    expect(formatRemoteConnectionHostFooter("ws://127.1:18789")).toBeNull();
+    expect(formatRemoteConnectionHostFooter("ws://[::1]:18789")).toBeNull();
   });
 });
 

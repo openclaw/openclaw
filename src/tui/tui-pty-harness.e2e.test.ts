@@ -364,7 +364,7 @@ describe.sequential("TUI PTY harness", () => {
 
   it("renders local ready on startup", () => {
     expect(fixture.run.output()).toContain("local ready");
-    expect(fixture.run.output()).toContain("host local");
+    expect(fixture.run.output()).not.toContain("host local");
   });
 
   it(
