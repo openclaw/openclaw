@@ -696,21 +696,6 @@ export type ProviderAuthDoctorHintContext = {
   profileId?: string;
 };
 
-export type ProviderNativeWebSearchPolicyContext = {
-  sessionKey?: string;
-  sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
-  messageProvider?: string;
-  agentAccountId?: string | null;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  spawnedBy?: string | null;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
-};
-
 /**
  * Provider-owned extra-param normalization before OpenClaw builds its generic
  * stream option wrapper.
@@ -723,7 +708,7 @@ export type ProviderPrepareExtraParamsContext = {
   agentDir?: string;
   workspaceDir?: string;
   agentId?: string;
-  nativeWebSearchPolicyContext?: ProviderNativeWebSearchPolicyContext;
+  nativeWebSearchAllowedByToolPolicy?: boolean;
   provider: string;
   modelId: string;
   model?: ProviderRuntimeModel;

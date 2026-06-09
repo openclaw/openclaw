@@ -1,3 +1,7 @@
+import {
+  type NativeWebSearchToolPolicyParams,
+  isNativeWebSearchAllowedByToolPolicy,
+} from "../../agents/codex-native-web-search-core.js";
 /**
  * Resolves model extra parameters and transport overrides for embedded agents.
  */
@@ -30,7 +34,6 @@ import {
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import type { ProviderNativeWebSearchPolicyContext } from "../../plugins/types.js";
 import { canonicalizeMaxTokensParam, resolveMaxTokensParam } from "../model-max-tokens-params.js";
 import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
@@ -1046,7 +1049,7 @@ export function applyExtraParamsToAgent(
   resolvedTransport?: SupportedTransport,
   options?: {
     preparedExtraParams?: Record<string, unknown>;
-    nativeWebSearchPolicyContext?: ProviderNativeWebSearchPolicyContext;
+    nativeWebSearchPolicyContext?: NativeWebSearchToolPolicyParams;
   },
 ): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
@@ -1093,6 +1096,15 @@ export function applyExtraParamsToAgent(
   };
 
   const providerStreamBase = agent.streamFn;
+  const nativeWebSearchAllowedByToolPolicy = options?.nativeWebSearchPolicyContext
+    ? isNativeWebSearchAllowedByToolPolicy({
+        config: cfg,
+        modelProvider: model?.provider,
+        modelId: model?.id,
+        agentId,
+        ...options.nativeWebSearchPolicyContext,
+      })
+    : undefined;
   const pluginWrappedStreamFn = providerRuntimeDeps.wrapProviderStreamFn({
     provider,
     config: cfg,
@@ -1101,7 +1113,7 @@ export function applyExtraParamsToAgent(
       agentDir,
       workspaceDir,
       agentId,
-      nativeWebSearchPolicyContext: options?.nativeWebSearchPolicyContext,
+      nativeWebSearchAllowedByToolPolicy,
       provider,
       modelId,
       extraParams: effectiveExtraParams,

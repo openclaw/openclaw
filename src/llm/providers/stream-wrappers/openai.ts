@@ -630,6 +630,7 @@ export function createCodexNativeWebSearchWrapper(
     senderName?: string | null;
     senderUsername?: string | null;
     senderE164?: string | null;
+    nativeWebSearchAllowedByToolPolicy?: boolean;
     codeModeToolSurfaceEnabled?: boolean;
   },
 ): StreamFn {
@@ -661,6 +662,15 @@ export function createCodexNativeWebSearchWrapper(
         },
       };
       return underlying(model, context, codeModeOptions);
+    }
+
+    if (params.nativeWebSearchAllowedByToolPolicy === false) {
+      log.debug(
+        `skipping Codex native web search (tool_policy_denied) for ${
+          model.provider ?? "unknown"
+        }/${model.id ?? "unknown"}`,
+      );
+      return underlying(model, context, options);
     }
 
     const activation = resolveCodexNativeSearchActivation({

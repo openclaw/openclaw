@@ -82,7 +82,7 @@ function runWrappedPayloadCase(params: {
   extraParams?: Record<string, unknown>;
   cfg?: Record<string, unknown>;
   agentId?: string;
-  nativeWebSearchPolicyContext?: unknown;
+  nativeWebSearchAllowedByToolPolicy?: boolean;
   payload?: Record<string, unknown>;
 }) {
   const payload = params.payload ?? { store: false };
@@ -100,7 +100,7 @@ function runWrappedPayloadCase(params: {
     config: params.cfg as never,
     agentDir: "/tmp/openai-provider-test",
     agentId: params.agentId,
-    nativeWebSearchPolicyContext: params.nativeWebSearchPolicyContext,
+    nativeWebSearchAllowedByToolPolicy: params.nativeWebSearchAllowedByToolPolicy,
     streamFn: baseStreamFn,
   } as never);
 
@@ -1236,6 +1236,7 @@ describe("buildOpenAIProvider", () => {
       provider: "openai",
       modelId: "gpt-5.4",
       agentId: "main",
+      nativeWebSearchAllowedByToolPolicy: false,
       cfg: {
         agents: {
           list: [

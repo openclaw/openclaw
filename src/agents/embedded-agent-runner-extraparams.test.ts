@@ -469,7 +469,7 @@ function createTestOpenAIProviderWrapper(
     config: params.context.config,
     agentDir: params.context.agentDir,
     agentId: params.context.agentId,
-    ...params.context.nativeWebSearchPolicyContext,
+    nativeWebSearchAllowedByToolPolicy: params.context.nativeWebSearchAllowedByToolPolicy,
   });
   streamFn = createOpenAIStringContentWrapper(streamFn);
   streamFn = createOpenAICompletionsStrictMessageKeysWrapper(streamFn);
@@ -563,20 +563,8 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(capturedContext?.agentDir).toBe("/tmp/openclaw-agent");
     expect(capturedContext?.workspaceDir).toBe("/tmp/openclaw-workspace");
-    expect(capturedContext?.nativeWebSearchPolicyContext).toEqual({
-      sessionKey: "agent:cass:main",
-      sandboxToolPolicy: { deny: ["group:web"] },
-      messageProvider: "teams",
-      agentAccountId: "acct-1",
-      groupId: "group-1",
-      groupChannel: "General",
-      groupSpace: "space-1",
-      spawnedBy: "agent:cass:main",
-      senderId: "alice",
-      senderName: "Alice",
-      senderUsername: "alice-user",
-      senderE164: "+15551234567",
-    });
+    expect(capturedContext?.nativeWebSearchAllowedByToolPolicy).toBe(false);
+    expect("nativeWebSearchPolicyContext" in (capturedContext ?? {})).toBe(false);
   });
 
   function runResponsesPayloadMutationCase(params: {
