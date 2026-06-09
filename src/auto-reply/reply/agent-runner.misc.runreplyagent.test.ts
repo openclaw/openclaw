@@ -1,3 +1,4 @@
+// Tests miscellaneous run-reply-agent behaviors and artifact output.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import * as sessionTypesModule from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
+import {
+  readSessionStoreForTest,
+  writeSessionStoreForTestAsync,
+} from "../../config/sessions/test-helpers.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -247,6 +252,16 @@ function firstMockCallArg(mock: MockCallSource, label: string): unknown {
   return call[0];
 }
 
+async function seedSessionStore(params: {
+  storePath: string;
+  sessionKey: string;
+  entry: Record<string, unknown>;
+}) {
+  await writeSessionStoreForTestAsync(params.storePath, {
+    [params.sessionKey]: params.entry as SessionEntry,
+  });
+}
+
 beforeEach(() => {
   vi.useRealTimers();
   registerCliBackendsForTest();
@@ -297,19 +312,6 @@ afterEach(() => {
 });
 
 describe("runReplyAgent auto-compaction token update", () => {
-  async function seedSessionStore(params: {
-    storePath: string;
-    sessionKey: string;
-    entry: Record<string, unknown>;
-  }) {
-    await fs.mkdir(path.dirname(params.storePath), { recursive: true });
-    await fs.writeFile(
-      params.storePath,
-      JSON.stringify({ [params.sessionKey]: params.entry }, null, 2),
-      "utf-8",
-    );
-  }
-
   function createBaseRun(params: {
     storePath: string;
     sessionEntry: Record<string, unknown>;
@@ -420,7 +422,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       unsubscribe?.();
     }
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = readSessionStoreForTest(storePath);
     const usageEvent = diagnostics.find((event) => event.type === "model.usage");
     return { sessionKey, stored, usageEvent };
   }
@@ -826,17 +828,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       verboseLevel: "on",
     };
 
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: sessionEntry,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
 
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
       const latest = loadSessionStore(storePath, { skipCache: true });
@@ -938,17 +930,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       traceLevel: "on",
     };
 
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: sessionEntry,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
 
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
       const latest = loadSessionStore(storePath, { skipCache: true });
@@ -1049,17 +1031,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       traceLevel: "on",
     };
 
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: sessionEntry,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
 
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
       const latest = loadSessionStore(storePath, { skipCache: true });
@@ -1162,17 +1134,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       compactionCount: 3,
     };
 
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: sessionEntry,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
     await fs.writeFile(
       sessionFile,
       [
@@ -1408,7 +1370,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       traceLevel: "raw",
     };
 
-    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: sessionEntry }, null, 2), "utf-8");
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
     await fs.writeFile(sessionFile, "", "utf-8");
 
     runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -1624,7 +1586,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       traceLevel: "raw",
     };
 
-    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: sessionEntry }, null, 2), "utf-8");
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
     await fs.writeFile(sessionFile, "", "utf-8");
 
     runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -3009,7 +2971,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "stranded";
     const sessionEntry = { sessionId: "session", updatedAt: Date.now(), totalTokens: 1_000 };
-    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: sessionEntry }, null, 2), "utf-8");
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
 
     const finalAssistantText =
       params.finalAssistantText ??

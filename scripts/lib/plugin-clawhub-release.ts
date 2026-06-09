@@ -1,3 +1,4 @@
+// Plugin Clawhub Release script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
@@ -7,6 +8,7 @@ import {
   collectChangedPathsFromGitRange,
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
+  assertPluginReleaseVersionFloors,
   parsePluginReleaseArgs,
   resolvePublishablePluginVersion,
   resolveGitCommitSha,
@@ -16,7 +18,7 @@ import {
   type PluginReleaseSelectionMode,
 } from "./plugin-npm-release.ts";
 
-export { parsePluginReleaseArgs };
+export { assertPluginReleaseVersionFloors, parsePluginReleaseArgs };
 
 type PluginPackageJson = {
   name?: string;
@@ -53,6 +55,7 @@ export type PublishablePluginPackage = {
 
 type PluginReleasePlanItem = PublishablePluginPackage & {
   alreadyPublished: boolean;
+  artifactName: string;
 };
 
 type PluginReleasePlan = {
@@ -99,6 +102,16 @@ function getRegistryBaseUrl(explicit?: string) {
     process.env.CLAWHUB_SITE?.trim() ||
     CLAWHUB_DEFAULT_REGISTRY
   );
+}
+
+function formatClawHubPackageArtifactName(
+  plugin: Pick<PublishablePluginPackage, "packageName" | "version">,
+) {
+  const safeName = plugin.packageName
+    .replace(/^@/u, "")
+    .replace(/[^A-Za-z0-9_.-]+/gu, "-")
+    .replace(/^-+|-+$/gu, "");
+  return `clawhub-package-${safeName}-${plugin.version}`;
 }
 
 async function readClawHubPackageOwnerDetail(
@@ -452,6 +465,11 @@ export async function collectPluginClawHubReleasePlan(params?: {
     rootDir,
   });
 
+  const explicitPublishSelection = params?.selectionMode !== undefined || selection.length > 0;
+  if (explicitPublishSelection) {
+    assertPluginReleaseVersionFloors(selectedPublishable, "Plugin ClawHub release plan");
+  }
+
   const all = await Promise.all(
     selectedPublishable.map(async (plugin) =>
       Object.assign({}, plugin, {
@@ -460,6 +478,7 @@ export async function collectPluginClawHubReleasePlan(params?: {
           plugin.version,
           { registryBaseUrl: params?.registryBaseUrl, fetchImpl: params?.fetchImpl },
         ),
+        artifactName: formatClawHubPackageArtifactName(plugin),
       }),
     ),
   );

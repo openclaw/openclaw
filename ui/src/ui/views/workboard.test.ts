@@ -1,3 +1,4 @@
+// Control UI tests cover workboard behavior.
 import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { getWorkboardState } from "../controllers/workboard.ts";
@@ -1675,6 +1676,22 @@ describe("renderWorkboard", () => {
         priority: "high",
       }),
     });
+    expect(state.cards[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 2 });
+
+    render(renderWorkboard(props), container);
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    container
+      .querySelector<HTMLButtonElement>('button[title="Edit card"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render(renderWorkboard(props), container);
+
+    expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
+      "Renamed",
+    );
+    expect(
+      [...container.querySelectorAll<HTMLSelectElement>(".workboard-draft__meta select")].at(1)
+        ?.value,
+    ).toBe("high");
   });
 
   it("locks edit-modal actions while a comment request is in flight", () => {

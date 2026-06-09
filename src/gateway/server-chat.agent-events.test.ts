@@ -1,3 +1,5 @@
+// Server chat agent-event tests protect event fanout, heartbeat visibility,
+// session lifecycle persistence, and subscriber registry behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
@@ -408,6 +410,89 @@ describe("agent event handler", () => {
     expect(payload.deltaText).toBe("Hello world");
     expect(payload.message?.content?.[0]?.text).toBe("Hello world");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("emits the first assistant chat.send timing event to the originating Control UI", () => {
+    const { broadcastToConnIds, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    chatRunState.registry.add("run-1", {
+      sessionKey: "session-1",
+      clientRunId: "client-1",
+      chatSendTiming: {
+        ackedAtMs: 0,
+        connId: "conn-control-ui",
+        dispatchStartedAtMs: 0,
+        receivedAtMs: 0,
+      },
+    });
+
+    handler({
+      runId: "run-1",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world" },
+    });
+    handler({
+      runId: "run-1",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world again" },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "chat.send_timing",
+      expect.objectContaining({
+        phase: "first-assistant-event",
+        runId: "client-1",
+        sessionKey: "session-1",
+        ackToPhaseMs: expect.any(Number),
+        dispatchStartedToPhaseMs: expect.any(Number),
+        receivedToPhaseMs: expect.any(Number),
+      }),
+      new Set(["conn-control-ui"]),
+      { dropIfSlow: true },
+    );
+    nowSpy?.mockRestore();
+  });
+
+  it("emits first assistant chat.send timing when text first flushes on final", () => {
+    const { broadcastToConnIds, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    chatRunState.registry.add("run-final-only", {
+      sessionKey: "session-1",
+      clientRunId: "client-final",
+      chatSendTiming: {
+        ackedAtMs: 0,
+        connId: "conn-control-ui",
+        dispatchStartedAtMs: 0,
+        receivedAtMs: 0,
+      },
+    });
+    chatRunState.buffers.set("client-final", "Final only reply");
+
+    handler({
+      runId: "run-final-only",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "chat.send_timing",
+      expect.objectContaining({
+        phase: "first-assistant-event",
+        runId: "client-final",
+        sessionKey: "session-1",
+        ackToPhaseMs: expect.any(Number),
+        dispatchStartedToPhaseMs: expect.any(Number),
+        receivedToPhaseMs: expect.any(Number),
+      }),
+      new Set(["conn-control-ui"]),
+      { dropIfSlow: true },
+    );
     nowSpy?.mockRestore();
   });
 

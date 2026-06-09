@@ -1,3 +1,4 @@
+/** Shared helpers for onboarding, reset, gateway checks, and wizard output. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
@@ -20,6 +21,7 @@ import {
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
+import { clearExistingSqliteSessionStore } from "../config/sessions/store-sqlite.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveControlUiLinks } from "../gateway/control-ui-links.js";
@@ -42,6 +44,7 @@ export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
 export { resolveControlUiLinks };
 
+/** Handles Clack cancellation by exiting through the runtime. */
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
@@ -51,6 +54,7 @@ export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   return value;
 }
 
+/** Summarizes existing config values before onboarding overwrites or reuses them. */
 export function summarizeExistingConfig(config: OpenClawConfig): string {
   const rows: string[] = [];
   const defaults = config.agents?.defaults;
@@ -127,6 +131,7 @@ function formatGatewayBind(value: string | undefined): string | undefined {
   }
 }
 
+/** Normalizes gateway token prompts while rejecting JS stringification sentinels. */
 export function normalizeGatewayTokenInput(value: unknown): string {
   if (typeof value !== "string") {
     return "";
@@ -140,6 +145,7 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   return trimmed;
 }
 
+/** Validates gateway password prompt input. */
 export function validateGatewayPasswordInput(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return "Required";
@@ -154,6 +160,7 @@ export function validateGatewayPasswordInput(value: unknown): string | undefined
   return undefined;
 }
 
+/** Prints the onboarding banner. */
 export function printWizardHeader(runtime: RuntimeEnv) {
   const bannerWidth = 54;
   const icon = decorativeEmoji("🦞");
@@ -172,6 +179,7 @@ export function printWizardHeader(runtime: RuntimeEnv) {
   runtime.log(header);
 }
 
+/** Records wizard provenance metadata on config writes. */
 export function applyWizardMetadata(
   cfg: OpenClawConfig,
   params: { command: string; mode: OnboardMode },
@@ -191,6 +199,7 @@ export function applyWizardMetadata(
   };
 }
 
+/** Formats the no-GUI SSH tunnel hint for opening the Control UI remotely. */
 export function formatControlUiSshHint(params: {
   port: number;
   basePath?: string;
@@ -226,6 +235,7 @@ function resolveSshTargetHint(): string {
   return `${user}@${host}`;
 }
 
+/** Ensures workspace bootstrap files and session transcript directories exist. */
 export async function ensureWorkspaceAndSessions(
   workspaceDir: string,
   runtime: RuntimeEnv,
@@ -246,6 +256,7 @@ export async function ensureWorkspaceAndSessions(
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
 }
 
+/** Returns package manager choices offered by onboarding. */
 export function resolveNodeManagerOptions(): Array<{
   value: NodeManagerChoice;
   label: string;
@@ -257,6 +268,7 @@ export function resolveNodeManagerOptions(): Array<{
   ];
 }
 
+/** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */
 export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<void> {
   if (!pathname) {
     return;
@@ -297,13 +309,16 @@ async function resolveMoveToTrashAllowedRoots(targetPath: string): Promise<strin
   return uniqueStrings(allowedRoots);
 }
 
+/** Deletes onboarding-managed state according to the selected reset scope. */
 export async function handleReset(scope: ResetScope, workspaceDir: string, runtime: RuntimeEnv) {
   await moveToTrash(resolveConfigPath(), runtime);
   if (scope === "config") {
     return;
   }
   await moveToTrash(path.join(resolveConfigDir(), "credentials"), runtime);
-  await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
+  const sessionsDir = resolveSessionTranscriptsDirForAgent();
+  clearExistingSqliteSessionStore(path.join(sessionsDir, "sessions.json"), { compact: true });
+  await moveToTrash(sessionsDir, runtime);
   if (scope === "full") {
     await moveToTrash(workspaceDir, runtime);
     for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
@@ -316,6 +331,7 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
   }
 }
 
+/** Runs a single lightweight gateway probe for onboarding readiness checks. */
 export async function probeGatewayReachable(params: {
   url: string;
   token?: string;
@@ -340,6 +356,7 @@ export async function probeGatewayReachable(params: {
   }
 }
 
+/** Polls gateway reachability until success or deadline. */
 export async function waitForGatewayReachable(params: {
   url: string;
   token?: string;
@@ -395,4 +412,5 @@ function summarizeError(err: unknown): string {
   return line.length > 120 ? `${line.slice(0, 119)}…` : line;
 }
 
+/** Default workspace path shown by onboarding prompts. */
 export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;

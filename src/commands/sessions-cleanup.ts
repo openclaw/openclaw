@@ -1,3 +1,9 @@
+/**
+ * Session cleanup command.
+ *
+ * It can delegate cleanup to a live gateway or run local store maintenance,
+ * with dry-run tables that explain every planned pruning action.
+ */
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
@@ -12,6 +18,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isGatewayTransportError } from "../gateway/call.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  ensureExplicitSessionStoreMigratedForCommand,
+  ensureSessionStateMigratedForCommand,
+  loadExplicitSessionStorePreviewForCommand,
+} from "./session-state-migration.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import { resolveSessionDisplayModel } from "./sessions-display-model.js";
 import {
@@ -65,6 +76,8 @@ function buildActionRows(params: {
   budgetEvictedKeys: Set<string>;
   dmScopeRetiredKeys: Set<string>;
 }): SessionCleanupActionRow[] {
+  // Recompute row actions from the preview sets so dry-run output uses the same
+  // action labels as the cleanup engine without mutating the preview store.
   return toSessionDisplayRows(params.beforeStore).map((row) =>
     Object.assign({}, row, {
       action: resolveSessionCleanupAction({
@@ -164,6 +177,8 @@ async function maybeRunGatewayCleanup(
   opts: SessionsCleanupOptions,
 ): Promise<SessionsCleanupResult | null> {
   if (opts.store || opts.dryRun) {
+    // Explicit store paths and dry-runs must stay local; the gateway only owns
+    // live in-process cleanup for default stores.
     return null;
   }
   try {
@@ -183,26 +198,16 @@ async function maybeRunGatewayCleanup(
     });
   } catch (error) {
     if (isGatewayTransportError(error)) {
+      // A stopped gateway should not block local maintenance; fall back to the
+      // on-disk session stores when transport is unavailable.
       return null;
     }
     throw error;
   }
 }
 
+/** Runs session cleanup, optionally using the live gateway for active stores. */
 export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runtime: RuntimeEnv) {
-  const gatewayResult = await maybeRunGatewayCleanup(opts);
-  if (gatewayResult) {
-    if (opts.json) {
-      writeRuntimeJson(runtime, gatewayResult);
-      return;
-    }
-    renderAppliedSummaries({
-      summaries: "stores" in gatewayResult ? gatewayResult.stores : [gatewayResult],
-      runtime,
-    });
-    return;
-  }
-
   const cfg = getRuntimeConfig();
   const targets = resolveSessionStoreTargetsOrExit({
     cfg,
@@ -216,10 +221,43 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
   if (!targets) {
     return;
   }
+
+  const gatewayResult = await maybeRunGatewayCleanup(opts);
+  if (gatewayResult) {
+    if (opts.json) {
+      writeRuntimeJson(runtime, gatewayResult);
+      return;
+    }
+    renderAppliedSummaries({
+      summaries: "stores" in gatewayResult ? gatewayResult.stores : [gatewayResult],
+      runtime,
+    });
+    return;
+  }
+
+  if (!opts.dryRun) {
+    await ensureSessionStateMigratedForCommand(cfg);
+  }
+  if (!opts.dryRun) {
+    for (const target of targets) {
+      await ensureExplicitSessionStoreMigratedForCommand(target.storePath, {
+        onWarning: (warning) => runtime.error?.(warning),
+      });
+    }
+  }
+  const previewStores = opts.dryRun
+    ? new Map(
+        targets.map((target) => [
+          target.storePath,
+          loadExplicitSessionStorePreviewForCommand(target.storePath),
+        ]),
+      )
+    : undefined;
   const { mode, previewResults, appliedSummaries } = await runSessionsCleanup({
     cfg,
     opts,
     targets,
+    previewStores,
   });
 
   if (opts.dryRun) {

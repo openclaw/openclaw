@@ -1,3 +1,5 @@
+// MCP loopback HTTP server.
+// Exposes Gateway-scoped tools to local MCP clients over bearer-auth loopback.
 import crypto from "node:crypto";
 import {
   createServer as createHttpServer,
@@ -17,12 +19,17 @@ import {
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
 import {
   isMcpHttpBodyTooLargeError,
+  isMcpHttpBodyTimeoutError,
   readMcpHttpBody,
+  resolveMcpHttpBodyTimeoutMs,
   resolveMcpRequestContext,
   validateMcpLoopbackRequest,
 } from "./mcp-http.request.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 
+// Loopback MCP server exposes gateway-scoped tools to local MCP clients over a
+// bearer-token HTTP endpoint bound to 127.0.0.1. Only one active server/runtime
+// is registered per process.
 export {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
@@ -36,6 +43,50 @@ type McpLoopbackServer = {
 
 let activeMcpLoopbackServer: McpLoopbackServer | undefined;
 let activeMcpLoopbackServerPromise: Promise<McpLoopbackServer> | null = null;
+
+function createMcpJsonParseError(error: unknown): Error & { code: "mcp_json_parse_error" } {
+  return Object.assign(new Error("MCP JSON parse error"), {
+    cause: error,
+    code: "mcp_json_parse_error" as const,
+  });
+}
+
+function isMcpJsonParseError(error: unknown): error is Error & { code: "mcp_json_parse_error" } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "mcp_json_parse_error"
+  );
+}
+
+function parseMcpJsonBody(body: string): JsonRpcRequest | JsonRpcRequest[] {
+  try {
+    return JSON.parse(body) as JsonRpcRequest | JsonRpcRequest[];
+  } catch (error) {
+    throw createMcpJsonParseError(error);
+  }
+}
+
+function readJsonRpcRequestId(message: unknown) {
+  if (!isRecord(message)) {
+    return null;
+  }
+  const id = message.id;
+  return typeof id === "string" || typeof id === "number" || id === null ? id : undefined;
+}
+
+function isJsonRpcRequest(message: unknown): message is JsonRpcRequest {
+  return isRecord(message) && message.jsonrpc === "2.0" && typeof message.method === "string";
+}
+
+function jsonRpcInternalError(parsed: JsonRpcRequest | JsonRpcRequest[] | undefined) {
+  if (Array.isArray(parsed)) {
+    return parsed.map((message) =>
+      jsonRpcError(readJsonRpcRequestId(message), -32603, "Internal error"),
+    );
+  }
+  return jsonRpcError(readJsonRpcRequestId(parsed), -32603, "Internal error");
+}
 
 function shouldLogMcpLoopbackTraffic(): boolean {
   return (
@@ -51,6 +102,8 @@ function logMcpLoopbackTraffic(step: string, details: Record<string, unknown>): 
   console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
 }
 
+// Abort tool calls when the request disconnects before completion, but keep
+// completed responses alive through normal response close notifications.
 function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
   const controller = new AbortController();
   const abort = () => {
@@ -82,6 +135,7 @@ function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
   };
 }
 
+/** Starts a new MCP loopback HTTP server and registers its bearer tokens. */
 export async function startMcpLoopbackServer(port = 0): Promise<{
   port: number;
   close: () => Promise<void>;
@@ -89,18 +143,49 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   const ownerToken = crypto.randomBytes(32).toString("hex");
   const nonOwnerToken = crypto.randomBytes(32).toString("hex");
   const toolCache = new McpLoopbackToolCache();
+  // GET notification streams are intentionally long-lived; shutdown must end
+  // them itself before waiting for httpServer.close() to drain active responses.
+  const activeSseResponses = new Set<ServerResponse>();
+
+  const trackSseResponse = (res: ServerResponse): void => {
+    activeSseResponses.add(res);
+    const cleanup = () => {
+      activeSseResponses.delete(res);
+      res.off("close", cleanup);
+      res.off("finish", cleanup);
+    };
+    res.once("close", cleanup);
+    res.once("finish", cleanup);
+  };
+
+  const closeActiveSseResponses = (): void => {
+    for (const res of activeSseResponses) {
+      if (!res.destroyed && !res.writableEnded) {
+        const socket = res.socket;
+        res.end();
+        socket?.end();
+      }
+    }
+  };
 
   const httpServer = createHttpServer((req, res) => {
-    const auth = validateMcpLoopbackRequest({ req, res, ownerToken, nonOwnerToken });
+    const auth = validateMcpLoopbackRequest({
+      req,
+      res,
+      ownerToken,
+      nonOwnerToken,
+      onSseResponse: trackSseResponse,
+    });
     if (!auth) {
       return;
     }
 
     const requestAbort = createRequestAbortSignal(req, res);
     void (async () => {
+      let parsed: JsonRpcRequest | JsonRpcRequest[] | undefined;
       try {
-        const body = await readMcpHttpBody(req);
-        const parsed: JsonRpcRequest | JsonRpcRequest[] = JSON.parse(body);
+        const body = await readMcpHttpBody(req, { timeoutMs: resolveMcpHttpBodyTimeoutMs() });
+        parsed = parseMcpJsonBody(body);
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
         const scopedTools = toolCache.resolve({
@@ -120,7 +205,9 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         const messages = Array.isArray(parsed) ? parsed : [parsed];
         logMcpLoopbackTraffic("request", {
           batchSize: messages.length,
-          methods: messages.map((message) => message.method),
+          methods: messages.map((message) =>
+            isJsonRpcRequest(message) ? message.method : undefined,
+          ),
           sessionKey: requestContext.sessionKey,
           inboundEventKind: requestContext.inboundEventKind,
           senderIsOwner: requestContext.senderIsOwner === true,
@@ -129,6 +216,10 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         });
         const responses: object[] = [];
         for (const message of messages) {
+          if (!isJsonRpcRequest(message)) {
+            responses.push(jsonRpcError(readJsonRpcRequestId(message), -32600, "Invalid Request"));
+            continue;
+          }
           const response = await handleMcpJsonRpc({
             message,
             tools: scopedTools.tools,
@@ -178,9 +269,17 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
             res.end(JSON.stringify({ error: "payload_too_large" }), () => {
               req.destroy();
             });
-          } else {
+          } else if (isMcpHttpBodyTimeoutError(error)) {
+            res.writeHead(408, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "request_body_timeout" }), () => {
+              req.destroy();
+            });
+          } else if (isMcpJsonParseError(error)) {
             res.writeHead(400, { "Content-Type": "application/json" });
             res.end(JSON.stringify(jsonRpcError(null, -32700, "Parse error")));
+          } else {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(jsonRpcInternalError(parsed)));
           }
         }
       } finally {
@@ -201,6 +300,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   if (!address || typeof address === "string") {
     throw new Error("mcp loopback did not bind to a TCP port");
   }
+  // Register tokens only after the TCP listener is live so clients never learn
+  // a bearer token for a server that failed to bind.
   setActiveMcpLoopbackRuntime({ port: address.port, ownerToken, nonOwnerToken });
   logDebug(`mcp loopback listening on 127.0.0.1:${address.port}`);
 
@@ -221,11 +322,13 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           }
           resolve();
         });
+        closeActiveSseResponses();
       }),
   };
   return server;
 }
 
+/** Returns the active MCP loopback server or starts one if none exists. */
 export async function ensureMcpLoopbackServer(port = 0): Promise<McpLoopbackServer> {
   if (activeMcpLoopbackServer) {
     return activeMcpLoopbackServer;
@@ -243,6 +346,7 @@ export async function ensureMcpLoopbackServer(port = 0): Promise<McpLoopbackServ
   return activeMcpLoopbackServerPromise;
 }
 
+/** Closes the active MCP loopback server if one has been started. */
 export async function closeMcpLoopbackServer(): Promise<void> {
   const server =
     activeMcpLoopbackServer ??

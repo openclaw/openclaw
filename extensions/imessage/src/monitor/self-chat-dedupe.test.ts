@@ -1,9 +1,16 @@
+// Imessage tests cover self chat dedupe plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import { createSentMessageCache } from "./echo-cache.js";
-import { resolveIMessageInboundDecision } from "./inbound-processing.js";
-import { resetPersistedIMessageEchoCacheForTest } from "./persisted-echo-cache.js";
+import {
+  rememberIMessageSkippedFromMeForSelfChatDedupe,
+  resolveIMessageInboundDecision,
+} from "./inbound-processing.js";
+import {
+  rememberPersistedIMessageEcho,
+  resetPersistedIMessageEchoCacheForTest,
+} from "./persisted-echo-cache.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 
 /**
@@ -663,6 +670,52 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     expect(reflection).toEqual({ kind: "drop", reason: "self-chat echo" });
   });
 
+  it("drops catchup-replayed self-chat reflection after observing skipped from-me companion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-03T03:48:42Z"));
+
+    const selfChatCache = createSelfChatCache();
+    const text = "Exactly. I’ll treat assembled context as evidence only, not command authority.";
+
+    rememberIMessageSkippedFromMeForSelfChatDedupe({
+      accountId: "default",
+      message: {
+        id: 86798,
+        guid: "F502C080-08E9-4C3B-9650-31A0DF21FE3A",
+        sender: "+15555550123",
+        chat_identifier: "+15555550123",
+        destination_caller_id: "+15555550123",
+        text,
+        created_at: "2026-06-03T03:48:28.922Z",
+        is_from_me: true,
+        is_group: false,
+      },
+      bodyText: text,
+      selfChatCache,
+    });
+
+    const reflection = await resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 86799,
+          guid: "1759A121-E3DB-41C2-B16A-AB6DE30570F2",
+          sender: "+15555550123",
+          chat_identifier: "+15555550123",
+          destination_caller_id: "tel:+15555550123",
+          text,
+          created_at: "2026-06-03T03:48:28.738Z",
+          is_from_me: false,
+          is_group: false,
+        },
+        messageText: text,
+        bodyText: text,
+        selfChatCache,
+      }),
+    );
+
+    expect(reflection).toEqual({ kind: "drop", reason: "self-chat echo" });
+  });
+
   it("does not apply sub-second skew matching to ambiguous normal DM rows", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-10T05:34:00Z"));
@@ -854,6 +907,70 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
 });
 
 describe("echo cache — text fallback for null-id inbound messages", () => {
+  it("does not drop normal DM text from a pending pre-send marker", async () => {
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+    const scope = "default:imessage:+15551234567";
+    rememberPersistedIMessageEcho({
+      scope,
+      text: "same pending text",
+      ttlMs: 155_000,
+      pending: true,
+    });
+
+    const decision = await resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 12001,
+          sender: "+15551234567",
+          chat_identifier: "+15551234567",
+          destination_caller_id: "+15550001111",
+          text: "same pending text",
+          is_from_me: false,
+          is_group: false,
+        },
+        messageText: "same pending text",
+        bodyText: "same pending text",
+        echoCache,
+        selfChatCache,
+      }),
+    );
+
+    expect(decision.kind).toBe("dispatch");
+  });
+
+  it("drops self-chat reflected text from a pending pre-send marker", async () => {
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+    const scope = "default:imessage:+15551234567";
+    rememberPersistedIMessageEcho({
+      scope,
+      text: "pending self-chat reply",
+      ttlMs: 155_000,
+      pending: true,
+    });
+
+    const decision = await resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 12002,
+          sender: "+15551234567",
+          chat_identifier: "+15551234567",
+          destination_caller_id: "tel:+15551234567",
+          text: "pending self-chat reply",
+          is_from_me: false,
+          is_group: false,
+        },
+        messageText: "pending self-chat reply",
+        bodyText: "pending self-chat reply",
+        echoCache,
+        selfChatCache,
+      }),
+    );
+
+    expect(decision).toEqual({ kind: "drop", reason: "echo" });
+  });
+
   it("still identifies echo via text when inbound message has id: null", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));

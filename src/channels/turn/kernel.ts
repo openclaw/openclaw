@@ -1,3 +1,4 @@
+// Channel turn kernel for normalized inbound event dispatch, history, and delivery.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   clearHistoryEntriesIfEnabled,
@@ -147,6 +148,7 @@ function emit(params: {
 }
 
 export function createNoopChannelEventDeliveryAdapter(): ChannelEventDeliveryAdapter {
+  // Observe-only channels still need an adapter shape for shared turn plumbing.
   return {
     deliver: async () => ({
       visibleReplySent: false,
@@ -423,6 +425,7 @@ export async function dispatchAssembledChannelTurn(
             },
             onError: params.delivery.onError,
           },
+          toolsAllow: params.toolsAllow,
           replyOptions: replyPipeline.replyOptions,
           replyResolver: params.replyResolver,
         }),

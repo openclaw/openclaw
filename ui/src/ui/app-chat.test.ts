@@ -53,6 +53,7 @@ let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./app-chat.ts").markQueuedChatSendsWaitingForReconnect;
 let retryReconnectableQueuedChatSends: typeof import("./app-chat.ts").retryReconnectableQueuedChatSends;
 let recordChatSendServerTiming: typeof import("./app-chat.ts").recordChatSendServerTiming;
+let recordFirstAssistantChatTiming: typeof import("./app-chat.ts").recordFirstAssistantChatTiming;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -68,6 +69,7 @@ async function loadChatHelpers(): Promise<void> {
     markQueuedChatSendsWaitingForReconnect,
     retryReconnectableQueuedChatSends,
     recordChatSendServerTiming,
+    recordFirstAssistantChatTiming,
   } = await import("./app-chat.ts"));
 }
 
@@ -1074,6 +1076,50 @@ describe("refreshChat", () => {
     }
   });
 
+  it("uses startup metadata without scheduling command or metadata follow-ups", async () => {
+    const { resetSlashCommandsForTest } = await import("./chat/slash-commands.ts");
+    resetSlashCommandsForTest();
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false }) as never;
+    try {
+      const request = vi.fn((method: string) => {
+        if (method === "chat.startup") {
+          return Promise.resolve({
+            messages: [],
+            metadata: {
+              models: [{ id: "gpt-fast", name: "GPT Fast", provider: "openai" }],
+            },
+          });
+        }
+        return pendingPromise();
+      });
+      const host = makeHost({
+        client: { request } as unknown as ChatHost["client"],
+        sessionKey: "main",
+      });
+
+      await refreshChat(host, { startup: true });
+
+      await vi.waitFor(() => expect(host.chatModelCatalog).toHaveLength(1));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 75);
+      });
+      expect(request).toHaveBeenCalledWith("chat.startup", {
+        sessionKey: "main",
+        limit: 100,
+      });
+      expect(request).not.toHaveBeenCalledWith("chat.metadata", expect.anything());
+      expect(request).not.toHaveBeenCalledWith("models.list", expect.anything());
+      expect(request).not.toHaveBeenCalledWith("commands.list", expect.anything());
+      expect(host.chatModelCatalog).toEqual([
+        { id: "gpt-fast", name: "GPT Fast", provider: "openai" },
+      ]);
+    } finally {
+      resetSlashCommandsForTest();
+      globalThis.fetch = previousFetch;
+    }
+  });
+
   it("falls back to separate metadata RPCs when chat.metadata is not advertised", async () => {
     const request = vi.fn(() => pendingPromise());
     const host = makeHost({
@@ -1424,6 +1470,83 @@ describe("handleSendChat", () => {
           agentRunId: "agent-run-1",
         }),
       ]),
+    );
+  });
+
+  it("warns when the first assistant reply paint is slow", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      queueMicrotask(() => callback(0));
+      return 1;
+    });
+    const runId = "run-slow-first-assistant";
+    const host = makeHost({
+      chatStream: "slow first token",
+      eventLogBuffer: [],
+      tab: "debug",
+    });
+    const timingHost = host as ChatHost & {
+      chatSendTimingsByRun: Map<
+        string,
+        {
+          runId: string;
+          submittedAtMs: number;
+          requestStartedAtMs: number;
+          ackAtMs: number;
+          ackStatus: "started";
+          sendAttempts: number;
+          sendState: "sending";
+          sessionKey: string;
+          agentId: string;
+        }
+      >;
+    };
+    timingHost.chatSendTimingsByRun = new Map([
+      [
+        runId,
+        {
+          runId,
+          submittedAtMs: performance.now() - 2_000,
+          requestStartedAtMs: performance.now() - 1_900,
+          ackAtMs: performance.now() - 1_800,
+          ackStatus: "started",
+          sendAttempts: 1,
+          sendState: "sending",
+          sessionKey: "agent:main",
+          agentId: "main",
+        },
+      ],
+    ]);
+
+    recordFirstAssistantChatTiming(
+      host,
+      {
+        agentId: "main",
+        runId,
+        sessionKey: "agent:main",
+        state: "delta",
+      },
+      "delta",
+    );
+
+    await vi.waitFor(() =>
+      expect(eventPayloads(host, "control-ui.chat.send")).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            phase: "first-assistant-visible",
+            runId,
+            slow: true,
+          }),
+        ]),
+      ),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "[openclaw] control-ui.chat.send",
+      expect.objectContaining({
+        phase: "first-assistant-visible",
+        runId,
+        slow: true,
+      }),
     );
   });
 
@@ -2183,6 +2306,109 @@ describe("handleSendChat", () => {
     expect(host.chatMessages).toHaveLength(1);
     const userMessage = requireRecord(host.chatMessages[0], "user message");
     expect(userMessage.role).toBe("user");
+  });
+
+  it("routes queued Skill Workshop revisions through the proposal request RPC", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "skills.proposals.requestRevision") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "keep my draft",
+    });
+    (host as ChatHost & { currentSessionId?: string }).currentSessionId = "session-current";
+
+    const send = handleSendChat(host, "Make the support files 5", {
+      restoreDraft: true,
+      skillWorkshopRevision: {
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        agentId: "proposal-owner",
+      },
+    });
+    await Promise.resolve();
+
+    expect(host.chatQueue[0]).toMatchObject({
+      text: "Make the support files 5",
+      skillWorkshopRevision: {
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        agentId: "proposal-owner",
+      },
+    });
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "skills.proposals.requestRevision",
+      "revision request payload",
+    );
+    expect(payload).toMatchObject({
+      agentId: "proposal-owner",
+      proposalId: "support-file-sampler-20260531-68207b7b7f",
+      instructions: "Make the support files 5",
+      sessionKey: "agent:main",
+      sessionId: "session-current",
+    });
+    expect(payload).not.toHaveProperty("message");
+    expect(payload).not.toHaveProperty("targetAgentId");
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatMessages).toHaveLength(1);
+    const userMessage = requireRecord(host.chatMessages[0], "user message");
+    expect(userMessage.role).toBe("user");
+    expect(userMessage.content).toEqual([{ type: "text", text: "Make the support files 5" }]);
+  });
+
+  it("treats slash-like Skill Workshop revision drafts as revision instructions", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "skills.proposals.requestRevision") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+    });
+
+    const send = handleSendChat(host, "/reset examples", {
+      restoreDraft: true,
+      skillWorkshopRevision: {
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+      },
+    });
+    await Promise.resolve();
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "skills.proposals.requestRevision",
+      "revision slash payload",
+    );
+    expect(payload).toMatchObject({
+      proposalId: "support-file-sampler-20260531-68207b7b7f",
+      instructions: "/reset examples",
+      sessionKey: "agent:main",
+    });
+    expect(payload).not.toHaveProperty("message");
+    expect(host.chatQueue[0]).toMatchObject({
+      refreshSessions: false,
+      text: "/reset examples",
+      skillWorkshopRevision: {
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+      },
+    });
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    expect(host.chatMessages[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "/reset examples" }],
+    });
   });
 
   it("keeps ACK-completed sends idle when sessions.list returns a stale active row", async () => {

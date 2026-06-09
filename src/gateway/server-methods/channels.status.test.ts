@@ -1,3 +1,6 @@
+/**
+ * Gateway channels.status method tests.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { requireRecord } from "../test-helpers.assertions.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";

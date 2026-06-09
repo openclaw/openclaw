@@ -1,3 +1,4 @@
+/** In-memory plugin registry builder and mutation API for plugin runtime registration. */
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -2145,16 +2146,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     descriptor: PluginControlUiDescriptor,
   ) => {
+    const legacyDescriptor = descriptor as PluginControlUiDescriptor & { name?: unknown };
     const id = normalizeHostHookString(descriptor.id);
-    const label = normalizeHostHookString(descriptor.label);
+    const label = normalizeHostHookString(descriptor.label ?? legacyDescriptor.name);
     const description = normalizeOptionalHostHookString(descriptor.description);
     const placement = normalizeOptionalHostHookString(descriptor.placement);
     const requiredScopes = normalizeHostHookStringList(descriptor.requiredScopes);
-    const surface = typeof descriptor.surface === "string" ? descriptor.surface : "";
+    // The flat registerControlUiDescriptor API shipped before descriptor.surface/label were
+    // required. Keep older external JS plugins loadable while current typed plugins stay explicit.
+    const surface = typeof descriptor.surface === "string" ? descriptor.surface : "session";
     if (
       !id ||
       !label ||
-      !controlUiSurfaces.has(surface as PluginControlUiDescriptor["surface"]) ||
+      !controlUiSurfaces.has(surface) ||
       description === "" ||
       placement === "" ||
       requiredScopes === null
@@ -2210,7 +2214,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       descriptor: {
         ...descriptor,
         id,
-        surface: surface as PluginControlUiDescriptor["surface"],
+        surface,
         label,
         ...(description !== undefined ? { description } : {}),
         ...(placement !== undefined ? { placement } : {}),

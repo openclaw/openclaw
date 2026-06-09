@@ -1,3 +1,4 @@
+/** Tests ACP spawn planning, policy gates, bindings, cleanup, and parent stream setup. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -114,6 +115,12 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: hoisted.getChannelPluginMock,
+  getLoadedChannelPlugin: hoisted.getLoadedChannelPluginMock,
+  normalizeChannelId: hoisted.normalizeChannelIdMock,
+}));
+
+vi.mock("../channels/plugins/registry.js", () => ({
   getChannelPlugin: hoisted.getChannelPluginMock,
   getLoadedChannelPlugin: hoisted.getLoadedChannelPluginMock,
   normalizeChannelId: hoisted.normalizeChannelIdMock,
@@ -446,19 +453,19 @@ function resolveMatrixRoomTargetForTest(value: string | undefined): string | und
 }
 
 function enableMatrixAcpThreadBindings(): void {
-  replaceSpawnConfig({
-    ...hoisted.state.cfg,
-    channels: {
-      ...hoisted.state.cfg.channels,
-      matrix: {
-        threadBindings: {
-          enabled: true,
-          spawnSessions: true,
-        },
+  hoisted.state.cfg.channels = {
+    ...hoisted.state.cfg.channels,
+    matrix: {
+      threadBindings: {
+        enabled: true,
+        spawnSessions: true,
       },
     },
-  });
+  };
   const matrixPlugin = {
+    conversationBindings: {
+      defaultTopLevelPlacement: "child",
+    },
     messaging: {
       resolveDeliveryTarget: ({
         conversationId,
@@ -1666,7 +1673,7 @@ describe("spawnAcpDirect", () => {
             channel: "matrix",
             accountId: input.conversation.accountId,
             conversationId: "child-thread",
-            parentConversationId: input.conversation.parentConversationId ?? "!room:example",
+            parentConversationId: input.conversation.parentConversationId ?? "!room:example.org",
           },
           metadata: {
             boundBy:
@@ -1683,12 +1690,14 @@ describe("spawnAcpDirect", () => {
         agentId: "codex",
         mode: "session",
         thread: true,
+        cwd: os.tmpdir(),
       },
       {
-        agentSessionKey: "agent:main:matrix:channel:!room:example",
+        agentSessionKey: "agent:main:matrix:channel:!room:example.org",
         agentChannel: "matrix",
         agentAccountId: "default",
-        agentTo: "channel:!room:example",
+        agentTo: "room:!room:example.org",
+        agentGroupId: "!room:example.org",
       },
     );
     expect(result.status, JSON.stringify(result)).toBe("accepted");
@@ -1697,13 +1706,13 @@ describe("spawnAcpDirect", () => {
       conversation: {
         channel: "matrix",
         accountId: "default",
-        conversationId: "!room:example",
+        conversationId: "!room:example.org",
       },
     });
     expectAgentGatewayCall({
       deliver: true,
       channel: "matrix",
-      to: "room:!room:example",
+      to: "room:!room:example.org",
       threadId: "child-thread",
     });
   });

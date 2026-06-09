@@ -1,3 +1,8 @@
+/**
+ * Slash command metadata registry.
+ *
+ * Defines built-in command metadata and the source shape used by prompts, skills, and extensions.
+ */
 import { APP_NAME } from "../config.js";
 import type { SourceInfo } from "./source-info.js";
 
@@ -15,6 +20,7 @@ export interface BuiltinSlashCommand {
   description: string;
 }
 
+/** Built-in TUI slash commands that exist even when no prompt/skill packages are loaded. */
 export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
   { name: "settings", description: "Open settings menu" },
   { name: "model", description: "Select model (opens selector UI)" },

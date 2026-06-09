@@ -1,3 +1,4 @@
+/** Doctor repair for stale runtime snapshot paths cached in session stores. */
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,6 +9,8 @@ import {
   hydrateSessionStoreSkillPromptRefs,
   resolveSessionSkillPromptBlobPath,
 } from "../config/sessions/skill-prompt-blobs.js";
+import { loadSqliteSessionStore } from "../config/sessions/store-sqlite.js";
+import { saveSessionStore } from "../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -201,6 +204,7 @@ function resolveExpectedBundledSkillPath(params: {
   return params.pathExists(expectedPath) ? expectedPath : undefined;
 }
 
+/** Finds cached bundled-skill paths that point at old runtime/temp package roots. */
 export function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
   store: Record<string, SessionEntry>;
   bundledSkillsDir: string | undefined;
@@ -257,7 +261,6 @@ async function listSessionStorePaths(stateDir: string): Promise<string[]> {
   return agentEntries
     .filter((entry) => entry.isDirectory())
     .map((entry) => path.join(agentsDir, entry.name, "sessions", "sessions.json"))
-    .filter((storePath) => fs.existsSync(storePath))
     .toSorted((a, b) => a.localeCompare(b));
 }
 
@@ -270,24 +273,16 @@ function resolveSessionStorePaths(params: {
   }
   return resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env })
     .map((target) => target.storePath)
-    .filter((storePath) => fs.existsSync(storePath))
     .toSorted((a, b) => a.localeCompare(b));
 }
 
 function loadSessionStoreForSnapshotScan(storePath: string): Record<string, SessionEntry> {
-  const parsed = JSON.parse(fs.readFileSync(storePath, "utf-8")) as unknown;
-  if (!isRecord(parsed)) {
-    return {};
-  }
-  const store = parsed as Record<string, SessionEntry>;
+  const store = loadSqliteSessionStore(storePath);
   hydrateSessionStoreSkillPromptRefs({ storePath, store });
   return store;
 }
 
-/**
- * Replace stale paths in raw text content (blob files or inline prompts).
- * Handles raw, JSON-escaped, and XML-escaped forms.
- */
+/** Replaces stale paths in raw, JSON-escaped, and XML-escaped prompt text. */
 function replaceStalePathsInText(text: string, finding: StaleSessionSnapshotPathFinding): string {
   const jsonEscaped = JSON.stringify(finding.cachedPath).slice(1, -1);
   const jsonEscapedExpected = JSON.stringify(finding.expectedPath).slice(1, -1);
@@ -317,6 +312,7 @@ function replaceStalePathsInText(text: string, finding: StaleSessionSnapshotPath
   return result;
 }
 
+/** Reports and optionally repairs stale bundled skill paths in session snapshot metadata. */
 export async function noteSessionSnapshotHealth(params?: {
   storePaths?: string[];
   bundledSkillsDir?: string;
@@ -366,7 +362,6 @@ export async function noteSessionSnapshotHealth(params?: {
     ),
   );
 
-  // Auto-repair stale paths when shouldRepair is enabled
   if (params?.shouldRepair) {
     let repairedStores = 0;
     let totalReplacements = 0;
@@ -374,8 +369,10 @@ export async function noteSessionSnapshotHealth(params?: {
 
     for (const [storePath, findings] of findingsByStore) {
       try {
-        const raw = fs.readFileSync(storePath, "utf-8");
-        const sessions = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+        const sessions = loadSessionStoreForSnapshotScan(storePath) as Record<
+          string,
+          Record<string, unknown>
+        >;
         let modified = false;
 
         let storeCount = 0;
@@ -515,13 +512,9 @@ export async function noteSessionSnapshotHealth(params?: {
         }
 
         if (modified && storeCount > 0) {
-          // Create backup before writing
-          const backupPath = `${storePath}.bak.${Date.now()}`;
-          await writeTextAtomic(backupPath, raw, { mode: 0o600 });
-
-          // Atomic write — only modified fields changed, no hydration side effects
-          const fixed = JSON.stringify(sessions, null, 2);
-          await writeTextAtomic(storePath, fixed, { mode: 0o600 });
+          await saveSessionStore(storePath, sessions as Record<string, SessionEntry>, {
+            skipMaintenance: true,
+          });
           totalReplacements += storeCount;
           repairedStores++;
 

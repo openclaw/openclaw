@@ -1,3 +1,4 @@
+// Skill loading config helpers resolve configured skill sources and enablement.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -21,6 +22,7 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.evaluateEnabled": true,
 };
 
+/** Platform helpers re-exported for skill loading callers and tests. */
 export { hasBinary, resolveConfigPath, resolveRuntimePlatform };
 
 export function resolveSkillsInstallPreferences(config?: OpenClawConfig): SkillsInstallPreferences {

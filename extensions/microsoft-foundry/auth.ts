@@ -1,3 +1,4 @@
+// Microsoft Foundry plugin module implements auth behavior.
 import type {
   ProviderAuthContext,
   ProviderAuthMethod,
@@ -26,11 +27,21 @@ import {
 import {
   buildFoundryAuthResult,
   type FoundryProviderApi,
+  isFoundryMaiImageModel,
   listConfiguredFoundryProfileIds,
   PROVIDER_ID,
   resolveConfiguredModelNameHint,
   resolveFoundryApi,
 } from "./shared.js";
+
+export function shouldTestFoundryTextConnection(params: {
+  modelId: string;
+  modelNameHint?: string | null;
+}): boolean {
+  return !isFoundryMaiImageModel(
+    resolveConfiguredModelNameHint(params.modelId, params.modelNameHint),
+  );
+}
 
 export const entraIdAuthMethod: ProviderAuthMethod = {
   id: "entra-id",
@@ -41,6 +52,7 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
     choiceId: "microsoft-foundry-entra",
     choiceLabel: "Microsoft Foundry (Entra ID / az login)",
     choiceHint: "Use your Azure login — no API key needed",
+    onboardingScopes: ["text-inference", "image-generation"],
     groupId: "microsoft-foundry",
     groupLabel: "Microsoft Foundry",
     groupHint: "Entra ID + API key",
@@ -123,12 +135,9 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       if (useDiscoveredResource) {
         const selectedResource = await selectFoundryResource(ctx, selectedSub);
         const resourceDeployments = listResourceDeployments(selectedResource, selectedSub.id);
-        const selectedDeployment = await selectFoundryDeployment(
-          ctx,
-          selectedResource,
-          resourceDeployments,
-        );
-        discoveredDeployments = resourceDeployments.map((deployment) =>
+        const { selected: selectedDeployment, supported: supportedDeployments } =
+          await selectFoundryDeployment(ctx, selectedResource, resourceDeployments);
+        discoveredDeployments = supportedDeployments.map((deployment) =>
           Object.assign(
             { name: deployment.name },
             deployment.modelName ? { modelName: deployment.modelName } : {},
@@ -158,15 +167,17 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
       ({ endpoint, modelId, modelNameHint, api } = await promptEndpointAndModelManually(ctx));
     }
 
-    await testFoundryConnection({
-      ctx,
-      endpoint,
-      modelId,
-      modelNameHint,
-      api,
-      subscriptionId: selectedSub?.id,
-      tenantId,
-    });
+    if (shouldTestFoundryTextConnection({ modelId, modelNameHint })) {
+      await testFoundryConnection({
+        ctx,
+        endpoint,
+        modelId,
+        modelNameHint,
+        api,
+        subscriptionId: selectedSub?.id,
+        tenantId,
+      });
+    }
 
     return buildFoundryAuthResult({
       profileId: `${PROVIDER_ID}:entra`,
@@ -201,6 +212,7 @@ export const apiKeyAuthMethod: ProviderAuthMethod = {
   wizard: {
     choiceId: "microsoft-foundry-apikey",
     choiceLabel: "Microsoft Foundry (API key)",
+    onboardingScopes: ["text-inference", "image-generation"],
     groupId: "microsoft-foundry",
     groupLabel: "Microsoft Foundry",
     groupHint: "Entra ID + API key",

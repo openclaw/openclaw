@@ -1,8 +1,10 @@
+// Cron Mcp Cleanup Docker Client tests cover cron mcp cleanup docker client script behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assertCronFinishedOk,
   readCronMcpCleanupProbePidWaitMs,
   waitForProbePid,
 } from "../../scripts/e2e/cron-mcp-cleanup-docker-client.ts";
@@ -33,5 +35,13 @@ describe("cron MCP cleanup docker client", () => {
     } finally {
       fs.rmSync(root, { force: true, recursive: true });
     }
+  });
+
+  it("accepts cron finished events only when the run status is ok", () => {
+    expect(() => assertCronFinishedOk({ status: "ok" })).not.toThrow();
+    expect(() => assertCronFinishedOk({ status: "error" })).toThrow(
+      /cron cleanup run did not finish ok/u,
+    );
+    expect(() => assertCronFinishedOk({})).toThrow(/cron cleanup run did not finish ok/u);
   });
 });

@@ -1,3 +1,9 @@
+/**
+ * Browser agent action route registration and existing-session execution.
+ *
+ * Dispatches normalized actions to either Playwright-backed OpenClaw browser
+ * control or Chrome MCP existing-session operations with navigation guards.
+ */
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   clickChromeMcpElement,
@@ -13,6 +19,7 @@ import {
   type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
+import { normalizeBrowserEvaluateFunctionSource } from "../evaluate-source.js";
 import {
   assertBrowserNavigationResultAllowed,
   type BrowserNavigationPolicyOptions,
@@ -350,6 +357,7 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
   throw new Error("Unsupported browser act kind");
 }
 
+/** Register browser action endpoints, including hook and download subroutes. */
 export function registerBrowserAgentActRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -626,7 +634,10 @@ export function registerBrowserAgentActRoutes(
                       profileName,
                       profile: profileCtx.profile,
                       targetId: tab.targetId,
-                      fn: action.fn,
+                      fn: normalizeBrowserEvaluateFunctionSource(
+                        action.fn,
+                        action.ref ? { argumentName: "el" } : undefined,
+                      ),
                       args: action.ref ? [action.ref] : undefined,
                     }),
                   guard: existingSessionNavigationGuard,

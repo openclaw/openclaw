@@ -1,3 +1,6 @@
+/**
+ * Node invoke system-run approval matching tests.
+ */
 import { describe, expect, test } from "vitest";
 import { buildSystemRunApprovalBinding } from "../infra/system-run-approval-binding.js";
 import { evaluateSystemRunApprovalMatch } from "./node-invoke-system-run-approval-match.js";

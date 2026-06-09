@@ -1,3 +1,4 @@
+// Codex tests cover run attempt plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -1161,6 +1162,101 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("emits TUI-compatible tool events for Codex dynamic tool calls", async () => {
+    const sessionFile = path.join(tempDir, "session-tool-events.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-tool-events");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    const onRunAgentEvent = vi.fn();
+    params.timeoutMs = 60_000;
+    params.onAgentEvent = onRunAgentEvent;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    await expect(
+      harness.handleServerRequest({
+        id: "request-tool-1",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: null,
+          tool: "python",
+          arguments: { code: "print('hi')" },
+        },
+      }),
+    ).resolves.toMatchObject({
+      success: false,
+      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: python" }],
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(onRunAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "python",
+        toolCallId: "call-1",
+        args: { code: "print('hi')" },
+      },
+    });
+    expect(onRunAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: {
+        phase: "result",
+        name: "python",
+        toolCallId: "call-1",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "Unknown OpenClaw tool: python" }],
+        },
+      },
+    });
+    const resultEvent = onRunAgentEvent.mock.calls
+      .map(([event]) => event)
+      .find(
+        (
+          event,
+        ): event is {
+          data: {
+            phase: "result";
+            result: { content?: unknown; contentItems?: unknown; success?: unknown };
+          };
+          stream: "tool";
+        } => event.stream === "tool" && event.data?.phase === "result",
+      );
+    expect(resultEvent?.data.result).not.toHaveProperty("success");
+    expect(resultEvent?.data.result).not.toHaveProperty("contentItems");
+  });
+
+  it("maps sanitized dynamic tool output into transcript progress content", () => {
+    const rawToolSecret = "sk-abcdefghijklmnopqrstuvwxyz1234567890"; // pragma: allowlist secret
+    const result = testing.toTranscriptToolResultForTests({
+      success: true,
+      contentItems: [
+        { type: "inputText", text: `lookup result: ${rawToolSecret}` },
+        { type: "inputImage", imageUrl: "data:image/png;base64,abc" },
+        { type: "unsupportedCodexOutput", imageUrl: "data:image/png;base64,ignored" },
+      ],
+    });
+    const content = result.content as Array<{ text?: string; type?: string; url?: string }>;
+
+    expect(result).not.toHaveProperty("success");
+    expect(result).not.toHaveProperty("contentItems");
+    expect(content[0]).toEqual({ type: "text", text: expect.any(String) });
+    expect(content[0]?.text).toContain("lookup result:");
+    expect(content[0]?.text).not.toContain(rawToolSecret);
+    expect(content[1]).toEqual({ type: "image", url: "data:image/png;base64,abc" });
+    expect(content[2]).toEqual({
+      type: "text",
+      text: "[Unsupported Codex dynamic tool output: unsupportedCodexOutput]",
+    });
+    expect(JSON.stringify(result)).not.toContain(rawToolSecret);
+  });
+
   it("keeps leading delivery hints out of the Codex current user request", async () => {
     const sessionFile = path.join(tempDir, "session-delivery-hint.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-delivery-hint");
@@ -1301,6 +1397,79 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(result.promptError).toBeNull();
     expect(result.assistantTexts).toEqual(["Nested done."]);
+  });
+
+  it("delivers completed assistant text when an orphan native tool call lacks a matching result", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session-orphan-tool.jsonl"),
+      path.join(tempDir, "workspace-orphan-tool"),
+    );
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "commandExecution",
+          id: "cmd-orphan",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      },
+    });
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [
+            {
+              type: "agentMessage",
+              id: "msg-final",
+              text: "Recovered with final answer after orphan tool call.",
+            },
+          ],
+          error: null,
+          startedAt: null,
+          completedAt: null,
+          durationMs: null,
+        },
+      },
+    });
+
+    const result = await run;
+
+    expect(result.promptError).toBeNull();
+    expect(result.lastToolError).toMatchObject({
+      toolName: "bash",
+      error: expect.stringContaining("without a matching tool.result"),
+      mutatingAction: true,
+    });
+    expect(result.lastToolError?.actionFingerprint).toContain("pnpm test extensions/codex");
+    expect(result.assistantTexts).toEqual(["Recovered with final answer after orphan tool call."]);
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    const snapshotJson = JSON.stringify(result.messagesSnapshot);
+    expect(snapshotJson).toContain('"toolCallId":"cmd-orphan"');
+    expect(snapshotJson).toContain('"isError":true');
+    expect(snapshotJson).toContain("without a matching tool.result");
   });
 
   it("keeps forced message dynamic tool when toolsAllow omits it", () => {

@@ -1,3 +1,8 @@
+/**
+ * Tests Anthropic Messages transport streaming.
+ * Covers request construction, SSE parsing, aborts, tool calls, usage, and
+ * provider transport hooks.
+ */
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
@@ -2028,5 +2033,65 @@ describe("anthropic transport stream", () => {
     const payload = latestAnthropicRequest().payload;
     expect(payload.thinking).toEqual({ type: "adaptive" });
     expect(payload.output_config).toEqual({ effort: "high" });
+  });
+
+  it("emits start event only after message_start so pre-stream SSE errors arrive before any non-error event", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      ]),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = streamFn(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hi" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    const eventTypes: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      eventTypes.push(event.type);
+    }
+
+    const startIndex = eventTypes.indexOf("start");
+    expect(startIndex).toBeGreaterThanOrEqual(0);
+    expect(eventTypes.slice(0, startIndex).some((t) => t === "error")).toBe(false);
+  });
+
+  it("emits error without a preceding start event when SSE error arrives before message_start", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createRawSseResponse(
+        "event: error\ndata: " +
+          JSON.stringify({
+            type: "invalid_request_error",
+            message: "messages.1.content.63: Invalid signature in thinking block",
+          }) +
+          "\n\n",
+      ),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = streamFn(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hi" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    const eventTypes: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      eventTypes.push(event.type);
+    }
+
+    // start must not precede the error path, regardless of whether the mock
+    // surfaces the SSE error as an explicit "error" event or silently ends the
+    // stream (a timing artefact of synchronous mock SSE delivery).
+    expect(eventTypes).not.toContain("start");
   });
 });

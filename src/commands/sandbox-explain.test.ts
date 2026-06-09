@@ -1,3 +1,4 @@
+// Sandbox explain tests cover command output for sandbox browser and container diagnostics.
 import { describe, expect, it, vi } from "vitest";
 import { sandboxExplainCommand } from "./sandbox-explain.js";
 
@@ -13,6 +14,13 @@ vi.mock("../config/config.js", async () => {
     loadConfig: vi.fn().mockImplementation(() => mockCfg),
   };
 });
+
+vi.mock("./session-state-migration.js", async () => ({
+  ...(await vi.importActual<typeof import("./session-state-migration.js")>(
+    "./session-state-migration.js",
+  )),
+  ensureSessionStateMigratedForCommand: vi.fn(async () => {}),
+}));
 
 describe("sandbox explain command", () => {
   it("prints JSON shape + fix-it keys", { timeout: SANDBOX_EXPLAIN_TEST_TIMEOUT_MS }, async () => {

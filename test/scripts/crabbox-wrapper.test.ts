@@ -1,3 +1,4 @@
+// Crabbox Wrapper tests cover crabbox wrapper script behavior.
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -70,6 +71,15 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       "    fi",
       "  done",
       "fi",
+      'if [ "$1" = "whoami" ]; then',
+      '  status="${OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS:-0}"',
+      '  if [ "$status" != "0" ]; then',
+      '    printf "%s\\n" "coordinator GET /v1/whoami: http 401: {\\"error\\":\\"unauthorized\\"}" >&2',
+      '    exit "$status"',
+      "  fi",
+      '  printf "%s\\n" "fake-crabbox-user"',
+      "  exit 0",
+      "fi",
       'for arg in "$@"; do',
       '  if [ "$arg" = "--artifact-glob" ] || [ "$arg" = "-artifact-glob" ]; then',
       "    mkdir -p .crabbox/runs/run_fake",
@@ -85,6 +95,12 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       "  fi",
       '  previous_arg="$arg"',
       "done",
+      'if [ "${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_AND_EXIT:-}" = "1" ]; then',
+      '  deleted_cwd="$PWD"',
+      "  cd / || exit 1",
+      '  rm -rf "$deleted_cwd"',
+      "  exit 0",
+      "fi",
       'if [ "${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_ONCE:-}" = "1" ]; then',
       '  deleted_cwd="$PWD"',
       "  cd / || exit 1",
@@ -124,6 +140,15 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     "    process.exit(status);",
     "  }",
     '  process.stdout.write(process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_JSON || \'{"coordinator":"configured-broker","brokerAuth":"configured"}\');',
+    "  process.exit(0);",
+    "}",
+    'if (args[0] === "whoami") {',
+    "  const status = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS || '0', 10);",
+    "  if (status !== 0) {",
+    '    process.stderr.write(\'coordinator GET /v1/whoami: http 401: {"error":"unauthorized"}\\n\');',
+    "    process.exit(status);",
+    "  }",
+    "  process.stdout.write('fake-crabbox-user\\n');",
     "  process.exit(0);",
     "}",
     "const scriptIndex = args.findIndex((arg) => arg === '--script' || arg === '-script');",
@@ -280,6 +305,8 @@ function runWrapper(
         .filter(Boolean)
         .join(path.delimiter),
       CRABBOX_PROVIDER: "",
+      OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "",
+      OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "0",
       OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
       ...(options.configJson
         ? { OPENCLAW_FAKE_CRABBOX_CONFIG_JSON: JSON.stringify(options.configJson) }
@@ -589,6 +616,21 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain(
       "crabbox login --url https://crabbox.openclaw.ai --provider aws",
     );
+  });
+
+  it("fails closed for AWS proof when broker auth is stale", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--", "echo ok"],
+      {
+        configJson: { coordinator: "https://crabbox.openclaw.ai", brokerAuth: "configured" },
+        env: { OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS: "1" },
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("provider=aws requires a configured Crabbox broker");
   });
 
   it("allows explicit direct AWS debugging without broker auth", () => {
@@ -2603,7 +2645,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
   });
 
   (process.platform === "win32" ? it.skip : it)(
-    "recreates sparse-sync temporary full checkouts that disappear while Crabbox is running",
+    "terminates when sparse-sync temporary full checkouts disappear while Crabbox is running",
     () => {
       const result = runWrapper(
         "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
@@ -2620,10 +2662,36 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
         },
       );
 
-      const output = parseFakeCrabboxOutput(result);
-      expect(result.status).toBe(0);
-      expect(result.stderr).toContain("temporary full checkout disappeared; recreating");
-      expect(output.cwd).toContain("openclaw-crabbox-sync-");
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "temporary full checkout disappeared while Crabbox was running",
+      );
+      expect(result.stderr).toContain("child cwd cannot be repaired");
+    },
+  );
+
+  (process.platform === "win32" ? it.skip : it)(
+    "fails successful sparse-sync children when their temporary full checkout vanishes before exit",
+    () => {
+      const result = runWrapper(
+        "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+        ["run", "--provider", "aws", "--", "echo ok"],
+        {
+          env: {
+            OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS: "60000",
+            OPENCLAW_FAKE_CRABBOX_DELETE_CWD_AND_EXIT: "1",
+          },
+          gitResponses: {
+            [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+            [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          },
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "temporary full checkout vanished before Crabbox finished syncing",
+      );
     },
   );
 

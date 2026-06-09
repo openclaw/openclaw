@@ -1,3 +1,6 @@
+/**
+ * Gateway startup web fetch bind tests.
+ */
 import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";

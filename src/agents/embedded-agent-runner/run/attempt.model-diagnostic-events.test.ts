@@ -1,3 +1,4 @@
+// Coverage for model-call diagnostic events around attempt stream functions.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -22,6 +23,8 @@ import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-helper
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
 async function collectModelCallEvents(run: () => Promise<void>): Promise<DiagnosticEventPayload[]> {
+  // Diagnostics are emitted asynchronously; collect only public model-call
+  // events and flush one tick after the stream completes.
   const events: DiagnosticEventPayload[] = [];
   const stop = onInternalDiagnosticEvent((event) => {
     if (event.type.startsWith("model.call.")) {
@@ -66,6 +69,8 @@ async function collectTrustedModelCallEvents(run: () => Promise<void>): Promise<
 }
 
 async function drain(stream: AsyncIterable<unknown>): Promise<void> {
+  // Force stream iteration so completion events include response byte and timing
+  // accounting.
   for await (const _ of stream) {
     // drain
   }
@@ -123,6 +128,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
   });
 
   it("emits started and completed events for async streams", async () => {
+    // Request payloads are measured for diagnostics but must be redacted from
+    // public event bodies.
     async function* stream() {
       yield { type: "text", text: "ok" };
     }
@@ -393,16 +400,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
 
     const completedEvent = getEvent(events, 1);
     expect(completedEvent.type).toBe("model.call.completed");
-    expect(completedEvent.responseStreamBytes).toBe(
-      Buffer.byteLength(
-        JSON.stringify({ type: "text_delta", contentIndex: 0, delta: "a" }),
-        "utf8",
-      ) +
-        Buffer.byteLength(
-          JSON.stringify({ type: "text_delta", contentIndex: 0, delta: "bc" }),
-          "utf8",
-        ),
-    );
+    expect(completedEvent.responseStreamBytes).toBe(Buffer.byteLength("abc", "utf8"));
     expect(serializedPartial).not.toHaveBeenCalled();
   });
 
@@ -449,9 +447,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(chunks[1]).toEqual({ type: "text_delta", delta: "ok" });
     const completedEvent = getEvent(events, 1);
     expect(completedEvent.type).toBe("model.call.completed");
-    expect(completedEvent.responseStreamBytes).toBe(
-      Buffer.byteLength(JSON.stringify({ type: "text_delta", delta: "ok" }), "utf8"),
-    );
+    expect(completedEvent.responseStreamBytes).toBe(Buffer.byteLength("ok", "utf8"));
   });
 
   it("captures model input, tools, and output only when content capture is enabled", async () => {

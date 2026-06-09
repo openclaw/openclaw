@@ -1,3 +1,4 @@
+// Tests dispatch-from-config runtime selection, hooks, and provider handoff.
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
@@ -34,6 +35,7 @@ import { createInternalHookEventPayload } from "../../test-utils/internal-hook-e
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { setReplyPayloadMetadata, type GetReplyOptions, type ReplyPayload } from "../types.js";
+import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 import {
   createReplyDispatcher,
@@ -1039,6 +1041,56 @@ describe("dispatchReplyFromConfig", () => {
     expect(runtimePluginMocks.ensureRuntimePluginsLoaded.mock.invocationCallOrder[0]).toBeLessThan(
       hookMocks.runner.hasHooks.mock.invocationCallOrder[0],
     );
+  });
+
+  it("returns session metadata changes marked during reply resolution", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:main";
+    const dispatcher = createDispatcher();
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        SessionKey: sessionKey,
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (ctx) => {
+        markCommandSessionMetadataChanged({ ctx, sessionKey });
+        return { text: "goal updated" };
+      },
+    });
+
+    expect(result.sessionMetadataChanges).toEqual([{ sessionKey, reason: "command-metadata" }]);
+  });
+
+  it("notifies session metadata changes before later dispatch errors", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:main";
+    const dispatcher = createDispatcher();
+    dispatcher.sendFinalReply = vi.fn(() => {
+      throw new Error("delivery failed");
+    });
+    const onSessionMetadataChanges = vi.fn();
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "telegram",
+          SessionKey: sessionKey,
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        onSessionMetadataChanges,
+        replyResolver: async (ctx) => {
+          markCommandSessionMetadataChanged({ ctx, sessionKey });
+          return { text: "goal updated" };
+        },
+      }),
+    ).rejects.toThrow("delivery failed");
+
+    expect(onSessionMetadataChanges).toHaveBeenCalledWith([
+      { sessionKey, reason: "command-metadata" },
+    ]);
   });
 
   it("skips pre-dispatch admission when the caller already aborted", async () => {
@@ -6825,6 +6877,14 @@ describe("dispatchReplyFromConfig", () => {
       { text: "Alpha" },
       { assistantMessageIndex: 7 },
     );
+    const queuedPayload = onBlockReplyQueued.mock.calls[0]?.[0];
+    expect(queuedPayload ? getReplyPayloadMetadata(queuedPayload) : undefined).toMatchObject({
+      assistantMessageIndex: 7,
+    });
+    const deliveredPayload = vi.mocked(dispatcher.sendBlockReply).mock.calls[0]?.[0];
+    expect(deliveredPayload ? getReplyPayloadMetadata(deliveredPayload) : undefined).toMatchObject({
+      assistantMessageIndex: 7,
+    });
   });
 });
 
@@ -8027,6 +8087,44 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     if (replyDispatchCall?.[1] === undefined) {
       throw new Error("Expected reply dispatch metadata");
     }
+  });
+
+  it("treats message-tool-only observed delivery as visible for fallback eligibility", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const observedReplyDelivery = vi.fn();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      await opts?.onObservedReplyDelivery?.();
+      return { text: "private final reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "channel",
+        SessionKey: "test:session",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        onObservedReplyDelivery: observedReplyDelivery,
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(observedReplyDelivery).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(result.observedReplyDelivery).toBe(true);
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("preserves hook-blocked metadata when source delivery is message-tool-only", async () => {

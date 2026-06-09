@@ -1,11 +1,12 @@
+// Implements compaction commands for session context and model state.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
+import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   OPENAI_CODEX_PROVIDER_ID,
@@ -52,15 +53,13 @@ function extractCompactInstructions(params: {
 }
 
 function isCompactionSkipReason(reason?: string): boolean {
-  const text = normalizeOptionalLowercaseString(reason) ?? "";
+  const classification = classifyCompactionReason(reason);
   // Manual /compact mirrors preflight semantics: already-small sessions are a
   // successful no-op, not a failed compaction.
   return (
-    text.includes("nothing to compact") ||
-    text.includes("below threshold") ||
-    text.includes("already under target") ||
-    text.includes("already compacted") ||
-    text.includes("no real conversation messages")
+    classification === "no_compactable_entries" ||
+    classification === "below_threshold" ||
+    classification === "already_compacted_recently"
   );
 }
 
@@ -70,23 +69,20 @@ function formatCompactionReason(reason?: string): string | undefined {
     return undefined;
   }
 
-  const lower = normalizeLowercaseStringOrEmpty(text);
-  if (lower.includes("nothing to compact")) {
-    return "nothing compactable in this session yet";
+  const classification = classifyCompactionReason(reason);
+  const lower = normalizeLowercaseStringOrEmpty(reason);
+  switch (classification) {
+    case "no_compactable_entries":
+      return "nothing compactable in this session yet";
+    case "below_threshold":
+      return lower.includes("already under target")
+        ? "context is already under the compaction target"
+        : "context is below the compaction threshold";
+    case "already_compacted_recently":
+      return "session was already compacted recently";
+    default:
+      return text;
   }
-  if (lower.includes("below threshold")) {
-    return "context is below the compaction threshold";
-  }
-  if (lower.includes("already under target")) {
-    return "context is already under the compaction target";
-  }
-  if (lower.includes("already compacted")) {
-    return "session was already compacted recently";
-  }
-  if (lower.includes("no real conversation messages")) {
-    return "no real conversation messages yet";
-  }
-  return text;
 }
 
 function isCodexNativeCompactionStartedResult(result: { result?: { details?: unknown } }): boolean {
@@ -213,12 +209,15 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   if (!targetSessionEntry?.sessionId) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Compaction unavailable (missing session id)." },
+      reply: {
+        text: "⚙️ Compaction unavailable (missing session id).",
+        isStatusNotice: true,
+      },
     };
   }
   const runtime = await loadCompactRuntime();
   const sessionId = targetSessionEntry.sessionId;
-  if (runtime.isEmbeddedAgentRunActive(sessionId)) {
+  if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
     runtime.abortEmbeddedAgentRun(sessionId);
     await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
   }
@@ -327,5 +326,11 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     ? `${compactLabel}: ${reason} • ${contextSummary}`
     : `${compactLabel} • ${contextSummary}`;
   runtime.enqueueSystemEvent(line, { sessionKey: params.sessionKey });
-  return { shouldContinue: false, reply: { text: `⚙️ ${line}` } };
+  return {
+    shouldContinue: false,
+    reply: {
+      text: `⚙️ ${line}`,
+      isStatusNotice: true,
+    },
+  };
 };
