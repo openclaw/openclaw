@@ -164,7 +164,7 @@ is_semgrepignored_path() {
     fi
 
     if [[ "$trimmed" == */* ]]; then
-      [[ "$path" == $trimmed ]] && return 0
+      [[ "$path" == $trimmed || "$path" == $trimmed/* ]] && return 0
     else
       [[ "$base" == $trimmed ]] && return 0
     fi
