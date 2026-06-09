@@ -806,17 +806,20 @@ describe("startGatewayPostAttachRuntime", () => {
     const releaseQueue: Array<() => void> = [];
     const cleanStaleLockFiles = vi.fn(
       async ({ sessionsDir }: { sessionsDir: string }) =>
-        await new Promise<{ locks: []; cleaned: (typeof cleanedLock)[] }>((resolve) => {
-          active += 1;
-          maxActive = Math.max(maxActive, active);
-          releaseQueue.push(() => {
-            active -= 1;
-            resolve({
-              locks: [],
-              cleaned: sessionsDir.endsWith("/b") ? [cleanedLock] : [],
+        await new Promise<{ locks: []; cleaned: (typeof cleanedLock)[]; safeToRecover: [] }>(
+          (resolve) => {
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            releaseQueue.push(() => {
+              active -= 1;
+              resolve({
+                locks: [],
+                cleaned: sessionsDir.endsWith("/b") ? [cleanedLock] : [],
+                safeToRecover: [],
+              });
             });
-          });
-        }),
+          },
+        ),
     );
     const markRestartAbortedMainSessionsFromLocks = vi.fn(async () => {});
     const cleanupPromise = testing.cleanupStaleSessionLocks({
@@ -868,6 +871,7 @@ describe("startGatewayPostAttachRuntime", () => {
       return {
         locks: [],
         cleaned: [cleanedLock],
+        safeToRecover: [],
       };
     });
     const markRestartAbortedMainSessionsFromLocks = vi.fn(async () => {});
@@ -884,6 +888,46 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(markRestartAbortedMainSessionsFromLocks).toHaveBeenCalledWith({
       sessionsDir: "/sessions/a",
       cleanedLocks: [cleanedLock],
+    });
+  });
+
+  it("calls crash marker with safeToRecover locks when cleanup finds non-removable dead-owner locks", async () => {
+    const safeLock = {
+      lockPath: "/tmp/openclaw-state/agents/main/sessions/x.jsonl.lock",
+      pid: 999_999,
+      pidAlive: false,
+      createdAt: new Date(Date.now() - 5_000).toISOString(),
+      ageMs: 5_000,
+      stale: true,
+      staleReasons: ["missing-pid"],
+      removed: false,
+    };
+    const cleanStaleLockFiles = vi.fn(async () => ({
+      locks: [safeLock],
+      cleaned: [],
+      safeToRecover: [safeLock],
+    }));
+    const markRestartAbortedMainSessionsFromLocks = vi.fn(async () => {});
+    const markCrashedMainSessionsFromRemainingLocks = vi.fn(async () => {});
+
+    await testing.cleanupStaleSessionLocks({
+      sessionDirs: ["/sessions/x"],
+      cfg: {} as never,
+      log: { warn: vi.fn() },
+      isStopped: () => false,
+      cleanStaleLockFiles: cleanStaleLockFiles as never,
+      markRestartAbortedMainSessionsFromLocks: markRestartAbortedMainSessionsFromLocks as never,
+      markCrashedMainSessionsFromRemainingLocks: markCrashedMainSessionsFromRemainingLocks as never,
+      startupMode: true,
+    });
+
+    expect(cleanStaleLockFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ startupMode: true }),
+    );
+    expect(markRestartAbortedMainSessionsFromLocks).not.toHaveBeenCalled();
+    expect(markCrashedMainSessionsFromRemainingLocks).toHaveBeenCalledWith({
+      sessionsDir: "/sessions/x",
+      safeToRecoverLocks: [safeLock],
     });
   });
 

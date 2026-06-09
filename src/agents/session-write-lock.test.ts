@@ -354,6 +354,110 @@ describe("acquireSessionWriteLock", () => {
 
       expect(result.cleaned).toEqual([]);
       expect(result.locks).toHaveLength(1);
+      expect(result.safeToRecover).toEqual([]);
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+    });
+  });
+
+  it("classifies dead-PID lock past grace window as cleaned (not safeToRecover)", async () => {
+    await withTempSessionLockFile(async ({ root }) => {
+      const lockPath = path.join(root, "sessions.jsonl.lock");
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({ pid: 999_999, createdAt: new Date(Date.now() - 60_000).toISOString() }),
+        "utf8",
+      );
+      const staleDate = new Date(Date.now() - 60_000);
+      await fs.utimes(lockPath, staleDate, staleDate);
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir: root,
+        staleMs: 30 * 60_1000,
+        removeStale: true,
+      });
+
+      expect(result.cleaned).toHaveLength(1);
+      expect(result.safeToRecover).toEqual([]);
+      await expect(fs.access(lockPath)).rejects.toThrow();
+    });
+  });
+
+  it("classifies orphan lock past grace window as cleaned", async () => {
+    await withTempSessionLockFile(async ({ root }) => {
+      const lockPath = path.join(root, "sessions.jsonl.lock");
+      await fs.writeFile(lockPath, "", "utf8");
+      const staleDate = new Date(Date.now() - 60_000);
+      await fs.utimes(lockPath, staleDate, staleDate);
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir: root,
+        staleMs: 60_000,
+        removeStale: true,
+      });
+
+      expect(result.cleaned).toHaveLength(1);
+      expect(result.safeToRecover).toEqual([]);
+    });
+  });
+
+  it("does not classify young orphan locks as safeToRecover outside startup mode", async () => {
+    await withTempSessionLockFile(async ({ root }) => {
+      const lockPath = path.join(root, "sessions.jsonl.lock");
+      await fs.writeFile(lockPath, "", "utf8");
+      const youngDate = new Date(Date.now() - 5_000);
+      await fs.utimes(lockPath, youngDate, youngDate);
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir: root,
+        staleMs: 60_000,
+        removeStale: true,
+      });
+
+      expect(result.cleaned).toEqual([]);
+      expect(result.safeToRecover).toEqual([]);
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+    });
+  });
+
+  it("classifies young orphan locks as safeToRecover in startup mode", async () => {
+    await withTempSessionLockFile(async ({ root }) => {
+      const lockPath = path.join(root, "sessions.jsonl.lock");
+      await fs.writeFile(lockPath, "", "utf8");
+      const youngDate = new Date(Date.now() - 5_000);
+      await fs.utimes(lockPath, youngDate, youngDate);
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir: root,
+        staleMs: 60_000,
+        removeStale: true,
+        startupMode: true,
+      });
+
+      expect(result.cleaned).toEqual([]);
+      expect(result.safeToRecover).toHaveLength(1);
+      expect(result.safeToRecover[0].staleReasons).toContain("missing-pid");
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+    });
+  });
+
+  it("includes dead-PID lock in safeToRecover when removeStale is false", async () => {
+    await withTempSessionLockFile(async ({ root }) => {
+      const lockPath = path.join(root, "sessions.jsonl.lock");
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({ pid: 999_999, createdAt: new Date(Date.now() - 60_000).toISOString() }),
+        "utf8",
+      );
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir: root,
+        staleMs: 30 * 60_1000,
+        removeStale: false,
+      });
+
+      expect(result.cleaned).toEqual([]);
+      expect(result.safeToRecover).toHaveLength(1);
+      expect(result.safeToRecover[0].staleReasons).toContain("dead-pid");
       await expect(fs.access(lockPath)).resolves.toBeUndefined();
     });
   });
