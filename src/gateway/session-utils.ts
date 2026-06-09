@@ -923,6 +923,7 @@ export function resolveDeletedAgentIdFromSessionKey(
   cfg: OpenClawConfig,
   sessionKey: string,
   entry?: SessionEntry | null,
+  options?: { acpMetadataSessionKey?: string | null },
 ): string | null {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
@@ -932,8 +933,15 @@ export function resolveDeletedAgentIdFromSessionKey(
     // Free ACP runtime keys use agent:<harnessId>:acp:<uuid>, but key shape is
     // not proof: ACP bridge sessions can use ACP-shaped keys without SessionAcpMeta.
     // Configured acp:binding keys stay owner-scoped even when ACP metadata exists.
+    const acpMetadataSessionKey = normalizeOptionalString(options?.acpMetadataSessionKey);
     const acpMeta =
-      entry?.acp ?? readAcpSessionMetaForEntry({ sessionKey, entry: entry ?? undefined });
+      entry?.acp ??
+      (acpMetadataSessionKey
+        ? readAcpSessionMetaForEntry({
+            sessionKey: acpMetadataSessionKey,
+            entry: entry ?? undefined,
+          })
+        : readAcpSessionMeta({ sessionKey, cfg }));
     if (acpMeta) {
       return null;
     }

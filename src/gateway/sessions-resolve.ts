@@ -43,8 +43,9 @@ function validateSessionAgentExists(
   cfg: OpenClawConfig,
   key: string,
   entry?: SessionEntry | null,
+  options?: { acpMetadataSessionKey?: string | null },
 ): SessionsResolveResult | null {
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, key, entry);
+  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, key, entry, options);
   if (deletedAgentId === null) {
     return null;
   }
@@ -142,6 +143,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
         cfg,
         target.canonicalKey,
         store[target.canonicalKey],
+        { acpMetadataSessionKey: target.canonicalKey },
       );
       if (agentCheck) {
         return agentCheck;
@@ -174,6 +176,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
       cfg,
       target.canonicalKey,
       migratedStore[target.canonicalKey],
+      { acpMetadataSessionKey: legacyKey },
     );
     if (agentCheckLegacy) {
       return agentCheckLegacy;
