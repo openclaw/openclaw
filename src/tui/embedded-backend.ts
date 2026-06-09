@@ -135,15 +135,10 @@ function shouldLoadFullGatewayCatalogForReplaceMode(cfg: OpenClawConfig) {
 
 function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
   cfg: OpenClawConfig;
-  entry?: Record<string, unknown>;
   sessionAgentId: string;
 }): { status: "warmed" } | { status: "failed"; error: string } {
   try {
-    const spawnedWorkspaceDir = params.entry?.spawnedWorkspaceDir;
-    const workspaceDir =
-      typeof spawnedWorkspaceDir === "string" && spawnedWorkspaceDir.trim()
-        ? spawnedWorkspaceDir
-        : resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId);
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.sessionAgentId);
     ensureRuntimePluginsLoaded({
       config: params.cfg,
       workspaceDir,
@@ -442,7 +437,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
     const runtimePluginsPrewarm = ensureEmbeddedHistoryRuntimePluginsLoaded({
       cfg,
-      entry,
       sessionAgentId,
     });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);

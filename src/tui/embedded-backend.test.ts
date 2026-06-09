@@ -611,7 +611,7 @@ describe("EmbeddedTuiBackend", () => {
     expect(loadSessionEntryMock).toHaveBeenCalledWith("global", { agentId: "work" });
   });
 
-  it("loads runtime plugins before returning embedded history", async () => {
+  it("loads runtime plugins for the send-path workspace before returning embedded history", async () => {
     const cfg = { agents: { list: [{ id: "main" }] } };
     loadSessionEntryMock.mockReturnValue({
       cfg,
@@ -628,7 +628,7 @@ describe("EmbeddedTuiBackend", () => {
     });
     expect(ensureRuntimePluginsLoadedMock).toHaveBeenCalledWith({
       config: cfg,
-      workspaceDir: "/tmp/openclaw-custom-workspace",
+      workspaceDir: "/tmp/openclaw-agent-main",
     });
   });
 
