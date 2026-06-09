@@ -15,7 +15,9 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 
 type PluginAutoEnableCacheEntry = {
   configFingerprint: string;
+  discoveryFingerprint: string;
   envFingerprint: string;
+  registryFingerprint: string;
   result: PluginAutoEnableResult;
 };
 type PluginAutoEnableDiscoveryCache = WeakMap<object, PluginAutoEnableCacheEntry>;
@@ -69,12 +71,16 @@ function stableFingerprintValue(value: unknown): string {
 
 function createPluginAutoEnableCacheEntry(params: {
   config: OpenClawConfig;
+  discovery: PluginDiscoveryResult;
   env: NodeJS.ProcessEnv;
+  manifestRegistry: PluginManifestRegistry;
   result: PluginAutoEnableResult;
 }): PluginAutoEnableCacheEntry {
   return {
     configFingerprint: hashRuntimeConfigValue(params.config),
+    discoveryFingerprint: stableFingerprintValue(params.discovery.candidates),
     envFingerprint: stableFingerprintValue(params.env),
+    registryFingerprint: stableFingerprintValue(params.manifestRegistry.plugins),
     result: params.result,
   };
 }
@@ -82,11 +88,15 @@ function createPluginAutoEnableCacheEntry(params: {
 function isPluginAutoEnableCacheEntryFresh(params: {
   entry: PluginAutoEnableCacheEntry;
   config: OpenClawConfig;
+  discovery: PluginDiscoveryResult;
   env: NodeJS.ProcessEnv;
+  manifestRegistry: PluginManifestRegistry;
 }): boolean {
   return (
     params.entry.configFingerprint === hashRuntimeConfigValue(params.config) &&
-    params.entry.envFingerprint === stableFingerprintValue(params.env)
+    params.entry.discoveryFingerprint === stableFingerprintValue(params.discovery.candidates) &&
+    params.entry.envFingerprint === stableFingerprintValue(params.env) &&
+    params.entry.registryFingerprint === stableFingerprintValue(params.manifestRegistry.plugins)
   );
 }
 
@@ -146,7 +156,16 @@ export function applyPluginAutoEnable(params: {
       () => new WeakMap<object, PluginAutoEnableCacheEntry>(),
     );
     const cached = discoveryCache.get(params.discovery);
-    if (cached && isPluginAutoEnableCacheEntryFresh({ entry: cached, config, env })) {
+    if (
+      cached &&
+      isPluginAutoEnableCacheEntryFresh({
+        entry: cached,
+        config,
+        discovery: params.discovery,
+        env,
+        manifestRegistry: params.manifestRegistry,
+      })
+    ) {
       return cached.result;
     }
     const candidates = detectPluginAutoEnableCandidates(params);
@@ -156,7 +175,16 @@ export function applyPluginAutoEnable(params: {
       env: params.env,
       manifestRegistry: params.manifestRegistry,
     });
-    discoveryCache.set(params.discovery, createPluginAutoEnableCacheEntry({ config, env, result }));
+    discoveryCache.set(
+      params.discovery,
+      createPluginAutoEnableCacheEntry({
+        config,
+        discovery: params.discovery,
+        env,
+        manifestRegistry: params.manifestRegistry,
+        result,
+      }),
+    );
     scheduleSameTurnApplyCacheClear();
     return result;
   }
