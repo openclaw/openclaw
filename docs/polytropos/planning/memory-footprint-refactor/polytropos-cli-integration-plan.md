@@ -287,16 +287,26 @@ what still requires Polytropos-owned wrapper/daemon logic.
 
 ### Important finding
 
-The actual `openclaw hooks relay ...` command implementation does not appear to
-live in this core repo. The core repo contains the built-in `hooks` CLI for
-managing internal hooks, but the Codex-native relay command seems to come from
-the external Codex app-server plugin / integration layer.
+The current checkout does not contain `openclaw hooks relay ...`, but the
+implementation does exist on the locally available `upstream/main` ref.
+
+Relevant upstream files:
+
+- [src/cli/hooks-cli.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/cli/hooks-cli.ts)
+  registers hidden `hooks relay`
+- `src/cli/native-hook-relay-cli.ts`
+  implements the thin CLI adapter around stdin/stdout and relay dispatch
+- `src/agents/harness/native-hook-relay.ts`
+  owns registration, runtime state, validation, and relay invocation
+- `src/gateway/server-methods/native-hook-relay.ts`
+  exposes the Gateway RPC fallback path
+- `extensions/codex/src/app-server/native-hook-relay.ts`
+  builds the Codex hook command and registration payloads
 
 That means the analysis splits into:
 
 - core OpenClaw services that a replacement relay path can reuse
-- external relay-command glue that likely must be recreated or mirrored by
-  Polytropos
+- relay-command glue that likely must be recreated or mirrored by Polytropos
 
 ### Reusable upstream core pieces
 
@@ -304,6 +314,14 @@ These look reusable with little or no semantic change:
 
 - CLI argv helpers such as primary-command extraction and root-option parsing in
   [src/cli/argv.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/cli/argv.ts)
+- the request/response contract and validation logic in
+  `src/agents/harness/native-hook-relay.ts`
+- provider payload normalization and response rendering in
+  `src/agents/harness/native-hook-relay.ts`
+- the bounded bridge request behavior used to reach the originating process in
+  `src/agents/harness/native-hook-relay.ts`
+- the thin Gateway fallback surface in
+  `src/gateway/server-methods/native-hook-relay.ts`
 - plugin hook policy and hook precedence resolution in
   [src/hooks/policy.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/hooks/policy.ts)
 - internal hook loading in
@@ -320,6 +338,12 @@ These look reusable with little or no semantic change:
 
 These are the main candidates to host inside a long-lived daemon once, instead
 of redoing them in a short-lived CLI process for every relay event.
+
+Just as important: the short-lived relay CLI does not appear to load the full
+plugin runtime itself. The originating long-lived OpenClaw process already owns
+the active relay registration, run context, approval state, and hook registry.
+That suggests the best first daemon boundary is "bridge to the owning process"
+rather than "re-execute all hook logic locally inside the wrapper."
 
 ### Reusable, but probably too heavy for the hot wrapper path
 
@@ -369,6 +393,16 @@ Implication:
 These layers still look too process-shaped, too expensive, or too policy-specific
 to treat as the reusable hot path:
 
+- `src/cli/native-hook-relay-cli.ts`
+  - directly models stdin/stdout/stderr and process-exit semantics
+  - parsing and validation logic may be reused, but the process contract itself
+    should stay outside the shared hot path
+- `src/agents/harness/native-hook-relay.ts`
+  - registration currently stores process-local and non-serializable state such
+    as active run context, `AbortSignal`, pending approvals, and plugin hook
+    registries
+  - that makes it a poor target for a drop-in "move unchanged into another
+    daemon" approach
 - [src/entry.ts](/home/ec2-user/polytropos/openclaw-polytropos/src/entry.ts)
   - respawn logic
   - process env mutation
@@ -393,14 +427,13 @@ For the first wave, the simplest useful design is probably:
 1. The installed Polytropos wrapper hardcodes a narrow intercept for the `hooks`
    root, or even more narrowly the `hooks relay` subpath.
 2. All other argv falls through unchanged to the core OpenClaw CLI.
-3. The daemon preloads the reusable core pieces once:
-   - config snapshot
-   - plugin metadata / registry state
-   - hook policy state
-   - hook runner state
+3. The daemon preloads the reusable bridge, validation, and routing pieces once.
 4. The wrapper sends relay requests to the daemon.
-5. The daemon uses reusable upstream hook/plugin machinery where possible, but
-   does not rebuild the whole CLI program for each event.
+5. The daemon forwards to the originating OpenClaw process that owns the active
+   relay registration whenever possible, instead of trying to become the new
+   owner of hook execution immediately.
+6. Only after that path is stable should we consider moving more of the active
+   relay ownership itself into the daemon.
 
 This avoids overgeneralizing too early. For the first experiment, we do not need
 to solve "arbitrary root override for any plugin" before solving `hooks relay`.
