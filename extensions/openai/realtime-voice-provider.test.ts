@@ -202,6 +202,29 @@ function requireFetchJsonBody(callIndex = 0): Record<string, unknown> {
   return requireRecord(JSON.parse(body as string), "fetch JSON body");
 }
 
+function expectDirectOpenAIRealtimeAuthMessage(error: unknown, unexpectedSecret?: string): void {
+  const message = error instanceof Error ? error.message : String(error);
+  expect(message).toContain("Talk Realtime provider 'openai' requires a direct OpenAI API key");
+  expect(message).toContain("Azure AI Foundry / Azure OpenAI model credentials");
+  expect(message).toContain("OpenAI-compatible proxy keys");
+  if (unexpectedSecret) {
+    expect(message).not.toContain(unexpectedSecret);
+  }
+}
+
+async function expectRejectsDirectOpenAIRealtimeAuth(
+  promise: Promise<unknown>,
+  unexpectedSecret?: string,
+): Promise<void> {
+  try {
+    await promise;
+  } catch (error) {
+    expectDirectOpenAIRealtimeAuthMessage(error, unexpectedSecret);
+    return;
+  }
+  throw new Error("Expected OpenAI Realtime direct auth diagnostic");
+}
+
 function requireSession(socket: FakeWebSocketInstance, index = 0): Record<string, unknown> {
   return requireRecord(parseSent(socket)[index]?.session, "session");
 }
@@ -405,6 +428,52 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalled();
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("preserves configured proxy-looking keys for custom realtime endpoints", () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "sk-litellm-custom-endpoint-key", // pragma: allowlist secret
+        azureEndpoint: "https://realtime-proxy.example.com",
+        model: "gpt-realtime-2",
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    void bridge.connect();
+    bridge.close();
+
+    const socket = FakeWebSocket.instances[0];
+    expect(socket?.args[0]).toBe(
+      "wss://realtime-proxy.example.com/v1/realtime?model=gpt-realtime-2",
+    );
+    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
+    expect(options?.headers?.Authorization).toBe("Bearer sk-litellm-custom-endpoint-key");
+  });
+
+  it("preserves env proxy-looking keys for custom realtime endpoints", () => {
+    vi.stubEnv("OPENAI_API_KEY", "sk-or-custom-endpoint-key"); // pragma: allowlist secret
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        azureEndpoint: "https://realtime-proxy.example.com",
+        model: "gpt-realtime-2",
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    void bridge.connect();
+    bridge.close();
+
+    const socket = FakeWebSocket.instances[0];
+    expect(socket?.args[0]).toBe(
+      "wss://realtime-proxy.example.com/v1/realtime?model=gpt-realtime-2",
+    );
+    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
+    expect(options?.headers?.Authorization).toBe("Bearer sk-or-custom-endpoint-key");
   });
 
   it("does not open a native websocket after slow OAuth resolution times out", async () => {
@@ -675,6 +744,177 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
   });
 
+  it("rejects obvious proxy API keys before minting browser realtime client secrets", async () => {
+    const proxyKey = "sk-litellm-realtime-proxy-key"; // pragma: allowlist secret
+    vi.stubEnv("OPENAI_API_KEY", proxyKey);
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected OpenAI realtime provider to support browser sessions");
+    }
+
+    await expectRejectsDirectOpenAIRealtimeAuth(
+      provider.createBrowserSession({
+        cfg: {
+          models: {
+            providers: {
+              "azure-openai-responses": {
+                baseUrl: "https://example.services.ai.azure.com/models",
+                models: [],
+              },
+            },
+          },
+        } as never,
+        providerConfig: {},
+        instructions: "Be concise.",
+      }),
+      proxyKey,
+    );
+
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects Azure-looking API keys before browser realtime client secret requests", async () => {
+    const azureKey = "0123456789abcdef0123456789abcdef"; // pragma: allowlist secret
+    vi.stubEnv("OPENAI_API_KEY", azureKey);
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected OpenAI realtime provider to support browser sessions");
+    }
+
+    await expectRejectsDirectOpenAIRealtimeAuth(
+      provider.createBrowserSession({
+        providerConfig: {},
+        instructions: "Be concise.",
+      }),
+      azureKey,
+    );
+
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to Codex OAuth when an obvious proxy API key is present", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "sk-or-openrouter-proxy-key"); // pragma: allowlist secret
+    resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("oauth-realtime-token");
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse({
+        client_secret: { value: "client-secret-123" },
+      }),
+      release: vi.fn(async () => undefined),
+    });
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected OpenAI realtime provider to support browser sessions");
+    }
+
+    await provider.createBrowserSession({
+      cfg: { agents: { defaults: {} } } as never,
+      providerConfig: {},
+      instructions: "Be concise.",
+    });
+
+    expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith({
+      provider: "openai-codex",
+      cfg: { agents: { defaults: {} } },
+      includeExternalCliAuth: true,
+    });
+    expectRecordFields(requireFetchHeaders(), "fetch headers", {
+      Authorization: "Bearer oauth-realtime-token", // pragma: allowlist secret
+    });
+  });
+
+  it("rejects configured proxy API keys before browser realtime client secret requests", async () => {
+    const configuredProxyKey = "sk-litel-configured-proxy-key"; // pragma: allowlist secret
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected OpenAI realtime provider to support browser sessions");
+    }
+
+    await expectRejectsDirectOpenAIRealtimeAuth(
+      provider.createBrowserSession({
+        providerConfig: { apiKey: configuredProxyKey },
+        instructions: "Be concise.",
+      }),
+      configuredProxyKey,
+    );
+
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects keychain-resolved proxy API keys before browser realtime client secret requests", async () => {
+    const resolvedProxyKey = "sk-litellm-keychain-proxy-key"; // pragma: allowlist secret
+    vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_PROXY_TEST");
+    execFileSyncMock.mockReturnValueOnce(`${resolvedProxyKey}\n`);
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected OpenAI realtime provider to support browser sessions");
+    }
+
+    await expectRejectsDirectOpenAIRealtimeAuth(
+      provider.createBrowserSession({
+        providerConfig: {},
+        instructions: "Be concise.",
+      }),
+      resolvedProxyKey,
+    );
+
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("wraps OpenAI invalid-key responses from realtime client secret requests", async () => {
+    const directLookingKey = "sk-test-direct-looking-invalid-key"; // pragma: allowlist secret
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse(
+        {
+          error: {
+            code: "invalid_api_key",
+            message: `Incorrect API key provided: ${directLookingKey}`,
+          },
+        },
+        { status: 401 },
+      ),
+      release: vi.fn(async () => undefined),
+    });
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected OpenAI realtime provider to support browser sessions");
+    }
+
+    await expectRejectsDirectOpenAIRealtimeAuth(
+      provider.createBrowserSession({
+        providerConfig: { apiKey: directLookingKey },
+        instructions: "Be concise.",
+      }),
+      directLookingKey,
+    );
+  });
+
+  it("preserves non-auth 403 responses from realtime client secret requests", async () => {
+    const directLookingKey = "sk-test-direct-looking-valid-key"; // pragma: allowlist secret
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse(
+        {
+          error: {
+            code: "model_access_denied",
+            message: "Project does not have access to the requested Realtime model.",
+          },
+        },
+        { status: 403 },
+      ),
+      release: vi.fn(async () => undefined),
+    });
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected OpenAI realtime provider to support browser sessions");
+    }
+
+    await expect(
+      provider.createBrowserSession({
+        providerConfig: { apiKey: directLookingKey },
+        instructions: "Be concise.",
+      }),
+    ).rejects.toThrow("OpenAI Realtime client secret failed (403)");
+  });
+
   it("fails closed when keychain refs cannot be resolved", async () => {
     vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_MISSING_TEST");
     execFileSyncMock.mockImplementationOnce(() => {
@@ -688,7 +928,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       onClearAudio: vi.fn(),
     });
 
-    await expect(bridge.connect()).rejects.toThrow("OpenAI API key or Codex OAuth missing");
+    await expect(bridge.connect()).rejects.toThrow(
+      "Talk Realtime provider 'openai' requires a direct OpenAI API key",
+    );
   });
 
   it("normalizes provider-owned voice settings from raw provider config", () => {
@@ -930,6 +1172,38 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     await connecting;
   });
 
+  it("preserves Azure deployment startup auth failures", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "sk-test", // pragma: allowlist secret
+        azureEndpoint: "https://example.openai.azure.com/",
+        azureDeployment: "realtime-prod",
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.emit("error", new Error("Unexpected server response: 401"));
+
+    try {
+      await connecting;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toContain("Unexpected server response: 401");
+      expect(message).not.toContain(
+        "Talk Realtime provider 'openai' requires a direct OpenAI API key",
+      );
+      return;
+    }
+    throw new Error("Expected Azure realtime startup auth failure");
+  });
+
   it("rejects connection when session configuration fails before readiness", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({
@@ -995,7 +1269,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       ),
     );
 
-    await expect(connecting).rejects.toThrow("Incorrect API key provided");
+    await expect(connecting).rejects.toThrow(
+      "Talk Realtime provider 'openai' requires a direct OpenAI API key",
+    );
     expect(onError).not.toHaveBeenCalled();
     expect(socket.closed).toBe(true);
     expect(bridge.isConnected()).toBe(false);
