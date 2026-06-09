@@ -47,7 +47,7 @@ function clearMarker(marker: string) {
   }
 }
 
-function envRecord(entries: ReadonlyArray<readonly [string, string]>): NodeJS.ProcessEnv {
+function envRecord(entries: ReadonlyArray<readonly [string, string]>): Record<string, string> {
   return Object.fromEntries(entries);
 }
 
