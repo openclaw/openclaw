@@ -859,6 +859,7 @@ describe("buildStatusReply subagent summary", () => {
       sessionEntry: {
         sessionId: "sess-status-codex-synthetic-usage",
         updatedAt: 0,
+        authProfileOverride: "openai:work",
       },
       sessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",
@@ -888,7 +889,12 @@ describe("buildStatusReply subagent summary", () => {
     expect(providerUsageCall[0]).toMatchObject({
       timeoutMs: 8000,
       providers: ["openai"],
-      auth: expectedCodexRuntimeUsageAuth,
+      auth: [
+        {
+          ...expectedCodexRuntimeUsageAuth[0],
+          authProfileId: "openai:work",
+        },
+      ],
       config: expect.objectContaining({
         agents: expect.objectContaining({
           defaults: expect.objectContaining({ agentRuntime: { id: "codex" } }),

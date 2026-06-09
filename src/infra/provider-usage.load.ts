@@ -67,6 +67,7 @@ async function fetchProviderUsageSnapshot(params: {
       provider: params.auth.provider,
       token: params.auth.token,
       accountId: params.auth.accountId,
+      authProfileId: params.auth.authProfileId,
       timeoutMs: params.timeoutMs,
       fetchFn: params.fetchFn,
     },

@@ -343,6 +343,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider: activeStatusProvider,
     effectiveHarness,
   });
+  const codexUsageAuthProfileId = sessionEntry?.authProfileOverride?.trim() || undefined;
   const usageCredentialType = useCodexSyntheticUsage
     ? "token"
     : resolveUsageCredentialType(usageAuthLabel);
@@ -375,6 +376,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
                 {
                   provider: "openai",
                   token: CODEX_APP_SERVER_AUTH_MARKER,
+                  ...(codexUsageAuthProfileId ? { authProfileId: codexUsageAuthProfileId } : {}),
                   hookProvider: "codex",
                 },
               ]

@@ -28,6 +28,7 @@ function requireFirstPluginUsageCall(): {
   context?: {
     provider?: unknown;
     token?: unknown;
+    authProfileId?: unknown;
     timeoutMs?: unknown;
   };
 } {
@@ -44,6 +45,7 @@ function requireFirstPluginUsageCall(): {
     context?: {
       provider?: unknown;
       token?: unknown;
+      authProfileId?: unknown;
       timeoutMs?: unknown;
     };
   };
@@ -105,7 +107,14 @@ describe("provider-usage.load plugin boundary", () => {
     await expect(
       loadProviderUsageSummary({
         now: usageNow,
-        auth: [{ provider: "openai", token: "codex-app-server", hookProvider: "codex" }],
+        auth: [
+          {
+            provider: "openai",
+            token: "codex-app-server",
+            authProfileId: "openai:work",
+            hookProvider: "codex",
+          },
+        ],
       }),
     ).resolves.toEqual({
       updatedAt: usageNow,
@@ -122,5 +131,6 @@ describe("provider-usage.load plugin boundary", () => {
     expect(pluginCall.provider).toBe("codex");
     expect(pluginCall.context?.provider).toBe("openai");
     expect(pluginCall.context?.token).toBe("codex-app-server");
+    expect(pluginCall.context?.authProfileId).toBe("openai:work");
   });
 });

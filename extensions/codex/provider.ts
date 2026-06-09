@@ -47,6 +47,7 @@ type CodexModelLister = (options: {
 type CodexRateLimitReader = (options: {
   timeoutMs: number;
   agentDir?: string;
+  authProfileId?: string;
   config?: Parameters<typeof requestCodexAppServerRateLimitsLazy>[0]["config"];
   startOptions?: CodexAppServerStartOptions;
 }) => Promise<unknown>;
@@ -126,6 +127,7 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
       const rateLimits = await (options.readRateLimits ?? requestCodexAppServerRateLimitsLazy)({
         timeoutMs: ctx.timeoutMs,
         agentDir: ctx.agentDir,
+        ...(ctx.authProfileId ? { authProfileId: ctx.authProfileId } : {}),
         config: ctx.config,
         startOptions: appServer.start,
       });
@@ -237,6 +239,7 @@ async function listCodexAppServerModelsLazy(options: {
 async function requestCodexAppServerRateLimitsLazy(options: {
   timeoutMs: number;
   agentDir?: string;
+  authProfileId?: string;
   config?: Parameters<
     typeof import("./src/app-server/request.js").requestCodexAppServerJson
   >[0]["config"];
@@ -247,6 +250,7 @@ async function requestCodexAppServerRateLimitsLazy(options: {
     method: "account/rateLimits/read",
     timeoutMs: options.timeoutMs,
     agentDir: options.agentDir,
+    ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
     config: options.config,
     startOptions: options.startOptions,
     isolated: true,

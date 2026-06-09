@@ -416,6 +416,7 @@ describe("codex provider", () => {
       await provider.fetchUsageSnapshot?.({
         provider: "openai",
         token: "codex-app-server",
+        authProfileId: "openai:work",
         timeoutMs: 3500,
         config: {
           plugins: {
@@ -434,6 +435,7 @@ describe("codex provider", () => {
         method: "account/rateLimits/read",
         timeoutMs: 3500,
         agentDir: undefined,
+        authProfileId: "openai:work",
         config: {
           plugins: {
             entries: {
@@ -450,7 +452,6 @@ describe("codex provider", () => {
         }),
         isolated: true,
       });
-      expect(requestCodexAppServerJson.mock.calls[0]?.[0]).not.toHaveProperty("authProfileId");
     } finally {
       vi.doUnmock("./src/app-server/request.js");
     }
