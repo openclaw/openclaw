@@ -8,6 +8,7 @@ import {
   shouldAutoControlRealtimeVoiceAgentText,
 } from "../../../../src/talk/agent-run-control-shared.js";
 import type { RealtimeVoiceAgentControlMode } from "../../../../src/talk/agent-run-control-shared.js";
+import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/describe-view-tool.js";
 import type { TalkEvent } from "../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../gateway.ts";
 
@@ -18,6 +19,7 @@ export type RealtimeTalkCallbacks = {
   onStatus?: (status: RealtimeTalkStatus, detail?: string) => void;
   onTranscript?: (entry: { role: "user" | "assistant"; text: string; final: boolean }) => void;
   onTalkEvent?: (event: RealtimeTalkEvent) => void;
+  onVideoStream?: (stream: MediaStream | null) => void;
 };
 
 export type RealtimeTalkEventInput<TPayload = unknown> = {
@@ -107,6 +109,7 @@ export type RealtimeTalkTransportContext = {
   callbacks: RealtimeTalkCallbacks;
   consultThinkingLevel?: string;
   consultFastMode?: boolean;
+  videoEnabled?: boolean;
 };
 
 export function createRealtimeTalkEventEmitter(
@@ -610,8 +613,64 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
+async function captureFrameFromVideoStream(
+  stream: MediaStream | null,
+): Promise<string | undefined> {
+  if (!stream) {
+    return undefined;
+  }
+  try {
+    const video = document.createElement("video");
+    video.srcObject = stream;
+    video.muted = true;
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("video play timeout")), 5000);
+      const done = (fn: () => void) => () => {
+        clearTimeout(timeout);
+        fn();
+      };
+      video.addEventListener("canplay", done(resolve), { once: true });
+      video.addEventListener(
+        "error",
+        done(() => reject(new Error("video error"))),
+        { once: true },
+      );
+      video.play().catch(done(reject));
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("canvas 2d context unavailable");
+    }
+    ctx.drawImage(video, 0, 0);
+    video.pause();
+    video.srcObject = null;
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+    return dataUrl.replace(/^data:image\/jpeg;base64,/, "");
+  } catch {
+    return undefined;
+  }
+}
+
+export async function captureCurrentFrameAsBase64(): Promise<string | undefined> {
+  let stream: MediaStream | undefined;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    return await captureFrameFromVideoStream(stream);
+  } catch {
+    return undefined;
+  } finally {
+    stream?.getTracks().forEach((t) => t.stop());
+  }
+}
+
+export { captureFrameFromVideoStream };
+
 export {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+  REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
   shouldAutoControlRealtimeVoiceAgentText,
 };

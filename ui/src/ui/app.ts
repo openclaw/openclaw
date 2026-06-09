@@ -303,10 +303,12 @@ export class OpenClawApp extends LitElement {
   @state() chatQueueBySession: Record<string, ChatQueueItem[]> = {};
   @state() chatAttachments: ChatAttachment[] = [];
   @state() realtimeTalkActive = false;
+  @state() realtimeTalkMode: "audio" | "video" | null = null;
   @state() realtimeTalkStatus: RealtimeTalkStatus = "idle";
   @state() realtimeTalkDetail: string | null = null;
   @state() realtimeTalkTranscript: string | null = null;
   @state() realtimeTalkConversation: RealtimeTalkConversationEntry[] = [];
+  @state() realtimeTalkVideoStream: MediaStream | null = null;
   @state() realtimeTalkOptionsOpen = false;
   @state() realtimeTalkOptions = {
     provider: "",
@@ -1199,7 +1201,7 @@ export class OpenClawApp extends LitElement {
     };
   }
 
-  async toggleRealtimeTalk() {
+  async toggleRealtimeTalk(opts?: Pick<RealtimeTalkLaunchOptions, "videoEnabled" | "transport">) {
     if (this.realtimeTalkSession) {
       if (this.realtimeTalkStatus === "error") {
         this.realtimeTalkSession.stop();
@@ -1208,6 +1210,7 @@ export class OpenClawApp extends LitElement {
         this.realtimeTalkSession.stop();
         this.realtimeTalkSession = null;
         this.realtimeTalkActive = false;
+        this.realtimeTalkMode = null;
         this.realtimeTalkStatus = "idle";
         this.realtimeTalkDetail = null;
         this.realtimeTalkTranscript = null;
@@ -1221,6 +1224,7 @@ export class OpenClawApp extends LitElement {
       return;
     }
     this.realtimeTalkActive = true;
+    this.realtimeTalkMode = opts?.videoEnabled ? "video" : "audio";
     this.realtimeTalkStatus = "connecting";
     this.realtimeTalkDetail = null;
     this.realtimeTalkTranscript = null;
@@ -1234,6 +1238,9 @@ export class OpenClawApp extends LitElement {
           this.realtimeTalkDetail = detail ?? null;
           if (status === "idle" || status === "error") {
             this.realtimeTalkActive = status !== "idle";
+            if (status === "idle") {
+              this.realtimeTalkMode = null;
+            }
           }
           if (status === "error" && this.realtimeTalkDetail) {
             this.lastError = this.realtimeTalkDetail;
@@ -1248,8 +1255,11 @@ export class OpenClawApp extends LitElement {
           );
           this.realtimeTalkConversation = this.realtimeTalkConversationState.entries;
         },
+        onVideoStream: (stream) => {
+          this.realtimeTalkVideoStream = stream;
+        },
       },
-      this.buildRealtimeTalkLaunchOptions(),
+      { ...this.buildRealtimeTalkLaunchOptions(), ...opts },
     );
     this.realtimeTalkSession = session;
     try {
@@ -1260,6 +1270,7 @@ export class OpenClawApp extends LitElement {
         this.realtimeTalkSession = null;
       }
       this.realtimeTalkActive = false;
+      this.realtimeTalkMode = null;
       this.realtimeTalkStatus = "error";
       this.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
       this.lastError = this.realtimeTalkDetail;

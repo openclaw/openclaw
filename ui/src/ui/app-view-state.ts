@@ -5,7 +5,7 @@ import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
 import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-conversation.ts";
-import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
+import type { RealtimeTalkLaunchOptions, RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
@@ -147,10 +147,12 @@ export type AppViewState = {
   chatInputHistoryIndex: number;
   chatDraftBeforeHistory: string | null;
   realtimeTalkActive: boolean;
+  realtimeTalkMode: "audio" | "video" | null;
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
   realtimeTalkTranscript: string | null;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
+  realtimeTalkVideoStream: MediaStream | null;
   realtimeTalkOptionsOpen: boolean;
   realtimeTalkOptions: {
     provider: string;
@@ -532,7 +534,9 @@ export type AppViewState = {
     handleChatInputHistoryKey: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
     resetChatInputHistoryNavigation: () => void;
     handleSendChat: (messageOverride?: string, opts?: ChatSendOptions) => Promise<void>;
-    toggleRealtimeTalk: () => Promise<void>;
+    toggleRealtimeTalk: (
+      opts?: Pick<RealtimeTalkLaunchOptions, "videoEnabled" | "transport">,
+    ) => Promise<void>;
     steerQueuedChatMessage: (id: string) => Promise<void>;
     handleAbortChat: (opts?: ChatAbortOptions) => Promise<void>;
     removeQueuedMessage: (id: string) => void;

@@ -981,6 +981,33 @@
   opacity: 0.7;
 }
 
+.agent-chat__talk-video-pip-source {
+  position: fixed;
+  bottom: 80px;
+  right: 16px;
+  width: 160px;
+  height: 120px;
+  border-radius: var(--radius-md);
+  object-fit: cover;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--border);
+  cursor: grab;
+  z-index: 1000;
+  touch-action: none;
+  user-select: none;
+}
+
+.agent-chat__talk-video-pip-source:active {
+  cursor: grabbing;
+}
+
+.agent-chat__talk-status-text {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .agent-chat__talk-options {
   display: flex;
   align-items: flex-start;

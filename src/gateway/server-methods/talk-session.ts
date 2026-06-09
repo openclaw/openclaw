@@ -20,6 +20,7 @@ import {
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
+import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL } from "../../talk/describe-view-tool.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
 import type { TalkBrain, TalkMode, TalkTransport } from "../../talk/talk-events.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
@@ -325,7 +326,11 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           provider: resolution.provider,
           providerConfig: withRealtimeBrowserOverrides(resolution.providerConfig, launchOptions),
           instructions: buildRealtimeInstructions(realtimeConfig.instructions),
-          tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL, REALTIME_VOICE_AGENT_CONTROL_TOOL],
+          tools: [
+            REALTIME_VOICE_AGENT_CONSULT_TOOL,
+            REALTIME_VOICE_AGENT_CONTROL_TOOL,
+            REALTIME_VOICE_DESCRIBE_VIEW_TOOL,
+          ],
           model: launchOptions.model,
           sessionKey: normalizeOptionalString(params.sessionKey),
           voice: launchOptions.voice,

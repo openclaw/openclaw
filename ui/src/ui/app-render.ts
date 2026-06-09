@@ -3510,10 +3510,12 @@ export function renderApp(state: AppViewState) {
                   draft: state.chatMessage,
                   queue: state.chatQueue,
                   realtimeTalkActive: state.realtimeTalkActive,
+                  realtimeTalkMode: state.realtimeTalkMode,
                   realtimeTalkStatus: state.realtimeTalkStatus,
                   realtimeTalkDetail: state.realtimeTalkDetail,
                   realtimeTalkTranscript: state.realtimeTalkTranscript,
                   realtimeTalkConversation: state.realtimeTalkConversation,
+                  realtimeTalkVideoStream: state.realtimeTalkVideoStream,
                   realtimeTalkOptionsOpen: state.realtimeTalkOptionsOpen,
                   realtimeTalkOptions: state.realtimeTalkOptions,
                   connected: state.connected,
@@ -3560,6 +3562,8 @@ export function renderApp(state: AppViewState) {
                     });
                   },
                   onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
+                  onToggleRealtimeTalkWithVideo: () =>
+                    void state.toggleRealtimeTalk({ videoEnabled: true }),
                   onToggleRealtimeTalkOptions: () => {
                     state.realtimeTalkOptionsOpen = !state.realtimeTalkOptionsOpen;
                   },
