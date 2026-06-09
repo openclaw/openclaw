@@ -123,7 +123,7 @@ function registerStatusCodexHarness(): void {
 function saveStatusTestAuthProfile(params: {
   dir: string;
   profileId: string;
-  provider: "openai" | "anthropic";
+  provider: "openai" | "openai-codex" | "anthropic";
 }): void {
   saveStatusTestAuthProfiles({
     dir: params.dir,
@@ -133,7 +133,7 @@ function saveStatusTestAuthProfile(params: {
 
 function saveStatusTestAuthProfiles(params: {
   dir: string;
-  profiles: Array<{ profileId: string; provider: "openai" | "anthropic" }>;
+  profiles: Array<{ profileId: string; provider: "openai" | "openai-codex" | "anthropic" }>;
 }): void {
   const agentDir = path.join(params.dir, ".openclaw", "agents", "main", "agent");
   fs.mkdirSync(agentDir, { recursive: true });
@@ -143,10 +143,10 @@ function saveStatusTestAuthProfiles(params: {
       profiles: Object.fromEntries(
         params.profiles.map((profile) => [
           profile.profileId,
-          profile.provider === "openai"
+          profile.provider === "openai" || profile.provider === "openai-codex"
             ? {
                 type: "oauth",
-                provider: "openai",
+                provider: profile.provider,
                 access: "access-token",
                 refresh: "refresh-token",
                 expires: Date.now() + 60 * 60_000,
@@ -926,6 +926,8 @@ describe("buildStatusReply subagent summary", () => {
         resolveDefaultThinkingLevel: async () => undefined,
         isGroup: false,
         defaultGroupActivation: () => "mention",
+        modelAuthOverride: "oauth",
+        activeModelAuthOverride: "oauth",
       });
 
       const normalized = normalizeTestText(text);
@@ -953,6 +955,69 @@ describe("buildStatusReply subagent summary", () => {
           }),
         }),
       });
+    });
+  });
+
+  it("forwards legacy Codex profile providers to Codex synthetic usage", async () => {
+    registerStatusCodexHarness();
+    providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: Date.now(),
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "5h", usedPercent: 9 }],
+        },
+      ],
+    });
+
+    await withTempHome(async (dir) => {
+      saveStatusTestAuthProfile({
+        dir,
+        profileId: "openai-codex:legacy",
+        provider: "openai-codex",
+      });
+
+      await buildStatusText({
+        cfg: {
+          ...baseCfg,
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+        sessionEntry: {
+          sessionId: "sess-status-codex-legacy-profile",
+          updatedAt: 0,
+          authProfileOverride: "openai-codex:legacy",
+        },
+        sessionKey: "agent:main:main",
+        parentSessionKey: "agent:main:main",
+        sessionScope: "per-sender",
+        statusChannel: "mobilechat",
+        provider: "openai",
+        model: "gpt-5.5",
+        contextTokens: 32_000,
+        resolvedFastMode: false,
+        resolvedVerboseLevel: "off",
+        resolvedReasoningLevel: "off",
+        resolveDefaultThinkingLevel: async () => undefined,
+        isGroup: false,
+        defaultGroupActivation: () => "mention",
+        modelAuthOverride: "oauth",
+        activeModelAuthOverride: "oauth",
+      });
+
+      const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+        ([params]) => params?.providers?.includes("openai"),
+      );
+      expect(providerUsageCall?.[0]?.auth).toEqual([
+        {
+          ...expectedCodexRuntimeUsageAuth[0],
+          authProfileId: "openai-codex:legacy",
+        },
+      ]);
     });
   });
 

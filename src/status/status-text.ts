@@ -168,7 +168,11 @@ function resolveCodexSyntheticUsageAuthProfileId(params: {
     if (!credential) {
       return undefined;
     }
-    return resolveProviderIdForAuth(credential.provider, { config: params.cfg }) === "openai"
+    const credentialProvider = normalizeOptionalLowercaseString(credential.provider);
+    const resolvedProvider = resolveProviderIdForAuth(credential.provider, { config: params.cfg });
+    return resolvedProvider === "openai" ||
+      credentialProvider === "openai-codex" ||
+      credentialProvider === "codex-cli"
       ? normalizedProfileId
       : undefined;
   } catch {
