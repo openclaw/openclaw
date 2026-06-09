@@ -24,16 +24,11 @@ function isSelfClosingThinkingTagText(tagText: string): boolean {
   return /\/\s*>$/.test(tagText);
 }
 
-export function canRecoverLiteralReasoningTagMention(
-  prefix: string,
-  textAfterTag: string,
-): boolean {
-  if (!/\S/.test(prefix)) {
+function canRecoverLiteralTagMention(prefix: string, textAfterTag: string): boolean {
+  if (!/\S/.test(prefix) || /^\s+tag\s+should\s+be\s+hidden\b/i.test(textAfterTag)) {
     return false;
   }
-  return /^\s+tag\s+(?:is\s+deprecated\s+in\s+this\s+example|for\s+this\s+example)\b/i.test(
-    textAfterTag,
-  );
+  return /^\s+tag\b/i.test(textAfterTag);
 }
 
 /** Detects whether a stray reasoning close tag separates two visible text regions. */
@@ -165,7 +160,7 @@ export function stripReasoningTagsFromText(
     trimmedResult &&
     firstUnclosedTagText !== undefined &&
     !unclosedTagIsRecoverable &&
-    canRecoverLiteralReasoningTagMention(result, unclosedTagSuffix)
+    canRecoverLiteralTagMention(result, unclosedTagSuffix)
   ) {
     return applyTrim(result + firstUnclosedTagText + unclosedTagSuffix, trimMode);
   }

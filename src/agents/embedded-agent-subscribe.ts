@@ -15,10 +15,7 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { findFinalTagMatches } from "../shared/text/final-tags.js";
-import {
-  canRecoverLiteralReasoningTagMention,
-  hasOrphanReasoningCloseBoundary,
-} from "../shared/text/reasoning-tags.js";
+import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
@@ -789,9 +786,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     let lastIndex = 0;
     let lastCodeIndex = 0;
     let inThinking = stateLocal.thinking;
-    let literalReasoningPrefix: string | undefined;
-    let literalReasoningTagText: string | undefined;
-    let literalReasoningSuffixIndex: number | undefined;
     // Hidden reasoning has its own code state: malformed hidden fences must not
     // mark later visible text as code, but literal close tags there stay hidden.
     let hiddenInlineState: InlineCodeState = stateLocal.reasoningInlineCode
@@ -861,20 +855,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         if (isSelfClosing) {
           continue;
         }
-        if (/^<\s*(?:antml:)?reasoning(?=\s|\/|>)/i.test(match[0])) {
-          literalReasoningPrefix = processed;
-          literalReasoningTagText = match[0];
-          literalReasoningSuffixIndex = lastIndex;
-        }
         hiddenInlineState = createInlineCodeState();
         hiddenFenceState = undefined;
         hiddenPendingFenceFragment = undefined;
       }
       inThinking = !isClose;
       if (!inThinking) {
-        literalReasoningPrefix = undefined;
-        literalReasoningTagText = undefined;
-        literalReasoningSuffixIndex = undefined;
         hiddenInlineState = createInlineCodeState();
         hiddenFenceState = undefined;
         hiddenPendingFenceFragment = undefined;
@@ -883,22 +869,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
     if (inThinking) {
       advanceHiddenCodeState(scanText.slice(lastCodeIndex));
-      const literalReasoningSuffix =
-        literalReasoningSuffixIndex === undefined
-          ? ""
-          : scanText.slice(literalReasoningSuffixIndex);
-      if (
-        literalReasoningPrefix !== undefined &&
-        literalReasoningTagText !== undefined &&
-        canRecoverLiteralReasoningTagMention(literalReasoningPrefix, literalReasoningSuffix)
-      ) {
-        processed = literalReasoningPrefix + literalReasoningTagText + literalReasoningSuffix;
-        lastIndex = scanText.length;
-        inThinking = false;
-        hiddenInlineState = createInlineCodeState();
-        hiddenFenceState = undefined;
-        hiddenPendingFenceFragment = undefined;
-      }
     }
     if (!inThinking) {
       processed += scanText.slice(lastIndex);

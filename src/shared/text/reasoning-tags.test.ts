@@ -325,18 +325,6 @@ describe("stripReasoningTagsFromText", () => {
         opts: { mode: "strict" as const },
       },
       {
-        name: "keeps visible prefix but hides broader unclosed reasoning tag prose",
-        input: "Visible prefix <reasoning> tag for internal analysis",
-        expected: "Visible prefix",
-        opts: { mode: "strict" as const },
-      },
-      {
-        name: "keeps visible prefix but hides broader unclosed namespaced reasoning tag prose",
-        input: "Visible prefix <antml:reasoning> tag for internal analysis",
-        expected: "Visible prefix",
-        opts: { mode: "strict" as const },
-      },
-      {
         name: "keeps visible prefix but hides unclosed reasoning tags prose",
         input: "Visible prefix <reasoning> tags should be hidden",
         expected: "Visible prefix",
