@@ -9941,6 +9941,19 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     maxTokens: 32_000,
   } satisfies Model<"openai-completions">;
 
+  const gemma4Model = {
+    id: "google/gemma-4-12b",
+    name: "Gemma 4 12B",
+    api: "openai-completions",
+    provider: "vllm",
+    baseUrl: "https://proxy.example.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 262_144,
+    maxTokens: 32_000,
+  } satisfies Model<"openai-completions">;
+
   const kimiCodingProxyModel = {
     ...customKimiProxyModel,
     id: "kimi-for-coding",
@@ -10114,6 +10127,17 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
   it("preserves reasoning_content replay for custom reasoning model metadata", () => {
     const assistant = getAssistantMessage(
       buildReplayParams(customQwenReasoningModel, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for Gemma 4 openai-completions models", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(gemma4Model, "reasoning_content"),
     );
 
     expect(assistant.reasoning_content).toBe("Need to answer politely.");

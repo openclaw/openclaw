@@ -1,7 +1,6 @@
 // Provides shared replay-policy helpers for provider plugins.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../agents/runtime/index.js";
-import { isGemma4ModelId } from "../shared/google-models.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../shared/google-turn-ordering.js";
 import type {
   ProviderReasoningOutputMode,
@@ -52,8 +51,7 @@ export function buildOpenAICompatibleReplayPolicy(
           validateGeminiTurns: false,
           validateAnthropicTurns: false,
         }),
-    ...(modelApi === "openai-completions" &&
-    (dropReasoningFromHistory || isGemma4ModelId(options.modelId))
+    ...(modelApi === "openai-completions" && dropReasoningFromHistory
       ? { dropReasoningFromHistory: true }
       : {}),
   };

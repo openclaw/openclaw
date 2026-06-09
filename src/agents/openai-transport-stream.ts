@@ -35,7 +35,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../shared/azure-openai-responses-client-compat.js";
-import { isGemma4ModelId } from "../shared/google-models.js";
 import {
   isResponsesTextContentPartType,
   isResponsesTextDeltaEventType,
@@ -4015,7 +4014,7 @@ function shouldPreserveOpenRouterReasoningReplay(model: OpenAIModeModel): boolea
 }
 
 function shouldTrustReasoningContentReplayMetadata(model: OpenAIModeModel): boolean {
-  if (!model.reasoning || isGemma4ModelId(model.id)) {
+  if (!model.reasoning) {
     return false;
   }
   const provider = model.provider.trim().toLowerCase();
