@@ -80,4 +80,19 @@ describe("AgentParamsSchema", () => {
 
     expect(Value.Check(AgentParamsSchema, params)).toBe(false);
   });
+
+  it("accepts an opaque clientContext bag", () => {
+    const params = {
+      message: "run",
+      sessionKey: "agent:main:example",
+      idempotencyKey: "run-1",
+      clientContext: {
+        schemaVersion: "example.context.v1",
+        agentId: "Conductor",
+        nested: { runId: "abc", issueId: "ISSUE-8" },
+      },
+    };
+
+    expect(Value.Check(AgentParamsSchema, params)).toBe(true);
+  });
 });

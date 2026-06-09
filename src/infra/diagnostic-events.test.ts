@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
   emitInternalDiagnosticEvent,
+  emitInternalDiagnosticEventWithPrivateData,
   emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
   emitTrustedSecurityEvent,
@@ -12,6 +13,7 @@ import {
   isDiagnosticsEnabled,
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
+  onTrustedDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
@@ -840,6 +842,68 @@ describe("diagnostic-events", () => {
         systemPrompt: "secret system",
       },
     });
+  });
+
+  it("onTrustedDiagnosticEvent delivers lifecycle privateData while public listeners stay clean", () => {
+    const publicEvents: DiagnosticEventPayload[] = [];
+    const trusted: Array<{ type: string; clientContext: unknown }> = [];
+    onDiagnosticEvent((event) => {
+      publicEvents.push(event);
+    });
+    onTrustedDiagnosticEvent((event, privateData) => {
+      trusted.push({
+        type: event.type,
+        clientContext: (privateData as { clientContext?: unknown }).clientContext,
+      });
+    });
+
+    const clientContext = { schemaVersion: "agentweave.context.v1", agentId: "Conductor" };
+    // Seeded run: the lifecycle event stays public, the bag rides privateData.
+    emitInternalDiagnosticEventWithPrivateData(
+      { type: "session.state", sessionKey: "k", sessionId: "s1", state: "processing" },
+      { clientContext },
+    );
+    emitInternalDiagnosticEventWithPrivateData(
+      { type: "message.queued", sessionId: "s1", source: "dispatch" },
+      { clientContext },
+    );
+
+    // The public payload never carries the bag (privacy/cardinality contract).
+    expect(JSON.stringify(publicEvents)).not.toContain("Conductor");
+    expect(publicEvents.map((e) => e.type)).toEqual(["session.state", "message.queued"]);
+    for (const event of publicEvents) {
+      expect((event as Record<string, unknown>).clientContext).toBeUndefined();
+    }
+    // The trusted listener receives it on both lifecycle events.
+    expect(trusted).toEqual([
+      { type: "session.state", clientContext },
+      { type: "message.queued", clientContext },
+    ]);
+  });
+
+  it("onTrustedDiagnosticEvent ignores events outside the lifecycle allowlist", async () => {
+    const seen: string[] = [];
+    onTrustedDiagnosticEvent((event) => {
+      seen.push(event.type);
+    });
+
+    // Trusted model content-capture also rides privateData, but on a non-lifecycle
+    // event type — the allowlist drops it here.
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.started",
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.5",
+      },
+      { modelContent: { inputMessages: ["secret"] } },
+    );
+    // An unseeded lifecycle event (no privateData) still lands, with empty privateData.
+    emitInternalDiagnosticEvent({ type: "session.state", sessionKey: "k", state: "idle" });
+
+    await waitForDiagnosticEventsDrained();
+    expect(seen).toEqual(["session.state"]);
   });
 
   it("skips event enrichment and subscribers when diagnostics are disabled", () => {

@@ -182,6 +182,14 @@ export const PollParamsSchema = Type.Object(
 );
 
 /** Main agent-run request accepted by the gateway. */
+/**
+ * Opaque object a gateway client may attach to a run. The gateway forwards it
+ * verbatim onto diagnostic events for plugins to interpret and never reads its
+ * contents, so it stays a permissive string-keyed record at the wire boundary;
+ * the runtime normalizer enforces size/depth/key bounds.
+ */
+export const ClientContextSchema = Type.Record(Type.String(), Type.Unknown());
+
 export const AgentParamsSchema = Type.Object(
   {
     message: NonEmptyString,
@@ -234,6 +242,11 @@ export const AgentParamsSchema = Type.Object(
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
+    // Opaque, caller-supplied context bag forwarded verbatim onto diagnostic
+    // events for plugins to interpret (the gateway never inspects its
+    // contents). Size/depth/key bounds are enforced by the runtime normalizer,
+    // not the wire schema, so this stays permissive.
+    clientContext: Type.Optional(ClientContextSchema),
   },
   { additionalProperties: false },
 );
