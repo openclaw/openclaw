@@ -209,4 +209,21 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     );
     expect(tokenLogs).toHaveLength(0);
   });
+
+  it("strips whitespace from URLs with internal spaces (#91651)", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Cleaned\n\nURL works."));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createWebFetchTool(baseToolConfig);
+    // LLM generates URLs with accidental space after protocol: "https:// docs.example.com"
+    const result = await tool?.execute?.("call", {
+      url: "https:// docs.example.com/page",
+    });
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    const fetchArg = fetchSpy.mock.calls[0][0] as RequestInfo | URL;
+    const urlStr = typeof fetchArg === "string" ? fetchArg : fetchArg.toString();
+    expect(urlStr).toMatch(/^https:\/\/docs\.example\.com\/page/);
+    expect(result).toBeDefined();
+  });
 });

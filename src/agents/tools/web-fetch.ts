@@ -438,8 +438,9 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   }
 
   let parsedUrl: URL;
+  const cleanedUrl = params.url.replace(/\s+/g, "");
   try {
-    parsedUrl = new URL(params.url);
+    parsedUrl = new URL(cleanedUrl);
   } catch {
     throw new Error("Invalid URL: must be http or https");
   }
@@ -450,11 +451,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   const start = Date.now();
   let res: Response;
   let release: (() => Promise<void>) | null;
-  let finalUrl = params.url;
+  let finalUrl = cleanedUrl;
   try {
     const fetchWithWebToolsNetworkGuard = await loadWebGuardedFetch();
     const result = await fetchWithWebToolsNetworkGuard({
-      url: params.url,
+      url: cleanedUrl,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       signal: params.signal,
@@ -506,7 +507,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       }
       const payload = await maybeFetchProviderWebFetchPayload({
         ...params,
-        urlToFetch: params.url,
+        urlToFetch: cleanedUrl,
         cacheKey,
         tookMs: Date.now() - start,
       });
@@ -614,7 +615,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     const wrappedTitle = title ? wrapWebFetchField(title) : undefined;
     const wrappedWarning = wrapWebFetchField(responseTruncatedWarning);
     const payload = {
-      url: params.url, // Keep raw for tool chaining
+      url: cleanedUrl,
       finalUrl, // Keep raw
       status: res.status,
       contentType: normalizedContentType, // Protocol metadata, don't wrap
