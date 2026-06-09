@@ -49,7 +49,7 @@ The proxy:
 
 <Steps>
   <Step title="Install the proxy">
-    Requires Node.js 20+ and Claude Code CLI.
+    Requires Node.js 22+ and Claude Code CLI.
 
     ```bash
     npm install -g claude-max-api-proxy

@@ -45,7 +45,7 @@ import {
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
 import {
-  ensureSessionStateMigratedForCommand,
+  ensureExplicitSessionStoreMigratedForCommand,
   loadExplicitSessionStorePreviewForCommand,
 } from "./session-state-migration.js";
 import {
@@ -79,6 +79,38 @@ function formatTaskTimestamp(value: number | undefined): string {
 
 async function loadTaskCancelConfig() {
   return getRuntimeConfig();
+}
+
+type GatewayTaskCancelSummary = {
+  id?: string;
+  taskId?: string;
+  runtime?: string;
+  runId?: string;
+};
+
+type GatewayTaskCancelResult = {
+  found?: boolean;
+  cancelled?: boolean;
+  reason?: string;
+  task?: GatewayTaskCancelSummary;
+};
+
+async function tryCancelCronTaskViaGateway(
+  task: TaskRecord,
+): Promise<GatewayTaskCancelResult | null> {
+  if (task.runtime !== "cron") {
+    return null;
+  }
+  try {
+    const { callGateway } = await import("../gateway/call.js");
+    return await callGateway<GatewayTaskCancelResult>({
+      method: "tasks.cancel",
+      params: { taskId: task.taskId },
+      timeoutMs: 5_000,
+    });
+  } catch {
+    return null;
+  }
 }
 
 function configureTaskMaintenanceFromConfig(): void {
@@ -151,12 +183,12 @@ async function runSessionRegistryMaintenance(params: {
   apply: boolean;
 }): Promise<SessionRegistryMaintenanceSummary> {
   const cfg = getRuntimeConfig();
-  if (params.apply) {
-    await ensureSessionStateMigratedForCommand(cfg);
-  }
   const runningCronJobIds = readRunningCronJobIds();
   const stores: SessionRegistryMaintenanceStoreSummary[] = [];
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
+    if (params.apply) {
+      await ensureExplicitSessionStoreMigratedForCommand(target.storePath);
+    }
     const beforeStore = params.apply
       ? loadSessionStore(target.storePath, { skipCache: true })
       : loadExplicitSessionStorePreviewForCommand(target.storePath);
@@ -493,6 +525,24 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
   if (!task) {
     runtime.error(formatTaskLookupMiss(opts.lookup));
     runtime.exit(1);
+    return;
+  }
+  const gatewayResult = await tryCancelCronTaskViaGateway(task);
+  if (gatewayResult) {
+    if (!gatewayResult.found) {
+      runtime.error(gatewayResult.reason ?? formatTaskLookupMiss(opts.lookup));
+      runtime.exit(1);
+      return;
+    }
+    if (!gatewayResult.cancelled) {
+      runtime.error(gatewayResult.reason ?? `Could not cancel task: ${opts.lookup}`);
+      runtime.exit(1);
+      return;
+    }
+    const updated = gatewayResult.task;
+    runtime.log(
+      `Cancelled ${updated?.taskId ?? updated?.id ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
+    );
     return;
   }
   const result = await cancelDetachedTaskRunById({

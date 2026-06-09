@@ -215,6 +215,14 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toEqual(["src/utils/provider-utils.test.ts"]);
   });
 
+  it("skips deleted direct test files in changed mode", () => {
+    expect(
+      resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
+        "test/deleted-changed-target.test.ts",
+      ]),
+    ).toStrictEqual([]);
+  });
+
   it("records broad fallback paths skipped by focused changed mode", () => {
     expect(
       resolveChangedTestTargetPlan([

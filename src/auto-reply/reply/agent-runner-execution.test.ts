@@ -4589,7 +4589,7 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("delivers compaction hook messages without duplicating notifyUser notices", async () => {
+  it("delivers compaction hook messages alongside notifyUser notices (#90185)", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({
@@ -4639,7 +4639,7 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
+    expect(onBlockReply).toHaveBeenCalledTimes(4);
     expectBlockReplyCall(onBlockReply, 0, {
       text: "Hook before",
       replyToId: "msg",
@@ -4647,7 +4647,19 @@ describe("runAgentTurnWithFallback", () => {
       isCompactionNotice: true,
     });
     expectBlockReplyCall(onBlockReply, 1, {
+      text: "🧹 Compacting context...",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onBlockReply, 2, {
       text: "Hook after",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onBlockReply, 3, {
+      text: "🧹 Compaction complete",
       replyToId: "msg",
       replyToCurrent: true,
       isCompactionNotice: true,
@@ -4771,6 +4783,69 @@ describe("runAgentTurnWithFallback", () => {
     });
     expectBlockReplyCall(onBlockReply, 1, {
       text: "🧹 Compaction incomplete",
+      isCompactionNotice: true,
+    });
+  });
+
+  it("uses the compaction notice fallback when no block-reply dispatcher is wired", async () => {
+    const onCompactionNoticePayload = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", completed: true },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          compaction: {
+            notifyUser: true,
+          },
+        },
+      },
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+      onCompactionNoticePayload,
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onCompactionNoticePayload).toHaveBeenCalledTimes(2);
+    expectBlockReplyCall(onCompactionNoticePayload, 0, {
+      text: "🧹 Compacting context...",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onCompactionNoticePayload, 1, {
+      text: "🧹 Compaction complete",
+      replyToId: "msg",
+      replyToCurrent: true,
       isCompactionNotice: true,
     });
   });

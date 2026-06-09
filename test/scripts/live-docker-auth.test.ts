@@ -84,6 +84,57 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     ]);
   });
 
+  it("caps default CPU limits to the runner capacity", () => {
+    const binDir = makeTempBin("openclaw-live-docker-auth-cpus-");
+    writeExecutable(
+      path.join(binDir, "timeout"),
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "--kill-after=1s" ] && [ "$2" = "1s" ] && [ "$3" = "true" ]; then',
+        "  exit 0",
+        "fi",
+        "exit 64",
+        "",
+      ].join("\n"),
+    );
+
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        [
+          "source scripts/lib/live-docker-auth.sh",
+          "ARGS=()",
+          "OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS=8 openclaw_live_init_docker_run_args ARGS 42s",
+          "printf '%s\\n' \"${ARGS[@]}\"",
+        ].join("\n"),
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: binDir,
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trimEnd().split("\n")).toEqual([
+      "timeout",
+      "--kill-after=30s",
+      "42s",
+      "docker",
+      "run",
+      "--memory",
+      "8g",
+      "--cpus",
+      "8",
+      "--pids-limit",
+      "2048",
+    ]);
+  });
+
   it("falls back to plain timeout when kill-after is unavailable", () => {
     const binDir = makeTempBin("openclaw-live-docker-auth-plain-");
     writeExecutable(

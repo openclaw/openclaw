@@ -14,6 +14,7 @@ import {
 import {
   deliverInboundReplyWithMessageSendContext,
   createChannelMessageReplyPipeline,
+  resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
@@ -92,6 +93,7 @@ import {
 } from "./inbound-dedupe.js";
 import {
   buildIMessageInboundContext,
+  rememberIMessageSkippedFromMeForSelfChatDedupe,
   resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
@@ -727,14 +729,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
   }
 
-  async function handleMessageNowInner(rawMessage: IMessagePayload) {
-    const message = await repairMessageConversationAnchor(rawMessage);
-    if (!message) {
-      return;
-    }
-
+  function resolveIMessageInboundBodyText(message: IMessagePayload) {
     const messageText = (message.text ?? "").trim();
-
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
     const validAttachments = attachments.filter((entry) => {
@@ -768,7 +764,28 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       : validAttachments.length
         ? "<media:attachment>"
         : "";
-    const bodyText = messageText || placeholder;
+    return {
+      messageText,
+      bodyText: messageText || placeholder,
+      validAttachments,
+      rawMediaAttachments,
+      effectiveAttachmentRoots,
+    };
+  }
+
+  async function handleMessageNowInner(rawMessage: IMessagePayload) {
+    const message = await repairMessageConversationAnchor(rawMessage);
+    if (!message) {
+      return;
+    }
+
+    const {
+      messageText,
+      bodyText,
+      validAttachments,
+      rawMediaAttachments,
+      effectiveAttachmentRoots,
+    } = resolveIMessageInboundBodyText(message);
 
     // Approval reaction shortcut: if the inbound tapback resolves a pending
     // approval prompt, route it through the gateway and skip the normal
@@ -1132,6 +1149,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           },
         } as const)
       : {};
+    const configuredBlockStreaming = resolveChannelStreamingBlockEnabled(accountInfo.config);
     const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
       route: decision.route,
       sessionKey: decision.route.sessionKey,
@@ -1205,8 +1223,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                 replyOptions: {
                   ...typingReplyOptions,
                   disableBlockStreaming:
-                    typeof accountInfo.config.blockStreaming === "boolean"
-                      ? !accountInfo.config.blockStreaming
+                    typeof configuredBlockStreaming === "boolean"
+                      ? !configuredBlockStreaming
                       : undefined,
                   onModelSelected,
                   ...directToolTypingOptions,
@@ -1496,6 +1514,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         config: catchupCfg,
         includeAttachments,
         dispatchPayload: (message) => handleMessageNow(message, { advanceCatchupCursor: false }),
+        observeSkippedFromMePayload: (message) => {
+          const { bodyText } = resolveIMessageInboundBodyText(message);
+          rememberIMessageSkippedFromMeForSelfChatDedupe({
+            accountId: accountInfo.accountId,
+            message,
+            bodyText,
+            selfChatCache,
+          });
+        },
         runtime,
       });
       liveCatchupCursorAdvanceEnabled =
