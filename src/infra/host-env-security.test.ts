@@ -378,9 +378,9 @@ describe("sanitizeHostExecEnv", () => {
   });
 
   it("blocks PATH and dangerous override values", () => {
-    // nosemgrep: ghsa-7ggg-pvrf-458v.openclaw-host-exec-python-index-override, ghsa-j425-whc4-4jgc.openclaw-dangerous-host-env-override-pivots
     // Regression fixture intentionally feeds blocked override pivots into the sanitizer.
     const env = sanitizeHostExecEnv({
+      // nosemgrep: ghsa-7ggg-pvrf-458v.openclaw-host-exec-python-index-override, ghsa-j425-whc4-4jgc.openclaw-dangerous-host-env-override-pivots
       baseEnv: {
         PATH: "/usr/bin:/bin",
         HOME: "/tmp/trusted-home",
@@ -977,9 +977,9 @@ describe("isDangerousHostEnvOverrideVarName", () => {
 
 describe("sanitizeHostExecEnvWithDiagnostics", () => {
   it("reports blocked and invalid requested overrides", () => {
-    // nosemgrep: ghsa-7ggg-pvrf-458v.openclaw-host-exec-python-index-override, ghsa-j425-whc4-4jgc.openclaw-dangerous-host-env-override-pivots
     // Diagnostics coverage needs the denied keys present at the sanitizer boundary.
     const result = sanitizeHostExecEnvWithDiagnostics({
+      // nosemgrep: ghsa-7ggg-pvrf-458v.openclaw-host-exec-python-index-override, ghsa-j425-whc4-4jgc.openclaw-dangerous-host-env-override-pivots
       baseEnv: {
         PATH: "/usr/bin:/bin",
       },
@@ -1638,9 +1638,9 @@ describe("git env exploit regression", () => {
     expect(fs.existsSync(marker)).toBe(true);
     clearMarker(marker);
 
-    // nosemgrep: ghsa-j425-whc4-4jgc.openclaw-dangerous-host-env-override-pivots
     // Exploit regression proves the sanitizer removes the Git command pivot before spawn.
     const safeEnv = sanitizeHostExecEnv({
+      // nosemgrep: ghsa-j425-whc4-4jgc.openclaw-dangerous-host-env-override-pivots
       baseEnv,
       overrides: {
         GIT_SSH_COMMAND: exploitValue,
@@ -1693,9 +1693,9 @@ describe("compiler override exploit regression", () => {
       expect(fs.existsSync(marker)).toBe(true);
       clearMarker(marker);
 
-      // nosemgrep: ghsa-j425-whc4-4jgc.openclaw-dangerous-host-env-override-pivots
       // Exploit regression proves compiler override pivots are blocked before make runs.
       const safeEnv = sanitizeHostExecEnv({
+        // nosemgrep: ghsa-j425-whc4-4jgc.openclaw-dangerous-host-env-override-pivots
         baseEnv,
         overrides: {
           CC: exploitPath,
@@ -1744,9 +1744,9 @@ describe("make env exploit regression", () => {
       const baselineTriggered = fs.existsSync(marker);
       clearMarker(marker);
 
-      // nosemgrep: ghsa-j425-whc4-4jgc.openclaw-dangerous-host-env-override-pivots
       // Exploit regression proves make flag pivots are blocked before child execution.
       const safeEnv = sanitizeHostExecEnv({
+        // nosemgrep: ghsa-j425-whc4-4jgc.openclaw-dangerous-host-env-override-pivots
         baseEnv,
         overrides: {
           MAKEFLAGS: exploitValue,
