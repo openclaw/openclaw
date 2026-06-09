@@ -90,7 +90,7 @@ export function recoveryOutcomeMutatesSessionState(
   return (
     outcome.status === "aborted" ||
     outcome.status === "released" ||
-    outcome.status === "failed" ||
+    (outcome.status === "failed" && outcome.action === "none") ||
     (outcome.status === "noop" && outcome.reason === "no_active_work")
   );
 }
@@ -101,6 +101,7 @@ export function recoveryOutcomeClearsQueuedSessionState(
   return (
     outcome.status === "released" ||
     (outcome.status === "aborted" && outcome.released > 0 && (outcome.queuedCount ?? 0) === 0) ||
+    (outcome.status === "failed" && outcome.action === "none") ||
     (outcome.status === "noop" && outcome.reason === "no_active_work")
   );
 }
