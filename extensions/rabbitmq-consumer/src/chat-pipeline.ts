@@ -7,8 +7,9 @@ import type { ReportTaskPublisher } from "./report-task-publisher.js";
 import type { ReportTemplateLookup } from "./report-template-lookup.js";
 import { computeDateScope, detectReportRequest, type ReportPeriod } from "./report-trigger.js";
 import { ToolActivityNarrator } from "./tool-activity.js";
+import { pickTopicByLlm } from "./topic-llm-picker.js";
 import { pickTopicByName } from "./topic-match.js";
-import type { TopicResolver } from "./topic-resolver.js";
+import type { TopicInfo, TopicResolver } from "./topic-resolver.js";
 import type { ChatMessage, MercureConfig } from "./types.js";
 
 /**
@@ -28,22 +29,66 @@ function extractAssistantDelta(data: Record<string, unknown>): string {
 }
 
 /**
+ * Pick the requirement-named topic from the user's authorized set, preferring
+ * the LLM classifier and falling back to deterministic substring matching.
+ *
+ * The LLM understands intent the substring matcher can't — abbreviations like
+ * "深圳农行" -> "农业银行深圳市分行", and it ignores generic domain words
+ * ("舆情/日报") that used to cause spurious matches. When the model is
+ * unavailable, times out, is unsure, or picks an out-of-set id, pickTopicByLlm
+ * returns null and we fall back to pickTopicByName. Both are bounded to the
+ * authorized set, so neither can reach a project the user does not own.
+ */
+async function matchRequirementTopic(
+  requirement: string,
+  topics: TopicInfo[],
+  logger: PluginLogger,
+  userId: string,
+  runtime?: PluginRuntime,
+  token?: string | number,
+): Promise<TopicInfo | null> {
+  if (runtime && token !== undefined) {
+    const llmMatch = await pickTopicByLlm({
+      requirement,
+      topics,
+      subagent: runtime.subagent,
+      userId,
+      token,
+      logger,
+    });
+    if (llmMatch) {
+      logger.info(
+        `[CHAT_PIPELINE] LLM matched topic ${JSON.stringify(llmMatch.topicName)} ` +
+          `(#${llmMatch.topicId}) for userId=${userId}`,
+      );
+      return llmMatch;
+    }
+  }
+  return pickTopicByName(requirement, topics);
+}
+
+/**
  * Resolve the user's report topic (entity_auth: uid -> masterId/slaveId).
  * Shared by the explicit-template and keyword report paths so both agree on
  * which feed_topic the report covers. Returns zeros when no resolver/mapping.
  *
- * When the requirement names a project ("...南方基金..."), the best title match
- * WITHIN the user's authorized topics wins over the default primary topic — so
- * a multi-project user gets the report they asked for, not just their most
+ * When the requirement names a project ("...南方基金..."), the best match WITHIN
+ * the user's authorized topics wins over the default primary topic — so a
+ * multi-project user gets the report they asked for, not just their most
  * recently granted one. Matching is bounded to the authorized set, never the
  * whole feed_topic table, so it can't be used to reach an unowned project.
  */
-async function resolveReportTopic(
-  userId: string,
-  topicResolver: TopicResolver | undefined,
-  logger: PluginLogger,
-  requirement?: string,
-): Promise<{ topicId: number; useSlaveTopic: boolean; masterId: number }> {
+async function resolveReportTopic(args: {
+  userId: string;
+  topicResolver: TopicResolver | undefined;
+  logger: PluginLogger;
+  requirement?: string;
+  /** Enables the LLM topic picker; omit to use only substring matching. */
+  runtime?: PluginRuntime;
+  /** Uniqueness token for the picker's isolated session (e.g. historyId). */
+  token?: string | number;
+}): Promise<{ topicId: number; useSlaveTopic: boolean; masterId: number }> {
+  const { userId, topicResolver, logger, requirement, runtime, token } = args;
   if (!topicResolver) {
     return { topicId: 0, useSlaveTopic: false, masterId: 0 };
   }
@@ -58,7 +103,14 @@ async function resolveReportTopic(
 
   // Prefer a requirement-named project when the user owns several.
   if (requirement && resolution.topics.length > 1) {
-    const match = pickTopicByName(requirement, resolution.topics);
+    const match = await matchRequirementTopic(
+      requirement,
+      resolution.topics,
+      logger,
+      userId,
+      runtime,
+      token,
+    );
     if (match && match.topicId !== chosen.topicId) {
       logger.info(
         `[CHAT_PIPELINE] Requirement matched topic ${JSON.stringify(match.topicName)} ` +
@@ -265,7 +317,14 @@ export async function processChatMessage(
         logger.info(
           `[CHAT_PIPELINE] Explicit template #${tpl.id} ("${tpl.name}") -> ${tpl.period} report`,
         );
-        const topic = await resolveReportTopic(userId, topicResolver, logger, userMessage);
+        const topic = await resolveReportTopic({
+          userId,
+          topicResolver,
+          logger,
+          requirement: userMessage,
+          runtime,
+          token: chatMsg.historyId,
+        });
         return await createReportTaskAndRespond({
           period: tpl.period,
           // The user's typed text becomes the requirement; it may just be the
@@ -297,12 +356,14 @@ export async function processChatMessage(
     if (triggerResult.isReportRequest && downloadManager) {
       logger.info(`[CHAT_PIPELINE] Report request detected: ${triggerResult.period}`);
 
-      const topic = await resolveReportTopic(
+      const topic = await resolveReportTopic({
         userId,
         topicResolver,
         logger,
-        triggerResult.requirement,
-      );
+        requirement: triggerResult.requirement,
+        runtime,
+        token: chatMsg.historyId,
+      });
 
       return await createReportTaskAndRespond({
         period: triggerResult.period!,

@@ -621,6 +621,57 @@ describe("processChatMessage", () => {
     expect(taskArg.topicId).toBe(204);
   });
 
+  it("routes the report to the LLM-chosen topic over the substring match", async () => {
+    // The requirement text substring-matches 南方基金 (#204), but the LLM
+    // classifier resolves intent to 招商证券 (#305). The LLM pick is
+    // authoritative when it returns a valid authorized topic; only on an
+    // unavailable/unsure model do we fall back to substring matching.
+    const createReportTask = vi.fn(async (_args: Record<string, unknown>) => 1);
+    const downloadManager = { createReportTask } as unknown as DownloadManager;
+    const resolve = vi.fn(async () => ({ id: 4, period: "日报" as const, name: "火灾速报" }));
+    const templateLookup = { resolve } as unknown as ReportTemplateLookup;
+    const runtime = createRuntimeMock({
+      workspaceDir,
+      onRun: () => {},
+      sessionMessages: [{ role: "assistant", content: '好的 {"topicId": 305}' }],
+    });
+    const { historyManager } = createHistoryManagerMock();
+    const topicResolver = {
+      getTopicIdsByUser: async () => ({
+        topicId: 89,
+        useSlaveTopic: false,
+        masterId: 89,
+        topicName: "广汽本田",
+        topics: [
+          { topicId: 89, useSlaveTopic: false, masterId: 89, topicName: "广汽本田" },
+          { topicId: 204, useSlaveTopic: false, masterId: 204, topicName: "南方基金" },
+          { topicId: 305, useSlaveTopic: false, masterId: 305, topicName: "招商证券" },
+        ],
+      }),
+    } as unknown as TopicResolver;
+
+    const chatMsg: ChatMessage = {
+      ...createChatMessage(),
+      message: "用这个模板做一个南方基金6月的报告",
+      templateId: 4,
+    };
+    await processChatMessage(
+      chatMsg,
+      historyManager,
+      mercureConfig,
+      runtime,
+      logger,
+      downloadManager,
+      topicResolver,
+      undefined,
+      undefined,
+      templateLookup,
+    );
+
+    const taskArg = createReportTask.mock.calls[0][0] as unknown as { topicId: number };
+    expect(taskArg.topicId).toBe(305);
+  });
+
   it("falls through to normal chat when the templateId does not resolve", async () => {
     // A deleted / disabled / foreign templateId must not silently drop the
     // turn: it degrades to ordinary chat handling.
