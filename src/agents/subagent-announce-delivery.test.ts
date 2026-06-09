@@ -3968,6 +3968,52 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("treats embedded prompt lock-changed error as permanent during completion delivery", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error(
+        "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+      );
+    }) as unknown as typeof runtimeCallGateway;
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "transcript_commit_wait_unsupported",
+      "no_active_run",
+    ]);
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+      sessionId: "requester-session-text-lock-changed",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-text-lock-changed",
+      sourceTool: "sessions_spawn",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "child_session",
+          childSessionKey: "child:task-lock-changed",
+          childSessionId: "task-lock-changed",
+          announceType: "child task",
+          taskLabel: "lock changed task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Task completed: summary output.",
+          replyInstruction: "Tell the user the task is done.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: expect.stringContaining(
+        "session file changed while embedded prompt lock was released",
+      ),
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("keeps generic requester handoff errors visible after active wake failure", async () => {
     const callGateway = vi.fn(async () => {
       throw new Error("requester handoff exploded after dispatch");

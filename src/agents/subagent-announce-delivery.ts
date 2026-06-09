@@ -378,6 +378,7 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
+  /session file changed while embedded prompt lock was released/i,
 ];
 
 function isTransientAnnounceDeliveryError(error: unknown): boolean {
