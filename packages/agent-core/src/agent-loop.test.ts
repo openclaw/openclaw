@@ -259,7 +259,9 @@ describe("runAgentLoop missing tool resolution", () => {
     const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => {
       activeExecutions += 1;
       maxActiveExecutions = Math.max(maxActiveExecutions, activeExecutions);
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 5);
+      });
       activeExecutions -= 1;
       return {
         content: [{ type: "text", text: "hidden ok" }],
