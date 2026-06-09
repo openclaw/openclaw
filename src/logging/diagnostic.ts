@@ -50,6 +50,7 @@ import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
   getDiagnosticSessionStateCountForTest as getDiagnosticSessionStateCountForTestImpl,
+  peekDiagnosticSessionState,
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
   type SessionRef,
@@ -912,10 +913,22 @@ export function setDiagnosticSessionClientContext(
   ref: SessionRef,
   clientContext: DiagnosticClientContext | undefined,
 ): void {
-  if (!clientContext || !areDiagnosticsEnabledForProcess()) {
+  if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  getDiagnosticSessionState(ref).clientContext = clientContext;
+  if (clientContext) {
+    getDiagnosticSessionState(ref).clientContext = clientContext;
+    return;
+  }
+  // No (or out-of-bounds) context for this run: actively clear any value a
+  // prior run left on the reused per-session diagnostic state, so later
+  // message.queued / session.state events are not misattributed to a stale
+  // upstream context. Per-session state is keyed by sessionId/sessionKey and
+  // lives until idle TTL, so the seed path must own clearing, not just setting.
+  const existing = peekDiagnosticSessionState(ref);
+  if (existing) {
+    existing.clientContext = undefined;
+  }
 }
 
 export function updateDiagnosticSessionFile(params: SessionRef) {
