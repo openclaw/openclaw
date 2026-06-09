@@ -2,7 +2,7 @@
 import { getSourceSecretTargetRegistry } from "./target-registry-data.js";
 import { getUnsupportedSecretRefSurfacePatterns } from "./unsupported-surface-policy.js";
 
-type CredentialMatrixEntry = {
+export type CredentialMatrixEntry = {
   id: string;
   configFile: "openclaw.json" | "auth-profiles.json";
   path: string;
