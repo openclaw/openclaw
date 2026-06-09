@@ -881,6 +881,24 @@ describe("sanitizeChatHistoryMessages", () => {
     ]);
   });
 
+  it("preserves ordinary assistant messages matching the stream-error sentinel text", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("drops commentary-only assistant entries when phase exists only in textSignature", () => {
     const result = sanitizeChatHistoryMessages([
       {

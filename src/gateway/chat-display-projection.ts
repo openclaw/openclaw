@@ -1070,6 +1070,14 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
   return changed ? next : messages;
 }
 
+function isStreamErrorFallbackAssistantMessage(message: unknown, text: string): boolean {
+  if (text.trim() !== STREAM_ERROR_FALLBACK_TEXT) {
+    return false;
+  }
+  const entry = message as { internalStreamError?: unknown; stopReason?: unknown };
+  return entry.stopReason === "error" || entry.internalStreamError === true;
+}
+
 function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
@@ -1088,7 +1096,7 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (text === undefined) {
     return false;
   }
-  if (text.trim() === STREAM_ERROR_FALLBACK_TEXT) {
+  if (isStreamErrorFallbackAssistantMessage(message, text)) {
     return !hasAssistantNonTextContent(message);
   }
   if (!isSuppressedControlReplyText(text)) {
