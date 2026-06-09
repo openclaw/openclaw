@@ -134,6 +134,7 @@ describe("run-opengrep.sh", () => {
     writeFile(path.join(repo, "src/prod.ts"), "export const prod = 1;\n");
     writeFile(path.join(repo, "src/prod.test.ts"), "export const test = 1;\n");
     writeFile(path.join(repo, "src/foo/extensions/qa-demo/index.ts"), "export const nested = 1;\n");
+    writeFile(path.join(repo, "extensions/qa-backdoor.ts"), "export const qaBackdoor = 1;\n");
     writeFile(path.join(repo, "extensions/qa-demo/src/index.ts"), "export const qa = 1;\n");
     writeFile(path.join(repo, "scripts/test-planner/vitest-args.mjs"), "export const plan = 1;\n");
     git(repo, "add", ".");
@@ -142,6 +143,7 @@ describe("run-opengrep.sh", () => {
     writeFile(path.join(repo, "src/prod.ts"), "export const prod = 2;\n");
     writeFile(path.join(repo, "src/prod.test.ts"), "export const test = 2;\n");
     writeFile(path.join(repo, "src/foo/extensions/qa-demo/index.ts"), "export const nested = 2;\n");
+    writeFile(path.join(repo, "extensions/qa-backdoor.ts"), "export const qaBackdoor = 2;\n");
     writeFile(path.join(repo, "extensions/qa-demo/src/index.ts"), "export const qa = 2;\n");
     writeFile(path.join(repo, "scripts/test-planner/vitest-args.mjs"), "export const plan = 2;\n");
 
@@ -172,6 +174,7 @@ describe("run-opengrep.sh", () => {
     const args = fs.readFileSync(argsPath, "utf8");
     expect(args).toContain("src/prod.ts");
     expect(args).toContain("src/foo/extensions/qa-demo/index.ts");
+    expect(args).toContain("extensions/qa-backdoor.ts");
     expect(args).not.toContain("src/prod.test.ts");
     expect(args).not.toContain("extensions/qa-demo/src/index.ts");
     expect(args).not.toContain("scripts/test-planner/vitest-args.mjs");
