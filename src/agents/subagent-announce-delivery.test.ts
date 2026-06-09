@@ -3991,7 +3991,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       internalEvents: [
         {
           type: "task_completion",
-          source: "child_session",
+          source: "subagent",
           childSessionKey: "child:task-lock-changed",
           childSessionId: "task-lock-changed",
           announceType: "child task",
