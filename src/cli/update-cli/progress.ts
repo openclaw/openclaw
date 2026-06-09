@@ -28,6 +28,7 @@ const STEP_LABELS: Record<string, string> = {
   "ui assets verify": "Validating UI assets",
   "openclaw doctor entry": "Checking doctor entrypoint",
   "openclaw doctor": "Running doctor checks",
+  "openclaw doctor (warning)": "Running doctor checks",
   "git rev-parse HEAD (after)": "Verifying update",
   "global update": "Updating via package manager",
   "global update (omit optional)": "Retrying update without optional deps",
@@ -39,6 +40,10 @@ const STEP_LABELS: Record<string, string> = {
 
 function getStepLabel(step: UpdateStepInfo): string {
   return STEP_LABELS[step.name] ?? step.name;
+}
+
+function isAdvisoryStep(step: UpdateStepInfo): boolean {
+  return step.exitCode === 0 && step.name.endsWith("(warning)");
 }
 
 /** Convert updater failure reasons and stderr tails into operator-facing recovery hints. */
@@ -143,7 +148,14 @@ export function createUpdateProgress(enabled: boolean): ProgressController {
       currentSpinner.stop(`${icon} ${label} ${duration}`);
       currentSpinner = null;
 
-      if (step.exitCode !== 0 && step.stderrTail) {
+      if (isAdvisoryStep(step) && step.stderrTail) {
+        const lines = step.stderrTail.split("\n").slice(-10);
+        for (const line of lines) {
+          if (line.trim()) {
+            defaultRuntime.log(`    ${theme.warn(line)}`);
+          }
+        }
+      } else if (step.exitCode !== 0 && step.stderrTail) {
         const lines = step.stderrTail.split("\n").slice(-10);
         for (const line of lines) {
           if (line.trim()) {
@@ -217,7 +229,14 @@ export function printResult(result: UpdateRunResult, opts: PrintResultOptions): 
       const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
       defaultRuntime.log(`  ${status} ${step.name} ${duration}`);
 
-      if (step.exitCode !== 0 && step.stderrTail) {
+      if (isAdvisoryStep(step) && step.stderrTail) {
+        const lines = step.stderrTail.split("\n").slice(0, 5);
+        for (const line of lines) {
+          if (line.trim()) {
+            defaultRuntime.log(`      ${theme.warn(line)}`);
+          }
+        }
+      } else if (step.exitCode !== 0 && step.stderrTail) {
         const lines = step.stderrTail.split("\n").slice(0, 5);
         for (const line of lines) {
           if (line.trim()) {

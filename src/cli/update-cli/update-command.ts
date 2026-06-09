@@ -85,7 +85,11 @@ import {
   resolvePnpmGlobalDirFromGlobalRoot,
 } from "../../infra/update-global.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
-import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
+import {
+  runGatewayUpdate,
+  type UpdateRunResult,
+  type UpdateStepProgress,
+} from "../../infra/update-runner.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -1484,7 +1488,7 @@ async function runPackageInstallUpdate(params: {
       if (entryPath) {
         await createUpdateConfigSnapshot();
         const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
-        return await runUpdateStep({
+        const doctorStep = await runUpdateStep({
           name: `${CLI_NAME} doctor`,
           argv: [
             params.nodeRunner ?? resolveNodeRunner(),
@@ -1507,8 +1511,9 @@ async function runPackageInstallUpdate(params: {
               : { OPENCLAW_COMPATIBILITY_HOST_VERSION: candidateHostVersion }),
           },
           timeoutMs: params.timeoutMs,
-          progress: params.progress,
+          progress: createPackagePostInstallDoctorProgress(params.progress),
         });
+        return normalizePackagePostInstallDoctorStep(doctorStep);
       }
       return null;
     },
@@ -1523,6 +1528,40 @@ async function runPackageInstallUpdate(params: {
     after: { version: packageUpdate.afterVersion ?? beforeVersion },
     steps: packageUpdate.steps,
     durationMs: Date.now() - params.startedAt,
+  };
+}
+
+function normalizePackagePostInstallDoctorStep<
+  T extends { name: string; exitCode: number | null; stderrTail?: string | null },
+>(step: T): T {
+  if (step.exitCode === 0 || step.exitCode === null) {
+    return step;
+  }
+  const advisoryTail = [
+    step.stderrTail,
+    "Post-install doctor failed after the package install was verified; continuing with post-core plugin convergence and gateway restart.",
+  ]
+    .filter((line): line is string => Boolean(line?.trim()))
+    .join("\n");
+  return {
+    ...step,
+    name: `${CLI_NAME} doctor (warning)`,
+    exitCode: 0,
+    stderrTail: advisoryTail || step.stderrTail,
+  };
+}
+
+function createPackagePostInstallDoctorProgress(
+  progress: UpdateStepProgress | undefined,
+): UpdateStepProgress | undefined {
+  if (!progress) {
+    return undefined;
+  }
+  return {
+    ...(progress.onStepStart ? { onStepStart: progress.onStepStart } : {}),
+    onStepComplete: (step) => {
+      progress.onStepComplete?.(normalizePackagePostInstallDoctorStep(step));
+    },
   };
 }
 
