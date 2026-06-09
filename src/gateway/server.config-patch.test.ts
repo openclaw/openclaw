@@ -31,14 +31,11 @@ function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
   return startedServer.ws;
 }
 
-function requireConfigObject(
-  value: Record<string, unknown> | undefined,
-  label: string,
-): Record<string, unknown> {
+function requireConfigObject(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected ${label}`);
   }
-  return value;
+  return value as Record<string, unknown>;
 }
 
 beforeAll(async () => {
