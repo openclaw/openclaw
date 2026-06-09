@@ -969,7 +969,7 @@ describe("getApiKeyForModel", () => {
     const cfg: OpenClawConfig = {
       models: {
         providers: {
-          "demo-local": {
+          "anthropic-local": {
             apiKey: "demo-key",
             baseUrl: "http://127.0.0.1:8000/v1",
             models: [testModelDefinition("demo-model")],
@@ -981,14 +981,14 @@ describe("getApiKeyForModel", () => {
     // Initially available
     await expect(
       hasAuthForModelProvider({
-        provider: "demo-local",
+        provider: "anthropic-local",
         cfg,
         store,
       }),
     ).resolves.toBe(true);
 
     // Mark failure to trigger cooldown
-    const usageId = resolveInlineProviderApiKeyUsageId("demo-local");
+    const usageId = resolveInlineProviderApiKeyUsageId("anthropic-local");
     store.usageStats![usageId] = {
       disabledUntil: Date.now() + 60_000,
       disabledReason: "billing",
@@ -997,7 +997,7 @@ describe("getApiKeyForModel", () => {
     // Now unavailable for visibility listing (cooldown)
     await expect(
       hasAuthForModelProvider({
-        provider: "demo-local",
+        provider: "anthropic-local",
         cfg,
         store,
       }),
@@ -1006,12 +1006,12 @@ describe("getApiKeyForModel", () => {
     // But still available if there is a healthy stored profile
     store.profiles["test-profile"] = {
       type: "api_key",
-      provider: "demo-local",
+      provider: "anthropic-local",
       key: "profile-key",
     } as unknown as AuthProfileCredential;
     await expect(
       hasAuthForModelProvider({
-        provider: "demo-local",
+        provider: "anthropic-local",
         cfg,
         store,
       }),

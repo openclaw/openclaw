@@ -842,7 +842,7 @@ export function hasRuntimeAvailableProviderAuth(params: {
   const inlineProviderApiKeyUsable = params.store
     ? (() => {
         const unusableUntil = resolveInlineProviderApiKeyUnusableUntil(params.store, provider);
-        return typeof unusableUntil !== "number" || unusableUntil <= Date.now();
+        return unusableUntil === null || unusableUntil === undefined || unusableUntil <= Date.now();
       })()
     : true;
 
