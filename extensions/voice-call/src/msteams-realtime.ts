@@ -92,6 +92,8 @@ const MSTEAMS_AGENT_TASK_TOOL: RealtimeVoiceTool = {
     "Use this for work that may take more than a few seconds (multi-step actions, lengthy research). " +
     "After calling it, tell the caller you are on it and will reach them on Microsoft Teams when it is done. " +
     "Do NOT use this for quick questions or lookups — use openclaw_agent_consult and answer in-line for those. " +
+    'Do NOT use this when the caller wants to SEE an image on the call right now (e.g. "show me ...", ' +
+    '"take a screenshot and show me") — use show_to_caller for that, even if it must open a browser or screenshot first. ' +
     'Set deliverVia to "call" when the caller asked to be CALLED back when done; otherwise it defaults to a Teams chat message.',
   parameters: {
     type: "object",
@@ -146,8 +148,11 @@ const MSTEAMS_SHOW_TOOL: RealtimeVoiceTool = {
   description:
     "Show the caller an image on the video call — take a screenshot of your screen, or display an " +
     'image you generated or found. Use this when the caller asks to SEE something ("show me your ' +
-    'screen", "show me that picture", "can I see it?"). The image appears on your video tile for a few ' +
-    "seconds; describe what you are showing in your spoken reply.",
+    'screen", "show me that picture", "can I see it?", "show me the GitHub page"). The image appears ' +
+    "on your video tile for a few seconds; describe what you are showing in your spoken reply. " +
+    "This is the ONLY way to put an image on the call — use it even when producing the image first " +
+    "needs you to open a browser, take a screenshot, or generate it. Do NOT hand this to a background " +
+    "task and do NOT try to present it via canvas/a node; this tool displays it on the tile for you.",
   parameters: {
     type: "object",
     properties: {
@@ -164,12 +169,18 @@ const MSTEAMS_SHOW_TOOL: RealtimeVoiceTool = {
 /** System prompt for the show_to_caller consult: produce ONE image; the bridge displays it on the tile. */
 const MSTEAMS_REALTIME_SHOW_SYSTEM_PROMPT =
   "The caller is on a live video call and asked to SEE something. Produce exactly ONE image to show " +
-  "them — take a screenshot of your screen, or generate/fetch the requested image — using your tools. " +
-  "The image is shown on your video tile automatically, so do NOT send it as a chat message. Return a " +
-  "brief spoken sentence describing what you're showing.";
+  "them — take a screenshot of your screen (use the browser to open a page first if needed), or " +
+  "generate/fetch the requested image — using your tools. Your ONLY job is to PRODUCE the image file; " +
+  "the call displays it on your video tile automatically. Do NOT try to present or display it yourself " +
+  "(no canvas, no connected node) and do NOT send it as a chat message. Return a brief spoken sentence " +
+  "describing what you're showing.";
 
 /** Max bytes for an agent-produced image we'll display (safety bound). */
 const MSTEAMS_MAX_DISPLAY_IMAGE_BYTES = 4_000_000;
+
+/** show_to_caller produces an image (browse + screenshot / generate), which needs more than the
+ *  quick-reply budget; the model plays a "working on it" filler while it runs. */
+const MSTEAMS_SHOW_TIMEOUT_MS = 90_000;
 
 /** MIME for an image by file/URL extension (query string stripped), or null for non-images. */
 function mimeForImageExtension(pathOrUrl: string): string | null {
@@ -860,6 +871,14 @@ export function createMsteamsRealtimeCall(params: {
           { willContinue: true },
         );
       }
+      // show_to_caller sends { request }; the consult contract expects question/prompt/query/task,
+      // so map request -> question (otherwise the consult throws "question required").
+      const showRequest =
+        event.args &&
+        typeof event.args === "object" &&
+        typeof (event.args as { request?: unknown }).request === "string"
+          ? (event.args as { request: string }).request
+          : undefined;
       const result = await runMsteamsConsult({
         agentRuntime,
         voiceConfig,
@@ -867,12 +886,12 @@ export function createMsteamsRealtimeCall(params: {
         agentId,
         sessionKey,
         runIdPrefix: `voice-realtime-show:${callId}`,
-        args: event.args,
+        args: showRequest ? { question: showRequest } : event.args,
         surface:
           "a live Microsoft Teams video call — show the caller an image on the bot's video tile",
         extraSystemPrompt: MSTEAMS_REALTIME_SHOW_SYSTEM_PROMPT,
         toolPolicy: "owner", // needs the screenshot / image-generation tools
-        timeoutMs: voiceConfig.responseTimeoutMs,
+        timeoutMs: Math.max(voiceConfig.responseTimeoutMs, MSTEAMS_SHOW_TIMEOUT_MS),
       });
       const shown = await forwardDisplayImages(result.mediaPaths ?? []);
       rtSession.submitToolResult(event.callId, {
