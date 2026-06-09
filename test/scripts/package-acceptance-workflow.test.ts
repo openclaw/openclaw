@@ -1514,6 +1514,10 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "Full release validation must run rerun_group=all before npm publish",
     );
+    expect(workflow).toContain("tideclaw_alpha_focused_validation");
+    expect(workflow).toContain('"$rerun_group" == "install-smoke"');
+    expect(npmWorkflow).toContain("tideclaw_alpha_focused_validation");
+    expect(npmWorkflow).toContain('"$RERUN_GROUP" == "install-smoke"');
     expect(workflow).toContain(
       "publish_openclaw_npm=true requires plugin_publish_scope=all-publishable",
     );

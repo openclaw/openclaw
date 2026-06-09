@@ -661,6 +661,10 @@ jobs:
 
       - name: Verify full release validation target
         if: ${{ inputs.full_release_validation_run_id != '' }}
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          WORKFLOW_REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
@@ -681,7 +685,11 @@ jobs:
             echo "Full release validation target SHA mismatch: expected $EXPECTED_RELEASE_SHA, got $TARGET_SHA" >&2
             exit 1
           fi
-          if [[ "$RERUN_GROUP" != "all" ]]; then
+          tideclaw_alpha_focused_validation=false
+          if [[ "$RERUN_GROUP" == "install-smoke" && "$RELEASE_TAG" == *"-alpha."* && "$RELEASE_NPM_DIST_TAG" == "alpha" && "$WORKFLOW_REF_NAME" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            tideclaw_alpha_focused_validation=true
+          fi
+          if [[ "$RERUN_GROUP" != "all" && "$tideclaw_alpha_focused_validation" != "true" ]]; then
             echo "Full release validation must run rerun_group=all before npm publish; got $RERUN_GROUP" >&2
             exit 1
           fi
