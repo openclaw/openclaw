@@ -18,7 +18,7 @@ type CliProfileParseResult =
 
 function isCommandLocalProfileOption(out: string[]): boolean {
   const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
-  return primary === "qa" && secondary === "matrix";
+  return primary === "qa" && (secondary === "matrix" || secondary === "run");
 }
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {

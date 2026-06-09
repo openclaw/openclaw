@@ -111,6 +111,33 @@ describe("parseCliProfileArgs", () => {
     expect(res.argv).toEqual(["node", "openclaw", "--no-color", "qa", "matrix", "--profile=fast"]);
   });
 
+  it("preserves qa run --profile for the command parser", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--profile",
+      "smoke-ci",
+      "--category",
+      "agent-runtime-and-provider-execution.agent-turn-execution",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--profile",
+      "smoke-ci",
+      "--category",
+      "agent-runtime-and-provider-execution.agent-turn-execution",
+    ]);
+  });
+
   it("still parses root --profile before Matrix QA", () => {
     const res = parseCliProfileArgs([
       "node",

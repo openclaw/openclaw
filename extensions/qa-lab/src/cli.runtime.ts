@@ -65,9 +65,14 @@ import type { RuntimeId } from "./runtime-parity.js";
 import {
   QA_RUNTIME_PARITY_TIERS,
   readQaScenarioPack,
+  type QaSeedScenarioWithSource,
   type QaRuntimeParityTier,
 } from "./scenario-catalog.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
+import {
+  readQaScorecardTaxonomyReport,
+  type QaScorecardCategoryMappingReport,
+} from "./scorecard-taxonomy.js";
 import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
 import {
@@ -568,6 +573,167 @@ export async function runQaLabSelfCheckCommand(opts: { repoRoot?: string; output
     process.stdout.write(`QA self-check report: ${result.outputPath}\n`);
   } finally {
     await server.stop();
+  }
+}
+
+export async function runQaProfileCommand(opts: {
+  repoRoot?: string;
+  outputDir?: string;
+  profile: string;
+  surface?: string;
+  category?: string;
+  transportId?: string;
+  providerMode?: QaProviderModeInput;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  concurrency?: number;
+  allowFailures?: boolean;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const scenarioPack = readQaScenarioPack();
+  const scorecardReport = readQaScorecardTaxonomyReport(scenarioPack.scenarios);
+  const profile = normalizeQaRunProfile(
+    opts.profile,
+    scorecardReport.profiles.map((entry) => entry.id),
+  );
+  const categories = scorecardReport.categories.filter((category) =>
+    qaScorecardCategoryMatchesRunProfile(category, {
+      profile,
+      surface: opts.surface,
+      category: opts.category,
+    }),
+  );
+  if (categories.length === 0) {
+    throw new Error(formatQaRunProfileNoMatchMessage(opts));
+  }
+
+  const scenarioBySourcePath = new Map(
+    scenarioPack.scenarios.map((scenario) => [scenario.sourcePath, scenario] as const),
+  );
+  const scenarios = uniqueStrings(categories.flatMap((category) => category.scenarioRefs))
+    .map((scenarioRef) => scenarioBySourcePath.get(scenarioRef))
+    .filter((scenario): scenario is NonNullable<typeof scenario> => scenario !== undefined);
+  if (scenarios.length === 0) {
+    throw new Error(`qa run --profile ${profile} did not resolve any executable QA scenarios.`);
+  }
+
+  const scenarioGroups = groupQaProfileScenariosByExecutionKind(scenarios);
+  const providerMode = opts.providerMode ?? defaultQaRunProfileProviderMode(profile);
+  process.stdout.write(
+    `QA run profile: ${profile}; categories: ${categories.length}; scenarios: ${scenarios.length}\n`,
+  );
+  await withTemporaryQaProfileEnv(profile, async () => {
+    for (const group of scenarioGroups) {
+      await runQaSuiteCommand({
+        repoRoot,
+        outputDir: resolveQaProfileGroupOutputDir(
+          opts.outputDir,
+          group.executionKind,
+          scenarioGroups.length,
+        ),
+        transportId: opts.transportId,
+        providerMode,
+        primaryModel: opts.primaryModel,
+        alternateModel: opts.alternateModel,
+        fastMode: opts.fastMode,
+        scenarioIds: group.scenarioIds,
+        concurrency: opts.concurrency,
+        allowFailures: opts.allowFailures,
+      });
+    }
+  });
+}
+
+function normalizeQaRunProfile(value: string, profileIds: readonly string[]) {
+  if (profileIds.length === 0) {
+    throw new Error("taxonomy.yaml does not define QA run profiles.");
+  }
+  const normalized = value.trim();
+  if (profileIds.includes(normalized)) {
+    return normalized;
+  }
+  throw new Error(`--profile must be one of ${profileIds.join(", ")}, got "${value}".`);
+}
+
+function defaultQaRunProfileProviderMode(profile: string): QaProviderModeInput {
+  return profile === "smoke-ci" ? "mock-openai" : DEFAULT_QA_LIVE_PROVIDER_MODE;
+}
+
+function qaScorecardCategoryMatchesRunProfile(
+  category: QaScorecardCategoryMappingReport,
+  opts: { profile: string; surface?: string; category?: string },
+): boolean {
+  if (!category.profiles.includes(opts.profile)) {
+    return false;
+  }
+  if (opts.surface?.trim()) {
+    const surface = opts.surface.trim();
+    if (category.taxonomySurfaceId !== surface && !category.id.startsWith(`${surface}.`)) {
+      return false;
+    }
+  }
+  if (opts.category?.trim() && category.id !== opts.category.trim()) {
+    return false;
+  }
+  return true;
+}
+
+function groupQaProfileScenariosByExecutionKind(
+  scenarios: readonly QaSeedScenarioWithSource[],
+) {
+  const groups = new Map<QaSeedScenarioWithSource["execution"]["kind"], string[]>();
+  for (const scenario of scenarios) {
+    const scenarioIds = groups.get(scenario.execution.kind) ?? [];
+    scenarioIds.push(scenario.id);
+    groups.set(scenario.execution.kind, scenarioIds);
+  }
+  const executionOrder: readonly QaSeedScenarioWithSource["execution"]["kind"][] = [
+    "flow",
+    "vitest",
+    "playwright",
+  ];
+  return executionOrder.flatMap((executionKind) => {
+    const scenarioIds = groups.get(executionKind);
+    return scenarioIds && scenarioIds.length > 0 ? [{ executionKind, scenarioIds }] : [];
+  });
+}
+
+function resolveQaProfileGroupOutputDir(
+  outputDir: string | undefined,
+  executionKind: string,
+  groupCount: number,
+) {
+  if (!outputDir || groupCount === 1) {
+    return outputDir;
+  }
+  return `${outputDir}-${executionKind}`;
+}
+
+function formatQaRunProfileNoMatchMessage(opts: {
+  profile: string;
+  surface?: string;
+  category?: string;
+}) {
+  const filters = [
+    `--profile ${opts.profile}`,
+    opts.surface?.trim() ? `--surface ${opts.surface.trim()}` : null,
+    opts.category?.trim() ? `--category ${opts.category.trim()}` : null,
+  ].filter((filter): filter is string => filter !== null);
+  return `qa run did not find taxonomy categories for ${filters.join(" ")}.`;
+}
+
+async function withTemporaryQaProfileEnv<T>(profile: string, run: () => Promise<T>): Promise<T> {
+  const previousProfile = process.env.OPENCLAW_QA_PROFILE;
+  process.env.OPENCLAW_QA_PROFILE = profile;
+  try {
+    return await run();
+  } finally {
+    if (previousProfile === undefined) {
+      delete process.env.OPENCLAW_QA_PROFILE;
+    } else {
+      process.env.OPENCLAW_QA_PROFILE = previousProfile;
+    }
   }
 }
 

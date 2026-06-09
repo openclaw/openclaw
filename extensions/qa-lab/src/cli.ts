@@ -46,6 +46,24 @@ async function runQaSelfCheck(opts: { repoRoot?: string; output?: string }) {
   await runtime.runQaLabSelfCheckCommand(opts);
 }
 
+async function runQaProfile(opts: {
+  repoRoot?: string;
+  outputDir?: string;
+  profile: string;
+  surface?: string;
+  category?: string;
+  transportId?: string;
+  providerMode?: QaProviderModeInput;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  allowFailures?: boolean;
+  concurrency?: number;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaProfileCommand(opts);
+}
+
 async function runQaSuiteCliCommand(opts: {
   repoRoot?: string;
   outputDir?: string;
@@ -290,9 +308,62 @@ export function registerQaLabCli(program: Command) {
     .description("Run the bundled QA self-check and write a Markdown report")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output <path>", "Report output path")
-    .action(async (opts: { repoRoot?: string; output?: string }) => {
-      await runQaSelfCheck(opts);
-    });
+    .option("--output-dir <path>", "Profile run artifact directory")
+    .option("--profile <id>", "Run the QA scorecard profile from taxonomy.yaml")
+    .option("--surface <id>", "Limit --profile to a taxonomy surface id")
+    .option("--category <id>", "Limit --profile to a taxonomy category id")
+    .option("--transport <id>", "QA transport id", "qa-channel")
+    .option("--provider-mode <mode>", formatQaProviderModeHelp())
+    .option("--model <ref>", "Primary provider/model ref")
+    .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
+      parseQaCliPositiveIntegerOption(value, "--concurrency"),
+    )
+    .option(
+      "--allow-failures",
+      "Write artifacts without setting a failing exit code when scenarios fail",
+      false,
+    )
+    .option("--fast", "Enable provider fast mode where supported", false)
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        output?: string;
+        outputDir?: string;
+        profile?: string;
+        surface?: string;
+        category?: string;
+        transport?: string;
+        providerMode?: QaProviderModeInput;
+        model?: string;
+        altModel?: string;
+        concurrency?: number;
+        allowFailures?: boolean;
+        fast?: boolean;
+      }) => {
+        if (opts.profile?.trim()) {
+          await runQaProfile({
+            repoRoot: opts.repoRoot,
+            outputDir: opts.outputDir,
+            profile: opts.profile,
+            surface: opts.surface,
+            category: opts.category,
+            transportId: opts.transport,
+            providerMode: opts.providerMode,
+            primaryModel: opts.model,
+            alternateModel: opts.altModel,
+            concurrency: opts.concurrency,
+            allowFailures: opts.allowFailures,
+            fastMode: opts.fast,
+          });
+          return;
+        }
+        await runQaSelfCheck({
+          repoRoot: opts.repoRoot,
+          output: opts.output,
+        });
+      },
+    );
 
   qa.command("suite")
     .description("Run repo-backed QA scenarios against the QA gateway lane")

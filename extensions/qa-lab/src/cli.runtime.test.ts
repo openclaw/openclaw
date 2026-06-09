@@ -83,6 +83,7 @@ import {
   runQaJsonlReplayCommand,
   runQaManualLaneCommand,
   runQaParityReportCommand,
+  runQaProfileCommand,
   runQaSuiteCommand,
 } from "./cli.runtime.js";
 import { QaSuiteInfraError } from "./errors.js";
@@ -337,6 +338,52 @@ describe("qa cli runtime", () => {
     ).rejects.toThrow("--image, --cpus, --memory, and --disk require --runner multipass");
 
     expect(runQaSuite).not.toHaveBeenCalled();
+  });
+
+  it("dispatches a taxonomy-backed profile category through the suite runner", async () => {
+    const previousProfile = process.env.OPENCLAW_QA_PROFILE;
+    process.env.OPENCLAW_QA_PROFILE = "release";
+    try {
+      runQaSuite.mockImplementationOnce(async () => {
+        expect(process.env.OPENCLAW_QA_PROFILE).toBe("smoke-ci");
+        return flowSuiteRuntimeResult({
+          watchUrl: "http://127.0.0.1:43124",
+          reportPath: suiteReportPath,
+          summaryPath: suiteSummaryPath,
+        });
+      });
+
+      await runQaProfileCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        outputDir: ".artifacts/qa-e2e/smoke-ci",
+        profile: "smoke-ci",
+        surface: "agent-runtime-and-provider-execution",
+        category: "agent-runtime-and-provider-execution.agent-turn-execution",
+        transportId: "qa-channel",
+        fastMode: true,
+        concurrency: 2,
+        allowFailures: true,
+      });
+
+      const suiteArgs = mockFirstObjectArg(runQaSuite);
+      expectFields(suiteArgs, {
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa-e2e/smoke-ci"),
+        transportId: "qa-channel",
+        providerMode: "mock-openai",
+        fastMode: true,
+        concurrency: 2,
+      });
+      expect(suiteArgs.scenarioIds).toEqual(expect.arrayContaining(["dm-chat-baseline"]));
+      expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
+      expectWriteContains(stdoutWrite, "QA run profile: smoke-ci; categories: 1; scenarios:");
+    } finally {
+      if (previousProfile === undefined) {
+        delete process.env.OPENCLAW_QA_PROFILE;
+      } else {
+        process.env.OPENCLAW_QA_PROFILE = previousProfile;
+      }
+    }
   });
 
   it("resolves suite repo-root-relative paths before dispatching", async () => {
