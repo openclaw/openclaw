@@ -235,6 +235,10 @@ function formatDeprecatedTypedHookDiagnostic(hookName: PluginHookName): string |
   );
 }
 
+function canRegisterInstalledTrustedHook(record: PluginRecord): boolean {
+  return record.origin === "bundled" || (record.enabled && record.explicitlyEnabled === true);
+}
+
 type PluginOwnedProviderRegistration<T extends { id: string }> = {
   pluginId: string;
   pluginName?: string;
@@ -555,6 +559,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: `plugin must declare contracts.agentToolResultMiddleware for: ${missing.join(", ")}`,
+      });
+      return;
+    }
+    if (!canRegisterInstalledTrustedHook(record)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "plugin must be explicitly enabled to register agent tool result middleware",
       });
       return;
     }
@@ -2016,6 +2029,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     policy: PluginTrustedToolPolicyRegistration,
   ) => {
+    if (!policy || typeof policy !== "object") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "trusted tool policy registration requires id, description, and evaluate()",
+      });
+      return;
+    }
     const id = normalizeHostHookString(policy.id);
     const description = normalizeHostHookString(policy.description);
     if (!id || !description || typeof policy.evaluate !== "function") {
@@ -2036,6 +2058,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: `plugin must declare contracts.trustedToolPolicies for: ${id}`,
+      });
+      return;
+    }
+    if (!canRegisterInstalledTrustedHook(record)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must be explicitly enabled to register trusted tool policy: ${id}`,
       });
       return;
     }

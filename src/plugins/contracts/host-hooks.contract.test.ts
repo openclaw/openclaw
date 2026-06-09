@@ -191,7 +191,38 @@ describe("host-hook fixture plugin contract", () => {
     expect(diagnostics[1]?.message).toContain("only bundled plugins can claim reserved command");
   });
 
-  it("allows declared external trusted policy registration without reserved command ownership", () => {
+  it("rejects declared external trusted policy registration without explicit opt-in", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "external-policy",
+        name: "External Policy",
+        origin: "workspace",
+        contracts: { trustedToolPolicies: ["deny"] },
+        explicitlyEnabled: false,
+        activationSource: "default",
+      }),
+      register(api) {
+        api.registerTrustedToolPolicy({
+          id: "deny",
+          description: "Declared external policy",
+          evaluate: () => ({ block: true, blockReason: "blocked by external policy" }),
+        });
+      },
+    });
+
+    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "external-policy",
+        message: "plugin must be explicitly enabled to register trusted tool policy: deny",
+      },
+    ]);
+  });
+
+  it("allows explicitly enabled declared external trusted policy registration without reserved command ownership", () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
       registry,
@@ -224,6 +255,64 @@ describe("host-hook fixture plugin contract", () => {
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.pluginId).toBe("external-policy");
     expect(diagnostics[0]?.message).toContain("only bundled plugins can claim reserved command");
+  });
+
+  it("rejects declared external tool-result middleware registration without explicit opt-in", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "external-middleware",
+        name: "External Middleware",
+        origin: "workspace",
+        contracts: { agentToolResultMiddleware: ["codex"] },
+        explicitlyEnabled: false,
+        activationSource: "default",
+      }),
+      register(api) {
+        api.registerAgentToolResultMiddleware(async (event) => ({ result: event.result }), {
+          runtimes: ["codex"],
+        });
+      },
+    });
+
+    expect(registry.registry.agentToolResultMiddlewares ?? []).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "external-middleware",
+        message: "plugin must be explicitly enabled to register agent tool result middleware",
+      },
+    ]);
+  });
+
+  it("diagnoses malformed trusted policy registrations", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "malformed-policy",
+        name: "Malformed Policy",
+        origin: "workspace",
+      }),
+      register(api) {
+        Reflect.apply(api.registerTrustedToolPolicy, api, [null]);
+        Reflect.apply(api.registerTrustedToolPolicy, api, [undefined]);
+      },
+    });
+
+    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "malformed-policy",
+        message: "trusted tool policy registration requires id, description, and evaluate()",
+      },
+      {
+        pluginId: "malformed-policy",
+        message: "trusted tool policy registration requires id, description, and evaluate()",
+      },
+    ]);
   });
 
   it("scopes installed trusted policy ids to the registering plugin", () => {

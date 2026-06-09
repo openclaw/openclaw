@@ -677,15 +677,16 @@ Each list is optional:
 app-server-only extension factories. Bundled tool-result transforms should
 declare `contracts.agentToolResultMiddleware` and register with
 `api.registerAgentToolResultMiddleware(...)` instead. Installed plugins may use
-the same middleware seam only for runtimes they declare in
-`contracts.agentToolResultMiddleware`.
+the same middleware seam only when explicitly enabled and only for runtimes they
+declare in `contracts.agentToolResultMiddleware`.
 
 Installed plugins that need the host-trusted pre-tool policy tier must declare
-each registered local id in `contracts.trustedToolPolicies`. Bundled plugins
-keep the existing trusted-policy path, but installed plugins with undeclared
-policy ids are rejected before registration. Policy ids are scoped to the
-registering plugin, so two plugins may both declare and register
-`workflow-budget`; a single plugin may not register the same local id twice.
+each registered local id in `contracts.trustedToolPolicies` and be explicitly
+enabled. Bundled plugins keep the existing trusted-policy path, but installed
+plugins with undeclared policy ids are rejected before registration. Policy ids
+are scoped to the registering plugin, so two plugins may both declare and
+register `workflow-budget`; a single plugin may not register the same local id
+twice.
 
 Runtime `api.registerTool(...)` registrations must match `contracts.tools`.
 Tool discovery uses this list to load only the plugin runtimes that can own the

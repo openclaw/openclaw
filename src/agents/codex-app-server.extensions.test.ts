@@ -1,4 +1,5 @@
 // Verifies plugin extension points that are exposed to the Codex app server.
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -322,6 +323,184 @@ export default { id: "tool-result-middleware", register(api) {
     });
 
     expect(result.content).toEqual([{ type: "text", text: "exec installed lazily compacted" }]);
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+  });
+
+  it("does not lazily load installed middleware owners without explicit opt-in", async () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+
+    const pluginFile = writeTempPlugin({
+      dir: tmp,
+      id: "tool-result-middleware",
+      manifest: {
+        activation: {
+          onStartup: false,
+        },
+        contracts: {
+          agentToolResultMiddleware: ["codex"],
+        },
+      },
+      body: `export default { id: "tool-result-middleware", register(api) {
+  api.registerAgentToolResultMiddleware(async (event) => ({
+    result: { ...event.result, content: [{ type: "text", text: event.toolName + " should not run" }] }
+  }), { runtimes: ["codex"] });
+} };`,
+    });
+
+    setRuntimeConfigSnapshot({
+      plugins: {
+        load: { paths: [pluginFile] },
+      },
+    });
+    resetActivePluginRegistryForTest();
+
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" });
+    const result = await runner.applyToolResultMiddleware({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: { command: "git status" },
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "raw" }]);
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+  });
+
+  it("does not treat auto-enabled runtime config as explicit middleware opt-in", async () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+
+    const pluginFile = writeTempPlugin({
+      dir: tmp,
+      id: "tool-result-middleware",
+      manifest: {
+        activation: {
+          onStartup: false,
+        },
+        contracts: {
+          agentToolResultMiddleware: ["codex"],
+        },
+      },
+      body: `export default { id: "tool-result-middleware", register(api) {
+  api.registerAgentToolResultMiddleware(async (event) => ({
+    result: { ...event.result, content: [{ type: "text", text: event.toolName + " should not run" }] }
+  }), { runtimes: ["codex"] });
+} };`,
+    });
+
+    const sourceConfig = {
+      plugins: {
+        load: { paths: [pluginFile] },
+      },
+    };
+    setRuntimeConfigSnapshot(
+      {
+        plugins: {
+          load: { paths: [pluginFile] },
+          entries: {
+            "tool-result-middleware": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      sourceConfig,
+    );
+    resetActivePluginRegistryForTest();
+
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" });
+    const result = await runner.applyToolResultMiddleware({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: { command: "git status" },
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "raw" }]);
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+  });
+
+  it("forces full runtime load for setup-loaded installed middleware owners", async () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+
+    const pluginFile = writeTempPlugin({
+      dir: tmp,
+      id: "setup-channel-middleware",
+      manifest: {
+        channels: ["setup-channel-middleware"],
+        channelConfigs: {
+          "setup-channel-middleware": {
+            schema: { type: "object", additionalProperties: false, properties: {} },
+          },
+        },
+        contracts: {
+          agentToolResultMiddleware: ["codex"],
+        },
+      },
+      body: `export default { id: "setup-channel-middleware", register(api) {
+  api.registerAgentToolResultMiddleware(async (event) => ({
+    result: { ...event.result, content: [{ type: "text", text: event.toolName + " setup-owner compacted" }] }
+  }), { runtimes: ["codex"] });
+} };`,
+    });
+    const pluginDir = path.dirname(pluginFile);
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "setup-channel-middleware",
+          version: "0.0.0",
+          type: "module",
+          openclaw: {
+            extensions: [path.basename(pluginFile)],
+            setupEntry: "setup.mjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup.mjs"),
+      `export const plugin = {
+  id: "setup-channel-middleware",
+  meta: { id: "setup-channel-middleware", label: "Setup Channel Middleware" },
+  config: {
+    listAccountIds: () => [],
+    resolveAccount: () => undefined
+  }
+};`,
+      "utf-8",
+    );
+    const config = {
+      plugins: {
+        load: { paths: [pluginDir] },
+        allow: ["setup-channel-middleware"],
+      },
+    };
+
+    loadOpenClawPlugins({ config });
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+    setRuntimeConfigSnapshot(config);
+
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" });
+    const result = await runner.applyToolResultMiddleware({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: { command: "git status" },
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "exec setup-owner compacted" }]);
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
   });
 

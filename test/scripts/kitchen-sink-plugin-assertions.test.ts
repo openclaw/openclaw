@@ -16,7 +16,8 @@ import { describe, expect, it } from "vitest";
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs";
 const SWEEP_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/sweep.sh";
 const REQUIRED_FULL_DIAGNOSTIC_CANARIES = [
-  "plugin must declare contracts.trustedToolPolicies for: kitchen-sink-trusted-tool-policy",
+  "agent tool result middleware must be a function",
+  "trusted tool policy registration requires id, description, and evaluate()",
   "plugin must declare contracts.tools for: kitchen-sink-tool",
   'channel "kitchen-sink-channel-probe" registration missing required config helpers',
   'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',

@@ -227,8 +227,9 @@ The contracts intentionally split authority:
   metadata, next-turn injections, and normal hooks.
 - Trusted tool policies run before ordinary `before_tool_call` hooks and are
   host-trusted. Bundled policies run first; installed-plugin policies require
-  their local ids in `contracts.trustedToolPolicies` and run next in
-  plugin-load order. Policy ids are scoped to the registering plugin.
+  explicit enablement plus their local ids in
+  `contracts.trustedToolPolicies`, and run next in plugin-load order. Policy ids
+  are scoped to the registering plugin.
 - Reserved command ownership is bundled-only. External plugins should use their
   own command names or aliases.
 - `allowPromptInjection=false` disables prompt-mutating hooks including
@@ -253,16 +254,17 @@ Examples of non-Plan consumers:
 </Note>
 
 <Accordion title="When to use tool-result middleware">
-  Bundled plugins and installed plugins with matching manifest contracts can
-  use `api.registerAgentToolResultMiddleware(...)` when they need to rewrite a
-  tool result after execution and before the runtime feeds that result back into
-  the model. This is the trusted runtime-neutral seam for async output reducers
-  such as tokenjuice.
+  Bundled plugins and explicitly enabled installed plugins with matching
+  manifest contracts can use `api.registerAgentToolResultMiddleware(...)` when
+  they need to rewrite a tool result after execution and before the runtime
+  feeds that result back into the model. This is the trusted runtime-neutral
+  seam for async output reducers such as tokenjuice.
 
 Plugins must declare `contracts.agentToolResultMiddleware` for each targeted
 runtime, for example `["openclaw", "codex"]`. Installed plugins without that
-contract cannot register this middleware; keep normal OpenClaw plugin hooks for
-work that does not need pre-model tool-result timing. The old
+contract, or without explicit enablement, cannot register this middleware; keep
+normal OpenClaw plugin hooks for work that does not need pre-model tool-result
+timing. The old
 embedded-runner-only extension factory registration path has been removed.
 </Accordion>
 
