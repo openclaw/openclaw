@@ -155,14 +155,25 @@ function createSignalProcess() {
   };
 }
 
-async function waitForAgentCommandCall(expectedCalls = 1) {
-  const deadline = Date.now() + 5_000;
-  while (agentCommand.mock.calls.length < expectedCalls && Date.now() < deadline) {
+async function waitForAgentCommandCall(expectedAdditionalCalls = 1) {
+  const initialCalls = agentCommand.mock.calls.length;
+  const expectedCalls = initialCalls + expectedAdditionalCalls;
+  await vi.waitFor(() => {
+    expect(agentCommand.mock.calls.length).toBeGreaterThanOrEqual(expectedCalls);
+  });
+}
+
+async function waitForSignalListener(
+  signals: ReturnType<typeof createSignalProcess>,
+  signal: "SIGINT" | "SIGTERM",
+) {
+  const deadline = Date.now() + 10_000;
+  while (signals.listenerCount(signal) === 0 && Date.now() < deadline) {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 10);
     });
   }
-  expect(agentCommand).toHaveBeenCalledTimes(expectedCalls);
+  expect(signals.listenerCount(signal)).toBeGreaterThan(0);
 }
 
 function runAbortHandlerWhenReady(signal: AbortSignal | undefined, onAbort: () => void): void {
@@ -174,16 +185,7 @@ function runAbortHandlerWhenReady(signal: AbortSignal | undefined, onAbort: () =
 }
 
 async function waitForGatewayCall(expectedCalls = 1) {
-  for (
-    let attempt = 0;
-    attempt < 50 && callGateway.mock.calls.length < expectedCalls;
-    attempt += 1
-  ) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-  }
-  expect(callGateway).toHaveBeenCalledTimes(expectedCalls);
+  await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(expectedCalls));
 }
 
 function createDeferredVoid() {
@@ -1132,6 +1134,11 @@ describe("agentCliCommand", () => {
       const abortListenerAttached = createDeferredVoid();
       agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
         expect(opts.abortSignal).toBeInstanceOf(AbortSignal);
+        if (opts.abortSignal?.aborted) {
+          const err = new Error("local agent aborted");
+          err.name = "AbortError";
+          throw err;
+        }
         return await new Promise((_, reject) => {
           runAbortHandlerWhenReady(opts.abortSignal, () => {
             const err = new Error("local agent aborted");
@@ -1145,11 +1152,12 @@ describe("agentCliCommand", () => {
       const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
         process: signals.processLike,
       });
-      await waitForAgentCommandCall();
+      await waitForSignalListener(signals, "SIGTERM");
       await abortListenerAttached.promise;
       signals.emit("SIGTERM");
 
       await run;
+      expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(callGateway).not.toHaveBeenCalled();
       expect(runtime.exit).toHaveBeenCalledWith(143);
       expect(signals.listenerCount("SIGTERM")).toBe(0);
@@ -1162,6 +1170,12 @@ describe("agentCliCommand", () => {
       const signals = createSignalProcess();
       const abortListenerAttached = createDeferredVoid();
       agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
+        if (opts.abortSignal?.aborted) {
+          return {
+            payloads: [],
+            meta: { aborted: true },
+          } as unknown as Awaited<ReturnType<typeof AgentCommand>>;
+        }
         return await new Promise((resolve) => {
           runAbortHandlerWhenReady(opts.abortSignal, () => {
             resolve({
@@ -1176,11 +1190,12 @@ describe("agentCliCommand", () => {
       const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
         process: signals.processLike,
       });
-      await waitForAgentCommandCall();
+      await waitForSignalListener(signals, "SIGTERM");
       await abortListenerAttached.promise;
       signals.emit("SIGTERM");
 
       await expect(run).resolves.toBeUndefined();
+      expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(callGateway).not.toHaveBeenCalled();
       expect(runtime.exit).toHaveBeenCalledWith(143);
     });
