@@ -1777,7 +1777,6 @@ export async function runEmbeddedAgent(
             attempt.setTerminalLifecycleMeta?.({ ...meta, aborted });
           };
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
-          let compactionFailureContext = false;
           if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
             activeSessionId = sessionIdUsed;
             // Track the live session for lifecycle persistence identity (#88538).
@@ -2092,12 +2091,8 @@ export async function runEmbeddedAgent(
                 postCompactionGuard.armPostCompaction();
                 continue;
               } else {
-                compactionFailureContext =
-                  timeoutCompactionAttempts >= MAX_TIMEOUT_COMPACTION_ATTEMPTS;
                 log.warn(
-                  compactionFailureContext
-                    ? `[timeout-compaction] compaction did not reduce context for ${provider}/${modelId}; timeout compaction attempts exhausted, falling through to normal handling`
-                    : `[timeout-compaction] compaction did not reduce context for ${provider}/${modelId}; falling through to failover rotation`,
+                  `[timeout-compaction] compaction did not reduce context for ${provider}/${modelId}; falling through to normal handling`,
                 );
               }
             }
@@ -2900,7 +2895,6 @@ export async function runEmbeddedAgent(
             timedOutDuringCompaction,
             timedOutDuringToolExecution,
             harnessOwnsTransport: pluginHarnessOwnsTransport,
-            compactionFailureContext,
             profileRotated: false,
           });
           const assistantFailoverOutcome = await handleAssistantFailover({
@@ -2914,7 +2908,6 @@ export async function runEmbeddedAgent(
             idleTimedOut,
             timedOutDuringCompaction,
             timedOutDuringToolExecution,
-            compactionFailureContext,
             allowSameModelIdleTimeoutRetry:
               timedOut &&
               idleTimedOut &&
