@@ -25,7 +25,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js"
 type OpenAICompletionsOutput = Parameters<typeof testing.processOpenAICompletionsStream>[1];
 type OpenAIResponsesOutput = Parameters<typeof testing.processResponsesStream>[1];
 
-type CapturedStreamEvent = { type?: string; delta?: string };
+type CapturedStreamEvent = { type?: string; delta?: string; partial?: unknown };
 
 function createDeepSeekCompletionsModel(): Model<"openai-completions"> {
   return {
@@ -1859,6 +1859,64 @@ describe("openai transport stream", () => {
     expect(stream.push.mock.calls.length).toBeLessThan(512);
   });
 
+  it("omits accumulated partial snapshots from OpenAI-compatible text deltas", async () => {
+    const model = {
+      id: "dense-local",
+      name: "Dense Local",
+      api: "openai-completions",
+      provider: "local",
+      baseUrl: "http://127.0.0.1:18065/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-dense",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant" as const, content: "a" },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-dense",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { content: "b" },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    const textDeltas = events.filter((event) => event.type === "text_delta");
+    expect(textDeltas).toHaveLength(2);
+    expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
+    expect(output.content).toEqual([{ type: "text", text: "ab" }]);
+  });
+
   it("yields to aborts during bursty Responses streams", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
@@ -1885,6 +1943,28 @@ describe("openai transport stream", () => {
     ).rejects.toThrow("Request was aborted");
     expect(yieldedToTimer).toBe(true);
     expect(stream.push.mock.calls.length).toBeLessThan(512);
+  });
+
+  it("omits accumulated partial snapshots from Responses text deltas", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processResponsesStream(
+      streamChunks([
+        { type: "response.output_item.added", item: { type: "message" } },
+        { type: "response.output_text.delta", delta: "a" },
+        { type: "response.output_text.delta", delta: "b" },
+      ]),
+      output,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      model,
+    );
+
+    const textDeltas = events.filter((event) => event.type === "text_delta");
+    expect(textDeltas).toHaveLength(2);
+    expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
+    expect(output.content).toEqual([{ type: "text", text: "ab" }]);
   });
 
   it("skips null and non-object OpenAI-compatible stream chunks", async () => {

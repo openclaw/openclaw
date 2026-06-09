@@ -1033,6 +1033,22 @@ describe("kitchen-sink RPC command catalog assertions", () => {
       "plugins.uiDescriptors did not report Kitchen Sink descriptor",
     );
   });
+
+  it("allows conformance mode to skip generated Kitchen Sink UI descriptors", () => {
+    expect(() =>
+      assertKitchenSinkUiDescriptors(
+        {
+          ok: true,
+          descriptors: [],
+        },
+        { expectDescriptor: false },
+      ),
+    ).not.toThrow();
+
+    expect(() => assertKitchenSinkUiDescriptors({}, { expectDescriptor: false })).toThrow(
+      "plugins.uiDescriptors returned invalid payload",
+    );
+  });
 });
 
 describe("kitchen-sink RPC diagnostics assertions", () => {
