@@ -63,6 +63,7 @@ describe("codex app-server session binding", () => {
       dynamicToolsFingerprint: "tools-v1",
       userMcpServersFingerprint: "user-mcp-v1",
       nativeHookRelayGeneration: "generation-v1",
+      nativeHookRelayConfigFingerprint: "hook-config-v1",
     });
 
     const binding = await readCodexAppServerBinding(sessionFile);
@@ -76,6 +77,7 @@ describe("codex app-server session binding", () => {
     expect(binding?.dynamicToolsFingerprint).toBe("tools-v1");
     expect(binding?.userMcpServersFingerprint).toBe("user-mcp-v1");
     expect(binding?.nativeHookRelayGeneration).toBe("generation-v1");
+    expect(binding?.nativeHookRelayConfigFingerprint).toBe("hook-config-v1");
     const bindingStat = await fs.stat(resolveCodexAppServerBindingPath(sessionFile));
     expect(bindingStat.isFile()).toBe(true);
   });

@@ -1722,6 +1722,54 @@ describe("native hook relay registry", () => {
     });
   });
 
+  it("maps Codex Code Mode exec payloads to OpenClaw shell policy", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      block: true,
+      blockReason: "code mode command blocked",
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      channelId: "telegram",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        cwd: "/repo",
+        tool_name: "code_mode_exec",
+        tool_use_id: "native-code-mode-exec-1",
+        tool_input: { command: "cat /tmp/private_key" },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "code mode command blocked",
+      },
+    });
+    const event = getMockCallArg(beforeToolCall, 0, 0, "before tool call event");
+    expectRecordFields(event, {
+      toolName: "exec",
+      params: {
+        command: "cat /tmp/private_key",
+      },
+      runId: "run-1",
+      toolCallId: "native-code-mode-exec-1",
+    });
+  });
+
   it("prefers Codex exec_command cmd over a stale command field", async () => {
     const beforeToolCall = vi.fn(async (event: unknown) => {
       const command = (event as { params?: { command?: string } }).params?.command;
