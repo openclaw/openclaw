@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import {
   createChatSessionsLoadOverrides,
+  flushChatQueueAfterIdleSessionReconciliation,
   refreshChat,
   refreshChatAvatar,
   scopedAgentParamsForSession,
@@ -630,6 +631,7 @@ function switchChatSessionInternal(
   opts?: { awaitInitialLoad?: boolean },
 ): Promise<void> | undefined {
   const previousSessionKey = state.sessionKey;
+  const previousSessionsResult = state.sessionsResult;
   const nextSessionRow =
     state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey) ??
     state.chatSessionPickerResult?.sessions.find((row) => row.key === nextSessionKey);
@@ -654,6 +656,13 @@ function switchChatSessionInternal(
   );
   const historyLoad = loadChatHistory(state as unknown as ChatState);
   const sessionsRefresh = refreshSessionOptions(state);
+  flushChatQueueAfterIdleSessionReconciliation(
+    state as unknown as Parameters<typeof flushChatQueueAfterIdleSessionReconciliation>[0],
+    nextSessionKey,
+    historyLoad,
+    sessionsRefresh,
+    previousSessionsResult,
+  );
   if (opts?.awaitInitialLoad) {
     void sessionsRefresh;
     return Promise.allSettled([subscriptionSync, historyLoad]).then(() => undefined);
