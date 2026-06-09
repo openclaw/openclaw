@@ -1578,7 +1578,6 @@ async function processResponsesStream(
           type: "text_delta",
           contentIndex: blockIndex(),
           delta: stringifyUnknown(event.delta),
-          partial: output,
         });
       }
     } else if (type === "response.function_call_arguments.delta") {
@@ -2740,7 +2739,6 @@ async function processOpenAICompletionsStream(
       type: "text_delta",
       contentIndex: blockIndex(),
       delta: text,
-      partial: output,
     });
   };
   const flushPendingPostToolCallDeltas = () => {
@@ -3438,6 +3436,7 @@ function getCompat(model: OpenAIModeModel): {
     visibleReasoningDetailTypes:
       compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
     requiresReasoningContentOnAssistantMessages:
+      compat.requiresReasoningContentOnAssistantMessages ??
       detected.requiresReasoningContentOnAssistantMessages,
     requiresNonEmptyUserOrAssistantMessage: detected.requiresNonEmptyUserOrAssistantMessage,
   };
@@ -4283,6 +4282,7 @@ function mapStopReason(reason: string | null) {
 }
 
 export const testing = {
+  getCompat,
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
   buildOpenAISdkClientOptions,

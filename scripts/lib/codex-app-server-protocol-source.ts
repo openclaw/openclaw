@@ -383,3 +383,83 @@ export function normalizeGeneratedTypeScript(text: string): string {
     .replace('export * as v2 from "./v2.js";', 'export * as v2 from "./v2/index.js";')
     .replaceAll("| null | null", "| null");
 }
+
+export function canonicalizeCodexAppServerProtocolJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const items = value.map(canonicalizeCodexAppServerProtocolJson);
+    return sortCodexProtocolJsonArrayByType(items);
+  }
+
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  const sorted: Record<string, unknown> = {};
+  const entries = Object.entries(value)
+    .map(([key, child]) => [key, canonicalizeCodexAppServerProtocolJson(child)] as const)
+    .toSorted(([left], [right]) => {
+      if (left < right) {
+        return -1;
+      }
+      if (left > right) {
+        return 1;
+      }
+      return 0;
+    });
+  for (const [key, child] of entries) {
+    sorted[key] = child;
+  }
+  return sorted;
+}
+
+export function normalizeCodexAppServerProtocolJsonText(text: string): string {
+  return JSON.stringify(canonicalizeCodexAppServerProtocolJson(JSON.parse(text)));
+}
+
+export function formatCodexAppServerProtocolJsonText(text: string): string {
+  return `${JSON.stringify(canonicalizeCodexAppServerProtocolJson(JSON.parse(text)), null, 2)}\n`;
+}
+
+function sortCodexProtocolJsonArrayByType(items: unknown[]): unknown[] {
+  if (!items.every(isPlainObject)) {
+    return items;
+  }
+
+  const typed = items
+    .map((item, index) => ({ index, item, type: stringRecordValue(item, "type") }))
+    .filter(
+      (entry): entry is { index: number; item: Record<string, unknown>; type: string } =>
+        entry.type !== undefined,
+    );
+  if (typed.length < 2) {
+    return items;
+  }
+
+  const sortedTyped = typed.toSorted((left, right) => {
+    if (left.type < right.type) {
+      return -1;
+    }
+    if (left.type > right.type) {
+      return 1;
+    }
+    return left.index - right.index;
+  });
+  const sortedByOriginalIndex = new Map(
+    typed.map((entry, index) => [entry.index, sortedTyped[index]?.item]),
+  );
+
+  return items.map((item, index) => sortedByOriginalIndex.get(index) ?? item);
+}
+
+function stringRecordValue(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}

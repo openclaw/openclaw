@@ -68,6 +68,8 @@ vi.mock("./embeddings.js", () => {
         };
       },
     ) => config?.models?.providers?.[providerId]?.api ?? providerId,
+    resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
+      providerId === "local" ? "local" : "remote",
     createEmbeddingProvider: async (options: {
       provider?: string;
       model?: string;
@@ -294,7 +296,7 @@ describe("memory index", () => {
         defaults: {
           workspace: workspaceDir,
           memorySearch: {
-            provider: params.provider ?? "openai",
+            ...(params.provider !== undefined ? { provider: params.provider } : {}),
             model: params.model ?? "mock-embed",
             fallback: params.fallback,
             outputDimensionality: params.outputDimensionality,
@@ -361,6 +363,27 @@ describe("memory index", () => {
       await manager.close?.();
     }
   }
+
+  it("does not prepare vector deletes after unsafe reset drops a missing vector table", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-vector-missing-table.sqlite"),
+      vectorEnabled: true,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getFreshManager(cfg);
+    managersForCleanup.add(manager);
+    type VectorState = { available: boolean | null; dims?: number };
+    const vector = Reflect.get(manager, "vector") as VectorState;
+    vector.available = true;
+    vector.dims = 4;
+    Reflect.set(manager, "vectorReady", Promise.resolve(true));
+
+    await expect(
+      Reflect.apply(Reflect.get(manager, "runUnsafeReindex"), manager, [
+        { reason: "test", force: true },
+      ]),
+    ).resolves.toBeUndefined();
+  });
 
   async function getFtsSessionManager(params: {
     stateDirName: string;
@@ -493,12 +516,46 @@ describe("memory index", () => {
     }
   });
 
-  it("does not search stale rows when index metadata is missing", async () => {
+  it("keeps status clean when configured model defaults to the adapter model (#90413)", async () => {
+    const dbPath = path.join(workspaceDir, "index-default-model-status.sqlite");
+    // Index under the provider's resolved default model, as provider init does.
+    const indexCfg = createCfg({
+      storePath: dbPath,
+      provider: "gemini",
+      model: "gemini-embed",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const indexManager = await getFreshManager(indexCfg);
+    await indexManager.sync({ reason: "test", force: true });
+    await indexManager.close?.();
+
+    // Plain status path before provider init: settings.model is the empty
+    // default, so identity must resolve the adapter model instead of comparing
+    // meta against a blank "expected" model.
+    const statusCfg = createCfg({
+      storePath: dbPath,
+      provider: "gemini",
+      model: "",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const statusManager = await getFreshManager(statusCfg, "status");
+    try {
+      const status = statusManager.status();
+
+      expect(status.dirty).toBe(false);
+      expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      await statusManager.close?.();
+    }
+  });
+
+  it("rebuilds missing metadata with existing chunks on gateway sync", async () => {
     const dbPath = path.join(workspaceDir, "index-missing-meta-cutover.sqlite");
     const cfg = createCfg({
       storePath: dbPath,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
     const oldManager = await getFreshManager(cfg);
     await oldManager.sync({ reason: "test", force: true });
     await oldManager.close?.();
@@ -524,6 +581,19 @@ describe("memory index", () => {
         status: "missing",
         reason: "index metadata is missing",
       });
+
+      vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
+      await nextManager.sync({ reason: "test" });
+
+      expect(nextManager.status().dirty).toBe(false);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      const repairedAlphaResults = await nextManager.search("alpha");
+      expect(
+        repairedAlphaResults.some((result) => result.path.endsWith("memory/2026-01-12.md")),
+      ).toBe(false);
+      const repairedResults = await nextManager.search("beta");
+      expect(repairedResults.length).toBeGreaterThan(0);
+      expect(repairedResults[0]?.path).toContain("memory/2026-01-13.md");
     } finally {
       await nextManager.close?.();
     }
@@ -550,6 +620,46 @@ describe("memory index", () => {
       expect(nextManager.status().custom?.indexIdentity).toMatchObject({
         status: "mismatched",
       });
+    } finally {
+      await nextManager.close?.();
+    }
+  });
+
+  it("does not rebuild missing semantic metadata when embeddings are unavailable", async () => {
+    const dbPath = path.join(workspaceDir, "index-missing-meta-provider-unavailable.sqlite");
+    const oldCfg = createCfg({
+      storePath: dbPath,
+      model: "semantic-embed",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const oldManager = await getFreshManager(oldCfg);
+    await oldManager.sync({ reason: "test", force: true });
+    await oldManager.close?.();
+
+    forceNoProvider = true;
+    const nextManager = await getFreshManager(oldCfg);
+    try {
+      const db = (
+        nextManager as unknown as {
+          db: {
+            exec: (sql: string) => void;
+            prepare: (sql: string) => {
+              get: () => { model?: string } | undefined;
+            };
+          };
+        }
+      ).db;
+      db.exec(`DELETE FROM meta WHERE key = 'memory_index_meta_v1'`);
+
+      await nextManager.sync({ reason: "test" });
+
+      expect(nextManager.status().dirty).toBe(true);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({
+        status: "missing",
+        reason: "index metadata is missing",
+      });
+      const row = db.prepare("SELECT model FROM chunks LIMIT 1").get();
+      expect(row?.model).toBe("semantic-embed");
     } finally {
       await nextManager.close?.();
     }
@@ -939,6 +1049,25 @@ describe("memory index", () => {
     const third = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
     managersForCleanup.add(third);
     expect(third).toBe(second);
+  });
+
+  it("closes stale default managers when provider requirement changes", async () => {
+    const storePath = path.join(workspaceDir, "index-provider-requirement-cache.sqlite");
+    const implicitCfg = createCfg({ storePath });
+    const implicit = requireManager(
+      await getMemorySearchManager({ cfg: implicitCfg, agentId: "main" }),
+    );
+    managersForCleanup.add(implicit);
+    await implicit.probeEmbeddingAvailability();
+
+    const explicitCfg = createCfg({ storePath, provider: "openai" });
+    const explicit = requireManager(
+      await getMemorySearchManager({ cfg: explicitCfg, agentId: "main" }),
+    );
+    managersForCleanup.add(explicit);
+
+    expect(explicit === implicit).toBe(false);
+    expect(providerCloseCalls).toBe(1);
   });
 
   it("retries embedding provider close before releasing the manager", async () => {
@@ -1571,6 +1700,12 @@ describe("memory index", () => {
     const status = manager.status();
     expect(status.chunks).toBeGreaterThan(0);
     expect(embedBatchCalls).toBe(0);
+    expect(status.custom?.providerUnavailableReason).toBe("No API key found for provider");
+    expect(status.custom?.providerState).toEqual({
+      mode: "fts-only",
+      reason: "No API key found for provider",
+      attemptedProviderId: "openai",
+    });
 
     const results = await manager.search("Alpha");
     expect(results.length).toBeGreaterThan(0);
@@ -1578,6 +1713,56 @@ describe("memory index", () => {
 
     const noResults = await manager.search("nonexistent_xyz_keyword");
     expect(noResults.length).toBe(0);
+  });
+
+  it("fails fast instead of searching FTS when an explicit provider is unavailable", async () => {
+    forceNoProvider = true;
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-required-provider-missing.sqlite"),
+      provider: "openai",
+      minScore: 0.35,
+      hybrid: { enabled: true },
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await expect(manager.search("Alpha")).rejects.toThrow(
+        /Memory search unavailable: embedding provider "openai" is configured but unavailable\.[\s\S]*agentId=main purpose=default[\s\S]*registeredMemoryEmbeddingProviders=local/,
+      );
+      await expect(manager.sync({ reason: "test" })).rejects.toThrow(
+        /Memory sync unavailable: embedding provider "openai" is configured but unavailable\./,
+      );
+      forceNoProvider = false;
+      await manager.sync({ reason: "test", force: true });
+      const results = await manager.search("Alpha");
+      expect(results.length).toBeGreaterThan(0);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("fails fast instead of returning FTS when an explicit provider is lost at runtime", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-required-provider-runtime-missing.sqlite"),
+      provider: "openai",
+      minScore: 0.35,
+      hybrid: { enabled: true },
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test", force: true });
+      (
+        manager as unknown as {
+          provider: null;
+        }
+      ).provider = null;
+
+      await expect(manager.search("Alpha")).rejects.toThrow(
+        /Memory search unavailable: embedding provider "openai" is configured but unavailable\./,
+      );
+    } finally {
+      await manager.close?.();
+    }
   });
 
   it("prefers exact session transcript hits in FTS-only mode", async () => {

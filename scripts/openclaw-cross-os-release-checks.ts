@@ -2566,6 +2566,57 @@ export async function readBoundedCrossOsResponseText(
   return truncated ? `${text}\n[truncated]` : text;
 }
 
+export function dashboardHtmlMarkerStatus(html: string): {
+  app: boolean;
+  ready: boolean;
+  title: boolean;
+} {
+  const title = html.includes("<title>OpenClaw Control</title>");
+  const app = html.includes("<openclaw-app></openclaw-app>");
+  return { app, ready: title && app, title };
+}
+
+export function resolveDashboardAssetUrls(dashboardUrl: string, html: string): string[] {
+  const baseUrl = new URL(dashboardUrl);
+  const assetUrls = new Set<string>();
+  const assetAttributePattern = /<(?:script|link)\b[^>]*(?:src|href)\s*=\s*(["'])([^"']+)\1/giu;
+  for (const match of html.matchAll(assetAttributePattern)) {
+    const rawUrl = match[2]?.trim();
+    if (!rawUrl) {
+      continue;
+    }
+    const assetUrl = new URL(rawUrl, baseUrl);
+    if (assetUrl.origin === baseUrl.origin && assetUrl.pathname.includes("/assets/")) {
+      assetUrls.add(assetUrl.href);
+    }
+  }
+  return [...assetUrls].toSorted();
+}
+
+export async function verifyDashboardAssetUrls(
+  assetUrls: string[],
+  fetchAsset: typeof fetch = fetch,
+): Promise<{ failures: string[]; ok: boolean }> {
+  if (assetUrls.length === 0) {
+    return { failures: ["no dashboard asset URLs found"], ok: false };
+  }
+  const failures: string[] = [];
+  for (const assetUrl of assetUrls) {
+    try {
+      const response = await fetchAsset(assetUrl, {
+        signal: AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS),
+      });
+      await response.body?.cancel().catch(() => undefined);
+      if (!response.ok) {
+        failures.push(`${assetUrl} status=${response.status}`);
+      }
+    } catch (error) {
+      failures.push(`${assetUrl} ${formatError(error)}`);
+    }
+  }
+  return { failures, ok: failures.length === 0 };
+}
+
 async function waitForDiscordMessage(params) {
   const deadline = Date.now() + 3 * 60 * 1000;
   while (Date.now() < deadline) {
@@ -3303,7 +3354,7 @@ function buildReleaseAgentTurnArgs(sessionId) {
 
 export function shouldRetryCrossOsAgentTurnError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return /Agent output did not contain the expected OK marker|Agent turn used embedded fallback instead of gateway|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
+  return /Agent output did not contain the expected OK marker|Agent turn used embedded fallback instead of gateway|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly|rate limit reached|rate_limit_exceeded|HTTP 429|HTTP 503|upstream connect error|disconnect\/reset before headers|connection timeout/u.test(
     message,
   );
 }
@@ -3437,18 +3488,22 @@ async function runDashboardSmoke(params) {
           signal: AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS),
         });
         const html = await readBoundedCrossOsResponseText(response);
-        if (
-          response.ok &&
-          html.includes("<title>OpenClaw Control</title>") &&
-          html.includes("<openclaw-app></openclaw-app>")
-        ) {
+        const markers = dashboardHtmlMarkerStatus(html);
+        const assetUrls = resolveDashboardAssetUrls(dashboardUrl, html);
+        if (response.ok && markers.ready) {
+          const assets = await verifyDashboardAssetUrls(assetUrls);
+          if (assets.ok) {
+            logStream.write(
+              `${new Date().toISOString()} dashboard-ready status=${response.status} assets=${assetUrls.length}\n`,
+            );
+            return;
+          }
           logStream.write(
-            `${new Date().toISOString()} dashboard-ready status=${response.status}\n`,
+            `${new Date().toISOString()} dashboard-assets-not-ready status=${response.status} assets=${assetUrls.length} failures=${assets.failures.join(" | ")}\n`,
           );
-          return;
         }
         logStream.write(
-          `${new Date().toISOString()} dashboard-not-ready status=${response.status} title=${html.includes("<title>OpenClaw Control</title>")} app=${html.includes("<openclaw-app></openclaw-app>")}\n`,
+          `${new Date().toISOString()} dashboard-not-ready status=${response.status} title=${markers.title} app=${markers.app} assets=${assetUrls.length}\n`,
         );
       } catch (error) {
         logStream.write(
@@ -3785,14 +3840,33 @@ async function runCommandInvocation(invocation, options) {
       }
     };
 
+    const finishLogStream = (callback) => {
+      let completed = false;
+      const finish = (error) => {
+        if (completed) {
+          return;
+        }
+        completed = true;
+        callback(error);
+      };
+      logStream.once("finish", finish);
+      logStream.once("error", finish);
+      logStream.end();
+    };
+
     const finalize = (callback) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimers();
-      logStream.end();
-      callback();
+      finishLogStream((logError) => {
+        if (logError) {
+          rejectPromise(new Error(`Command log write failed: ${formatError(logError)}`));
+          return;
+        }
+        callback();
+      });
     };
 
     const requestKill = () => {
@@ -3894,11 +3968,16 @@ async function runCommandInvocation(invocation, options) {
 export async function startStaticFileServer(params) {
   mkdirSync(dirname(params.logPath), { recursive: true });
   const logStream = createWriteStream(params.logPath, { flags: "a" });
+  let logStreamError = null;
+  logStream.on("error", (error) => {
+    logStreamError ??= error;
+  });
   const fileName = String(params.filePath.split(/[/\\]/u).at(-1) ?? "artifact");
   const fileStat = statSync(params.filePath);
   const sockets = new Set<Socket>();
   const server = createServer((request, response) => {
     logStream.write(`${new Date().toISOString()} ${request.method} ${request.url}\n`);
+    response.setHeader("connection", "close");
     if (request.url !== `/${fileName}`) {
       response.statusCode = 404;
       response.end("not found");
@@ -3907,7 +3986,6 @@ export async function startStaticFileServer(params) {
     response.statusCode = 200;
     response.setHeader("content-type", resolveStaticFileContentType(params.filePath));
     response.setHeader("content-length", String(fileStat.size));
-    response.setHeader("connection", "close");
     const fileStream = createReadStream(params.filePath);
     fileStream.once("error", (error) => {
       logStream.write(`${new Date().toISOString()} static-file-read-error ${formatError(error)}\n`);
@@ -3936,23 +4014,75 @@ export async function startStaticFileServer(params) {
     throw new Error("Failed to bind static file server.");
   }
   const port = address.port;
+  let closePromise;
   return {
     url: `http://127.0.0.1:${port}/${fileName}`,
-    close: () =>
-      new Promise((resolvePromise, rejectPromise) => {
+    close: () => {
+      closePromise ??= new Promise((resolvePromise, rejectPromise) => {
+        closeStaticFileServerConnections(server, sockets);
         server.close((error) => {
-          logStream.end();
-          if (error) {
-            rejectPromise(error);
-            return;
-          }
-          resolvePromise();
+          void (async () => {
+            const closeLogError = await finishStaticFileServerLog(logStream, logStreamError).catch(
+              (logError: unknown): Error =>
+                logError instanceof Error ? logError : new Error(String(logError)),
+            );
+            if (error) {
+              rejectPromise(error);
+              return;
+            }
+            if (closeLogError) {
+              rejectPromise(
+                closeLogError instanceof Error
+                  ? closeLogError
+                  : new Error(formatError(closeLogError)),
+              );
+              return;
+            }
+            resolvePromise();
+          })();
         });
-        for (const socket of sockets) {
-          socket.destroy();
-        }
-      }),
+        closeStaticFileServerConnections(server, sockets);
+      });
+      return closePromise;
+    },
   };
+}
+
+function closeStaticFileServerConnections(server, sockets) {
+  for (const socket of sockets) {
+    socket.destroy();
+  }
+  if (typeof server.closeAllConnections === "function") {
+    server.closeAllConnections();
+  }
+}
+
+function finishStaticFileServerLog(logStream, pendingError) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    if (pendingError) {
+      logStream.destroy();
+      rejectPromise(new Error(`Static file server log write failed: ${formatError(pendingError)}`));
+      return;
+    }
+    let completed = false;
+    const finish = () => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      resolvePromise();
+    };
+    const fail = (error) => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      rejectPromise(new Error(`Static file server log write failed: ${formatError(error)}`));
+    };
+    logStream.once("finish", finish);
+    logStream.once("error", fail);
+    logStream.end();
+  });
 }
 
 export function resolveStaticFileContentType(filePath) {
