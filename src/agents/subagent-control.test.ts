@@ -656,6 +656,123 @@ describe("killSubagentRunAdmin", () => {
   });
 });
 
+describe("killSubagentRunAdmin ACP runtime cleanup", () => {
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+    __testing.setDepsForTest();
+  });
+
+  function addAcpRun(childSessionKey: string) {
+    addSubagentRunForTests({
+      runId: `run-${childSessionKey}`,
+      childSessionKey,
+      controllerSessionKey: "agent:main:controller",
+      requesterSessionKey: "agent:main:requester",
+      requesterDisplayKey: "requester",
+      task: "acp work",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+  }
+
+  it("closes the ACP runtime when killing an ACP-backed subagent session", async () => {
+    const childSessionKey = "agent:codex:acp:kill-me";
+    const storePath = writeSessionStoreFixture("acp-kill", {
+      [childSessionKey]: {
+        sessionId: "sess-acp",
+        updatedAt: Date.now(),
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          mode: "oneshot",
+          state: "running",
+          lastActivityAt: Date.now(),
+        },
+      },
+    });
+    addAcpRun(childSessionKey);
+
+    const closeAcpSessionRuntime = vi.fn(async () => ({
+      attempted: true,
+      runtimeClosed: true,
+      metaCleared: true,
+      cancelTimedOut: false,
+      closeTimedOut: false,
+      errors: [],
+    }));
+    setSubagentControlDepsForTest({ closeAcpSessionRuntime });
+
+    const result = await killSubagentRunAdmin({
+      cfg: cfgWithSessionStore(storePath),
+      sessionKey: childSessionKey,
+    });
+
+    expect(result).toMatchObject({ found: true, killed: true, sessionKey: childSessionKey });
+    expect(closeAcpSessionRuntime).toHaveBeenCalledTimes(1);
+    expect(closeAcpSessionRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: childSessionKey,
+        reason: "subagent-kill",
+        discardPersistentState: true,
+        clearMeta: true,
+      }),
+    );
+  });
+
+  it("does not attempt ACP cleanup when killing a non-ACP subagent session", async () => {
+    const childSessionKey = "agent:main:subagent:plain";
+    const storePath = writeSessionStoreFixture("plain-kill", {
+      [childSessionKey]: { sessionId: "sess-plain", updatedAt: Date.now() },
+    });
+    addAcpRun(childSessionKey);
+
+    const closeAcpSessionRuntime = vi.fn(async () => ({
+      attempted: false,
+      runtimeClosed: false,
+      metaCleared: false,
+      cancelTimedOut: false,
+      closeTimedOut: false,
+      errors: [],
+    }));
+    setSubagentControlDepsForTest({ closeAcpSessionRuntime });
+
+    const result = await killSubagentRunAdmin({
+      cfg: cfgWithSessionStore(storePath),
+      sessionKey: childSessionKey,
+    });
+
+    expect(result).toMatchObject({ found: true, killed: true });
+    expect(closeAcpSessionRuntime).not.toHaveBeenCalled();
+  });
+
+  it("still terminates the run when ACP cleanup throws", async () => {
+    const childSessionKey = "agent:codex:acp:kill-throws";
+    const storePath = writeSessionStoreFixture("acp-kill-throws", {
+      [childSessionKey]: {
+        sessionId: "sess-acp-throws",
+        updatedAt: Date.now(),
+        acp: { backend: "acpx", agent: "codex", mode: "oneshot", state: "running" },
+      },
+    });
+    addAcpRun(childSessionKey);
+
+    const closeAcpSessionRuntime = vi.fn(async () => {
+      throw new Error("acp backend wedged");
+    });
+    setSubagentControlDepsForTest({ closeAcpSessionRuntime });
+
+    const result = await killSubagentRunAdmin({
+      cfg: cfgWithSessionStore(storePath),
+      sessionKey: childSessionKey,
+    });
+
+    expect(result).toMatchObject({ found: true, killed: true });
+    expect(closeAcpSessionRuntime).toHaveBeenCalledTimes(1);
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
+  });
+});
+
 describe("killControlledSubagentRun", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });

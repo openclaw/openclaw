@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import type {
+  AcpRuntimeCloseOutcome,
+  CloseAcpSessionRuntimeParams,
+} from "../acp/control-plane/acp-runtime-close.js";
 import type { ClearSessionQueueResult } from "../auto-reply/reply/queue.js";
 import {
   resolveSubagentLabel,
@@ -52,6 +56,9 @@ type GatewayCaller = typeof callGateway;
 type UpdateSessionStore = typeof updateSessionStore;
 type AbortEmbeddedPiRun = (sessionId: string) => boolean;
 type ClearSessionQueues = (keys: Array<string | undefined>) => ClearSessionQueueResult;
+type CloseAcpSessionRuntimeFn = (
+  params: CloseAcpSessionRuntimeParams,
+) => Promise<AcpRuntimeCloseOutcome>;
 
 const defaultSubagentControlDeps = {
   callGateway,
@@ -63,6 +70,7 @@ let subagentControlDeps: {
   updateSessionStore: UpdateSessionStore;
   abortEmbeddedPiRun?: AbortEmbeddedPiRun;
   clearSessionQueues?: ClearSessionQueues;
+  closeAcpSessionRuntime?: CloseAcpSessionRuntimeFn;
 } = defaultSubagentControlDeps;
 
 const subagentControlRuntimeLoader = createLazyImportLoader(
@@ -88,6 +96,13 @@ async function resolveSubagentControlRuntime(): Promise<{
     abortEmbeddedPiRun: subagentControlDeps.abortEmbeddedPiRun ?? runtime.abortEmbeddedPiRun,
     clearSessionQueues: subagentControlDeps.clearSessionQueues ?? runtime.clearSessionQueues,
   };
+}
+
+async function resolveCloseAcpSessionRuntime(): Promise<CloseAcpSessionRuntimeFn> {
+  return (
+    subagentControlDeps.closeAcpSessionRuntime ??
+    (await loadSubagentControlRuntime()).closeAcpSessionRuntime
+  );
 }
 
 export type ResolvedSubagentController = {
@@ -175,6 +190,28 @@ async function killSubagentRun(params: {
     logVerbose(
       `subagents control kill: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
     );
+  }
+  // ACP-backed sessions must have their runtime torn down on kill; otherwise the
+  // ACPX one-shot record stays `closed:false` and `.acp` metadata stays
+  // `running` even though the operator asked to stop it (see incident
+  // 2026-06-08). Best-effort and timeout-guarded inside the helper so a wedged
+  // ACP backend can never make the kill itself hang or fail.
+  if (resolved.entry?.acp) {
+    try {
+      const closeAcpSessionRuntime = await resolveCloseAcpSessionRuntime();
+      await closeAcpSessionRuntime({
+        cfg: params.cfg,
+        sessionKey: childSessionKey,
+        entry: resolved.entry,
+        reason: "subagent-kill",
+        discardPersistentState: true,
+        clearMeta: true,
+      });
+    } catch (error) {
+      logVerbose(
+        `subagents control kill: ACP runtime close failed for ${childSessionKey}: ${formatErrorMessage(error)}`,
+      );
+    }
   }
   if (resolved.entry) {
     try {
@@ -734,6 +771,7 @@ export const __testing = {
       updateSessionStore: UpdateSessionStore;
       abortEmbeddedPiRun: AbortEmbeddedPiRun;
       clearSessionQueues: ClearSessionQueues;
+      closeAcpSessionRuntime: CloseAcpSessionRuntimeFn;
     }>,
   ) {
     subagentControlDeps = overrides
