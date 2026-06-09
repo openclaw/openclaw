@@ -76,6 +76,32 @@ describe("cron wake() origin delivery-context carry", () => {
     });
   });
 
+  it("resolves and carries deliveryContext for a sessionKey-only wake (no agentId)", () => {
+    // Caught by mutation testing: `sessionKey || agentId` -> `&&` in the
+    // resolver guard survived because every resolver-wired test passed both
+    // fields. A sessionKey-only wake (the common tool-path shape for
+    // single-agent setups) must still consult the resolver and carry the
+    // stored topic/thread context.
+    const { state, enqueueSystemEvent, resolveOriginDeliveryContext } = makeStateWithMocks(
+      () => TOPIC_DELIVERY_CONTEXT,
+    );
+
+    wake(state, {
+      mode: "now",
+      text: "check the queue",
+      sessionKey: "agent:main:telegram:8661849123:topic:4052",
+    });
+
+    expect(resolveOriginDeliveryContext).toHaveBeenCalledExactlyOnceWith({
+      sessionKey: "agent:main:telegram:8661849123:topic:4052",
+      agentId: undefined,
+    });
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith("check the queue", {
+      sessionKey: "agent:main:telegram:8661849123:topic:4052",
+      deliveryContext: TOPIC_DELIVERY_CONTEXT,
+    });
+  });
+
   it("omits deliveryContext when no origin context resolves (unchanged default routing)", () => {
     const { state, enqueueSystemEvent } = makeStateWithMocks(() => undefined);
 

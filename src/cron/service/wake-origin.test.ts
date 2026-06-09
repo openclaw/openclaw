@@ -76,6 +76,26 @@ describe("cron service wake() origin capture", () => {
     });
   });
 
+  it("forwards an agentId-only wake so the event reaches that agent's default lane", () => {
+    // Caught by mutation testing: `sessionKey || agentId` -> `&&` survived
+    // because no test exercised agentId without sessionKey. An agentId-only
+    // wake must still build enqueue opts (the gateway resolves the agent's
+    // default session from agentId) rather than fall back to the global
+    // default lane.
+    const { state, enqueueSystemEvent, requestHeartbeat } = makeStateWithMocks();
+    const result = wake(state, { mode: "now", text: "agent only", agentId: "ops" });
+    expect(result).toEqual({ ok: true });
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith("agent only", {
+      agentId: "ops",
+    });
+    expect(requestHeartbeat).toHaveBeenCalledExactlyOnceWith({
+      source: "manual",
+      intent: "immediate",
+      reason: "wake",
+      agentId: "ops",
+    });
+  });
+
   it("drops whitespace-only sessionKey / agentId rather than routing to a meaningless lane", () => {
     // Defence-in-depth: gateway handler already trims, but the wake function
     // is also reachable directly by other in-process call sites. Empty /

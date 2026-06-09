@@ -532,6 +532,35 @@ describe("cron tool", () => {
       });
     });
 
+    it("requires text for action wake", async () => {
+      // Mutation-test survivor: `required: true` -> false silently sent an
+      // undefined-text wake. Pin the guard.
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
+      });
+      await expect(tool.execute("call-wake-no-text", { action: "wake" })).rejects.toThrow();
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    });
+
+    it("sends a bare wake when no calling-session context exists", async () => {
+      // Mutation-test survivor: `opts?.agentSessionKey` -> `opts.agentSessionKey`
+      // crashed context-less callers. A tool created without session context
+      // must fall through to default routing, not throw.
+      const tool = createTestCronTool();
+      await tool.execute("call-wake-no-context", { action: "wake", text: "ping" });
+      const params = expectSingleGatewayCallMethod("wake");
+      expect(params).toEqual({ mode: "next-heartbeat", text: "ping" });
+    });
+
+    it('honours an explicit mode: "next-heartbeat"', async () => {
+      const tool = createTestCronTool({
+        agentSessionKey: "agent:agent-123:telegram:direct:channing",
+      });
+      await tool.execute("call-wake-nh", { action: "wake", text: "tick", mode: "next-heartbeat" });
+      const params = expectSingleGatewayCallMethod("wake");
+      expect(params).toMatchObject({ mode: "next-heartbeat", text: "tick" });
+    });
+
     it('threads mode: "now" through unchanged', async () => {
       const tool = createTestCronTool({
         agentSessionKey: "agent:agent-123:telegram:direct:channing",
