@@ -1957,6 +1957,53 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
     });
   });
 
+  it("keeps env-first precedence ahead of stale inline cooldown for per-entry profile references", async () => {
+    const usageId = resolveInlineProviderApiKeyUsageId("openai");
+    await withEnvAsync({ OPENAI_API_KEY: "sk-env-first" }, async () => {
+      const store = {
+        version: 1 as const,
+        profiles: {
+          "openai:key-b": {
+            type: "api_key" as const,
+            provider: "openai" as const,
+            key: "sk-profile-key",
+          },
+        },
+        usageStats: {
+          [usageId]: {
+            disabledUntil: Date.now() + 60_000,
+            disabledReason: "billing" as const,
+          },
+        },
+      };
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              api: "openai-completions",
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "openai:key-b",
+              models: [],
+            },
+          },
+        },
+      };
+
+      const resolved = await resolveApiKeyForProvider({
+        provider: "openai",
+        credentialPrecedence: "env-first",
+        cfg,
+        store,
+      });
+
+      expect(resolved.apiKey).toBe("sk-env-first");
+      expect(resolved.source).toContain("OPENAI_API_KEY");
+      await expect(hasAvailableAuthForProvider({ provider: "openai", store, cfg })).resolves.toBe(
+        true,
+      );
+    });
+  });
+
   it("does not bleed auth.order canonical provider profiles into a per-entry provider", async () => {
     // auth.order.openrouter should not be selected when resolving openrouter-minimax
     // that has its own per-entry apiKey = "openrouter:key-b" profile reference.
