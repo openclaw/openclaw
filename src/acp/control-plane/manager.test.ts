@@ -1213,7 +1213,6 @@ describe("AcpSessionManager", () => {
       agent: "claude",
       identity: {
         state: "pending",
-        acpxRecordId: sessionKey,
         source: "status",
         lastUpdatedAt: Date.now(),
       },

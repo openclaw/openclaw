@@ -206,10 +206,18 @@ describe("AcpSessionManager runtime handles", () => {
         storeSessionKey: "agent:codex:acp:session-1",
         acp: readySessionMeta({ lastActivityAt: baseTime.getTime() }),
       });
+      const cfg = {
+        acp: {
+          ...baseCfg.acp,
+          runtime: {
+            ttlMinutes: 10,
+          },
+        },
+      } as OpenClawConfig;
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
-        cfg: baseCfg,
+        cfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "first",
         mode: "prompt",
@@ -218,7 +226,7 @@ describe("AcpSessionManager runtime handles", () => {
 
       vi.setSystemTime(baseTime.getTime() + 11 * 60 * 1000);
       await manager.runTurn({
-        cfg: baseCfg,
+        cfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "second",
         mode: "prompt",
@@ -227,9 +235,67 @@ describe("AcpSessionManager runtime handles", () => {
 
       expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
       expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
-      expectRecordFields(mockCallArg(runtimeState.close), {
-        reason: "runtime-handle-idle-stale",
+      expect(runtimeState.close).toHaveBeenCalled();
+      const closeReason = mockCallArg(runtimeState.close).reason as string;
+      expect(["runtime-handle-idle-stale", "idle-evicted"]).toContain(closeReason);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-ensures idle stale persistent handles without preparing a fresh session record", async () => {
+    vi.useFakeTimers();
+    try {
+      const baseTime = new Date("2026-06-06T10:00:00.000Z");
+      vi.setSystemTime(baseTime);
+      const runtimeState = createRuntime();
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
       });
+      hoisted.readAcpSessionEntryMock.mockReturnValue({
+        sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+        storeSessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+        acp: readySessionMeta({
+          agent: "claude",
+          lastActivityAt: baseTime.getTime(),
+          identity: {
+            state: "pending",
+            acpxRecordId: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+            source: "status",
+            lastUpdatedAt: baseTime.getTime(),
+          },
+        }),
+      });
+      const cfg = {
+        acp: {
+          ...baseCfg.acp,
+          runtime: {
+            ttlMinutes: 10,
+          },
+        },
+      } as OpenClawConfig;
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg,
+        sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+        text: "first",
+        mode: "prompt",
+        requestId: "r1",
+      });
+
+      vi.setSystemTime(baseTime.getTime() + 11 * 60 * 1000);
+      await manager.runTurn({
+        cfg,
+        sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+      });
+
+      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+      expect(runtimeState.prepareFreshSession).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

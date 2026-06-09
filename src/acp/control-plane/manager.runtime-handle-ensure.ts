@@ -108,10 +108,12 @@ export async function ensureManagerRuntimeHandle(params: {
   let identityForEnsure = previousIdentity;
   const persistedResumeSessionId =
     mode === "persistent" ? resolveRuntimeResumeSessionId(previousIdentity) : undefined;
+  const hasPersistedRecordId = Boolean(normalizeText(previousIdentity?.acpxRecordId));
   const shouldPrepareFreshPersistentSession =
     mode === "persistent" &&
     previousIdentity != null &&
-    !identityHasStableSessionId(previousIdentity);
+    !identityHasStableSessionId(previousIdentity) &&
+    !hasPersistedRecordId;
   const ensureSession = async (resumeSessionId?: string) =>
     await withAcpRuntimeErrorBoundary({
       run: async () =>
@@ -161,6 +163,9 @@ export async function ensureManagerRuntimeHandle(params: {
           state: "pending",
         };
       }
+      await runtime.prepareFreshSession?.({
+        sessionKey: params.sessionKey,
+      });
       ensured = await ensureSession();
     }
   } else {
