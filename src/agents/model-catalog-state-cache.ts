@@ -11,8 +11,6 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import type { ModelCatalogEntry } from "./model-catalog.types.js";
-
 const AGENT_MODEL_CATALOG_CACHE_VERSION = 1;
 const AGENT_MODEL_CATALOG_CACHE_TTL_MS = 30 * 60 * 1000;
 
@@ -20,7 +18,7 @@ type AgentModelCatalogDatabase = Pick<OpenClawStateKyselyDatabase, "agent_model_
 
 type CachedAgentModelCatalogPayload = {
   version: typeof AGENT_MODEL_CATALOG_CACHE_VERSION;
-  entries: unknown[];
+  entries: readonly unknown[];
 };
 
 export type AgentModelCatalogCacheKeyInput = {
@@ -40,7 +38,7 @@ export type ReadCachedAgentModelCatalogParams = {
 export type WriteCachedAgentModelCatalogParams = {
   agentDir: string;
   catalogKey: string;
-  entries: ModelCatalogEntry[];
+  entries: readonly unknown[];
   nowMs?: number;
 };
 
@@ -95,17 +93,17 @@ export function buildAgentModelCatalogCacheKey(input: AgentModelCatalogCacheKeyI
     .digest("hex")}`;
 }
 
-function parseCachedAgentModelCatalog<Entry>(rawJson: string): Entry[] | undefined {
+function parseCachedAgentModelCatalog(rawJson: string): unknown[] | undefined {
   const parsed = JSON.parse(rawJson) as CachedAgentModelCatalogPayload;
   if (parsed?.version !== AGENT_MODEL_CATALOG_CACHE_VERSION || !Array.isArray(parsed.entries)) {
     return undefined;
   }
-  return parsed.entries as Entry[];
+  return parsed.entries;
 }
 
-export function readCachedAgentModelCatalog<Entry = ModelCatalogEntry>(
+export function readCachedAgentModelCatalog(
   params: ReadCachedAgentModelCatalogParams,
-): Entry[] | undefined {
+): unknown[] | undefined {
   try {
     const database = openOpenClawStateDatabase();
     const db = getNodeSqliteKysely<AgentModelCatalogDatabase>(database.db);
@@ -120,15 +118,13 @@ export function readCachedAgentModelCatalog<Entry = ModelCatalogEntry>(
     if (!row || (params.nowMs ?? Date.now()) - row.updated_at > AGENT_MODEL_CATALOG_CACHE_TTL_MS) {
       return undefined;
     }
-    return parseCachedAgentModelCatalog<Entry>(row.raw_json);
+    return parseCachedAgentModelCatalog(row.raw_json);
   } catch {
     return undefined;
   }
 }
 
-export function writeCachedAgentModelCatalog<Entry = ModelCatalogEntry>(
-  params: Omit<WriteCachedAgentModelCatalogParams, "entries"> & { entries: Entry[] },
-): void {
+export function writeCachedAgentModelCatalog(params: WriteCachedAgentModelCatalogParams): void {
   if (params.entries.length === 0) {
     return;
   }

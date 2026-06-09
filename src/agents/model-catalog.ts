@@ -40,7 +40,10 @@ import {
   buildConfiguredModelCatalog,
   hasConfiguredProviderModelRows,
 } from "./model-selection-shared.js";
-import { buildModelsJsonSourceFingerprint, ensureOpenClawModelsJson } from "./models-config.js";
+import {
+  buildModelsJsonSourceFingerprint,
+  prepareOpenClawModelsJsonSource,
+} from "./models-config.js";
 import {
   filterGeneratedPluginModelCatalogProviders,
   listPluginModelCatalogFiles,
@@ -78,6 +81,23 @@ type ManifestModelCatalogCacheEntry = {
   rows: ModelCatalogEntry[];
 };
 let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
+
+function buildLoadModelCatalogStateCacheKey(params: {
+  agentDir: string;
+  config: OpenClawConfig;
+  sourceFingerprint: string;
+  workspaceDir?: string;
+}): string {
+  return buildAgentModelCatalogCacheKey({
+    agentDir: params.agentDir,
+    cacheScope: {
+      source: "load-model-catalog",
+      sourceFingerprint: params.sourceFingerprint,
+    },
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
+}
 const defaultImportAgentDiscovery = () => import("./agent-model-discovery.js");
 let importAgentDiscovery = defaultImportAgentDiscovery;
 const modelSuppressionLoader = createLazyImportLoader(
@@ -373,16 +393,13 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
   });
   const cached = readCachedAgentModelCatalog({
     agentDir,
-    catalogKey: buildAgentModelCatalogCacheKey({
+    catalogKey: buildLoadModelCatalogStateCacheKey({
       agentDir,
-      cacheScope: {
-        source: "load-model-catalog",
-        sourceFingerprint: sourceFingerprint.fingerprint,
-      },
       config: cfg,
+      sourceFingerprint: sourceFingerprint.fingerprint,
       workspaceDir,
     }),
-  });
+  }) as ModelCatalogEntry[] | undefined;
   if (cached?.length) {
     return cached;
   }
@@ -552,25 +569,45 @@ export async function loadModelCatalog(params?: {
         pluginMetadataSnapshot: params?.metadataSnapshot,
         workspaceDir,
       });
-      const catalogKey = buildAgentModelCatalogCacheKey({
+      let catalogKey = buildLoadModelCatalogStateCacheKey({
         agentDir,
-        cacheScope: {
-          source: "load-model-catalog",
-          sourceFingerprint: sourceFingerprint.fingerprint,
-        },
         config: cfg,
+        sourceFingerprint: sourceFingerprint.fingerprint,
         workspaceDir,
       });
       if (!readOnly && params?.useCache !== false) {
-        const cached = readCachedAgentModelCatalog({ agentDir, catalogKey });
+        const cached = readCachedAgentModelCatalog({ agentDir, catalogKey }) as
+          | ModelCatalogEntry[]
+          | undefined;
         if (cached?.length) {
           logStage("state-cache-hit", `entries=${cached.length}`);
           return cached;
         }
       }
       if (!readOnly) {
-        await ensureOpenClawModelsJson(cfg);
+        const preparedSource = await prepareOpenClawModelsJsonSource(cfg, agentDir, {
+          pluginMetadataSnapshot: params?.metadataSnapshot,
+          workspaceDir,
+        });
+        const preparedCatalogKey = buildLoadModelCatalogStateCacheKey({
+          agentDir,
+          config: cfg,
+          sourceFingerprint: preparedSource.fingerprint,
+          workspaceDir: preparedSource.workspaceDir ?? workspaceDir,
+        });
         logStage("models-json-ready");
+        if (preparedCatalogKey !== catalogKey) {
+          catalogKey = preparedCatalogKey;
+          if (params?.useCache !== false) {
+            const cached = readCachedAgentModelCatalog({ agentDir, catalogKey }) as
+              | ModelCatalogEntry[]
+              | undefined;
+            if (cached?.length) {
+              logStage("state-cache-hit", `entries=${cached.length}`);
+              return cached;
+            }
+          }
+        }
       }
       // Keep discovery inside try/catch so transient filesystem/config failures do not poison
       // the shared catalog cache until restart.

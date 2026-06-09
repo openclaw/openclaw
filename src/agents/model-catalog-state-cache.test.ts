@@ -13,6 +13,23 @@ const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 let stateDir: string;
 
+function configuredModel(id: string) {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"] as Array<"text">,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  };
+}
+
 describe("model catalog state cache", () => {
   beforeEach(() => {
     stateDir = mkdtempSync(join(tmpdir(), "openclaw-model-catalog-state-"));
@@ -76,7 +93,13 @@ describe("model catalog state cache", () => {
     const base = buildAgentModelCatalogCacheKey({
       agentDir: "/agent/main",
       workspaceDir: "/workspace",
-      config: { models: { providers: { openai: { models: [{ id: "gpt-5.5" }] } } } },
+      config: {
+        models: {
+          providers: {
+            openai: { baseUrl: "https://api.openai.com/v1", models: [configuredModel("gpt-5.5")] },
+          },
+        },
+      },
       metadataSnapshot: {
         policyHash: "policy",
         configFingerprint: "config",
@@ -87,7 +110,13 @@ describe("model catalog state cache", () => {
     const same = buildAgentModelCatalogCacheKey({
       agentDir: "/agent/main",
       workspaceDir: "/workspace",
-      config: { models: { providers: { openai: { models: [{ id: "gpt-5.5" }] } } } },
+      config: {
+        models: {
+          providers: {
+            openai: { baseUrl: "https://api.openai.com/v1", models: [configuredModel("gpt-5.5")] },
+          },
+        },
+      },
       metadataSnapshot: {
         policyHash: "policy",
         configFingerprint: "config",
@@ -98,7 +127,13 @@ describe("model catalog state cache", () => {
     const changed = buildAgentModelCatalogCacheKey({
       agentDir: "/agent/main",
       workspaceDir: "/workspace",
-      config: { models: { providers: { openai: { models: [{ id: "gpt-5.6" }] } } } },
+      config: {
+        models: {
+          providers: {
+            openai: { baseUrl: "https://api.openai.com/v1", models: [configuredModel("gpt-5.6")] },
+          },
+        },
+      },
       metadataSnapshot: {
         policyHash: "policy",
         configFingerprint: "config",

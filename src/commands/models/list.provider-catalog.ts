@@ -369,10 +369,10 @@ export async function loadProviderCatalogModelsForList(params: {
     config: params.cfg,
     workspaceDir: params.metadataSnapshot?.workspaceDir,
   });
-  const cached = readCachedAgentModelCatalog<Model>({
+  const cached = readCachedAgentModelCatalog({
     agentDir: params.agentDir,
     catalogKey,
-  });
+  }) as Model[] | undefined;
   if (cached?.length) {
     return cached;
   }

@@ -15,7 +15,7 @@ let loadModelCatalog: typeof import("./model-catalog.js").loadModelCatalog;
 let modelSupportsInput: typeof import("./model-catalog.js").modelSupportsInput;
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
 let augmentCatalogMock: ReturnType<typeof vi.fn>;
-let ensureOpenClawModelsJsonMock: ReturnType<typeof vi.fn>;
+let prepareOpenClawModelsJsonSourceMock: ReturnType<typeof vi.fn>;
 let currentPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
 let loadPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
 let readFileMock: ReturnType<typeof vi.fn<(pathname: string) => Promise<string>>>;
@@ -246,7 +246,12 @@ describe("loadModelCatalog", () => {
       ...(await importOriginal<typeof import("node:fs/promises")>()),
       readFile: readFileMock,
     }));
-    ensureOpenClawModelsJsonMock = vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false });
+    prepareOpenClawModelsJsonSourceMock = vi.fn().mockResolvedValue({
+      agentDir: "/tmp/openclaw",
+      fingerprint: "source-fingerprint",
+      workspaceDir: "/tmp/openclaw-workspace",
+      wrote: false,
+    });
     buildModelsJsonSourceFingerprintMock = vi.fn().mockResolvedValue({
       agentDir: "/tmp/openclaw",
       fingerprint: "source-fingerprint",
@@ -254,7 +259,7 @@ describe("loadModelCatalog", () => {
     });
     vi.doMock("./models-config.js", () => ({
       buildModelsJsonSourceFingerprint: buildModelsJsonSourceFingerprintMock,
-      ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
+      prepareOpenClawModelsJsonSource: prepareOpenClawModelsJsonSourceMock,
     }));
     buildAgentModelCatalogCacheKeyMock = vi.fn(
       (input: { cacheScope?: { sourceFingerprint?: string } }) =>
@@ -328,7 +333,13 @@ describe("loadModelCatalog", () => {
     readFileMock.mockRejectedValue(
       Object.assign(new Error("models.json missing"), { code: "ENOENT" }),
     );
-    ensureOpenClawModelsJsonMock.mockClear();
+    prepareOpenClawModelsJsonSourceMock.mockReset();
+    prepareOpenClawModelsJsonSourceMock.mockResolvedValue({
+      agentDir: "/tmp/openclaw",
+      fingerprint: "source-fingerprint",
+      workspaceDir: "/tmp/openclaw-workspace",
+      wrote: false,
+    });
     augmentCatalogMock.mockClear();
     currentPluginMetadataSnapshotMock.mockReset();
     currentPluginMetadataSnapshotMock.mockReturnValue(undefined);
@@ -432,7 +443,7 @@ describe("loadModelCatalog", () => {
       agentDir: "/tmp/openclaw",
       catalogKey: "test-cache-key:source-fingerprint",
     });
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(prepareOpenClawModelsJsonSourceMock).not.toHaveBeenCalled();
     expect(importAgentDiscoveryModule).not.toHaveBeenCalled();
     expect(writeCachedAgentModelCatalogMock).not.toHaveBeenCalled();
   });
@@ -465,6 +476,76 @@ describe("loadModelCatalog", () => {
       catalogKey: "test-cache-key:source-fingerprint",
       entries: result,
     });
+  });
+
+  it("writes runtime discovery results under the refreshed models.json fingerprint", async () => {
+    buildModelsJsonSourceFingerprintMock.mockResolvedValue({
+      agentDir: "/tmp/openclaw",
+      fingerprint: "pre-refresh-source",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    prepareOpenClawModelsJsonSourceMock.mockResolvedValue({
+      agentDir: "/tmp/openclaw",
+      fingerprint: "post-refresh-source",
+      workspaceDir: "/tmp/openclaw-workspace",
+      wrote: true,
+    });
+    mockAgentDiscoveryModels([{ id: "runtime-fast", name: "Runtime Fast", provider: "openai" }]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    expect(result).toEqual([{ id: "runtime-fast", name: "Runtime Fast", provider: "openai" }]);
+    expect(readCachedAgentModelCatalogMock).toHaveBeenNthCalledWith(1, {
+      agentDir: "/tmp/openclaw",
+      catalogKey: "test-cache-key:pre-refresh-source",
+    });
+    expect(readCachedAgentModelCatalogMock).toHaveBeenNthCalledWith(2, {
+      agentDir: "/tmp/openclaw",
+      catalogKey: "test-cache-key:post-refresh-source",
+    });
+    expect(writeCachedAgentModelCatalogMock).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw",
+      catalogKey: "test-cache-key:post-refresh-source",
+      entries: result,
+    });
+  });
+
+  it("uses a refreshed state cached catalog before runtime discovery", async () => {
+    const cached = [{ id: "cached-fast", name: "Cached Fast", provider: "openai" }];
+    buildModelsJsonSourceFingerprintMock.mockResolvedValue({
+      agentDir: "/tmp/openclaw",
+      fingerprint: "pre-refresh-source",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    prepareOpenClawModelsJsonSourceMock.mockResolvedValue({
+      agentDir: "/tmp/openclaw",
+      fingerprint: "post-refresh-source",
+      workspaceDir: "/tmp/openclaw-workspace",
+      wrote: true,
+    });
+    readCachedAgentModelCatalogMock.mockImplementation(({ catalogKey }: { catalogKey: string }) =>
+      catalogKey.endsWith("post-refresh-source") ? cached : undefined,
+    );
+    const importAgentDiscoveryModule = vi.fn(async () => {
+      throw new Error("provider discovery should not load");
+    });
+    setModelCatalogImportForTest(
+      importAgentDiscoveryModule as unknown as () => Promise<AgentModelDiscoveryModule>,
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    expect(result).toEqual(cached);
+    expect(readCachedAgentModelCatalogMock).toHaveBeenNthCalledWith(1, {
+      agentDir: "/tmp/openclaw",
+      catalogKey: "test-cache-key:pre-refresh-source",
+    });
+    expect(readCachedAgentModelCatalogMock).toHaveBeenNthCalledWith(2, {
+      agentDir: "/tmp/openclaw",
+      catalogKey: "test-cache-key:post-refresh-source",
+    });
+    expect(importAgentDiscoveryModule).not.toHaveBeenCalled();
+    expect(writeCachedAgentModelCatalogMock).not.toHaveBeenCalled();
   });
 
   it("misses the state cached catalog when source freshness changes", async () => {
@@ -634,7 +715,7 @@ describe("loadModelCatalog", () => {
 
     const entry = requireCatalogEntry(result, "openai", "gpt-test");
     expect(entry.name).toBe("GPT Test");
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(prepareOpenClawModelsJsonSourceMock).not.toHaveBeenCalled();
     expect(importAgentDiscoveryModule).not.toHaveBeenCalled();
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
@@ -678,7 +759,7 @@ describe("loadModelCatalog", () => {
         compat: undefined,
       },
     ]);
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(prepareOpenClawModelsJsonSourceMock).not.toHaveBeenCalled();
     expect(augmentCatalogMock).not.toHaveBeenCalled();
   });
 
@@ -813,7 +894,7 @@ describe("loadModelCatalog", () => {
         reasoning: false,
       },
     ]);
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(prepareOpenClawModelsJsonSourceMock).not.toHaveBeenCalled();
     expect(importAgentDiscoveryModule).not.toHaveBeenCalled();
   });
 
@@ -841,7 +922,7 @@ describe("loadModelCatalog", () => {
         compat: undefined,
       },
     ]);
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(prepareOpenClawModelsJsonSourceMock).not.toHaveBeenCalled();
     expect(augmentCatalogMock).not.toHaveBeenCalled();
   });
 
@@ -896,7 +977,7 @@ describe("loadModelCatalog", () => {
     expect(entry.contextWindow).toBe(1_000_000);
     expect(entry.input).toEqual(["text", "image"]);
     expect(entry.reasoning).toBe(true);
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(prepareOpenClawModelsJsonSourceMock).not.toHaveBeenCalled();
     expect(augmentCatalogMock).not.toHaveBeenCalled();
   });
 
@@ -1102,7 +1183,7 @@ describe("loadModelCatalog", () => {
         compat: undefined,
       },
     ]);
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(prepareOpenClawModelsJsonSourceMock).not.toHaveBeenCalled();
     expect(augmentCatalogMock).not.toHaveBeenCalled();
   });
 
