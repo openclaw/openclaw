@@ -862,7 +862,9 @@ describe("gateway session utils", () => {
     expect(
       resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:acp:configured-bridge-without-meta", {
         acp: undefined,
-      } as SessionEntry),
+        sessionId: "sess-configured-bridge",
+        updatedAt: 1,
+      }),
     ).toBeNull();
 
     expect(
