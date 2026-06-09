@@ -408,12 +408,16 @@ export function createMsteamsRealtimeCall(params: {
   // which is only available under the "owner" tool policy.
   const asyncTasksEnabled =
     Boolean(deps.agentRuntime && deps.voiceConfig && deps.cfg) && consultToolPolicy === "owner";
-  // Vision: expose look_at_screen when the agent runtime + a frame source are available.
-  const visionEnabled = Boolean(
-    deps.agentRuntime && deps.voiceConfig && deps.cfg && deps.getLatestFrame,
-  );
-  // show_to_caller needs only a consult-capable agent (it produces its own image), not a frame source.
-  const showEnabled = Boolean(deps.agentRuntime && deps.voiceConfig && deps.cfg);
+  // Vision: expose the look_at_screen tool when the agent runtime + a frame source are available
+  // AND the tool policy permits tools at all — read-only vision is off under "none", on under
+  // "safe-read-only" and "owner". (The ambient frame push is independent continuous-vision context.)
+  const visionEnabled =
+    Boolean(deps.agentRuntime && deps.voiceConfig && deps.cfg && deps.getLatestFrame) &&
+    consultToolPolicy !== "none";
+  // show_to_caller produces its own image via owner-level tools (screenshot / browser / image-gen),
+  // so it is exposed ONLY under the "owner" policy — never under "none" or "safe-read-only".
+  const showEnabled =
+    Boolean(deps.agentRuntime && deps.voiceConfig && deps.cfg) && consultToolPolicy === "owner";
   const bridgeTools = [
     ...(deps.tools ?? []),
     ...(asyncTasksEnabled ? [MSTEAMS_AGENT_TASK_TOOL] : []),
@@ -582,10 +586,11 @@ export function createMsteamsRealtimeCall(params: {
     lastPushedFrameData = frame.dataBase64;
     logger?.debug?.(`MsteamsRealtime: ambient vision push (${frame.source}) for ${callId}`);
     try {
+      const owner = describeMsteamsVideoFrameOwner(frame);
       realtime.sendImage({
         dataBase64: frame.dataBase64,
         mime: frame.mime,
-        text: `Live view — ${describeMsteamsVideoFrameOwner(frame)}.`,
+        text: owner ? `Live view — ${owner}.` : "Live view of the call.",
       });
     } catch (err) {
       logger?.debug?.(
