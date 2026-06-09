@@ -275,6 +275,9 @@ func TestRunDocsI18NAllowPartialParallelKeepsQueuedDocsAfterFailure(t *testing.T
 	if _, err := os.Stat(filepath.Join(docsRoot, "zh-CN", "aaa-fail.md")); err == nil {
 		t.Fatal("did not expect failed output to be written")
 	}
+	if got := mustReadFile(t, filepath.Join(docsRoot, "zh-CN", "bbb-slow.md")); !strings.Contains(got, "# SLOW") {
+		t.Fatalf("expected in-flight output to be written after a failed doc, got:\n%s", got)
+	}
 	if got := mustReadFile(t, filepath.Join(docsRoot, "zh-CN", "zzz-ok.md")); !strings.Contains(got, "# Gateway") {
 		t.Fatalf("expected queued output to be written after a failed doc, got:\n%s", got)
 	}
