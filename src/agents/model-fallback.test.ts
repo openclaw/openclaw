@@ -2761,6 +2761,8 @@ describe("runWithModelFallback", () => {
 
   it("does not fall back on user aborts", async () => {
     const cfg = makeCfg();
+    const controller = new AbortController();
+    controller.abort(Object.assign(new Error("timeout"), { name: "TimeoutError" }));
     const run = vi
       .fn()
       .mockRejectedValueOnce(Object.assign(new Error("aborted"), { name: "AbortError" }))
@@ -2771,6 +2773,7 @@ describe("runWithModelFallback", () => {
         cfg,
         provider: "openai",
         model: "gpt-4.1-mini",
+        abortSignal: controller.signal,
         run,
       }),
     ).rejects.toThrow("aborted");
@@ -2795,6 +2798,94 @@ describe("runWithModelFallback", () => {
     ).rejects.toThrow("agent run aborted for restart");
 
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back when user cancels with AbortError reason", async () => {
+    const cfg = makeCfg();
+    const controller = new AbortController();
+    controller.abort(Object.assign(new Error("cancelled"), { name: "AbortError" }));
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("aborted"), { name: "AbortError" }))
+      .mockResolvedValueOnce("should not run");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        abortSignal: controller.signal,
+        run,
+      }),
+    ).rejects.toThrow("aborted");
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back when caller cancellation uses a string reason", async () => {
+    const cfg = makeCfg();
+    const controller = new AbortController();
+    controller.abort("Cancelled by operator.");
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("aborted"), { name: "AbortError" }))
+      .mockResolvedValueOnce("should not run");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        abortSignal: controller.signal,
+        run,
+      }),
+    ).rejects.toThrow("aborted");
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back when caller cancellation throws a plain error", async () => {
+    const cfg = makeCfg();
+    const controller = new AbortController();
+    controller.abort("Cancelled by operator.");
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Cancelled by operator."))
+      .mockResolvedValueOnce("should not run");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        abortSignal: controller.signal,
+        run,
+      }),
+    ).rejects.toThrow("Cancelled by operator.");
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back when AbortError comes from the LLM provider (no external signal)", async () => {
+    const cfg = makeProviderFallbackCfg("openai");
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("This operation was aborted"), { name: "AbortError" }),
+      )
+      .mockResolvedValueOnce({ payloads: [{ text: "fallback ok" }] });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toEqual({ payloads: [{ text: "fallback ok" }] });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.attempts[0]?.provider).toBe("openai");
+    expect(result.attempts[0]?.error).toBe("This operation was aborted");
   });
 
   it("does not fall back when the caller abort signal timed out", async () => {
@@ -2829,6 +2920,37 @@ describe("runWithModelFallback", () => {
     timeoutReason.name = "TimeoutError";
     const controller = new AbortController();
     controller.abort(timeoutReason);
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ payloads: [] })
+      .mockResolvedValueOnce({ payloads: [{ text: "fallback should not run" }] });
+    const classifyResult = vi.fn(() => ({
+      message: "This operation was aborted",
+      reason: "timeout" as const,
+      code: "terminal_abort",
+    }));
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "m1",
+        abortSignal: controller.signal,
+        run,
+        classifyResult,
+      }),
+    ).rejects.toThrow("This operation was aborted");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(classifyResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back when a user AbortError is classified from the result", async () => {
+    const cfg = makeProviderFallbackCfg("openai");
+    const abortReason = new Error("chat run cancelled");
+    abortReason.name = "AbortError";
+    const controller = new AbortController();
+    controller.abort(abortReason);
     const run = vi
       .fn()
       .mockResolvedValueOnce({ payloads: [] })
