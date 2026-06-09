@@ -1,5 +1,6 @@
 // Tests for the doctor migration that relocates a legacy home-relative exec-approvals
 // policy into the resolved state dir when OPENCLAW_STATE_DIR points elsewhere.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -75,6 +76,39 @@ describe("exec-approvals state-dir relocation doctor migration", () => {
     await expect(fs.readFile(canonicalPath, "utf8")).resolves.toContain('"security": "deny"');
     await expect(fs.access(legacyPath)).rejects.toThrow();
   });
+
+  // The migration writes a temp file inside the canonical dir then renames within it, so a
+  // legacy file on one device and a state dir on another must not hit EXDEV. Every other test
+  // shares a single tmpdir (same device); this forces a genuine cross-mount move using a tmpfs
+  // state dir (Linux /dev/shm), and skips where no second device is available (macOS/Windows).
+  it.skipIf(!fsSync.existsSync("/dev/shm"))(
+    "relocates across a device boundary when the state dir is on another mount (EXDEV-safe)",
+    async (ctx) => {
+      const tmpfsState = await fs.mkdtemp("/dev/shm/openclaw-exec-approvals-xdev-");
+      try {
+        const diskDev = fsSync.statSync(tempRoot).dev;
+        const tmpfsDev = fsSync.statSync(tmpfsState).dev;
+        if (diskDev === tmpfsDev) {
+          // os.tmpdir() is itself on tmpfs here, so there is no cross-device boundary to exercise.
+          ctx.skip();
+          return;
+        }
+        process.env.OPENCLAW_STATE_DIR = tmpfsState;
+        const tmpfsCanonical = path.join(tmpfsState, FILENAME);
+        await writeLegacyPolicy("deny");
+
+        const result = await relocateLegacyExecApprovalsStateFile({ env: process.env });
+
+        expect(result.warnings).toEqual([]);
+        expect(result.changes).toHaveLength(1);
+        expect(result.changes[0]).toContain("Moved exec-approvals policy");
+        await expect(fs.readFile(tmpfsCanonical, "utf8")).resolves.toContain('"security": "deny"');
+        await expect(fs.access(legacyPath)).rejects.toThrow();
+      } finally {
+        await fs.rm(tmpfsState, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("is a no-op for default installs where state dir equals the home location", async () => {
     delete process.env.OPENCLAW_STATE_DIR;
