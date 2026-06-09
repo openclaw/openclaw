@@ -55,6 +55,11 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "google-gemini-cli",
   "openai",
 ]);
+const CODEX_SYNTHETIC_USAGE_AUTH_PROFILE_PROVIDERS = new Set([
+  "openai",
+  "openai-codex",
+  "codex-cli",
+]);
 
 let statusMessageRuntimePromise: Promise<typeof import("../auto-reply/status.runtime.js")> | null =
   null;
@@ -144,6 +149,23 @@ function resolveUsageCredentialType(authLabel?: string): "oauth" | "token" | "ap
     return "api_key";
   }
   return undefined;
+}
+
+function resolveCodexSyntheticUsageAuthProfileId(
+  profileId: string | undefined,
+): string | undefined {
+  const normalizedProfileId = profileId?.trim();
+  if (!normalizedProfileId) {
+    return undefined;
+  }
+  const separatorIndex = normalizedProfileId.indexOf(":");
+  if (separatorIndex <= 0 || separatorIndex === normalizedProfileId.length - 1) {
+    return undefined;
+  }
+  const provider = normalizeOptionalLowercaseString(normalizedProfileId.slice(0, separatorIndex));
+  return provider && CODEX_SYNTHETIC_USAGE_AUTH_PROFILE_PROVIDERS.has(provider)
+    ? normalizedProfileId
+    : undefined;
 }
 
 function shouldUseCodexSyntheticUsage(params: {
@@ -343,7 +365,9 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider: activeStatusProvider,
     effectiveHarness,
   });
-  const codexUsageAuthProfileId = sessionEntry?.authProfileOverride?.trim() || undefined;
+  const codexUsageAuthProfileId = resolveCodexSyntheticUsageAuthProfileId(
+    sessionEntry?.authProfileOverride,
+  );
   const usageCredentialType = useCodexSyntheticUsage
     ? "token"
     : resolveUsageCredentialType(usageAuthLabel);

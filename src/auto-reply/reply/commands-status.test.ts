@@ -903,6 +903,54 @@ describe("buildStatusReply subagent summary", () => {
     });
   });
 
+  it("does not forward stale non-OpenAI profile overrides to Codex usage", async () => {
+    registerStatusCodexHarness();
+    providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: Date.now(),
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "5h", usedPercent: 9 }],
+        },
+      ],
+    });
+
+    await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-codex-stale-profile",
+        updatedAt: 0,
+        authProfileOverride: "anthropic:work",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.5",
+      contextTokens: 32_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+    });
+
+    const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+      ([params]) => params?.providers?.includes("openai"),
+    );
+    expect(providerUsageCall?.[0]?.auth).toEqual(expectedCodexRuntimeUsageAuth);
+  });
+
   it("shows DeepSeek balance summaries in /status output", async () => {
     providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
       updatedAt: Date.now(),
