@@ -360,6 +360,39 @@ describe("heartbeat runner skips when target session lane is busy", () => {
     });
   });
 
+  it("returns requests-in-flight when reply admission races after the preflight checks", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath }) => {
+      const cfg = createHeartbeatTelegramConfig();
+      const sessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
+      let operation: ReturnType<typeof createReplyOperation> | undefined;
+      const replySpy = vi.fn(async () => {
+        operation = createReplyOperation({
+          sessionKey,
+          sessionId: "racing-visible-session",
+          resetTriggered: false,
+        });
+        operation.setPhase("running");
+        return undefined;
+      });
+
+      try {
+        const result = await runHeartbeatOnce({
+          cfg,
+          deps: {
+            getQueueSize: vi.fn((_lane?: string) => 0),
+            nowMs: () => Date.now(),
+            getReplyFromConfig: replySpy,
+          } as HeartbeatDeps,
+        });
+
+        expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
+        expect(replySpy).toHaveBeenCalledOnce();
+      } finally {
+        operation?.complete();
+      }
+    });
+  });
+
   it("returns requests-in-flight when an isolated heartbeat reply run is still active", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig();

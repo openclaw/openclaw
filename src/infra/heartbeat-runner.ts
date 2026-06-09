@@ -1813,6 +1813,19 @@ export async function runHeartbeatOnce(opts: {
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+    if (
+      !heartbeatToolResponse &&
+      (!replyPayload || !hasOutboundReplyContent(replyPayload)) &&
+      (isReplyRunActive(runSessionKey) ||
+        hasActiveRunForSession(runSessionKey, listActiveEmbeddedRuns))
+    ) {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
+    }
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
       ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
