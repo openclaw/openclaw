@@ -38,6 +38,44 @@ function inheritedUpdateTimeout(
   return inheritOptionFromParent<string>(command, "timeout");
 }
 
+function registerUpdateRepairCommand(update: Command, name: string, params?: { hidden?: boolean }) {
+  const command = params?.hidden ? update.command(name, { hidden: true }) : update.command(name);
+  command
+    .description("Repair post-update doctor and plugin convergence")
+    .option("--json", "Output result as JSON", false)
+    .option("--channel <stable|beta|dev>", "Persist update channel before repair")
+    .option("--timeout <seconds>", "Timeout for update repair steps in seconds (default: 1800)")
+    .option("--yes", "Skip confirmation prompts (non-interactive)", false)
+    .option("--no-restart", "Accepted for update command parity; repair never restarts")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw update repair", "Rerun post-update doctor and plugin convergence."],
+          ["openclaw update repair --channel beta", "Repair against the beta update channel."],
+          ["openclaw update repair --json", "JSON output for automation."],
+        ])}\n\n${theme.heading("Notes:")}\n${theme.muted(
+          "- Repairs post-update plugin state after the core package already changed",
+        )}\n${theme.muted("- Runs doctor repair and plugin convergence, but never restarts the Gateway")}\n\n${theme.muted(
+          "Docs:",
+        )} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`,
+    )
+    .action(async (opts, command) => {
+      try {
+        await updateFinalizeCommand({
+          json: Boolean(opts.json) || inheritedUpdateJson(command),
+          channel: opts.channel as string | undefined,
+          timeout: inheritedUpdateTimeout(opts, command),
+          yes: Boolean(opts.yes),
+          restart: false,
+        });
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+}
+
 /** Attach the update command group to the root CLI. */
 export function registerUpdateCli(program: Command) {
   program.enablePositionalOptions();
@@ -65,6 +103,7 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update --no-restart", "Update without restarting the service"],
         ["openclaw update --json", "Output result as JSON"],
         ["openclaw update --yes", "Non-interactive (accept downgrade prompts)"],
+        ["openclaw update repair", "Repair stranded post-update plugin state"],
         ["openclaw update wizard", "Interactive update wizard"],
         ["openclaw --update", "Shorthand for openclaw update"],
       ] as const;
@@ -115,31 +154,8 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       }
     });
 
-  update
-    .command("finalize", { hidden: true })
-    .description("Run OpenClaw update finalization after an external core runtime change")
-    .option("--json", "Output result as JSON", false)
-    .option("--channel <stable|beta|dev>", "Persist update channel for finalization")
-    .option(
-      "--timeout <seconds>",
-      "Timeout for update finalization steps in seconds (default: 1800)",
-    )
-    .option("--yes", "Skip confirmation prompts (non-interactive)", false)
-    .option("--no-restart", "Accepted for update command parity; finalization never restarts")
-    .action(async (opts, command) => {
-      try {
-        await updateFinalizeCommand({
-          json: Boolean(opts.json) || inheritedUpdateJson(command),
-          channel: opts.channel as string | undefined,
-          timeout: inheritedUpdateTimeout(opts, command),
-          yes: Boolean(opts.yes),
-          restart: false,
-        });
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
-    });
+  registerUpdateRepairCommand(update, "repair");
+  registerUpdateRepairCommand(update, "finalize", { hidden: true });
 
   update
     .command("wizard")
