@@ -871,7 +871,7 @@ describe("gateway session utils", () => {
       resolveDeletedAgentIdFromSessionKey(
         cfg,
         "agent:deleted-agent:acp:bridge-session-without-runtime-meta",
-        { acp: undefined },
+        { acp: undefined, sessionId: "sess-deleted-bridge", updatedAt: 1 },
       ),
     ).toBe("deleted-agent");
   });
