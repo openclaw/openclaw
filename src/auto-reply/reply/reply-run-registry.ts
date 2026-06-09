@@ -17,6 +17,7 @@ export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   cancel(reason?: ReplyBackendCancelReason): void;
   isStreaming(): boolean;
+  isAwaitingUserInput?: () => boolean;
   queueMessage?: (text: string) => Promise<void>;
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
@@ -529,6 +530,14 @@ export function isReplyRunStreamingForSessionId(sessionId: string): boolean {
     return false;
   }
   return getAttachedBackend(operation)?.isStreaming() ?? false;
+}
+
+export function isReplyRunAwaitingUserInputForSessionId(sessionId: string): boolean {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  if (!operation || operation.phase !== "running") {
+    return false;
+  }
+  return getAttachedBackend(operation)?.isAwaitingUserInput?.() ?? false;
 }
 
 export function queueReplyRunMessage(sessionId: string, text: string): boolean {

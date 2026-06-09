@@ -2219,6 +2219,7 @@ export async function runAgentTurnWithFallback(params: {
                     toolsAllow: params.opts?.toolsAllow,
                     disableTools: params.opts?.disableTools,
                     abortSignal: runAbortSignal,
+                    onUserInputPrompt: blockReplyHandler,
                     replyOperation: params.replyOperation,
                   },
                 }),
