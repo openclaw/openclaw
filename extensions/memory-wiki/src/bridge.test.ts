@@ -402,7 +402,7 @@ describe("syncMemoryWikiBridgeSources", () => {
 
     const second = syncMemoryWikiBridgeSources({ config, appConfig });
     await expect(second).rejects.toThrow(
-      /Refusing to write imported source page \((not-empty|not-file|path-mismatch)\): sources\//u,
+      /Refusing to write imported source page \((not-empty|not-file|path-mismatch|invalid-path)\): sources\//u,
     );
     await expect(second).rejects.not.toThrow("through symlink");
   });
@@ -415,7 +415,7 @@ describe("syncMemoryWikiBridgeSources", () => {
 
     const second = syncMemoryWikiBridgeSources({ config, appConfig });
     await expect(second).rejects.toThrow(
-      /Refusing to write imported source page \((not-file|path-mismatch)\): sources\//u,
+      /Refusing to write imported source page \((not-file|path-mismatch|invalid-path)\): sources\//u,
     );
     await expect(second).rejects.not.toThrow("through symlink");
     await expect(fs.stat(pageAbsPath)).resolves.toSatisfy((stat) => stat.isDirectory());
