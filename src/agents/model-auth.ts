@@ -377,7 +377,7 @@ function isInlineProviderApiKeySource(source: string): boolean {
   );
 }
 
-function isConfigBackedInlineProviderApiKey(params: {
+export function isConfigBackedInlineProviderApiKey(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   source: string;
@@ -772,12 +772,21 @@ export function hasRuntimeAvailableProviderAuth(params: {
   allowPluginSyntheticAuth?: boolean;
   runtimeLookup?: RuntimeProviderAuthLookup;
   modelApi?: string;
+  store?: AuthProfileStore;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
   const authOverride = resolveProviderAuthOverride(params.cfg, provider);
   if (authOverride === "aws-sdk") {
     return true;
   }
+
+  const inlineProviderApiKeyUsable = params.store
+    ? (() => {
+        const unusableUntil = resolveInlineProviderApiKeyUnusableUntil(params.store, provider);
+        return typeof unusableUntil !== "number" || unusableUntil <= Date.now();
+      })()
+    : true;
+
   const envAuth = resolveEnvApiKey(provider, params.env, {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -792,11 +801,16 @@ export function hasRuntimeAvailableProviderAuth(params: {
       provider,
       modelApi: params.modelApi,
       mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
-    })
+    }) &&
+    (!isConfigBackedInlineProviderApiKey({ cfg: params.cfg, provider, source: envAuth.source }) ||
+      inlineProviderApiKeyUsable)
   ) {
     return true;
   }
-  if (resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider, env: params.env })) {
+  if (
+    resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider, env: params.env }) &&
+    inlineProviderApiKeyUsable
+  ) {
     return true;
   }
   if (hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })) {
