@@ -1152,6 +1152,41 @@ describe("isDangerousHostEnvOverrideVarName", () => {
 });
 
 describe("sanitizeHostExecEnvWithDiagnostics", () => {
+  it("blocks reported executable override gaps while preserving non-executable Cargo target dir", () => {
+    const result = sanitizeHostExecEnvWithDiagnostics({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+      },
+      overrides: {
+        CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER: "/tmp/evil-rustc-workspace-wrapper",
+        CARGO_BUILD_RUSTDOC: "/tmp/evil-rustdoc",
+        CARGO_TARGET_DIR: "/tmp/custom-target",
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: "/tmp/evil-linker",
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "/tmp/evil-runner",
+        HGEDITOR: "/tmp/evil-hgeditor",
+        HGMERGE: "/tmp/evil-hgmerge",
+        MAKE: "/tmp/evil-make",
+        RUSTC: "/tmp/evil-rustc",
+        RUSTC_WORKSPACE_WRAPPER: "/tmp/evil-rustc-workspace-wrapper",
+        RUSTDOC: "/tmp/evil-rustdoc",
+      },
+    });
+
+    expect(result.rejectedOverrideBlockedKeys).toEqual([
+      "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+      "CARGO_BUILD_RUSTDOC",
+      "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+      "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER",
+      "HGEDITOR",
+      "HGMERGE",
+      "MAKE",
+      "RUSTC",
+      "RUSTC_WORKSPACE_WRAPPER",
+      "RUSTDOC",
+    ]);
+    expect(result.env.CARGO_TARGET_DIR).toBe("/tmp/custom-target");
+  });
+
   it("reports blocked and invalid requested overrides", () => {
     const overrides = envRecord([
       ["PATH", "/tmp/evil"],
