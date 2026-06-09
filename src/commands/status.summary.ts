@@ -1,3 +1,6 @@
+// Builds the status summary used by human and JSON status output.
+// It aggregates sessions, tasks, heartbeat, channel summary, and model/runtime metadata.
+
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -7,7 +10,7 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
 import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveCronStorePath } from "../cron/store.js";
+import { resolveCronJobsStorePath } from "../cron/store.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -19,6 +22,7 @@ import {
   summarizeRetainedLostTaskAuditFindings,
 } from "../tasks/task-registry.audit.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { ensureSessionStateMigratedForCommand } from "./session-state-migration.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
 const RECENT_SESSION_LIMIT = 10;
@@ -96,6 +100,7 @@ function discountRetainedLostTaskFailures(
   tasks: StatusSummary["tasks"],
   retainedLostCount: number,
 ): StatusSummary["tasks"] {
+  // Retained lost tasks are reported separately; avoid double-counting them as active failures.
   if (retainedLostCount <= 0 || tasks.failures <= 0) {
     return tasks;
   }
@@ -129,16 +134,20 @@ function compareSessionCandidatesByUpdatedAt(left: SessionCandidate, right: Sess
 }
 
 function listSessionCandidates(store: Record<string, SessionEntry | undefined>) {
-  return Object.entries(store)
-    .filter(([key]) => key !== "global" && key !== "unknown")
-    .map(([key, entry]) => ({
-      key,
-      entry,
-      updatedAt: entry?.updatedAt ?? null,
-    }))
-    .toSorted(compareSessionCandidatesByUpdatedAt);
+  return (
+    Object.entries(store)
+      // Compatibility aggregate buckets are not real user sessions.
+      .filter(([key]) => key !== "global" && key !== "unknown")
+      .map(([key, entry]) => ({
+        key,
+        entry,
+        updatedAt: entry?.updatedAt ?? null,
+      }))
+      .toSorted(compareSessionCandidatesByUpdatedAt)
+  );
 }
 
+/** Removes session paths and recent session details from a status summary. */
 export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSummary {
   return {
     ...summary,
@@ -159,6 +168,7 @@ export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSumm
   };
 }
 
+/** Builds the aggregate status summary for agents, sessions, tasks, heartbeat, and channels. */
 export async function getStatusSummary(
   options: {
     includeSensitive?: boolean;
@@ -176,6 +186,7 @@ export async function getStatusSummary(
     resolveSessionModelRef,
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? getRuntimeConfig();
+  await ensureSessionStateMigratedForCommand(cfg);
   const channelScopeConfig =
     options.sourceConfig === undefined
       ? { config: cfg }
@@ -212,8 +223,9 @@ export async function getStatusSummary(
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
+  // Configure maintenance store before reading task summaries so cron-backed tasks are in scope.
   taskMaintenanceModule.configureTaskRegistryMaintenance({
-    cronStorePath: resolveCronStorePath(cfg.cron?.store),
+    cronStorePath: resolveCronJobsStorePath(cfg.cron?.store),
   });
   const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
   const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings();
@@ -285,6 +297,7 @@ export async function getStatusSummary(
         selectedModelLabel !== configuredSessionModelLabel &&
         !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredSessionModelLabel) &&
         hasUserPinnedModelSelection(entry);
+      // Session rows show the live selected model but warn only for user-pinned differences.
       const contextTokens =
         resolveContextTokensForModel({
           cfg,

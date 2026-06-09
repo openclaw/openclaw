@@ -1,3 +1,4 @@
+// Msteams tests cover monitor.lifecycle plugin behavior.
 import { EventEmitter } from "node:events";
 import type { Request, Response } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -303,7 +304,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
     const early = await Promise.race([
       task.then(() => "resolved"),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 50)),
+      new Promise<"pending">((resolve) => {
+        setTimeout(() => resolve("pending"), 50);
+      }),
     ]);
     expect(early).toBe("pending");
 

@@ -1,3 +1,4 @@
+// Matrix plugin module implements inbound dedupe behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -281,7 +282,7 @@ export async function createMatrixInboundEventDeduper(params: {
           },
           ttlMs > 0 ? { ttlMs } : undefined,
         )
-        .catch((err) => {
+        .catch((err: unknown) => {
           LogService.warn(
             "MatrixInboundDedupe",
             "Failed persisting Matrix inbound dedupe entry:",

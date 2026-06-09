@@ -34,6 +34,27 @@ openclaw cron create "0 18 * * 1-5" \
   --webhook "https://example.invalid/openclaw/cron"
 ```
 
+Use `--command` for deterministic shell-style jobs that should run inside OpenClaw cron without starting an isolated agent/model run:
+
+<Note>
+Command cron jobs are admin-authored Gateway automation. Creating, editing,
+removing, or manually running them requires `operator.admin`; the scheduled run
+later executes in the Gateway process, not as an agent `tools.exec` tool call.
+`tools.exec.*` and exec approvals still govern model-visible exec tools.
+</Note>
+
+```bash
+openclaw cron create "*/15 * * * *" \
+  --name "Queue depth probe" \
+  --command "scripts/check-queue.sh" \
+  --command-cwd "/srv/app" \
+  --announce \
+  --channel telegram \
+  --to "-1001234567890"
+```
+
+`--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution. Command jobs capture stdout/stderr, record normal cron history, and route output through the same `announce`, `webhook`, or `none` delivery modes as isolated jobs. A command that prints only `NO_REPLY` is suppressed.
+
 ## Sessions
 
 `--session` accepts `main`, `isolated`, `current`, or `session:<id>`.
@@ -92,6 +113,10 @@ Note: isolated cron runs treat run-level agent failures as job errors even when
 no reply payload is produced, so model/provider failures still increment error
 counters and trigger failure notifications.
 
+Command cron jobs do not start an isolated agent turn. A zero exit code records
+`ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and
+can trigger the same failure notification path.
+
 If an isolated run times out before the first model request, `openclaw cron show`
 and `openclaw cron runs` include a phase-specific error such as
 `setup timed out before runner start` or
@@ -118,7 +143,7 @@ Skipped runs are tracked separately from execution errors. They do not affect re
 
 For isolated jobs that target a local configured model provider, cron runs a lightweight provider preflight before starting the agent turn. Loopback, private-network, and `.local` `api: "ollama"` providers are probed at `/api/tags`; local OpenAI-compatible providers such as vLLM, SGLang, and LM Studio are probed at `/models`. If the endpoint is unreachable, the run is recorded as `skipped` and retried on a later schedule; matching dead endpoints are cached for 5 minutes to avoid many jobs hammering the same local server.
 
-Note: cron job definitions live in `jobs.json`, while pending runtime state lives in `jobs-state.json`. If `jobs.json` is edited externally, the Gateway reloads changed schedules and clears stale pending slots; formatting-only rewrites do not clear the pending slot. Malformed job rows are removed from active `jobs.json` at load time after their raw contents are copied to `jobs-quarantine.json`.
+Note: cron jobs, pending runtime state, and run history live in the shared SQLite state database. Legacy `jobs.json`, `jobs-state.json`, and `runs/*.jsonl` files are imported once and renamed with a `.migrated` suffix. After import, edit schedules with `openclaw cron add|edit|remove` instead of editing JSON files.
 
 ### Manual runs
 
@@ -199,12 +224,12 @@ Cron does not classify final-output prose or approval-looking refusal phrases as
 Retention and pruning are controlled in config:
 
 - `cron.sessionRetention` (default `24h`) prunes completed isolated run sessions.
-- `cron.runLog.maxBytes` and `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl`.
+- `cron.runLog.keepLines` prunes retained SQLite run-history rows per job. `cron.runLog.maxBytes` remains accepted for compatibility with older file-backed run logs.
 
 ## Migrating older jobs
 
 <Note>
-If you have cron jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy cron fields (`jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, payload `provider` delivery aliases) and migrates simple `notify: true` webhook fallback jobs to explicit webhook delivery when `cron.webhook` is configured.
+If you have cron jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy cron fields (`jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, payload `provider` delivery aliases) and migrates `notify: true` webhook fallback jobs from `cron.webhook` to explicit webhook delivery. Jobs that already announce to a chat keep that delivery and get a completion webhook destination.
 </Note>
 
 ## Common edits
@@ -251,6 +276,21 @@ openclaw cron create "0 7 * * *" \
 ```
 
 `--light-context` applies to isolated agent-turn jobs only. For cron runs, lightweight mode keeps bootstrap context empty instead of injecting the full workspace bootstrap set.
+
+Create a command job with exact argv, cwd, env, stdin, and output limits:
+
+```bash
+openclaw cron create "*/30 * * * *" \
+  --name "Position export" \
+  --command-argv '["node","scripts/export-position.mjs"]' \
+  --command-cwd "/srv/app" \
+  --command-env "NODE_ENV=production" \
+  --command-input '{"mode":"summary"}' \
+  --timeout-seconds 120 \
+  --no-output-timeout-seconds 30 \
+  --output-max-bytes 65536 \
+  --webhook "https://example.invalid/openclaw/cron"
+```
 
 ## Common admin commands
 

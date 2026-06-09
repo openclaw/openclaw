@@ -1,3 +1,4 @@
+// Realtime Talk Live Smoke script supports OpenClaw repository automation.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -222,7 +223,7 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
         async ({ clientSecret: secret, sdpAnswerMaxBytes, timeoutMs }) => {
           const responseBodyTooLargeError = (label: string, maxBytes: number): Error =>
             new Error(`${label} response body exceeded ${maxBytes} bytes`);
-          const readBoundedText = async (
+          const readBoundedTextLocal = async (
             response: Response,
             label: string,
             maxBytes: number,
@@ -341,7 +342,7 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
                 if (!response.ok) {
                   throw new Error(`OpenAI Realtime SDP offer failed (${response.status})`);
                 }
-                return await readBoundedText(
+                return await readBoundedTextLocal(
                   response,
                   "OpenAI Realtime SDP answer",
                   sdpAnswerMaxBytes,
@@ -474,9 +475,9 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
               }
               window.clearTimeout(timeout);
               resolve({ setupComplete: true, readyState: ws.readyState });
-            })().catch((error) => {
+            })().catch((error: unknown) => {
               window.clearTimeout(timeout);
-              reject(error);
+              reject(toLintErrorObject(error, "Non-Error rejection"));
             });
           });
           ws.addEventListener("error", () => {
@@ -751,7 +752,7 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  await main().catch((error) => {
+  await main().catch((error: unknown) => {
     console.error(shortError(error));
     process.exitCode = 1;
   });
@@ -763,3 +764,17 @@ export const testing = {
   readBoundedText,
   resolveOpenAIHttpTimeoutMs,
 };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

@@ -1,6 +1,12 @@
+/** Interactive and noninteractive secrets configure workflow. */
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { confirm, select, text } from "@clack/prompts";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -16,11 +22,6 @@ import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
 import { runSecretsApply, type SecretsApplyResult } from "./apply.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import {
@@ -47,6 +48,7 @@ import { resolveSecretRefValue } from "./resolve.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
 
+/** Result returned after interactive secrets configure builds and preflights an apply plan. */
 export type SecretsConfigureResult = {
   plan: SecretsApplyPlan;
   preflight: SecretsApplyResult;
@@ -110,7 +112,7 @@ function removeSecretProvider(config: OpenClawConfig, providerAlias: string): bo
     return false;
   }
   const providers = config.secrets.providers;
-  if (!Object.prototype.hasOwnProperty.call(providers, providerAlias)) {
+  if (!Object.hasOwn(providers, providerAlias)) {
     return false;
   }
   delete providers[providerAlias];
@@ -814,6 +816,7 @@ async function configureProvidersInteractive(
   }
 }
 
+/** Runs interactive secrets configuration and returns changed config/auth-store state. */
 export async function runSecretsConfigureInteractive(
   params: {
     env?: NodeJS.ProcessEnv;

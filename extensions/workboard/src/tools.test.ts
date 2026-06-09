@@ -1,3 +1,4 @@
+// Workboard tests cover tools plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
@@ -35,8 +36,10 @@ describe("workboard tools", () => {
         },
       },
     } as unknown as OpenClawPluginApi;
+    const workboardStore = new WorkboardStore(keyed);
     const tools = createWorkboardTools({
       api,
+      store: workboardStore,
       context: { agentId: "main", sessionKey: "session-1" } as never,
     });
     const byName = new Map(tools.map((tool) => [tool.name, tool]));

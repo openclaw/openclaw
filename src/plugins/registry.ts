@@ -1,10 +1,22 @@
+/** In-memory plugin registry builder and mutation API for plugin runtime registration. */
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
+import { clearCodeModeNamespacesForPlugin } from "../agents/code-mode-namespaces.js";
 import {
   getRegisteredAgentHarness,
   registerAgentHarness as registerGlobalAgentHarness,
 } from "../agents/harness/registry.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
   normalizeCommandDescriptorName,
@@ -35,15 +47,6 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { uniqueValues } from "../shared/string-normalization.js";
-import {
-  normalizeStringEntries,
-  normalizeUniqueStringEntries,
-} from "../shared/string-normalization.js";
 import {
   getDetachedTaskLifecycleRuntimeRegistration,
   registerDetachedTaskLifecycleRuntime,
@@ -152,7 +155,9 @@ import {
   normalizePluginToolNames,
 } from "./tool-contracts.js";
 import {
+  DEPRECATED_PLUGIN_HOOKS,
   isConversationHookName,
+  isDeprecatedPluginHookName,
   isPluginHookName,
   isPromptInjectionHookName,
   stripPromptMutationFieldsFromLegacyHookResult,
@@ -202,6 +207,7 @@ export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistrati
 
 const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
 const LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT = getPluginCompatRecord("legacy-deactivate-hook-alias");
+const LEGACY_SUBAGENT_SPAWNING_HOOK_COMPAT = getPluginCompatRecord("legacy-subagent-spawning-hook");
 
 function formatLegacyDeactivateHookAliasDiagnostic(): string {
   const removeAfter =
@@ -209,6 +215,22 @@ function formatLegacyDeactivateHookAliasDiagnostic(): string {
   return (
     `typed hook "deactivate" is deprecated (${LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT.code}); ` +
     `use "gateway_stop". This compatibility alias will be removed after ${removeAfter}.`
+  );
+}
+
+function formatDeprecatedTypedHookDiagnostic(hookName: PluginHookName): string | undefined {
+  if (!isDeprecatedPluginHookName(hookName) || hookName === "deactivate") {
+    return undefined;
+  }
+  const deprecation = DEPRECATED_PLUGIN_HOOKS[hookName];
+  const compat =
+    hookName === "subagent_spawning" ? LEGACY_SUBAGENT_SPAWNING_HOOK_COMPAT : undefined;
+  const removeAfter = compat?.removeAfter ?? deprecation.removeAfter ?? "a future breaking release";
+  const code = compat?.code ?? "deprecated-plugin-hook";
+  return (
+    `typed hook "${hookName}" is deprecated (${code}); ` +
+    `${deprecation.reason} Use ${deprecation.replacement}. ` +
+    `This compatibility hook will be removed after ${removeAfter}.`
   );
 }
 
@@ -642,7 +664,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       entry?.hook.name ?? opts?.name?.trim(),
       "hook registration missing name",
     );
-    const existingHook = registry.hooks.find((entry) => entry.entry.hook.name === hookName);
+    const existingHook = registry.hooks.find(
+      (entryLocal) => entryLocal.entry.hook.name === hookName,
+    );
     if (existingHook) {
       pushDiagnostic({
         level: "error",
@@ -904,6 +928,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registration: OpenClawPluginChannelRegistration | ChannelPlugin,
     mode: PluginRegistrationMode = "full",
   ) => {
+    if (record.origin === "workspace" && !record.enabled) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `channel registration rejected for disabled workspace plugin: ${record.id}`,
+      });
+      return;
+    }
     const registrationCapabilities = resolvePluginRegistrationCapabilities(mode);
     const normalized =
       typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
@@ -2113,16 +2146,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     descriptor: PluginControlUiDescriptor,
   ) => {
+    const legacyDescriptor = descriptor as PluginControlUiDescriptor & { name?: unknown };
     const id = normalizeHostHookString(descriptor.id);
-    const label = normalizeHostHookString(descriptor.label);
+    const label = normalizeHostHookString(descriptor.label ?? legacyDescriptor.name);
     const description = normalizeOptionalHostHookString(descriptor.description);
     const placement = normalizeOptionalHostHookString(descriptor.placement);
     const requiredScopes = normalizeHostHookStringList(descriptor.requiredScopes);
-    const surface = typeof descriptor.surface === "string" ? descriptor.surface : "";
+    // The flat registerControlUiDescriptor API shipped before descriptor.surface/label were
+    // required. Keep older external JS plugins loadable while current typed plugins stay explicit.
+    const surface = typeof descriptor.surface === "string" ? descriptor.surface : "session";
     if (
       !id ||
       !label ||
-      !controlUiSurfaces.has(surface as PluginControlUiDescriptor["surface"]) ||
+      !controlUiSurfaces.has(surface) ||
       description === "" ||
       placement === "" ||
       requiredScopes === null
@@ -2178,7 +2214,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       descriptor: {
         ...descriptor,
         id,
-        surface: surface as PluginControlUiDescriptor["surface"],
+        surface,
         label,
         ...(description !== undefined ? { description } : {}),
         ...(placement !== undefined ? { placement } : {}),
@@ -2444,6 +2480,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: formatLegacyDeactivateHookAliasDiagnostic(),
       });
+    } else {
+      const deprecatedHookDiagnostic = formatDeprecatedTypedHookDiagnostic(hookName);
+      if (deprecatedHookDiagnostic) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: deprecatedHookDiagnostic,
+        });
+      }
     }
     let effectiveHandler = handler;
     if (policy?.allowPromptInjection === false && isPromptInjectionHookName(effectiveHookName)) {
@@ -2596,6 +2642,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             ): PluginStateSyncKeyedStore<T> => {
               assertPluginStateAllowed();
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
+            },
+            openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+              options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+            ) => {
+              assertPluginStateAllowed();
+              const stateDir = options?.stateDir ?? baseState.resolveStateDir();
+              return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
+                ...options,
+                channelId: pluginId,
+                stateDir,
+              });
             },
           } satisfies PluginRuntime["state"];
         }
@@ -2901,7 +2958,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   ? setPluginRunContext({ pluginId: record.id, patch })
                   : false,
               getRunContext: (get) => getPluginRunContext({ pluginId: record.id, get }),
-              clearRunContext: (params) => {
+              clearRunContext: (paramsLocal) => {
                 if (
                   registryParams.activateGlobalSideEffects === false ||
                   !shouldCommitWorkflowSideEffect()
@@ -2910,8 +2967,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 }
                 clearPluginRunContext({
                   pluginId: record.id,
-                  runId: params.runId,
-                  namespace: params.namespace,
+                  runId: paramsLocal.runId,
+                  namespace: paramsLocal.namespace,
                 });
               },
               registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
@@ -3144,6 +3201,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
     clearPluginCommandsForPlugin(pluginId);
     clearPluginInteractiveHandlersForPlugin(pluginId);
+    clearCodeModeNamespacesForPlugin(pluginId);
     clearContextEnginesForOwner(`plugin:${pluginId}`);
 
     const hookRollbackEntries = pluginHookRollback.get(pluginId) ?? [];

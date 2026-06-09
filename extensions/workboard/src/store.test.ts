@@ -1,5 +1,11 @@
+// Workboard tests cover store plugin behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import {
   WorkboardStore,
   type PersistedWorkboardAttachment,
@@ -31,6 +37,113 @@ function createMemoryStore<T = PersistedWorkboardCard>(options?: {
 }
 
 describe("WorkboardStore", () => {
+  it("persists boards, cards, subscriptions, and attachment blobs in sqlite", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    if (process.platform !== "win32") {
+      fs.chmodSync(dir, 0o755);
+    }
+    try {
+      const stores = createWorkboardSqliteStores({ dbPath });
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      const board = await store.upsertBoard({ id: "planning", name: "Planning" });
+      const card = await store.create({
+        title: "Persist it",
+        boardId: board.id,
+        labels: ["sqlite", "doctor"],
+        execution: {
+          id: "exec-1",
+          kind: "agent-session",
+          engine: "codex",
+          mode: "autonomous",
+          status: "running",
+          model: "gpt-5.5",
+          sessionKey: "agent:main:test",
+          runId: "run-1",
+          startedAt: 1,
+          updatedAt: 2,
+        },
+      });
+      await store.addComment(card.id, { body: "round trip" });
+      const attached = await store.addAttachment(card.id, {
+        fileName: "proof.txt",
+        contentBase64: Buffer.from("ok").toString("base64"),
+      });
+      expect(attached.events?.at(-1)).toMatchObject({ kind: "attachment_added" });
+      await store.addAttachment(card.id, {
+        fileName: "large-proof.bin",
+        contentBase64: Buffer.alloc(70 * 1024).toString("base64"),
+      });
+      await store.update(card.id, {
+        metadata: { lifecycleStatusSourceUpdatedAt: 1234 },
+      });
+      const attachmentId = attached.metadata?.attachments?.[0]?.id;
+      const subscription = await store.subscribeNotifications({
+        boardId: board.id,
+        target: "agent:main:test",
+        eventKinds: ["completed"],
+      });
+      if (process.platform !== "win32") {
+        expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+        expect(fs.statSync(dbPath).mode & 0o777).toBe(0o600);
+        for (const sidecarPath of [`${dbPath}-wal`, `${dbPath}-shm`]) {
+          if (fs.existsSync(sidecarPath)) {
+            expect(fs.statSync(sidecarPath).mode & 0o777).toBe(0o600);
+          }
+        }
+      }
+      stores.close();
+
+      const rawDb = new DatabaseSync(dbPath);
+      expect(rawDb.prepare("PRAGMA journal_mode").get()).toMatchObject({
+        journal_mode: "wal",
+      });
+      rawDb.close();
+
+      const reopenedStores = createWorkboardSqliteStores({ dbPath });
+      const reopened = new WorkboardStore(reopenedStores.cards, {
+        boards: reopenedStores.boards,
+        subscriptions: reopenedStores.subscriptions,
+        attachments: reopenedStores.attachments,
+      });
+
+      expect(await reopened.listBoards()).toMatchObject({
+        boards: [
+          expect.objectContaining({ id: "default" }),
+          expect.objectContaining({ id: board.id, name: "Planning" }),
+        ],
+      });
+      expect(await reopened.get(card.id)).toMatchObject({
+        id: card.id,
+        labels: ["sqlite", "doctor"],
+        metadata: {
+          automation: { boardId: "planning" },
+          lifecycleStatusSourceUpdatedAt: 1234,
+          comments: [expect.objectContaining({ body: "round trip" })],
+          attachments: expect.arrayContaining([
+            expect.objectContaining({ fileName: "proof.txt" }),
+            expect.objectContaining({ fileName: "large-proof.bin" }),
+          ]),
+        },
+      });
+      expect(await reopened.getAttachment(attachmentId ?? "")).toMatchObject({
+        contentBase64: Buffer.from("ok").toString("base64"),
+      });
+      await reopened.delete(card.id);
+      expect(await reopened.getAttachment(attachmentId ?? "")).toBeUndefined();
+      expect(await reopened.listNotificationSubscriptions({ boardId: board.id })).toMatchObject({
+        subscriptions: [expect.objectContaining({ id: subscription.id })],
+      });
+      reopenedStores.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("creates and lists cards by status order and position", async () => {
     const store = new WorkboardStore(createMemoryStore());
 
@@ -224,6 +337,224 @@ describe("WorkboardStore", () => {
     });
     expect(rolledBack.startedAt).toBeUndefined();
     expect(rolledBack.completedAt).toBeUndefined();
+  });
+
+  it("tracks lifecycle status provenance and clears it on manual status changes", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Sync status provenance" });
+
+    const zeroSourceLifecycle = await store.update(card.id, {
+      status: "running",
+      metadata: { lifecycleStatusSourceUpdatedAt: 0 },
+    });
+    expect(zeroSourceLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBe(0);
+
+    const lifecycleMoved = await store.update(card.id, {
+      status: "running",
+      metadata: { lifecycleStatusSourceUpdatedAt: 1000 },
+    });
+    expect(lifecycleMoved.metadata?.lifecycleStatusSourceUpdatedAt).toBe(1000);
+
+    const newerLifecycle = await store.update(card.id, {
+      status: "review",
+      metadata: { lifecycleStatusSourceUpdatedAt: 3000 },
+    });
+    expect(newerLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBe(3000);
+
+    const manual = await store.move(card.id, "running", 2000);
+    expect(manual.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
+
+    const staleZeroLifecycle = await store.update(card.id, {
+      status: "review",
+      metadata: { lifecycleStatusSourceUpdatedAt: 0 },
+    });
+    expect(staleZeroLifecycle).toEqual(manual);
+    expect(staleZeroLifecycle.status).toBe("running");
+    expect(staleZeroLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
+
+    const staleLifecycle = await store.update(card.id, {
+      status: "review",
+      metadata: { lifecycleStatusSourceUpdatedAt: 2000 },
+    });
+    expect(staleLifecycle).toEqual(manual);
+    expect(staleLifecycle.status).toBe("running");
+    expect(staleLifecycle.updatedAt).toBe(manual.updatedAt);
+    expect(staleLifecycle.events).toHaveLength(manual.events?.length ?? 0);
+    expect(staleLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
+
+    const freshLifecycleSourceUpdatedAt = Date.now() + 1000;
+    const freshLifecycle = await store.update(card.id, {
+      status: "review",
+      metadata: { lifecycleStatusSourceUpdatedAt: freshLifecycleSourceUpdatedAt },
+    });
+    expect(freshLifecycle.status).toBe("review");
+    expect(freshLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBe(
+      freshLifecycleSourceUpdatedAt,
+    );
+  });
+
+  it("keeps creation status from stale lifecycle patches", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(2000);
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({
+        title: "Initial running status",
+        status: "running",
+      });
+
+      const staleLifecycle = await store.update(card.id, {
+        status: "review",
+        metadata: { lifecycleStatusSourceUpdatedAt: 1000 },
+      });
+      expect(staleLifecycle).toEqual(card);
+      expect(staleLifecycle.status).toBe("running");
+      expect(staleLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
+
+      const freshLifecycle = await store.update(card.id, {
+        status: "review",
+        metadata: { lifecycleStatusSourceUpdatedAt: 3000 },
+      });
+      expect(freshLifecycle.status).toBe("review");
+      expect(freshLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBe(3000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let one stale bulk lifecycle patch strip later card updates", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1000);
+      const store = new WorkboardStore(createMemoryStore());
+      const staleCard = await store.create({ title: "Stale bulk target" });
+      const freshCard = await store.create({ title: "Fresh bulk target" });
+      vi.setSystemTime(3000);
+      await store.move(staleCard.id, "running", 1000);
+
+      const patch = {
+        status: "review",
+        metadata: { lifecycleStatusSourceUpdatedAt: 2000 },
+      } as const;
+      const result = await store.bulkUpdate({
+        ids: [staleCard.id, freshCard.id],
+        patch,
+      });
+
+      expect(result.cards[0]).toMatchObject({ id: staleCard.id, status: "running" });
+      expect(result.cards[0]?.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
+      expect(result.cards[1]).toMatchObject({ id: freshCard.id, status: "review" });
+      expect(result.cards[1]?.metadata?.lifecycleStatusSourceUpdatedAt).toBe(2000);
+      expect(patch).toEqual({
+        status: "review",
+        metadata: { lifecycleStatusSourceUpdatedAt: 2000 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps non-status fields from stale lifecycle patches", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Keep stale sync details",
+      execution: {
+        id: "exec-1",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "openai/gpt-5.5",
+        sessionKey: "agent:main:dashboard:1",
+        runId: "run-1",
+        startedAt: 1,
+        updatedAt: 1000,
+      },
+    });
+    const lifecycleMoved = await store.update(card.id, {
+      status: "review",
+      metadata: {
+        lifecycleStatusSourceUpdatedAt: 1000,
+        stale: {
+          detectedAt: 1000,
+          lastSessionUpdatedAt: 1000,
+          reason: "Session has not reported recent activity.",
+        },
+      },
+    });
+    const manual = await store.update(card.id, {
+      status: "running",
+      metadata: lifecycleMoved.metadata,
+    });
+
+    const synced = await store.update(card.id, {
+      status: "review",
+      execution: {
+        id: "exec-1",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "done",
+        model: "openai/gpt-5.5",
+        sessionKey: "agent:main:dashboard:1",
+        runId: "run-1",
+        startedAt: 1,
+        updatedAt: 2000,
+      },
+      metadata: {
+        lifecycleStatusSourceUpdatedAt: 1000,
+        stale: null,
+      },
+    });
+
+    expect(manual.metadata?.stale).toBeDefined();
+    expect(synced.status).toBe("running");
+    expect(synced.execution).toMatchObject({
+      runId: "run-1",
+      status: "done",
+      updatedAt: 2000,
+    });
+    expect(synced.metadata?.stale).toBeUndefined();
+    expect(synced.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
+    expect(synced.events?.at(-1)).toMatchObject({
+      kind: "attempt_updated",
+      runId: "run-1",
+    });
+  });
+
+  it("clears copied lifecycle provenance on manual status patches", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Clear copied provenance" });
+    const lifecycleMoved = await store.update(card.id, {
+      status: "review",
+      metadata: {
+        lifecycleStatusSourceUpdatedAt: 1000,
+        stale: {
+          kind: "session",
+          status: "done",
+          updatedAt: 1000,
+          observedAt: 1000,
+        },
+      },
+    });
+
+    const manual = await store.update(card.id, {
+      status: "running",
+      metadata: {
+        ...lifecycleMoved.metadata,
+        stale: null,
+      },
+    });
+
+    expect(manual.status).toBe("running");
+    expect(manual.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
+
+    const staleLifecycle = await store.update(card.id, {
+      status: "review",
+      metadata: { lifecycleStatusSourceUpdatedAt: 1000 },
+    });
+    expect(staleLifecycle.status).toBe("running");
+    expect(staleLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
   });
 
   it("keeps execution session links aligned with edited card links", async () => {
@@ -427,10 +758,16 @@ describe("WorkboardStore", () => {
     ).rejects.toThrow(/attachment must be/);
     await expect(
       store.addAttachment(card.id, {
-        fileName: "state-limit.bin",
-        contentBase64: Buffer.alloc(49 * 1024).toString("base64"),
+        fileName: "sqlite-sized.bin",
+        contentBase64: Buffer.alloc(70 * 1024).toString("base64"),
       }),
-    ).rejects.toThrow(/plugin state value/);
+    ).resolves.toMatchObject({
+      metadata: {
+        attachments: expect.arrayContaining([
+          expect.objectContaining({ fileName: "sqlite-sized.bin" }),
+        ]),
+      },
+    });
     await expect(
       store.addAttachment(card.id, {
         fileName: "padded.txt",
@@ -442,7 +779,9 @@ describe("WorkboardStore", () => {
     expect(context).toContain("failure.log");
 
     const deleted = await store.deleteAttachment(card.id, attachment.id);
-    expect(deleted.metadata?.attachments).toBeUndefined();
+    expect(deleted.metadata?.attachments).toEqual([
+      expect.objectContaining({ fileName: "sqlite-sized.bin" }),
+    ]);
     expect(deleted.events?.at(-1)).toMatchObject({ kind: "edited" });
     expect(await store.getAttachment(attachment.id)).toBeUndefined();
   });
@@ -1517,7 +1856,6 @@ describe("WorkboardStore", () => {
   });
 
   it("does not drop concurrent updates while refreshing diagnostics", async () => {
-    let store!: WorkboardStore;
     let proofPromise: Promise<unknown> | undefined;
     let triggered = false;
     const keyed = createMemoryStore({
@@ -1527,10 +1865,12 @@ describe("WorkboardStore", () => {
         }
         triggered = true;
         proofPromise = store.addProof(value.card.id, { status: "passed", label: "CI" });
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0);
+        });
       },
     });
-    store = new WorkboardStore(keyed);
+    const store: WorkboardStore = new WorkboardStore(keyed);
     const card = await store.create({ title: "Ready too long", agentId: "main" });
 
     await store.refreshDiagnostics(Date.now() + 2 * 24 * 60 * 60 * 1000);

@@ -1,3 +1,4 @@
+// Workspace load tests cover loading skills from workspace directories and manifests.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -27,19 +28,19 @@ import { readSkillFrontmatterSafe } from "./local-loader.js";
 import { loadWorkspaceSkillEntries } from "./workspace.js";
 
 vi.mock("../../plugins/manifest-registry.js", async () => {
-  const fs = await import("node:fs");
-  const path = await import("node:path");
+  const fsLocal = await import("node:fs");
+  const pathLocal = await import("node:path");
   return {
     loadPluginManifestRegistry: (params: { workspaceDir?: string }) => {
-      const extensionsRoot = path.join(params.workspaceDir ?? "", ".openclaw", "extensions");
+      const extensionsRoot = pathLocal.join(params.workspaceDir ?? "", ".openclaw", "extensions");
       const plugins = [];
       for (const id of ["open-prose", "browser"]) {
-        const rootDir = path.join(extensionsRoot, id);
-        const manifestPath = path.join(rootDir, "openclaw.plugin.json");
-        if (!fs.existsSync(manifestPath)) {
+        const rootDir = pathLocal.join(extensionsRoot, id);
+        const manifestPath = pathLocal.join(rootDir, "openclaw.plugin.json");
+        if (!fsLocal.existsSync(manifestPath)) {
           continue;
         }
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+        const manifest = JSON.parse(fsLocal.readFileSync(manifestPath, "utf8")) as {
           enabledByDefault?: boolean;
           skills?: string[];
         };
@@ -458,6 +459,34 @@ describe("loadWorkspaceSkillEntries", () => {
     });
 
     expect(entries.map((entry) => entry.skill.name)).toEqual(["remote-only"]);
+  });
+
+  it("filters remote-ineligible skills when no agent skill filter is active", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "local-only"),
+      name: "local-only",
+      description: "Always available",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "remote-only"),
+      name: "remote-only",
+      description: "Needs a remote bin",
+      metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","sandboxbin"]}}}',
+    });
+
+    const entries = loadTestWorkspaceSkillEntries(workspaceDir, {
+      eligibility: {
+        remote: {
+          platforms: ["linux"],
+          hasBin: () => false,
+          hasAnyBin: () => false,
+          note: "sandbox",
+        },
+      },
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toEqual(["local-only"]);
   });
 
   it.runIf(process.platform !== "win32")(

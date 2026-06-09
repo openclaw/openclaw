@@ -1,3 +1,4 @@
+// Protocol Gen Swift script supports OpenClaw repository automation.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,6 +42,7 @@ const STRICT_LITERAL_STRUCTS = new Set([
 ]);
 
 const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]][] = [
+  ["SendParams", ["buffer", "filename", "contentType"]],
   ["SessionOperationEvent", ["agentId"]],
   ["SessionsCompactionListParams", ["agentId"]],
   ["SessionsCompactionGetParams", ["agentId"]],
@@ -77,6 +79,8 @@ const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]
   ["MessageActionParams", ["inboundTurnKind"]],
   ["CronRunLogEntry", ["errorReason", "failureNotificationDelivery"]],
   ["ExecApprovalRequestParams", ["requireDeliveryRoute", "suppressDelivery"]],
+  ["AgentSummary", ["thinkingLevels", "thinkingOptions", "thinkingDefault"]],
+  ["ModelChoice", ["available"]],
 ];
 
 const DEFAULTED_OPTIONAL_INIT_PARAMS: Record<string, Set<string>> = Object.fromEntries(
@@ -636,7 +640,7 @@ async function generate() {
   }
 }
 
-generate().catch((err) => {
+generate().catch((err: unknown) => {
   console.error(err);
   process.exit(1);
 });

@@ -1,5 +1,7 @@
+/** Auth availability index for `openclaw models list` rows. */
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import {
   listProviderEnvAuthLookupKeys,
   resolveProviderEnvAuthLookupMaps,
@@ -14,7 +16,7 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
   OPENAI_PROVIDER_ID,
   openAIProviderUsesCodexRuntimeByDefault,
-} from "../../agents/openai-codex-routing.js";
+} from "../../agents/openai-routing.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -25,6 +27,7 @@ export type ModelListAuthIndex = {
   allowsProviderAuthAvailabilityFallback(provider: string): boolean;
 };
 
+/** Inputs used to build the auth index without re-reading process-wide state. */
 export type CreateModelListAuthIndexParams = {
   cfg: OpenClawConfig;
   authStore: AuthProfileStore;
@@ -76,6 +79,7 @@ function listValidatedSyntheticAuthProviderRefs(params: {
     .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
 }
 
+/** Builds a provider-auth lookup from profiles, env, config, and synthetic plugin refs. */
 export function createModelListAuthIndex(
   params: CreateModelListAuthIndexParams,
 ): ModelListAuthIndex {
@@ -92,6 +96,24 @@ export function createModelListAuthIndex(
   const authenticatedProviders = new Set<string>();
   const syntheticAuthProviders = new Set<string>();
   const envProviderAuthCache = new Map<string, boolean>();
+  const credentialAuthsProvider = (credential: AuthProfileCredential): boolean => {
+    const normalizedProvider = normalizeStoredAuthProvider(credential.provider, aliasMap);
+    if (normalizedProvider !== OPENAI_PROVIDER_ID) {
+      return true;
+    }
+    if (credential.type === "api_key") {
+      return true;
+    }
+    if (credential.type !== "oauth" && credential.type !== "token") {
+      return false;
+    }
+    // OpenAI OAuth/token profiles only authenticate provider rows when config
+    // routes OpenAI through Codex runtime semantics.
+    return openAIProviderUsesCodexRuntimeByDefault({
+      provider: normalizedProvider,
+      config: params.cfg,
+    });
+  };
   const addProvider = (provider: string | undefined) => {
     if (!provider?.trim()) {
       return;
@@ -107,7 +129,9 @@ export function createModelListAuthIndex(
   };
 
   for (const credential of Object.values(params.authStore.profiles ?? {})) {
-    addProvider(credential.provider);
+    if (credentialAuthsProvider(credential)) {
+      addProvider(credential.provider);
+    }
   }
 
   for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
@@ -141,6 +165,8 @@ export function createModelListAuthIndex(
     params.cfg.agents?.defaults?.model,
   )?.split("/", 1)[0];
   if (primaryModelProvider === "codex") {
+    // A Codex primary model is a synthetic provider auth signal even when no
+    // normal provider key exists in the profile store.
     addSyntheticProvider("codex");
   }
 

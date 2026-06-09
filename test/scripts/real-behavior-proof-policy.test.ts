@@ -1,3 +1,4 @@
+// Real Behavior Proof Policy tests cover real behavior proof policy script behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   MOCK_ONLY_PROOF_LABEL,
@@ -139,6 +140,43 @@ describe("real-behavior-proof-policy", () => {
     expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
   });
 
+  it("keeps proof fields after Markdown headings copied inside fenced output", () => {
+    const body = proofBody(
+      [
+        "Terminal transcript:",
+        "```text",
+        "compiled system prompt:",
+        "```js",
+        "console.log('not a closing fence')",
+        "## Real behavior proof",
+        "Behavior addressed: copied prompt content, not a PR proof section.",
+        "## TOOLS.md",
+        "Observed result: ```",
+        "Observed result: not tested",
+        "What was not tested: copied template text",
+        "not tested",
+        "openclaw gateway status",
+        "discord ready",
+        "```",
+      ].join("\n"),
+      {
+        observedResult: "Plugin rules appear after the plugin boundary.",
+        notTested: "Live model attribution smoke.",
+      },
+    );
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(body),
+    });
+
+    expect(evaluation.fields?.evidence).toContain("openclaw gateway status");
+    expect(evaluation.status).toBe("passed");
+    expect(evaluation.fields?.observedResult).toBe(
+      "Plugin rules appear after the plugin boundary.",
+    );
+    expect(evaluation.fields?.notTested).toBe("Live model attribution smoke.");
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+  });
+
   it("uses the latest real behavior proof section when duplicates exist", () => {
     const validProof = proofBody(
       [
@@ -260,6 +298,34 @@ describe("real-behavior-proof-policy", () => {
     });
 
     expect(evaluation.status).toBe("missing");
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([NEEDS_REAL_BEHAVIOR_PROOF_LABEL]);
+  });
+
+  it.each([
+    "not tested",
+    "not tested.",
+    "- not tested",
+    "- not tested.",
+    "did not test",
+    "did not test.",
+    "could not test",
+    "could not test.",
+  ])("fails external PRs with fenced missing-proof field values: %s", (missingProof) => {
+    const evidence = [
+      "Terminal transcript:",
+      "```text",
+      "$ openclaw gateway status",
+      "discord ready",
+      "```",
+    ].join("\n");
+    const notTested = ["```text", missingProof, "```"].join("\n");
+
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(proofBody(evidence, { notTested })),
+    });
+
+    expect(evaluation.status).toBe("missing");
+    expect(evaluation.missingFields).toEqual(["notTested"]);
     expect(labelsForRealBehaviorProof(evaluation)).toEqual([NEEDS_REAL_BEHAVIOR_PROOF_LABEL]);
   });
 
@@ -512,7 +578,9 @@ describe("isMaintainerTeamMember", () => {
   it("aborts stalled membership fetches", async () => {
     const fetch = vi.fn((_url: string, init: RequestInit) => {
       return new Promise((_resolve, reject) => {
-        init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        init.signal?.addEventListener("abort", () =>
+          reject(toLintErrorObject(init.signal?.reason, "Non-Error rejection")),
+        );
       });
     });
 
@@ -577,3 +645,17 @@ describe("readBoundedGitHubApiJson", () => {
     });
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

@@ -106,9 +106,19 @@ target server during config edits.
       remote: {
         url: "https://example.com/mcp",
         transport: "streamable-http", // streamable-http | sse
+        timeout: 20,
+        connectTimeout: 5,
+        supportsParallelToolCalls: true,
         headers: {
           Authorization: "Bearer ${MCP_REMOTE_TOKEN}",
         },
+        auth: "oauth",
+        oauth: {
+          scope: "docs.read",
+        },
+        sslVerify: true,
+        clientCert: "/path/to/client.crt",
+        clientKey: "/path/to/client.key",
         toolFilter: {
           include: ["search_*"],
           exclude: ["admin_*"],
@@ -129,6 +139,20 @@ target server during config edits.
   Remote entries use `transport: "streamable-http"` or `transport: "sse"`;
   `type: "http"` is a CLI-native alias that `openclaw mcp set` and
   `openclaw doctor --fix` normalize into the canonical `transport` field.
+- `mcp.servers.<name>.enabled`: set `false` to keep a saved server definition
+  while excluding it from embedded OpenClaw MCP discovery and tool projection.
+- `mcp.servers.<name>.timeout` / `requestTimeoutMs`: per-server MCP request
+  timeout in seconds or milliseconds.
+- `mcp.servers.<name>.connectTimeout` / `connectionTimeoutMs`: per-server
+  connection timeout in seconds or milliseconds.
+- `mcp.servers.<name>.supportsParallelToolCalls`: optional concurrency hint for
+  adapters that can choose whether to issue parallel MCP tool calls.
+- `mcp.servers.<name>.auth`: set `"oauth"` for HTTP MCP servers that require
+  OAuth. Run `openclaw mcp login <name>` to store tokens under OpenClaw state.
+- `mcp.servers.<name>.oauth`: optional OAuth scope, redirect URL, and client
+  metadata URL overrides.
+- `mcp.servers.<name>.sslVerify`, `clientCert`, `clientKey`: HTTP TLS controls
+  for private endpoints and mutual TLS.
 - `mcp.servers.<name>.toolFilter`: optional per-server tool selection. `include`
   limits the discovered MCP tools to matching names; `exclude` hides matching
   names. Entries are exact MCP tool names or simple `*` globs. Servers with
@@ -518,7 +542,7 @@ See [Inferred commitments](/concepts/commitments).
     tools: {
       // Additional /tools/invoke HTTP denies
       deny: ["browser"],
-      // Remove tools from the default HTTP deny list
+      // Remove tools from the default HTTP deny list for owner/admin callers
       allow: ["gateway"],
     },
     push: {
@@ -553,6 +577,11 @@ See [Inferred commitments](/concepts/commitments).
   value, so repeated failures from one localhost origin do not automatically
   lock out a different origin.
 - `tailscale.mode`: `serve` (tailnet only, loopback bind) or `funnel` (public, requires auth).
+- `tailscale.serviceName`: optional Tailscale Service name for Serve mode, such
+  as `svc:openclaw`. When set, OpenClaw passes it to `tailscale serve
+--service` so the Control UI can be exposed through a named Service instead
+  of the device hostname. The value must use Tailscale's `svc:<dns-label>`
+  Service name format; startup reports the derived Service URL.
 - `tailscale.preserveFunnel`: when `true` and `tailscale.mode = "serve"`, OpenClaw
   checks `tailscale funnel status` before re-applying Serve at startup and skips
   it if an externally configured Funnel route already covers the gateway port.
@@ -581,7 +610,10 @@ See [Inferred commitments](/concepts/commitments).
 - `gateway.nodes.pairing.autoApproveCidrs`: optional CIDR/IP allowlist for auto-approving first-time node device pairing with no requested scopes. It is disabled when unset. This does not auto-approve operator/browser/Control UI/WebChat pairing, and it does not auto-approve role, scope, metadata, or public-key upgrades.
 - `gateway.nodes.allowCommands` / `gateway.nodes.denyCommands`: global allow/deny shaping for declared node commands after pairing and platform allowlist evaluation. Use `allowCommands` to opt into dangerous node commands such as `camera.snap`, `camera.clip`, and `screen.record`; `denyCommands` removes a command even if a platform default or explicit allow would otherwise include it. After a node changes its declared command list, reject and re-approve that device pairing so the gateway stores the updated command snapshot.
 - `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
-- `gateway.tools.allow`: remove tool names from the default HTTP deny list.
+- `gateway.tools.allow`: remove tool names from the default HTTP deny list for
+  owner/admin callers. This does not upgrade identity-bearing `operator.write`
+  callers into owner/admin access; `cron`, `gateway`, and `nodes` remain
+  unavailable to non-owner callers even when allowlisted.
 
 </Accordion>
 
@@ -698,8 +730,8 @@ Query-string hook tokens are rejected.
 Validation and safety notes:
 
 - `hooks.enabled=true` requires a non-empty `hooks.token`.
-- `hooks.token` must be distinct from `gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN`; reusing the Gateway token fails startup validation.
-- `openclaw security audit` also flags `hooks.token` reuse of active Gateway password auth (`gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, or `--auth password --password <password>`) as a critical finding; password-mode reuse stays startup-compatible and should be repaired by rotating one of the secrets.
+- `hooks.token` should be distinct from active Gateway shared-secret auth (`gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`); startup logs a non-fatal security warning when it detects reuse.
+- `openclaw security audit` flags hook/Gateway auth reuse as a critical finding, including Gateway password auth supplied only at audit time (`--auth password --password <password>`). Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then update external hook senders to use the new hook token.
 - `hooks.path` cannot be `/`; use a dedicated subpath such as `/hooks`.
 - If `hooks.allowRequestSessionKey=true`, constrain `hooks.allowedSessionKeyPrefixes` (for example `["hook:"]`).
 - If a mapping or preset uses a templated `sessionKey`, set `hooks.allowedSessionKeyPrefixes` and `hooks.allowRequestSessionKey=true`. Static mapping keys do not require that opt-in.
@@ -1265,10 +1297,10 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 ```
 
 - `sessionRetention`: how long to keep completed isolated cron run sessions before pruning from `sessions.json`. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
-- `runLog.maxBytes`: max size per run log file (`cron/runs/<jobId>.jsonl`) before pruning. Default: `2_000_000` bytes.
-- `runLog.keepLines`: newest lines retained when run-log pruning is triggered. Default: `2000`.
+- `runLog.maxBytes`: accepted for compatibility with older file-backed cron run logs. Default: `2_000_000` bytes.
+- `runLog.keepLines`: newest SQLite run-history rows retained per job. Default: `2000`.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
-- `webhook`: deprecated legacy fallback webhook URL (http/https) used only for stored jobs that still have `notify: true`.
+- `webhook`: deprecated legacy fallback webhook URL (http/https) used by `openclaw doctor --fix` to migrate stored jobs that still have `notify: true`; runtime delivery uses per-job `delivery.mode="webhook"` plus `delivery.to`, or `delivery.completionDestination` when preserving announce delivery.
 
 ### `cron.retry`
 

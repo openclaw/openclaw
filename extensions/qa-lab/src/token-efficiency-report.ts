@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements token efficiency report behavior.
 import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 
 export type TokenEfficiencyRuntimeUsage = {
@@ -190,20 +191,21 @@ export function buildTokenEfficiencyReport(
   const usageSource: TokenEfficiencyRow["usageSource"] = liveUsage ? "live-usage" : "mock-estimate";
   const parityResults = params.summary.scenarios
     .map((scenario) => scenario.runtimeParity)
-    .filter((result): result is RuntimeParityResult => !!result);
+    .filter((result): result is RuntimeParityResult => Boolean(result));
 
   if (parityResults.length === 0) {
+    const noCapturesReason = "No runtime parity captures were present in the suite summary.";
     return {
-      status: "skipped",
+      status: liveUsage ? "evaluated" : "skipped",
       runtimePair,
       generatedAt: params.generatedAt ?? new Date().toISOString(),
       ...(providerMode ? { providerMode } : {}),
       thresholdPercent,
       rows: [],
       aggregate: ZERO_AGGREGATE,
-      pass: true,
-      failures: [],
-      skipReason: "No runtime parity captures were present in the suite summary.",
+      pass: !liveUsage,
+      failures: liveUsage ? [noCapturesReason] : [],
+      ...(liveUsage ? {} : { skipReason: noCapturesReason }),
       notes: ["Token efficiency requires runtime-pair summaries with RuntimeParityResult cells."],
     };
   }

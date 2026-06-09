@@ -1,9 +1,11 @@
+// OpenAI Responses shared helpers map runtime messages, tools, and stream events.
 import type OpenAI from "openai";
 import type {
   ResponseCreateParamsStreaming,
   ResponseFunctionCallOutputItemList,
   ResponseFunctionToolCall,
   ResponseInput,
+  ResponseInputItem,
   ResponseInputContent,
   ResponseInputImage,
   ResponseInputText,
@@ -11,6 +13,14 @@ import type {
   ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
+import {
+  AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
+  OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE,
+  type AzureResponsesTextContentPart,
+  type AzureResponsesTextDeltaEvent,
+  isAzureResponsesTextDeltaEvent,
+  isResponsesTextContentPartType,
+} from "../../shared/openai-responses-stream-compat.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   Api,
@@ -39,6 +49,49 @@ import { transformMessages } from "./transform-messages.js";
 // Utilities
 // =============================================================================
 
+type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
+type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & { id?: string };
+type ResponsesTextContentPart =
+  | ResponseOutputMessage["content"][number]
+  | AzureResponsesTextContentPart;
+type ResponsesStreamOutputMessage = Omit<ResponseOutputMessage, "content"> & {
+  content: ResponsesTextContentPart[];
+};
+type ResponsesContentPartAddedEvent = Extract<
+  ResponseStreamEvent,
+  { type: "response.content_part.added" }
+>;
+type ResponsesOutputItemDoneEvent = Extract<
+  ResponseStreamEvent,
+  { type: "response.output_item.done" }
+>;
+type AzureResponsesContentPartAddedEvent = Omit<ResponsesContentPartAddedEvent, "part"> & {
+  part: AzureResponsesTextContentPart;
+};
+type AzureResponsesOutputItemDoneEvent = Omit<ResponsesOutputItemDoneEvent, "item"> & {
+  item: ResponsesStreamOutputMessage;
+};
+
+export type OpenAIResponsesStreamEvent =
+  | ResponseStreamEvent
+  | AzureResponsesContentPartAddedEvent
+  | AzureResponsesOutputItemDoneEvent
+  | AzureResponsesTextDeltaEvent;
+
+function normalizeResponsesReasoningReplayItem(params: {
+  item: ReplayableResponseReasoningItem;
+  replayResponsesItemIds: boolean;
+}): ReplayableResponseReasoningItem {
+  const next = { ...(params.item as ReplayableResponseReasoningItem & Record<string, unknown>) };
+  if (!Array.isArray(next.summary)) {
+    next.summary = [];
+  }
+  if (!params.replayResponsesItemIds) {
+    delete next.id;
+  }
+  return next as ReplayableResponseReasoningItem;
+}
+
 function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase"]): string {
   const payload: TextSignatureV1 = { v: 1, id };
   if (phase) {
@@ -49,24 +102,44 @@ function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase"]): st
 
 function parseTextSignature(
   signature: string | undefined,
-): { id: string; phase?: TextSignatureV1["phase"] } | undefined {
+): { id?: string; phase?: TextSignatureV1["phase"] } | undefined {
   if (!signature) {
     return undefined;
   }
   if (signature.startsWith("{")) {
     try {
       const parsed = JSON.parse(signature) as Partial<TextSignatureV1>;
-      if (parsed.v === 1 && typeof parsed.id === "string") {
-        if (parsed.phase === "commentary" || parsed.phase === "final_answer") {
-          return { id: parsed.id, phase: parsed.phase };
+      if (parsed.v === 1) {
+        const id = typeof parsed.id === "string" ? parsed.id : undefined;
+        const phase =
+          parsed.phase === "commentary" || parsed.phase === "final_answer"
+            ? parsed.phase
+            : undefined;
+        // A reasoning-dropped replay keeps the phase but omits the paired id.
+        if (id !== undefined || phase !== undefined) {
+          return { id, phase };
         }
-        return { id: parsed.id };
+        return undefined;
       }
     } catch {
       // Fall through to legacy plain-string handling.
     }
   }
   return { id: signature };
+}
+
+function resolveReplayableResponsesMessageId(params: {
+  textSignatureId?: string;
+  fallbackId: string;
+  fallbackOrdinal: number;
+  previousReplayItemWasReasoning: boolean;
+}): string | undefined {
+  if (!params.textSignatureId) {
+    return params.fallbackOrdinal === 0
+      ? params.fallbackId
+      : `${params.fallbackId}_${params.fallbackOrdinal}`;
+  }
+  return params.previousReplayItemWasReasoning ? params.textSignatureId : undefined;
 }
 
 export interface OpenAIResponsesStreamOptions {
@@ -83,6 +156,7 @@ export interface OpenAIResponsesStreamOptions {
 
 export interface ConvertResponsesMessagesOptions {
   includeSystemPrompt?: boolean;
+  replayResponsesItemIds?: boolean;
 }
 export { convertResponsesTools };
 export type { ConvertResponsesToolsOptions } from "./openai-responses-tools.js";
@@ -133,6 +207,7 @@ export function convertResponsesMessages<TApi extends Api>(
   options?: ConvertResponsesMessagesOptions,
 ): ResponseInput {
   const messages: ResponseInput = [];
+  const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
 
   const normalizeIdPart = (part: string): string => {
     const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -176,8 +251,9 @@ export function convertResponsesMessages<TApi extends Api>(
   if (includeSystemPrompt && context.systemPrompt) {
     const role = model.reasoning ? "developer" : "system";
     messages.push({
+      type: "message",
       role,
-      content: sanitizeSurrogates(context.systemPrompt),
+      content: [{ type: "input_text", text: sanitizeSurrogates(context.systemPrompt) }],
     });
   }
 
@@ -186,6 +262,7 @@ export function convertResponsesMessages<TApi extends Api>(
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         messages.push({
+          type: "message",
           role: "user",
           content: [{ type: "input_text", text: sanitizeSurrogates(msg.content) }],
         });
@@ -207,13 +284,16 @@ export function convertResponsesMessages<TApi extends Api>(
           continue;
         }
         messages.push({
+          type: "message",
           role: "user",
           content,
         });
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
+      let textFallbackOrdinal = 0;
       const assistantMsg = msg;
+      let previousReplayItemWasReasoning = false;
       const isDifferentModel =
         assistantMsg.model !== model.id &&
         assistantMsg.provider === model.provider &&
@@ -222,48 +302,62 @@ export function convertResponsesMessages<TApi extends Api>(
       for (const block of msg.content) {
         if (block.type === "thinking") {
           if (block.thinkingSignature) {
-            const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
-            output.push(reasoningItem);
+            const reasoningItem = normalizeResponsesReasoningReplayItem({
+              item: JSON.parse(block.thinkingSignature) as ReplayableResponseReasoningItem,
+              replayResponsesItemIds: shouldReplayResponsesItemIds,
+            });
+            output.push(reasoningItem as ResponseInputItem);
+            previousReplayItemWasReasoning = true;
           }
         } else if (block.type === "text") {
           const textBlock = block;
           const parsedSignature = parseTextSignature(textBlock.textSignature);
-          // OpenAI requires id to be max 64 characters
-          let msgId = parsedSignature?.id;
-          if (!msgId) {
-            msgId = `msg_${msgIndex}`;
-          } else if (msgId.length > 64) {
+          let msgId = shouldReplayResponsesItemIds
+            ? resolveReplayableResponsesMessageId({
+                textSignatureId: parsedSignature?.id,
+                fallbackId: `msg_${msgIndex}`,
+                fallbackOrdinal: textFallbackOrdinal,
+                previousReplayItemWasReasoning,
+              })
+            : undefined;
+          if (!parsedSignature?.id) {
+            textFallbackOrdinal += 1;
+          }
+          if (msgId && msgId.length > 64) {
             msgId = `msg_${shortHash(msgId)}`;
           }
-          output.push({
+          const messageItem: ReplayableResponseOutputMessage = {
             type: "message",
             role: "assistant",
             content: [
               { type: "output_text", text: sanitizeSurrogates(textBlock.text), annotations: [] },
             ],
             status: "completed",
-            id: msgId,
+            ...(msgId ? { id: msgId } : {}),
             phase: parsedSignature?.phase,
-          } satisfies ResponseOutputMessage);
+          };
+          output.push(messageItem as ResponseInputItem);
+          previousReplayItemWasReasoning = false;
         } else if (block.type === "toolCall") {
           const toolCall = block;
           const [callId, itemIdRaw] = toolCall.id.split("|");
-          let itemId: string | undefined = itemIdRaw;
+          let itemId: string | undefined = shouldReplayResponsesItemIds ? itemIdRaw : undefined;
 
           // For different-model messages, set id to undefined to avoid pairing validation.
           // OpenAI tracks which fc_xxx IDs were paired with rs_xxx reasoning items.
           // By omitting the id, we avoid triggering that validation (like cross-provider does).
-          if (isDifferentModel && itemId?.startsWith("fc_")) {
+          if (shouldReplayResponsesItemIds && isDifferentModel && itemId?.startsWith("fc_")) {
             itemId = undefined;
           }
 
           output.push({
             type: "function_call",
-            id: itemId,
+            ...(itemId ? { id: itemId } : {}),
             call_id: callId,
             name: toolCall.name,
             arguments: JSON.stringify(toolCall.arguments),
           });
+          previousReplayItemWasReasoning = false;
         }
       }
       if (output.length === 0) {
@@ -469,14 +563,17 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
 // =============================================================================
 
 export async function processResponsesStream<TApi extends Api>(
-  openaiStream: AsyncIterable<ResponseStreamEvent>,
+  openaiStream: AsyncIterable<OpenAIResponsesStreamEvent>,
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
   model: Model<TApi>,
   options?: OpenAIResponsesStreamOptions,
 ): Promise<void> {
-  let currentItem: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | null =
-    null;
+  let currentItem:
+    | ResponseReasoningItem
+    | ResponsesStreamOutputMessage
+    | ResponseFunctionToolCall
+    | null = null;
   let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null =
     null;
   const blocks = output.content;
@@ -557,8 +654,11 @@ export async function processResponsesStream<TApi extends Api>(
     } else if (event.type === "response.content_part.added") {
       if (currentItem?.type === "message") {
         currentItem.content = currentItem.content || [];
-        // Filter out ReasoningText, only accept output_text and refusal
-        if (event.part.type === "output_text" || event.part.type === "refusal") {
+        if (
+          event.part.type === OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE ||
+          event.part.type === AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE ||
+          event.part.type === "refusal"
+        ) {
           currentItem.content.push(event.part);
         }
       }
@@ -568,7 +668,7 @@ export async function processResponsesStream<TApi extends Api>(
           continue;
         }
         const lastPart = currentItem.content[currentItem.content.length - 1];
-        if (lastPart?.type === "output_text") {
+        if (isResponsesTextContentPartType(lastPart?.type)) {
           currentBlock.text += event.delta;
           lastPart.text += event.delta;
           stream.push({
@@ -578,6 +678,23 @@ export async function processResponsesStream<TApi extends Api>(
             partial: output,
           });
         }
+      }
+    } else if (isAzureResponsesTextDeltaEvent(event)) {
+      if (currentItem?.type === "message" && currentBlock?.type === "text") {
+        currentItem.content = currentItem.content || [];
+        let lastPart = currentItem.content[currentItem.content.length - 1];
+        if (lastPart?.type !== "text") {
+          lastPart = { type: "text", text: "" };
+          currentItem.content.push(lastPart);
+        }
+        currentBlock.text += event.delta;
+        lastPart.text += event.delta;
+        stream.push({
+          type: "text_delta",
+          contentIndex: blockIndex(),
+          delta: event.delta,
+          partial: output,
+        });
       }
     } else if (event.type === "response.refusal.delta") {
       if (currentItem?.type === "message" && currentBlock?.type === "text") {
@@ -610,11 +727,18 @@ export async function processResponsesStream<TApi extends Api>(
     } else if (event.type === "response.function_call_arguments.done") {
       if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
         const previousPartialJson = currentBlock.partialJson;
-        currentBlock.partialJson = event.arguments;
-        currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+        const doneArguments = typeof event.arguments === "string" ? event.arguments : undefined;
 
-        if (event.arguments.startsWith(previousPartialJson)) {
-          const delta = event.arguments.slice(previousPartialJson.length);
+        if (
+          doneArguments !== undefined &&
+          (doneArguments.length > 0 || previousPartialJson === "")
+        ) {
+          currentBlock.partialJson = doneArguments;
+          currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+        }
+
+        if (doneArguments?.startsWith(previousPartialJson)) {
+          const delta = doneArguments.slice(previousPartialJson.length);
           if (delta.length > 0) {
             stream.push({
               type: "toolcall_delta",
@@ -641,8 +765,9 @@ export async function processResponsesStream<TApi extends Api>(
         });
         currentBlock = null;
       } else if (item.type === "message" && currentBlock?.type === "text") {
+        // Support both OpenAI "output_text" and Azure "text" content types
         currentBlock.text = item.content
-          .map((c) => (c.type === "output_text" ? c.text : c.refusal))
+          .map((c) => (c.type === "output_text" || c.type === "text" ? c.text : c.refusal))
           .join("");
         currentBlock.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
         stream.push({

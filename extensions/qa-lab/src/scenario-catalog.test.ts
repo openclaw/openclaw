@@ -1,3 +1,4 @@
+// Qa Lab tests cover scenario catalog plugin behavior.
 import { describe, expect, it } from "vitest";
 import { QA_AGENTIC_PARITY_SCENARIO_IDS } from "./agentic-parity.js";
 import {
@@ -124,10 +125,12 @@ describe("qa scenario catalog", () => {
     const messageTool = readQaScenarioById("runtime-tool-message-tool");
     const tavilySearch = readQaScenarioById("runtime-tool-tavily-search");
     const webSearch = readQaScenarioById("runtime-tool-web-search");
+    const imageGenerate = readQaScenarioById("runtime-tool-image-generate");
 
     expect(applyPatch.runtimeParityTier).toBe("standard");
     expect(messageTool.runtimeParityTier).toBe("optional");
     expect(tavilySearch.runtimeParityTier).toBe("optional");
+    expect(imageGenerate.runtimeParityTier).toBe("optional");
     expect(readQaScenarioExecutionConfig(applyPatch.id)).toMatchObject({
       toolName: "apply_patch",
       toolCoverage: {
@@ -154,6 +157,15 @@ describe("qa scenario catalog", () => {
       },
     });
     expect(readQaScenarioExecutionConfig(webSearch.id)).not.toHaveProperty("knownHarnessGap");
+    expect(readQaScenarioExecutionConfig(imageGenerate.id)).toMatchObject({
+      toolName: "image_generate",
+      toolCoverage: {
+        bucket: "openclaw-dynamic-integration",
+        expectedLayer: "openclaw-dynamic",
+        capabilityLayer: "openclaw-dynamic-direct",
+        required: false,
+      },
+    });
   });
 
   it("loads the Codex legacy Read vocabulary live parity canary", () => {
@@ -404,6 +416,15 @@ describe("qa scenario catalog", () => {
     );
     expect(config?.expectedAdversarialDiagnostics).toContain(
       "control UI descriptor registration requires id, surface, label, and valid optional fields",
+    );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "hosted media resolver registration missing resolver",
+    );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider",
+    );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "model catalog provider registration missing provider",
     );
     expect(
       config?.expectedAdversarialDiagnostics?.every((entry) => typeof entry === "string"),

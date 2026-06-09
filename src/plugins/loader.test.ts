@@ -1,3 +1,4 @@
+/** Broad plugin loader coverage for manifest discovery, runtime registration, and diagnostics. */
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +16,11 @@ import {
   getRegisteredEventKeys,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
-import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import {
+  emitDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import {
   clearDetachedTaskLifecycleRuntimeRegistration,
   getDetachedTaskLifecycleRuntimeRegistration,
@@ -204,6 +209,14 @@ function writeBundledPlugin(params: {
   delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
   return { bundledDir, plugin };
+}
+
+function makeOpenClawDevSourceRoot() {
+  const root = makeTempDir();
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
+  mkdirSafe(path.join(root, "src"));
+  mkdirSafe(path.join(root, "extensions"));
+  return root;
 }
 
 function writeWorkspacePlugin(params: {
@@ -985,6 +998,7 @@ function collectStartupTraceMetrics(
 }
 
 afterEach(() => {
+  resetDiagnosticEventsForTest();
   clearRuntimeConfigSnapshot();
   runtimeRegistryLoaderTesting.resetPluginRegistryLoadedForTests();
   resetPluginLoaderTestStateForTest();
@@ -5445,6 +5459,140 @@ module.exports = {
     ).toBe("disabled");
   });
 
+  it("blocks untrusted setup-only workspace channel plugins when explicitly scoped", () => {
+    useNoBundledPlugins();
+    const marker = path.join(makeTempDir(), "workspace-setup-only-loaded.txt");
+    const { workspaceDir, workspacePluginDir } = writeWorkspacePlugin({
+      id: "workspace-shadow",
+      body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
+module.exports = {
+  id: "workspace-shadow",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "workspace-shadow",
+        meta: {
+          id: "workspace-shadow",
+          label: "Workspace Shadow",
+          selectionLabel: "Workspace Shadow",
+          docsPath: "/channels/workspace-shadow",
+          blurb: "workspace shadow",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => undefined,
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+    });
+    fs.writeFileSync(
+      path.join(workspacePluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "workspace-shadow",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["workspace-shadow"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      includeSetupOnlyChannelPlugins: true,
+      forceSetupOnlyChannelPlugins: true,
+      onlyPluginIds: ["workspace-shadow"],
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(registry.channelSetups).toHaveLength(0);
+    expect(registry.channels).toHaveLength(0);
+    expect(registry.plugins.find((entry) => entry.id === "workspace-shadow")).toMatchObject({
+      status: "disabled",
+      error: "workspace plugin (disabled by default)",
+    });
+  });
+
+  it("keeps trusted setup-only workspace channel plugins available when explicitly scoped", () => {
+    useNoBundledPlugins();
+    const marker = path.join(makeTempDir(), "trusted-workspace-setup-only-loaded.txt");
+    const { workspaceDir, workspacePluginDir } = writeWorkspacePlugin({
+      id: "trusted-workspace-shadow",
+      body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
+module.exports = {
+  id: "trusted-workspace-shadow",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "telegram",
+        meta: {
+          id: "telegram",
+          label: "Trusted Workspace Telegram",
+          selectionLabel: "Trusted Workspace Telegram",
+          docsPath: "/channels/telegram",
+          blurb: "trusted workspace telegram",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+    });
+    fs.writeFileSync(
+      path.join(workspacePluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "trusted-workspace-shadow",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["telegram"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      includeSetupOnlyChannelPlugins: true,
+      forceSetupOnlyChannelPlugins: true,
+      onlyPluginIds: ["trusted-workspace-shadow"],
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["trusted-workspace-shadow"],
+        },
+      },
+    });
+
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(registry.channelSetups.map((entry) => entry.plugin.meta.label)).toEqual([
+      "Trusted Workspace Telegram",
+    ]);
+    expect(registry.channels).toHaveLength(0);
+    expect(registry.plugins.find((entry) => entry.id === "trusted-workspace-shadow")?.status).toBe(
+      "loaded",
+    );
+  });
+
   it.each([
     {
       name: "uses package setupEntry for selected setup-only channel loads",
@@ -6186,6 +6334,131 @@ module.exports = {
     });
   });
 
+  it("records a diagnostic when registerChannel throws in the setup-entry path", () => {
+    useNoBundledPlugins();
+    const brokenDir = makeTempDir();
+
+    fs.writeFileSync(
+      path.join(brokenDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/register-channel-throws-test",
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(brokenDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "register-channel-throws-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["register-channel-throws-test"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(brokenDir, "index.cjs"),
+      `module.exports = { id: "register-channel-throws-test", register() {} };`,
+      "utf-8",
+    );
+    // setup-entry.cjs: loadSetupPlugin succeeds, but the returned plugin
+    // has a nested throwing getter on config.listAccountIds that triggers
+    // inside registerChannel -> normalizeRegisteredChannelPlugin.
+    fs.writeFileSync(
+      path.join(brokenDir, "setup-entry.cjs"),
+      `const configObj = {
+  resolveAccount: () => ({ accountId: "default" }),
+};
+Object.defineProperty(configObj, "listAccountIds", {
+  get() { throw new Error("boom: registerChannel exploded"); },
+  enumerable: true,
+  configurable: true,
+});
+module.exports = {
+  kind: "bundled-channel-setup-entry",
+  loadSetupPlugin: () => ({
+    id: "register-channel-throws-test",
+    meta: {
+      id: "register-channel-throws-test",
+      label: "Throws on register",
+      selectionLabel: "Throws on register",
+      docsPath: "/channels/register-throws",
+      blurb: "test channel that throws during registration",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: configObj,
+    outbound: { deliveryMode: "direct" },
+  }),
+};`,
+      "utf-8",
+    );
+
+    const healthy = writePlugin({
+      id: "healthy-after-register-throw",
+      filename: "healthy-after-register-throw.cjs",
+      body: `module.exports = { id: "healthy-after-register-throw", register(api) {
+  api.registerChannel({
+    plugin: {
+      id: "healthy-after-register-throw-chat",
+      meta: {
+        id: "healthy-after-register-throw-chat",
+        label: "Healthy After Register Throw",
+        selectionLabel: "Healthy After Register Throw",
+        docsPath: "/channels/healthy-after-register-throw",
+        blurb: "survives sibling registerChannel throw",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" }),
+      },
+      outbound: { deliveryMode: "direct" },
+    }
+  });
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+          load: { paths: [brokenDir, healthy.file] },
+          allow: ["register-channel-throws-test", "healthy-after-register-throw"],
+        },
+      },
+    });
+
+    // The broken plugin should be recorded as a diagnostic, not crash the loop.
+    expectDiagnosticContaining({
+      registry,
+      level: "error",
+      pluginId: "register-channel-throws-test",
+      message: "failed to register setup channel",
+    });
+    // The healthy plugin loaded AFTER the broken one must still be present.
+    const healthyChannel = registry.channels.find(
+      (entry) => entry.plugin.id === "healthy-after-register-throw-chat",
+    );
+    if (!healthyChannel) {
+      throw new Error("expected healthy channel after register throw");
+    }
+    expect(healthyChannel.plugin.meta.label).toBe("Healthy After Register Throw");
+    expect(
+      registry.plugins.find((entry) => entry.id === "healthy-after-register-throw")?.status,
+    ).toBe("loaded");
+  });
+
   it("prefers setupEntry for configured channel loads during startup when opted in", () => {
     expect(
       testing.shouldLoadChannelPluginInSetupRuntime({
@@ -6862,6 +7135,37 @@ module.exports = {
     ).toBe(true);
   });
 
+  it("warns when plugins register deprecated subagent_spawning typed hooks", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "legacy-subagent-spawning-hook",
+      filename: "legacy-subagent-spawning-hook.cjs",
+      body: `module.exports = { id: "legacy-subagent-spawning-hook", register(api) {
+  api.on("subagent_spawning", () => ({ status: "ok" }));
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["legacy-subagent-spawning-hook"],
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "legacy-subagent-spawning-hook")?.status,
+    ).toBe("loaded");
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["subagent_spawning"]);
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.pluginId === "legacy-subagent-spawning-hook" &&
+          diag.message ===
+            'typed hook "subagent_spawning" is deprecated (legacy-subagent-spawning-hook); Core prepares thread-bound subagent bindings through channel session-binding adapters before `subagent_spawned` fires. Use `subagent_spawned` for observation; core session bindings for routing. This compatibility hook will be removed after 2026-08-30.',
+      ),
+    ).toBe(true);
+  });
+
   it("ignores unknown typed hooks from plugins and keeps loading", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -7332,6 +7636,58 @@ module.exports = {
         expectedDisabledOrigin: "bundled",
         expectedDisabledError: "overridden by global plugin",
         expectDuplicateWarning: false,
+        assert: expectPluginSourcePrecedence,
+      },
+      {
+        label: "dev source bundled beats installed global duplicate",
+        pluginId: "demo-dev-source-duplicate",
+        bundledFilename: "index.cjs",
+        loadRegistry: () => {
+          const devSourceRoot = makeOpenClawDevSourceRoot();
+          const bundledPluginsDir = path.join(devSourceRoot, "extensions");
+          writeBundledPlugin({
+            id: "demo-dev-source-duplicate",
+            body: simplePluginBody("demo-dev-source-duplicate"),
+            bundledDir: path.join(bundledPluginsDir, "demo-dev-source-duplicate"),
+          });
+          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+          return withEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }, () =>
+            withStateDir((stateDir) => {
+              const globalDir = path.join(stateDir, "extensions", "demo-dev-source-duplicate");
+              mkdirSafe(globalDir);
+              writePlugin({
+                id: "demo-dev-source-duplicate",
+                body: simplePluginBody("demo-dev-source-duplicate"),
+                dir: globalDir,
+                filename: "index.cjs",
+              });
+              writePersistedInstalledPluginIndexInstallRecordsSync(
+                {
+                  "demo-dev-source-duplicate": {
+                    source: "npm",
+                    installPath: globalDir,
+                  },
+                },
+                { stateDir },
+              );
+
+              return loadOpenClawPlugins({
+                cache: false,
+                config: {
+                  plugins: {
+                    allow: ["demo-dev-source-duplicate"],
+                    entries: {
+                      "demo-dev-source-duplicate": { enabled: true },
+                    },
+                  },
+                },
+              });
+            }),
+          );
+        },
+        expectedLoadedOrigin: "bundled",
+        expectedDisabledOrigin: "global",
+        expectedDisabledError: "overridden by bundled plugin",
         assert: expectPluginSourcePrecedence,
       },
       {
@@ -8059,7 +8415,7 @@ module.exports = {
     ).toBe("loaded");
   });
 
-  it("supports legacy plugins subscribing to diagnostic events from the root sdk", () => {
+  it("supports legacy plugins subscribing to diagnostic events from the root sdk", async () => {
     useNoBundledPlugins();
     const seenKey = "__openclawLegacyRootDiagnosticSeen";
     delete (globalThis as Record<string, unknown>)[seenKey];
@@ -8114,6 +8470,7 @@ module.exports = {
         sessionKey: "agent:main:test:dm:peer",
         usage: { total: 1 },
       });
+      await waitForDiagnosticEventsDrained();
 
       expect((globalThis as Record<string, unknown>)[seenKey]).toEqual([
         {

@@ -1,3 +1,8 @@
+/**
+ * Agent image resize helpers.
+ *
+ * Downscales base64 image content for provider payload limits using the configured image processor.
+ */
 import type { ImageContent } from "../../llm/types.js";
 import {
   createImageProcessor,
@@ -31,6 +36,10 @@ const DEFAULT_OPTIONS: Required<ImageResizeOptions> = {
   maxBytes: DEFAULT_MAX_BYTES,
   jpegQuality: 80,
 };
+
+function maxBinaryBytesForBase64Budget(maxBase64Bytes: number): number {
+  return Math.floor(maxBase64Bytes / 4) * 3;
+}
 
 interface EncodedCandidate {
   data: string;
@@ -107,7 +116,7 @@ export async function resizeImage(
         maxWidth: opts.maxWidth,
         maxHeight: opts.maxHeight,
       },
-      maxBase64Bytes: opts.maxBytes,
+      maxBytes: maxBinaryBytesForBase64Budget(opts.maxBytes),
       opaque: { format: "jpeg", quality: opts.jpegQuality },
       transparent: { format: "png" },
       search: {

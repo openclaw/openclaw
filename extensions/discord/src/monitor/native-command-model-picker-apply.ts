@@ -1,3 +1,4 @@
+// Discord plugin module implements native command model picker apply behavior.
 import { randomUUID } from "node:crypto";
 import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -119,7 +120,9 @@ export async function applyDiscordModelPickerSelection(params: {
 
     const fallbackRoute = dispatchResult.effectiveRoute ?? params.route;
     if (params.settleMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, params.settleMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, params.settleMs);
+      });
     }
 
     let effectiveModelRef = params.resolveCurrentModel(fallbackRoute);
@@ -135,7 +138,9 @@ export async function applyDiscordModelPickerSelection(params: {
           params.selectedModel === params.defaultModel,
         runtime: params.selectedRuntime,
       });
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
       effectiveModelRef = params.resolveCurrentModel(fallbackRoute);
       persisted = effectiveModelRef === params.resolvedModelRef;
     }
@@ -155,7 +160,9 @@ export async function applyDiscordModelPickerSelection(params: {
             params.selectedModel === params.defaultModel,
           runtime: params.selectedRuntime,
         });
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 100);
+        });
         effectiveModelRef = params.resolveCurrentModel(fallbackRoute);
         persisted = effectiveModelRef === params.resolvedModelRef;
         if (!persisted) {

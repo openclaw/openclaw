@@ -1,3 +1,4 @@
+// Diffs tests cover tool render output plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
@@ -67,8 +68,8 @@ describe("diffs tool rendered output guards", () => {
       mode: "file",
     });
 
-    expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
-    expect((result?.details as Record<string, unknown>).filePath).toMatch(/preview\.png$/);
+    expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
+    expect((result.details as Record<string, unknown>).filePath).toMatch(/preview\.png$/);
   });
 });
 

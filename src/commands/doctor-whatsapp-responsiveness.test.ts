@@ -1,3 +1,4 @@
+// Doctor WhatsApp responsiveness tests cover warning heuristics and note output for stale connections.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -6,7 +7,9 @@ const spawnSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
   const { mockNodeChildProcessSpawnSync } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeChildProcessSpawnSync(spawnSyncMock);
+  return mockNodeChildProcessSpawnSync(spawnSyncMock, () =>
+    vi.importActual<typeof import("node:child_process")>("node:child_process"),
+  );
 });
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({

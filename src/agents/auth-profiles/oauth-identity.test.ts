@@ -1,5 +1,10 @@
+/**
+ * Tests OAuth identity and mirroring gates.
+ * Includes direct and fuzz coverage for account/email comparison so refreshed
+ * credentials cannot poison another auth store.
+ */
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import {
   isSafeToCopyOAuthIdentity,
   isSameOAuthIdentity,
@@ -9,11 +14,6 @@ import {
 } from "./oauth-identity.js";
 import { makeSeededRandom, maybe, randomAsciiString as randomString } from "./oauth-test-utils.js";
 import type { AuthProfileCredential, OAuthCredential } from "./types.js";
-
-// Direct unit + fuzz tests for the cross-agent credential-mirroring identity
-// gate introduced for #26322 (CWE-284). These helpers are on the hot-path of
-// `mirrorRefreshedCredentialIntoMainStore` and must be strictly correct: a
-// false positive means a sub-agent could poison the main-agent auth store.
 
 describe("normalizeAuthIdentityToken", () => {
   it("returns trimmed value when non-empty", () => {
@@ -319,7 +319,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
   };
   const refreshed = {
     type: "oauth",
-    provider: "openai-codex",
+    provider: "openai",
     access: "fresh-access",
     refresh: "fresh-refresh",
     expires: 2_000,
@@ -337,7 +337,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "matching older oauth credential",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: 1_000,
@@ -350,7 +350,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "non-finite existing expiry",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: Number.NaN,
@@ -363,7 +363,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "out-of-range existing expiry",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: MAX_DATE_TIMESTAMP_MS + 1,
@@ -380,7 +380,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       },
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: 1_000,
@@ -393,7 +393,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "identity upgrade",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: 1_000,
@@ -405,7 +405,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "api key override",
       existing: {
         type: "api_key",
-        provider: "openai-codex",
+        provider: "openai",
         key: "operator-key",
       },
       shouldMirror: false,
@@ -428,7 +428,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "identity mismatch",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: 1_000,
@@ -441,7 +441,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "strictly fresher existing credential",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "main-fresh",
         refresh: "main-fresh-refresh",
         expires: 3_000,
@@ -469,7 +469,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       shouldMirrorRefreshedOAuthCredential({
         existing: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "main-identity-access",
           refresh: "main-identity-refresh",
           expires: 1_000,
@@ -477,7 +477,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
         },
         refreshed: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "fresh-access",
           refresh: "fresh-refresh",
           expires: 2_000,

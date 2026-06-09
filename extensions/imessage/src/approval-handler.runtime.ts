@@ -1,3 +1,4 @@
+// Imessage plugin module implements approval handler behavior.
 import {
   buildChannelApprovalExpiredText,
   buildChannelApprovalResolvedText,
@@ -8,9 +9,9 @@ import {
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalReactionPendingContent } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
-import {
-  type ExecApprovalRequest,
-  type PluginApprovalRequest,
+import type {
+  ExecApprovalRequest,
+  PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {

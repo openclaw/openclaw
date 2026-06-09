@@ -65,7 +65,7 @@ Use this checklist when you already know your old BlueBubbles config and want th
    imsg rpc --help
    ```
 
-   Replace `42` with a real chat id from `imsg chats`. Sending requires Automation permission for Messages.app. If OpenClaw will run through SSH, run these commands through the same SSH wrapper or user context that OpenClaw will use.
+   Replace `42` with a real chat id from `imsg chats`. Sending requires Automation permission for Messages.app. If OpenClaw will run through SSH, run these commands through the same SSH wrapper or user context that OpenClaw will use. If reads/probes work but sends fail with AppleEvents `-1743`, check whether Automation landed on `/usr/libexec/sshd-keygen-wrapper`; see [SSH wrapper sends fail with AppleEvents -1743](/channels/imessage#ssh-wrapper-sends-fail-with-appleevents-1743).
 
 3. Enable the private API bridge when you need advanced actions:
 
@@ -221,22 +221,22 @@ If the gateway logs `imessage: dropping group message from chat_id=<id>` or the 
 
 ## Action parity at a glance
 
-| Action                                                     | legacy BlueBubbles                  | bundled iMessage                                                                                                        |
-| ---------------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Send text / SMS fallback                                   | ✅                                  | ✅                                                                                                                      |
-| Send media (photo, video, file, voice)                     | ✅                                  | ✅                                                                                                                      |
-| Threaded reply (`reply_to_guid`)                           | ✅                                  | ✅ (closes [#51892](https://github.com/openclaw/openclaw/issues/51892))                                                 |
-| Tapback (`react`)                                          | ✅                                  | ✅                                                                                                                      |
-| Edit / unsend (macOS 13+ recipients)                       | ✅                                  | ✅                                                                                                                      |
-| Send with screen effect                                    | ✅                                  | ✅ (closes part of [#9394](https://github.com/openclaw/openclaw/issues/9394))                                           |
-| Rich text bold / italic / underline / strikethrough        | ✅                                  | ✅ (typed-run formatting via attributedBody)                                                                            |
-| Rename group / set group icon                              | ✅                                  | ✅                                                                                                                      |
-| Add / remove participant, leave group                      | ✅                                  | ✅                                                                                                                      |
-| Read receipts and typing indicator                         | ✅                                  | ✅ (gated on private API probe)                                                                                         |
-| Same-sender DM coalescing                                  | ✅                                  | ✅ (DM-only; opt-in via `channels.imessage.coalesceSameSenderDms`)                                                      |
-| Catchup of inbound messages received while gateway is down | ✅ (webhook replay + history fetch) | ✅ (opt-in via `channels.imessage.catchup.enabled`; closes [#78649](https://github.com/openclaw/openclaw/issues/78649)) |
+| Action                                              | legacy BlueBubbles                  | bundled iMessage                                                              |
+| --------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------- |
+| Send text / SMS fallback                            | ✅                                  | ✅                                                                            |
+| Send media (photo, video, file, voice)              | ✅                                  | ✅                                                                            |
+| Threaded reply (`reply_to_guid`)                    | ✅                                  | ✅ (closes [#51892](https://github.com/openclaw/openclaw/issues/51892))       |
+| Tapback (`react`)                                   | ✅                                  | ✅                                                                            |
+| Edit / unsend (macOS 13+ recipients)                | ✅                                  | ✅                                                                            |
+| Send with screen effect                             | ✅                                  | ✅ (closes part of [#9394](https://github.com/openclaw/openclaw/issues/9394)) |
+| Rich text bold / italic / underline / strikethrough | ✅                                  | ✅ (typed-run formatting via attributedBody)                                  |
+| Rename group / set group icon                       | ✅                                  | ✅                                                                            |
+| Add / remove participant, leave group               | ✅                                  | ✅                                                                            |
+| Read receipts and typing indicator                  | ✅                                  | ✅ (gated on private API probe)                                               |
+| Same-sender DM coalescing                           | ✅                                  | ✅ (DM-only; opt-in via `channels.imessage.coalesceSameSenderDms`)            |
+| Inbound recovery after a restart                    | ✅ (webhook replay + history fetch) | ✅ (automatic: replay missed via since_rowid + dedupe; wider window on local) |
 
-iMessage catchup is now available as an opt-in feature on the bundled plugin. On gateway startup, if `channels.imessage.catchup.enabled` is `true`, the gateway runs one `chats.list` + per-chat `messages.history` pass against the same JSON-RPC client used by `imsg watch`, replays each missed inbound row through the live dispatch path (allowlists, group policy, debouncer, echo cache), and persists a per-account cursor so subsequent startups pick up where they left off. See [Catching up after gateway downtime](/channels/imessage#catching-up-after-gateway-downtime) for tuning.
+iMessage recovers messages missed while the gateway was down: on startup it replays from the last dispatched rowid via `imsg watch.subscribe` `since_rowid` and dedupes by GUID, while a stale-backlog age fence suppresses the Push-flush "backlog bomb". This runs over the `imsg` RPC connection, so it works for remote SSH `cliPath` setups too; local setups get a wider recovery window because they can read `chat.db`. See [Inbound recovery after a bridge or gateway restart](/channels/imessage#inbound-recovery-after-a-bridge-or-gateway-restart).
 
 ## Pairing, sessions, and ACP bindings
 
@@ -248,7 +248,7 @@ iMessage catchup is now available as an opt-in feature on the bundled plugin. On
 
 There is no supported BlueBubbles runtime to switch back to. If iMessage verification fails, set `channels.imessage.enabled: false`, restart the Gateway, fix the `imsg` blocker, and retry the cutover.
 
-The reply cache lives at `~/.openclaw/state/imessage/reply-cache.jsonl` (mode `0600`, parent dir `0700`). It is safe to delete if you want a clean slate.
+The reply cache lives in SQLite plugin state. `openclaw doctor --fix` imports and archives the old `imessage/reply-cache.jsonl` sidecar when present.
 
 ## Related
 

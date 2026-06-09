@@ -1,4 +1,6 @@
+// Release-era repair for configs that imply official plugin installs before install records existed.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { normalizeNullableString as normalizeId } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import { listPotentialConfiguredChannelPresenceSignals } from "../../../channels/config-presence.js";
 import { normalizeChatChannelId } from "../../../channels/registry.js";
@@ -9,7 +11,6 @@ import { compareOpenClawVersions } from "../../../config/version.js";
 import { getOfficialExternalPluginCatalogEntry } from "../../../plugins/official-external-plugin-catalog.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
-import { normalizeNullableString as normalizeId } from "../../../shared/string-coerce.js";
 import { VERSION } from "../../../version.js";
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
 import { asObjectRecord } from "./object.js";
@@ -104,7 +105,10 @@ function collectSlotPluginIds(cfg: OpenClawConfig): string[] {
   const slots = asObjectRecord(cfg.plugins?.slots);
   return ["memory", "contextEngine"]
     .map((key) => normalizeId(slots?.[key]))
-    .filter((pluginId): pluginId is string => !!pluginId && pluginId.toLowerCase() !== "none");
+    .filter(
+      (pluginId): pluginId is string =>
+        typeof pluginId === "string" && pluginId.toLowerCase() !== "none",
+    );
 }
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
@@ -253,6 +257,7 @@ function addEligiblePluginId(cfg: OpenClawConfig, pluginIds: Set<string>, plugin
   pluginIds.add(normalized);
 }
 
+/** Return true when this config has not yet crossed the configured-plugin install release gate. */
 export function shouldRunConfiguredPluginInstallReleaseStep(params: {
   currentVersion?: string | null;
   touchedVersion?: string | null;
@@ -270,6 +275,7 @@ export function shouldRunConfiguredPluginInstallReleaseStep(params: {
   return touchedComparedToRelease === null || touchedComparedToRelease < 0;
 }
 
+/** Collect plugin/channel ids implied by config for the release install backfill step. */
 export function collectReleaseConfiguredPluginIds(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -324,6 +330,7 @@ export function collectReleaseConfiguredPluginIds(params: {
   };
 }
 
+/** Run the configured-plugin install release backfill when the config still needs it. */
 export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

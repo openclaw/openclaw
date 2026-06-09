@@ -1,3 +1,4 @@
+// Pnpm Audit Prod tests cover pnpm audit prod script behavior.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import {
   createBulkAdvisoryPayload,
   fetchBulkAdvisories,
   filterFindingsBySeverity,
+  parseArgs,
   parseSnapshotKey,
   readBoundedBulkAdvisoryErrorText,
   runPnpmAuditProd,
@@ -14,6 +16,19 @@ import {
 } from "../../scripts/pre-commit/pnpm-audit-prod.mjs";
 
 describe("pnpm-audit-prod", () => {
+  it("parses explicit audit severity flags", () => {
+    expect(parseArgs(["--min-severity", "critical"])).toEqual({ minSeverity: "critical" });
+    expect(parseArgs(["--audit-level=moderate"])).toEqual({ minSeverity: "moderate" });
+  });
+
+  it("rejects missing audit severity flag values", () => {
+    expect(() => parseArgs(["--min-severity"])).toThrow("--min-severity requires a value");
+    expect(() => parseArgs(["--min-severity", "--audit-level", "critical"])).toThrow(
+      "--min-severity requires a value",
+    );
+    expect(() => parseArgs(["--audit-level="])).toThrow("--audit-level requires a value");
+  });
+
   it("parses scoped snapshot keys with peer suffixes", () => {
     expect(parseSnapshotKey("@scope/pkg@1.2.3(peer@4.5.6)")).toEqual({
       packageName: "@scope/pkg",
@@ -240,9 +255,16 @@ snapshots:
       fetchImpl: ((_url, init) => {
         signal = init?.signal ?? undefined;
         return new Promise((_resolve, reject) => {
-          signal?.addEventListener("abort", () => reject(signal?.reason ?? new Error("aborted")), {
-            once: true,
-          });
+          signal?.addEventListener(
+            "abort",
+            () =>
+              reject(
+                toLintErrorObject(signal?.reason ?? new Error("aborted"), "Non-Error rejection"),
+              ),
+            {
+              once: true,
+            },
+          );
         });
       }) as typeof fetch,
     });
@@ -252,17 +274,27 @@ snapshots:
   });
 
   it("bounds successful bulk advisory response bodies", async () => {
+    let cancelled = false;
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("{}"));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
     const request = fetchBulkAdvisories({
       payload: { axios: ["1.0.0"] },
       responseBodyMaxBytes: 4,
       fetchImpl: async () =>
-        new Response("{}", {
+        new Response(body, {
           status: 200,
           headers: { "content-length": "5" },
         }),
     });
 
     await expect(request).rejects.toThrow(/Bulk advisory response body exceeded 4 bytes/u);
+    expect(cancelled).toBe(true);
   });
 
   it("fails closed on empty successful bulk advisory response bodies", async () => {
@@ -339,3 +371,17 @@ snapshots:
     }
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

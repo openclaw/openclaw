@@ -1,3 +1,4 @@
+// Matrix helper module supports handler helpers behavior.
 import type { PreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
 import { finalizeInboundContext as finalizeCoreInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { vi, type Mock } from "vitest";
@@ -259,9 +260,9 @@ export function createMatrixHandlerTestHarness(
               run: () => Promise<T>;
               onSettled?: () => void | Promise<void>;
             }) => {
-              const { dispatcher, run, onSettled } = params;
+              const { dispatcher, run: runLocal, onSettled } = params;
               try {
-                return await run();
+                return await runLocal();
               } finally {
                 dispatcher.markComplete?.();
                 try {

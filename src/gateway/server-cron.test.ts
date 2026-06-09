@@ -1,3 +1,5 @@
+// Gateway cron tests cover isolated agent turns, heartbeat wakeups, completion
+// delivery, lifecycle cleanup, hook emission, and SSRF-guarded webhooks.
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +17,8 @@ const {
   cleanupBrowserSessionsForLifecycleEndMock,
   getGlobalHookRunnerMock,
   runCronChangedMock,
+  abortAndDrainEmbeddedAgentRunMock,
+  retireSessionMcpRuntimeMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   requestHeartbeatMock: vi.fn(),
@@ -30,6 +34,12 @@ const {
     hasHooks: (hookName: string) => hookName === "cron_changed",
     runCronChanged: runCronChangedMock,
   })),
+  abortAndDrainEmbeddedAgentRunMock: vi.fn(async () => ({
+    aborted: true,
+    drained: true,
+    forceCleared: false,
+  })),
+  retireSessionMcpRuntimeMock: vi.fn(async () => true),
 }));
 
 function enqueueSystemEvent(...args: unknown[]) {
@@ -92,6 +102,14 @@ vi.mock("../browser-lifecycle-cleanup.js", () => ({
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: getGlobalHookRunnerMock,
+}));
+
+vi.mock("../agents/embedded-agent.js", () => ({
+  abortAndDrainEmbeddedAgentRun: abortAndDrainEmbeddedAgentRunMock,
+}));
+
+vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
 }));
 
 import { buildGatewayCronService } from "./server-cron.js";
@@ -194,6 +212,8 @@ describe("buildGatewayCronService", () => {
     cleanupBrowserSessionsForLifecycleEndMock.mockClear();
     runCronChangedMock.mockClear();
     getGlobalHookRunnerMock.mockClear();
+    abortAndDrainEmbeddedAgentRunMock.mockClear();
+    retireSessionMcpRuntimeMock.mockClear();
     getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: (hookName: string) => hookName === "cron_changed",
       runCronChanged: runCronChangedMock,
@@ -379,6 +399,79 @@ describe("buildGatewayCronService", () => {
         "request",
       );
       expectMainCronRunSessionKey(heartbeatRequest.sessionKey, job.id);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("suppresses command cron NO_REPLY output before announce delivery", async () => {
+    const cfg = createCronConfig("server-cron-command-no-reply");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "silent-command",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", "process.stdout.write('NO_REPLY\\n')"],
+        },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+      expect(state.cron.getJob(job.id)?.state.lastDeliveryError).toBeUndefined();
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("suppresses command cron NO_REPLY output before webhook delivery", async () => {
+    const cfg = createCronConfig("server-cron-command-webhook-no-reply");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "silent-command-webhook",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", "process.stdout.write('NO_REPLY\\n')"],
+        },
+        delivery: {
+          mode: "webhook",
+          to: "https://example.invalid/cron-finished",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
     }

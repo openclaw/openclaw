@@ -1,6 +1,8 @@
+// Qa Lab plugin module implements suite runtime agent process behavior.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   appendQaChildOutput,
   appendQaChildOutputTail,
@@ -98,10 +100,11 @@ async function runQaCli(
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
+    const timeoutMs = resolveTimerTimeoutMs(opts?.timeoutMs, 60_000);
     const timeout = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error(`qa cli timed out: openclaw ${args.join(" ")}`));
-    }, opts?.timeoutMs ?? 60_000);
+    }, timeoutMs);
     child.stdout.on("data", (chunk) => appendQaChildOutput(stdout, chunk));
     child.stderr.on("data", (chunk) => appendQaChildOutputTail(stderr, chunk));
     child.once("error", (error) => {
@@ -253,7 +256,9 @@ async function waitForMemorySearchMatch(params: {
     if (haystack.includes(params.expectedNeedle)) {
       return result;
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   throw new Error(`memory index missing expected fact after reindex: ${params.expectedNeedle}`);
 }

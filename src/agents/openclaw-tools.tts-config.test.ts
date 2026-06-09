@@ -1,9 +1,11 @@
+// Verifies createOpenClawTools wires shared config and context into the TTS tool.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { testing, createOpenClawTools } from "./openclaw-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => {
+  // Stub every non-TTS tool so this suite isolates TTS option plumbing.
   const stubTool = (name: string) =>
     ({
       name,
@@ -17,6 +19,7 @@ const mocks = vi.hoisted(() => {
   return {
     stubTool,
     createCronToolOptions: vi.fn(),
+    createSessionStatusToolOptions: vi.fn(),
     createImageGenerateToolOptions: vi.fn(),
     createMusicGenerateToolOptions: vi.fn(),
     createVideoGenerateToolOptions: vi.fn(),
@@ -83,7 +86,10 @@ vi.mock("./tools/pdf-tool.js", () => ({
 }));
 
 vi.mock("./tools/session-status-tool.js", () => ({
-  createSessionStatusTool: () => mocks.stubTool("session_status"),
+  createSessionStatusTool: (options: unknown) => {
+    mocks.createSessionStatusToolOptions(options);
+    return mocks.stubTool("session_status");
+  },
 }));
 
 vi.mock("./tools/sessions-history-tool.js", () => ({
@@ -131,6 +137,7 @@ vi.mock("../tts/tts.js", () => ({
 }));
 
 function getTextToSpeechParams() {
+  // The mocked TTS runtime exposes the exact invocation payload for assertions.
   const calls = (mocks.textToSpeech as unknown as { mock: { calls: unknown[][] } }).mock.calls;
   return calls[0]?.[0] as
     | {
@@ -305,11 +312,13 @@ describe("createOpenClawTools media generation session wiring", () => {
       runSessionKey: "agent:main:cron:daily-media:run:run-123",
       disableMessageTool: true,
       disablePluginTools: true,
+      onYield: vi.fn(),
     });
 
     expect(mocks.createImageGenerateToolOptions).toHaveBeenCalledWith(
       expect.objectContaining({
         agentSessionKey: "agent:main:cron:daily-media:run:run-123",
+        onAsyncTaskStarted: undefined,
       }),
     );
     expect(mocks.createVideoGenerateToolOptions).toHaveBeenCalledWith(
@@ -344,6 +353,40 @@ describe("createOpenClawTools media generation session wiring", () => {
     expect(mocks.createImageGenerateToolOptions).toHaveBeenCalledWith(
       expect.objectContaining({
         agentSessionKey: "agent:main:slack:channel:C123",
+      }),
+    );
+  });
+});
+
+describe("createOpenClawTools session status route context wiring", () => {
+  beforeEach(() => {
+    mocks.createSessionStatusToolOptions.mockClear();
+  });
+
+  it("passes the active live-run route into the session_status tool", () => {
+    createOpenClawTools({
+      agentSessionKey: "agent:main:discord:channel:1489550370136129537",
+      runSessionKey: "agent:main:discord:channel:1489550370136129537",
+      agentChannel: "webchat",
+      agentAccountId: "browser",
+      agentTo: "channel:1489550370136129537",
+      agentThreadId: "origin-thread",
+      currentChannelId: "webchat:control-ui",
+      currentThreadTs: "webchat-thread-1",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createSessionStatusToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:discord:channel:1489550370136129537",
+        runSessionKey: "agent:main:discord:channel:1489550370136129537",
+        activeDeliveryContext: {
+          channel: "webchat",
+          to: "webchat:control-ui",
+          accountId: "browser",
+          threadId: "webchat-thread-1",
+        },
       }),
     );
   });

@@ -1,3 +1,5 @@
+// Covers send validation for target/channel mismatches, configured channel
+// availability, and explicit target requirements.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -122,7 +124,7 @@ describe("runMessageAction send validation", () => {
     expect(result.toolResult?.content).toEqual([
       {
         type: "text",
-        text: "Sent visible reply to the current webchat conversation via internal-ui.",
+        text: "Sent visible reply to the current source conversation via internal-ui.",
       },
     ]);
     expect(result.toolResult?.details).toEqual({
@@ -139,6 +141,54 @@ describe("runMessageAction send validation", () => {
       dryRun: false,
     });
     expect(JSON.stringify(result.toolResult?.content)).not.toContain("hello from codex");
+  });
+
+  it("uses non-webchat current source context as the message-tool-only send sink", async () => {
+    const result = await runMessageAction({
+      cfg: emptyConfig,
+      action: "send",
+      params: {
+        message: "telegram reply",
+      },
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "user:123456789",
+        currentMessageId: 98765,
+      },
+      sessionKey: "agent:main:telegram:direct:123456789",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "webchat",
+      to: "current-run",
+      handledBy: "internal-source",
+      payload: {
+        status: "ok",
+        sourceReplyDeliveryMode: "message_tool_only",
+        sourceReply: {
+          text: "telegram reply",
+        },
+      },
+    });
+  });
+
+  it("requires source address context before inferring non-webchat source sinks", async () => {
+    await expect(
+      runMessageAction({
+        cfg: emptyConfig,
+        action: "send",
+        params: {
+          message: "telegram reply",
+        },
+        toolContext: {
+          currentChannelProvider: "telegram",
+        },
+        sessionKey: "agent:main:telegram:direct:123456789",
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    ).rejects.toThrow(/requires a target/i);
   });
 
   it("strips unsupported citation control markers from internal UI source replies", async () => {
@@ -313,6 +363,29 @@ describe("runMessageAction send validation", () => {
         toolContext: { currentChannelId: "C12345678" },
       }),
     ).rejects.toThrow(/use action "poll" instead of "send"/i);
+  });
+
+  it("allows send when only schema-padded shared poll modifiers are present", async () => {
+    // LLMs routinely echo the shared `message` tool schema's poll modifier
+    // defaults (`pollDurationHours: 1`, `pollMulti: false`) on every plain
+    // `send` call alongside the rest of the schema-padded slots. Without a
+    // pollQuestion or pollOption present, these defaults are noise — not
+    // poll intent — and must not block the send.
+    const result = await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "#C12345678",
+        message: "hello",
+        pollQuestion: "",
+        pollOption: [],
+        pollDurationHours: 1,
+        pollMulti: false,
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    });
+
+    expect(result.kind).toBe("send");
   });
 });
 

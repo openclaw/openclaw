@@ -1,6 +1,7 @@
-import {
-  type UnifiedModelCatalogEntry,
-  type UnifiedModelCatalogProviderContext,
+// Openrouter plugin module implements video model catalog behavior.
+import type {
+  UnifiedModelCatalogEntry,
+  UnifiedModelCatalogProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";

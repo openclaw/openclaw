@@ -1,8 +1,10 @@
+// Microsoft Foundry provider module implements model/runtime integration.
 import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/core";
 import type {
   ModelProviderConfig,
   ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { OPENAI_RESPONSES_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import { apiKeyAuthMethod, entraIdAuthMethod } from "./auth.js";
 import { prepareFoundryRuntimeAuth } from "./runtime.js";
 import {
@@ -16,6 +18,40 @@ import {
   resolveFoundryModelCapabilities,
   resolveFoundryTargetProfileId,
 } from "./shared.js";
+
+type FoundryProviderHooks = Pick<ProviderPlugin, "wrapStreamFn">;
+
+const wrapOpenAIResponsesStreamFn = OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn;
+
+const wrapMicrosoftFoundryStreamFn: NonNullable<FoundryProviderHooks["wrapStreamFn"]> = (ctx) => {
+  if (ctx.model?.api !== "openai-responses") {
+    return ctx.streamFn ?? null;
+  }
+
+  const baseStreamFn = ctx.streamFn;
+  if (!baseStreamFn) {
+    return wrapOpenAIResponsesStreamFn?.(ctx) ?? null;
+  }
+
+  const streamFnWithResponsesReplayIds: NonNullable<typeof ctx.streamFn> = (
+    model,
+    context,
+    options,
+  ) =>
+    baseStreamFn(model, context, {
+      ...options,
+      // Foundry validates encrypted reasoning replay against the original item id,
+      // even though its Responses endpoint does not support persisted `store`.
+      replayResponsesItemIds: true,
+    } as typeof options & { replayResponsesItemIds: true });
+
+  return (
+    wrapOpenAIResponsesStreamFn?.({
+      ...ctx,
+      streamFn: streamFnWithResponsesReplayIds,
+    }) ?? streamFnWithResponsesReplayIds
+  );
+};
 
 export function buildMicrosoftFoundryProvider(): ProviderPlugin {
   return {
@@ -58,10 +94,35 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
         const nextModel = Object.assign({}, model, {
           name: selectedModelCapabilities.modelName,
           api: selectedModelCapabilities.api,
+          reasoning: selectedModelCapabilities.reasoning || model.reasoning,
+          thinkingLevelMap: selectedModelCapabilities.thinkingLevelMap ?? model.thinkingLevelMap,
           input: selectedModelCapabilities.input,
         });
         if (selectedModelCapabilities.compat) {
-          nextModel.compat = selectedModelCapabilities.compat;
+          const explicitSupportsReasoningEffort =
+            typeof model.compat?.supportsReasoningEffort === "boolean"
+              ? model.compat.supportsReasoningEffort
+              : undefined;
+          const preserveExplicitReasoningEffort =
+            !selectedModelCapabilities.reasoning &&
+            model.reasoning &&
+            explicitSupportsReasoningEffort !== false;
+          const explicitMaxTokensField =
+            typeof model.compat?.maxTokensField === "string"
+              ? model.compat.maxTokensField
+              : preserveExplicitReasoningEffort
+                ? "max_completion_tokens"
+                : undefined;
+          nextModel.compat = {
+            ...model.compat,
+            ...selectedModelCapabilities.compat,
+            ...(explicitSupportsReasoningEffort !== undefined
+              ? { supportsReasoningEffort: explicitSupportsReasoningEffort }
+              : preserveExplicitReasoningEffort
+                ? { supportsReasoningEffort: true }
+                : undefined),
+            ...(explicitMaxTokensField ? { maxTokensField: explicitMaxTokensField } : {}),
+          };
         }
         return nextModel;
       });
@@ -70,7 +131,10 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
           id: selectedModelId,
           name: selectedModelCapabilities.modelName,
           api: selectedModelCapabilities.api,
-          reasoning: false,
+          reasoning: selectedModelCapabilities.reasoning,
+          ...(selectedModelCapabilities.thinkingLevelMap
+            ? { thinkingLevelMap: selectedModelCapabilities.thinkingLevelMap }
+            : {}),
           input: selectedModelCapabilities.input,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: 128_000,
@@ -106,10 +170,35 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
         isFoundryProviderApi(model.api) ? model.api : undefined,
         model.input,
       );
+      const explicitSupportsReasoningEffort =
+        typeof model.compat?.supportsReasoningEffort === "boolean"
+          ? model.compat.supportsReasoningEffort
+          : undefined;
+      const preserveExplicitReasoningEffort = !capabilities.reasoning && model.reasoning;
+      const explicitMaxTokensField =
+        typeof model.compat?.maxTokensField === "string"
+          ? model.compat.maxTokensField
+          : preserveExplicitReasoningEffort
+            ? "max_completion_tokens"
+            : undefined;
+      const compat = capabilities.compat
+        ? {
+            ...model.compat,
+            ...capabilities.compat,
+            ...(explicitSupportsReasoningEffort !== undefined
+              ? { supportsReasoningEffort: explicitSupportsReasoningEffort }
+              : preserveExplicitReasoningEffort
+                ? { supportsReasoningEffort: true }
+                : undefined),
+            ...(explicitMaxTokensField ? { maxTokensField: explicitMaxTokensField } : {}),
+          }
+        : undefined;
       return {
         ...model,
         name: capabilities.modelName,
         api: capabilities.api,
+        reasoning: capabilities.reasoning || model.reasoning,
+        thinkingLevelMap: capabilities.thinkingLevelMap ?? model.thinkingLevelMap,
         input: capabilities.input,
         baseUrl: buildFoundryProviderBaseUrl(
           endpoint,
@@ -117,9 +206,10 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
           capabilities.modelName,
           capabilities.api,
         ),
-        ...(capabilities.compat ? { compat: capabilities.compat } : {}),
+        ...(compat ? { compat } : {}),
       };
     },
+    wrapStreamFn: wrapMicrosoftFoundryStreamFn,
     prepareRuntimeAuth: prepareFoundryRuntimeAuth,
   };
 }

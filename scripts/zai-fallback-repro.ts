@@ -1,5 +1,7 @@
+// Zai Fallback Repro script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +37,21 @@ type ResolvePnpmCommandOptions = {
 };
 
 const COMMAND_OUTPUT_MAX_CHARS = 512 * 1024;
+const SESSION_TRANSCRIPT_SCAN_BYTES = 16 * 1024 * 1024;
+type ReproLog = (message: string) => void;
+type RunCommand = typeof runCommand;
+
+type RunZaiFallbackReproDeps = {
+  env?: NodeJS.ProcessEnv;
+  error?: ReproLog;
+  log?: ReproLog;
+  mkdtemp?: typeof fs.mkdtemp;
+  mkdir?: typeof fs.mkdir;
+  randomUUID?: typeof randomUUID;
+  rm?: typeof fs.rm;
+  runCommand?: RunCommand;
+  writeFile?: typeof fs.writeFile;
+};
 
 function resolveEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
   const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
@@ -61,6 +78,46 @@ function formatBoundedReproOutput(capture: OutputCapture): string {
   return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
 }
 
+export async function sessionTranscriptHasToolResult(
+  sessionFile: string,
+  maxBytes = SESSION_TRANSCRIPT_SCAN_BYTES,
+): Promise<boolean> {
+  let scannedBytes = 0;
+  let carry = "";
+  try {
+    for await (const rawChunk of createReadStream(sessionFile, { highWaterMark: 64 * 1024 })) {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(String(rawChunk));
+      const remaining = maxBytes - scannedBytes;
+      if (remaining <= 0) {
+        break;
+      }
+      const readableChunk = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+      scannedBytes += readableChunk.length;
+      const text = `${carry}${readableChunk.toString("utf8")}`;
+      if (text.includes('"toolResult"') || text.includes('"tool_result"')) {
+        return true;
+      }
+      carry = text.slice(-64);
+      if (readableChunk.length < chunk.length) {
+        break;
+      }
+    }
+  } catch (error) {
+    if ((error as { code?: unknown }).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+  return false;
+}
+
+export function outputContainsStandaloneToolOk(output: string): boolean {
+  return output
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .some((line) => line === "tool-ok");
+}
+
 export function resolveZaiFallbackPnpmCommand(
   args: string[],
   options: ResolvePnpmCommandOptions = {},
@@ -81,20 +138,20 @@ export function resolveZaiFallbackPnpmCommand(
   return command;
 }
 
-function pickAnthropicEnv(): { type: "oauth" | "api"; value: string } | null {
-  const oauth = process.env.ANTHROPIC_OAUTH_TOKEN?.trim();
+function pickAnthropicEnv(env: NodeJS.ProcessEnv): { type: "oauth" | "api"; value: string } | null {
+  const oauth = env.ANTHROPIC_OAUTH_TOKEN?.trim();
   if (oauth) {
     return { type: "oauth", value: oauth };
   }
-  const api = process.env.ANTHROPIC_API_KEY?.trim();
+  const api = env.ANTHROPIC_API_KEY?.trim();
   if (api) {
     return { type: "api", value: api };
   }
   return null;
 }
 
-function pickZaiKey(): string | null {
-  return process.env.ZAI_API_KEY?.trim() ?? process.env.Z_AI_API_KEY?.trim() ?? null;
+function pickZaiKey(env: NodeJS.ProcessEnv): string | null {
+  return env.ZAI_API_KEY?.trim() ?? env.Z_AI_API_KEY?.trim() ?? null;
 }
 
 async function runCommand(
@@ -143,97 +200,118 @@ async function runCommand(
   });
 }
 
-async function main() {
-  const anthropic = pickAnthropicEnv();
-  const zaiKey = pickZaiKey();
+export async function runZaiFallbackRepro(deps: RunZaiFallbackReproDeps = {}): Promise<number> {
+  const env = deps.env ?? process.env;
+  const log = deps.log ?? console.log;
+  const error = deps.error ?? console.error;
+  const mkdtemp = deps.mkdtemp ?? fs.mkdtemp;
+  const mkdir = deps.mkdir ?? fs.mkdir;
+  const rm = deps.rm ?? fs.rm;
+  const writeFile = deps.writeFile ?? fs.writeFile;
+  const run = deps.runCommand ?? runCommand;
+  const createUuid = deps.randomUUID ?? randomUUID;
+  const anthropic = pickAnthropicEnv(env);
+  const zaiKey = pickZaiKey(env);
   if (!anthropic) {
-    console.error("Missing ANTHROPIC_OAUTH_TOKEN or ANTHROPIC_API_KEY.");
-    process.exit(1);
+    error("Missing ANTHROPIC_OAUTH_TOKEN or ANTHROPIC_API_KEY.");
+    return 1;
   }
   if (!zaiKey) {
-    console.error("Missing ZAI_API_KEY or Z_AI_API_KEY.");
-    process.exit(1);
+    error("Missing ZAI_API_KEY or Z_AI_API_KEY.");
+    return 1;
   }
 
-  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zai-fallback-"));
+  const baseDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zai-fallback-"));
   const stateDir = path.join(baseDir, "state");
   const configPath = path.join(baseDir, "openclaw.json");
-  await fs.mkdir(stateDir, { recursive: true });
+  try {
+    await mkdir(stateDir, { recursive: true });
 
-  const config = {
-    agents: {
-      defaults: {
-        model: {
-          primary: "anthropic/claude-opus-4-6",
-          fallbacks: ["zai/glm-4.7"],
-        },
-        models: {
-          "anthropic/claude-opus-4-6": {},
-          "anthropic/claude-opus-4-5": {},
-          "zai/glm-4.7": {},
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["zai/glm-4.7"],
+          },
+          models: {
+            "anthropic/claude-opus-4-6": {},
+            "anthropic/claude-opus-4-5": {},
+            "zai/glm-4.7": {},
+          },
         },
       },
-    },
-  };
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
+    };
+    await writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
 
-  const sessionId = process.env.OPENCLAW_ZAI_FALLBACK_SESSION_ID ?? randomUUID();
+    const sessionId = env.OPENCLAW_ZAI_FALLBACK_SESSION_ID ?? createUuid();
 
-  const baseEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: stateDir,
-    ZAI_API_KEY: zaiKey,
-    Z_AI_API_KEY: "",
-  };
+    const baseEnv: NodeJS.ProcessEnv = {
+      ...env,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_STATE_DIR: stateDir,
+      ZAI_API_KEY: zaiKey,
+      Z_AI_API_KEY: "",
+    };
 
-  const envValidAnthropic: NodeJS.ProcessEnv = {
-    ...baseEnv,
-    ANTHROPIC_OAUTH_TOKEN: anthropic.type === "oauth" ? anthropic.value : "",
-    ANTHROPIC_API_KEY: anthropic.type === "api" ? anthropic.value : "",
-  };
+    const envValidAnthropic: NodeJS.ProcessEnv = {
+      ...baseEnv,
+      ANTHROPIC_OAUTH_TOKEN: anthropic.type === "oauth" ? anthropic.value : "",
+      ANTHROPIC_API_KEY: anthropic.type === "api" ? anthropic.value : "",
+    };
 
-  const envInvalidAnthropic: NodeJS.ProcessEnv = {
-    ...baseEnv,
-    ANTHROPIC_OAUTH_TOKEN: anthropic.type === "oauth" ? "invalid" : "",
-    ANTHROPIC_API_KEY: anthropic.type === "api" ? "invalid" : "",
-  };
+    const envInvalidAnthropic: NodeJS.ProcessEnv = {
+      ...baseEnv,
+      ANTHROPIC_OAUTH_TOKEN: anthropic.type === "oauth" ? "invalid" : "",
+      ANTHROPIC_API_KEY: anthropic.type === "api" ? "invalid" : "",
+    };
 
-  console.log("== Run 1: create tool history (primary only)");
-  const toolPrompt =
-    "Use the exec tool to create a file named zai-fallback-tool.txt with the content tool-ok. " +
-    "Then use the read tool to display the file contents. Reply with just the file contents.";
-  const run1 = await runCommand(
-    "run1",
-    ["openclaw", "agent", "--local", "--session-id", sessionId, "--message", toolPrompt],
-    envValidAnthropic,
-  );
-  if (run1.code !== 0) {
-    process.exit(run1.code ?? 1);
+    log("== Run 1: create tool history (primary only)");
+    const toolPrompt =
+      "Use the exec tool to create a file named zai-fallback-tool.txt with the content tool-ok. " +
+      "Then use the read tool to display the file contents. Reply with just the file contents.";
+    const run1 = await run(
+      "run1",
+      ["openclaw", "agent", "--local", "--session-id", sessionId, "--message", toolPrompt],
+      envValidAnthropic,
+    );
+    if (run1.code !== 0) {
+      return run1.code ?? 1;
+    }
+
+    const sessionFile = path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`);
+    if (!(await sessionTranscriptHasToolResult(sessionFile))) {
+      error("FAIL: no toolResult entries detected in session history.");
+      return 1;
+    }
+
+    log("== Run 2: force auth failover to Z.AI");
+    const followupPrompt =
+      "What is the content of zai-fallback-tool.txt? Reply with just the contents.";
+    const run2 = await run(
+      "run2",
+      ["openclaw", "agent", "--local", "--session-id", sessionId, "--message", followupPrompt],
+      envInvalidAnthropic,
+    );
+
+    if (run2.code === 0) {
+      if (outputContainsStandaloneToolOk(`${run2.stdout}\n${run2.stderr}`)) {
+        log("PASS: fallback succeeded.");
+        return 0;
+      }
+      error("FAIL: fallback run did not return standalone tool-ok.");
+      return 1;
+    }
+
+    error("FAIL: fallback failed.");
+    return run2.code ?? 1;
+  } finally {
+    await rm(baseDir, { force: true, recursive: true });
   }
+}
 
-  const sessionFile = path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`);
-  const transcript = await fs.readFile(sessionFile, "utf8").catch(() => "");
-  if (!transcript.includes('"toolResult"')) {
-    console.warn("Warning: no toolResult entries detected in session history.");
-  }
-
-  console.log("== Run 2: force auth failover to Z.AI");
-  const followupPrompt =
-    "What is the content of zai-fallback-tool.txt? Reply with just the contents.";
-  const run2 = await runCommand(
-    "run2",
-    ["openclaw", "agent", "--local", "--session-id", sessionId, "--message", followupPrompt],
-    envInvalidAnthropic,
-  );
-
-  if (run2.code === 0) {
-    console.log("PASS: fallback succeeded.");
-    process.exit(0);
-  }
-
-  console.error("FAIL: fallback failed.");
-  process.exit(run2.code ?? 1);
+async function main() {
+  process.exitCode = await runZaiFallbackRepro();
 }
 
 function isCliEntrypoint() {
@@ -242,7 +320,7 @@ function isCliEntrypoint() {
 }
 
 if (isCliEntrypoint()) {
-  await main().catch((err) => {
+  await main().catch((err: unknown) => {
     console.error(err);
     process.exit(1);
   });

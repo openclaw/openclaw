@@ -8,16 +8,13 @@
   "modelSupport": {
     "modelPrefixes": ["gpt-", "o1", "o3", "o4"]
   },
-  "providerAuthAliases": {
-    "openai-codex": "openai"
-  },
   "providerEndpoints": [
     {
       "endpointClass": "openai-public",
       "hosts": ["api.openai.com"]
     },
     {
-      "endpointClass": "openai-codex",
+      "endpointClass": "openai",
       "hosts": ["chatgpt.com"]
     },
     {
@@ -50,6 +47,8 @@
           {
             "id": "gpt-5.3-codex",
             "name": "GPT-5.3 Codex",
+            "api": "openai-chatgpt-responses",
+            "baseUrl": "https://chatgpt.com/backend-api",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 400000,
@@ -211,7 +210,7 @@
       }
     },
     "discovery": {
-      "openai": "static"
+      "openai": "runtime"
     },
     "suppressions": [
       {
@@ -239,7 +238,6 @@
       "provider": "openai",
       "method": "oauth",
       "choiceId": "openai",
-      "deprecatedChoiceIds": ["openai-codex", "codex-cli", "openai-codex-import"],
       "choiceLabel": "ChatGPT Login",
       "choiceHint": "Sign in with your ChatGPT or Codex subscription",
       "assistantPriority": -40,
@@ -252,7 +250,6 @@
       "provider": "openai",
       "method": "device-code",
       "choiceId": "openai-device-code",
-      "deprecatedChoiceIds": ["openai-codex-device-code"],
       "choiceLabel": "ChatGPT Device Pairing",
       "choiceHint": "Pair your ChatGPT account in browser with a device code",
       "assistantPriority": -10,
@@ -265,7 +262,6 @@
       "provider": "openai",
       "method": "api-key",
       "choiceId": "openai-api-key",
-      "deprecatedChoiceIds": ["openai-codex-api-key"],
       "choiceLabel": "OpenAI API Key",
       "choiceHint": "Use your OpenAI API key directly",
       "assistantPriority": 5,

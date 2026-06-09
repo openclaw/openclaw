@@ -1,3 +1,8 @@
+/**
+ * Simple completion runtime preparation.
+ *
+ * Resolves agent model selection, auth, runtime policy, and missing-auth errors before simple completions run.
+ */
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -24,7 +29,7 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-codex-routing.js";
+import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
 type SimpleCompletionAuthStorage = {

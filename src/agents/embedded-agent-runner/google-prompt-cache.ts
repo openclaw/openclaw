@@ -1,17 +1,20 @@
+/**
+ * Prepares Google prompt-cache payloads for embedded-agent stream calls.
+ */
 import crypto from "node:crypto";
-import { parseGeminiAuth } from "../../infra/gemini-auth.js";
-import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
-import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
-import type { Model } from "../../llm/types.js";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
-} from "../../shared/number-coercion.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parseGeminiAuth } from "../../infra/gemini-auth.js";
+import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
+import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
+import type { Model } from "../../llm/types.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import type { StreamFn } from "../runtime/index.js";
-import { isSessionWriteLockTimeoutError } from "../session-write-lock-error.js";
+import { isSessionWriteLockAcquireError } from "../session-write-lock-error.js";
 import { stableStringify } from "../stable-stringify.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "../transport-stream-shared.js";
@@ -179,7 +182,7 @@ async function appendGooglePromptCacheEntry(
   try {
     await sessionManager.appendCustomEntry(GOOGLE_PROMPT_CACHE_CUSTOM_TYPE, entry);
   } catch (err) {
-    if (err instanceof EmbeddedAttemptSessionTakeoverError || isSessionWriteLockTimeoutError(err)) {
+    if (err instanceof EmbeddedAttemptSessionTakeoverError || isSessionWriteLockAcquireError(err)) {
       throw err;
     }
     // ignore persistence failures

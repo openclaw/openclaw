@@ -1,3 +1,4 @@
+// Telegram plugin module implements outbound adapter behavior.
 import type { OutboundDeliveryFormattingOptions } from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveOutboundSendDep,
@@ -154,8 +155,8 @@ export async function sendTelegramPayloadMessages(params: {
         ...payloadOpts,
         buttons,
       }),
-    send: async ({ text, mediaUrl, isFirst }) =>
-      await params.send(params.to, text, {
+    send: async ({ text: textLocal, mediaUrl, isFirst }) =>
+      await params.send(params.to, textLocal, {
         ...payloadOpts,
         mediaUrl,
         ...(isFirst ? { buttons } : {}),

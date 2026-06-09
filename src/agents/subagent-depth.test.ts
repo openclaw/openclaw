@@ -1,8 +1,11 @@
+// Subagent depth tests cover depth recovery from persisted session metadata and
+// timer-safe timeout normalization for spawned agent runs.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveAgentTimeoutMs, resolveAgentTimeoutSeconds } from "./timeout.js";
 
@@ -40,6 +43,8 @@ describe("getSubagentDepthFromSessionStore", () => {
   });
 
   it("derives depth from spawnedBy ancestry when spawnDepth is missing", () => {
+    // Ancestry fallback keeps restored sessions useful when old stores predate
+    // the explicit spawnDepth field.
     const key1 = "agent:main:subagent:one";
     const key2 = "agent:main:subagent:two";
     const key3 = "agent:main:subagent:three";
@@ -72,48 +77,13 @@ describe("getSubagentDepthFromSessionStore", () => {
     const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
     const prefixedKey = "agent:main:subagent:flat";
     const storePath = storeTemplate.replaceAll("{agentId}", "main");
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          [prefixedKey]: {
-            sessionId: "subagent-flat",
-            updatedAt: Date.now(),
-            spawnDepth: 2,
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-
-    const depth = getSubagentDepthFromSessionStore("subagent:flat", {
-      cfg: {
-        session: {
-          store: storeTemplate,
-        },
+    writeSessionStoreForTest(storePath, {
+      [prefixedKey]: {
+        sessionId: "subagent-flat",
+        updatedAt: Date.now(),
+        spawnDepth: 2,
       },
     });
-
-    expect(depth).toBe(2);
-  });
-
-  it("accepts JSON5 syntax in the on-disk depth store for backward compatibility", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-json5-"));
-    const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
-    const storePath = storeTemplate.replaceAll("{agentId}", "main");
-    fs.writeFileSync(
-      storePath,
-      `{
-        // hand-edited legacy store
-        "agent:main:subagent:flat": {
-          sessionId: "subagent-flat",
-          spawnDepth: 2,
-        },
-      }`,
-      "utf-8",
-    );
 
     const depth = getSubagentDepthFromSessionStore("subagent:flat", {
       cfg: {

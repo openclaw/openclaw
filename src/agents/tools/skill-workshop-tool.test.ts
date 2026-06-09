@@ -1,23 +1,30 @@
+// skill_workshop tests cover proposal creation/revision/listing without
+// applying generated skills to the workspace.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../../test-utils/env.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
-let envSnapshot: ReturnType<typeof captureEnv>;
+let testState: OpenClawTestState;
 let stateDir = "";
 
 beforeEach(async () => {
-  envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  stateDir = await tempDirs.make("openclaw-skill-workshop-state-");
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  testState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-skill-workshop-state-",
+  });
+  stateDir = testState.stateDir;
 });
 
 afterEach(async () => {
-  envSnapshot.restore();
+  await testState.cleanup();
   await tempDirs.cleanup();
 });
 
@@ -63,8 +70,19 @@ describe("skill_workshop tool", () => {
   });
 
   it("creates pending skill proposals without applying them", async () => {
+    // Creation writes reviewable proposal artifacts under state, not live skill
+    // files in the workspace.
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
-    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      origin: {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:workshop-test",
+        runId: "run-workshop-test",
+      },
+    });
 
     const result = await tool.execute("call-1", {
       action: "create",
@@ -102,6 +120,24 @@ describe("skill_workshop tool", () => {
         "utf8",
       ),
     ).resolves.toContain("status: proposal");
+    await expect(
+      fs
+        .readFile(
+          path.join(
+            stateDir,
+            "skill-workshop",
+            "proposals",
+            (result.details as { id: string }).id,
+            "proposal.json",
+          ),
+          "utf8",
+        )
+        .then((raw) => JSON.parse(raw).origin),
+    ).resolves.toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:workshop-test",
+      runId: "run-workshop-test",
+    });
     await expect(
       fs.readFile(
         path.join(
@@ -170,6 +206,15 @@ describe("skill_workshop tool", () => {
         skillKey: "weather-planner",
       }),
     ]);
+    const punctuationOnly = await tool.execute("call-3b", {
+      action: "list",
+      status: "pending",
+      query: "!!!",
+    });
+    expect((punctuationOnly.content[0] as { text: string }).text).toBe(
+      "No skill proposals matched.",
+    );
+    expect((punctuationOnly.details as { proposals: unknown[] }).proposals).toEqual([]);
 
     const inspected = await tool.execute("call-4", {
       action: "inspect",

@@ -1,9 +1,10 @@
+// Tests private-route command persistence and timestamp bounds.
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,

@@ -1,9 +1,9 @@
+// Plugin state store E2E tests cover persisted plugin state across runtime calls.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closePluginStateDatabase,
   createPluginStateKeyedStore,
-  PluginStateStoreError,
   probePluginStateStore,
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,

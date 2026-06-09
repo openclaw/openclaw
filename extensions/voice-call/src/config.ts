@@ -1,3 +1,4 @@
+// Voice Call helper module supports config behavior.
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/realtime-voice";
 import {
   buildSecretInputSchema,
@@ -573,7 +574,7 @@ export function resolveVoiceCallNumberRouteKey(
   if (!routes) {
     return undefined;
   }
-  if (phone && Object.prototype.hasOwnProperty.call(routes, phone)) {
+  if (phone && Object.hasOwn(routes, phone)) {
     return phone;
   }
 

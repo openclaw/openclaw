@@ -1,3 +1,4 @@
+// CLI config readiness guard, legacy-state migration routing, and invalid-config allowances.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -57,19 +58,39 @@ function isLegacyWhatsAppAuthFile(name: string): boolean {
   return name.endsWith(".json") && /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
 }
 
+function isLegacyTelegramStateFile(name: string): boolean {
+  return (
+    (name.startsWith("bot-info-") && name.endsWith(".json")) ||
+    (name.startsWith("update-offset-") && name.endsWith(".json")) ||
+    name === "sticker-cache.json" ||
+    (name.startsWith("thread-bindings-") && name.endsWith(".json"))
+  );
+}
+
+function hasLegacyIMessageStateFiles(stateDir: string): boolean {
+  return (
+    fileOrDirExists(path.join(stateDir, "imessage", "reply-cache.jsonl")) ||
+    fileOrDirExists(path.join(stateDir, "imessage", "sent-echoes.jsonl")) ||
+    dirHasFile(path.join(stateDir, "imessage", "catchup"), (name) => name.endsWith(".json"))
+  );
+}
+
 function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir: string): boolean {
-  if (fileOrDirExists(path.join(stateDir, "discord", "model-picker-preferences.json"))) {
+  if (
+    fileOrDirExists(path.join(stateDir, "discord", "model-picker-preferences.json")) ||
+    fileOrDirExists(path.join(stateDir, "discord", "thread-bindings.json"))
+  ) {
     return true;
   }
   if (dirHasFile(path.join(stateDir, "feishu", "dedup"), (name) => name.endsWith(".json"))) {
     return true;
   }
+  if (hasLegacyIMessageStateFiles(stateDir)) {
+    return true;
+  }
   if (
     fileOrDirExists(path.join(oauthDir, "telegram-allowFrom.json")) ||
-    dirHasFile(
-      path.join(stateDir, "telegram"),
-      (name) => name.startsWith("bot-info-") && name.endsWith(".json"),
-    )
+    dirHasFile(path.join(stateDir, "telegram"), isLegacyTelegramStateFile)
   ) {
     return true;
   }
@@ -77,6 +98,7 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
 }
 
 function hasLegacyStateMigrationInputs(): boolean {
+  // Only run migration prompts when old state actually exists in known legacy locations.
   const stateDir = resolveStateDir(process.env, os.homedir);
   const oauthDir = resolveOAuthDir(process.env, stateDir);
   if (
@@ -93,16 +115,18 @@ function hasLegacyStateMigrationInputs(): boolean {
       path.join(stateDir, "agents"),
       path.join(stateDir, "flows", "registry.sqlite"),
       path.join(stateDir, "plugin-state", "state.sqlite"),
+      path.join(stateDir, "plugins", "installs.json"),
       path.join(stateDir, "sessions"),
       path.join(stateDir, "tasks", "runs.sqlite"),
     ].some(fileOrDirExists) || hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir)
   );
 }
 
-function isReadOnlyStateMigrationCommand(commandPath: string[]): boolean {
+function shouldRunStateMigrationOnlyWithLegacyInputs(commandPath: string[]): boolean {
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
   return (
+    commandName === "agent" ||
     commandName === "status" ||
     (commandName === "tasks" &&
       (subcommandName === undefined || ALLOWED_INVALID_TASK_SUBCOMMANDS.has(subcommandName)))
@@ -143,7 +167,7 @@ export async function ensureConfigReady(params: {
   const commandPath = params.commandPath ?? [];
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
   const shouldConsiderStateMigration = shouldMigrateStateFromPath(commandPath);
-  const isReadOnlyMigrationCommand = isReadOnlyStateMigrationCommand(commandPath);
+  const requiresLegacyStateInput = shouldRunStateMigrationOnlyWithLegacyInputs(commandPath);
   const runStateMigrationPreflight = async () => {
     didRunDoctorConfigFlow = true;
     const runDoctorConfigPreflight = async () =>
@@ -159,7 +183,7 @@ export async function ensureConfigReady(params: {
   if (
     !didRunDoctorConfigFlow &&
     shouldConsiderStateMigration &&
-    (!isReadOnlyMigrationCommand || hasLegacyStateMigrationInputs())
+    (!requiresLegacyStateInput || hasLegacyStateMigrationInputs())
   ) {
     preflightSnapshot = await runStateMigrationPreflight();
   }
@@ -169,7 +193,7 @@ export async function ensureConfigReady(params: {
     !preflightSnapshot &&
     !didRunDoctorConfigFlow &&
     shouldConsiderStateMigration &&
-    isReadOnlyMigrationCommand &&
+    requiresLegacyStateInput &&
     snapshot.valid &&
     snapshotHasConfiguredSessionStore(snapshot)
   ) {

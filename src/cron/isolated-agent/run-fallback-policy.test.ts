@@ -1,3 +1,4 @@
+// Run fallback policy tests cover isolated agent fallback behavior after run failures.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -37,6 +38,7 @@ describe("resolveCronFallbacksOverride", () => {
       resolveCronFallbacksOverride({
         cfg: makeConfig(["openai/gpt-5.4", "google/gemini-3-pro"]),
         agentId: "main",
+        inheritDefaultFallbacksForAgentStringModel: true,
         job: makeJob({
           kind: "agentTurn",
           message: "summarize",
@@ -88,7 +90,7 @@ describe("resolveCronFallbacksOverride", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
-                  fallbacks: ["openai-codex/gpt-5.2", "zai/glm-5"],
+                  fallbacks: ["openai/gpt-5.2", "zai/glm-5"],
                 },
               },
             },
@@ -101,7 +103,7 @@ describe("resolveCronFallbacksOverride", () => {
           message: "summarize",
         }),
       }),
-    ).toEqual(["openai-codex/gpt-5.2", "zai/glm-5"]);
+    ).toEqual(["openai/gpt-5.2", "zai/glm-5"]);
   });
 
   it("keeps a selected agent primary model strict ahead of default subagent fallbacks", () => {
@@ -113,7 +115,7 @@ describe("resolveCronFallbacksOverride", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
-                  fallbacks: ["openai-codex/gpt-5.2"],
+                  fallbacks: ["openai/gpt-5.2"],
                 },
               },
             },
@@ -178,7 +180,7 @@ describe("resolveCronFallbacksOverride", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
-                  fallbacks: ["openai-codex/gpt-5.2"],
+                  fallbacks: ["openai/gpt-5.2"],
                 },
               },
             },
@@ -192,6 +194,121 @@ describe("resolveCronFallbacksOverride", () => {
         }),
       }),
     ).toBeUndefined();
+  });
+
+  it("inherits default fallbacks for cron runs when the agent model is a string", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "deepseek/deepseek-v4-pro",
+                fallbacks: ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"],
+              },
+            },
+            list: [
+              {
+                id: "main",
+                model: "deepseek/deepseek-v4-pro",
+              },
+            ],
+          },
+        },
+        agentId: "main",
+        inheritDefaultFallbacksForAgentStringModel: true,
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toEqual(["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"]);
+  });
+
+  it("does not infer inheritance from rewritten cron agent defaults", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "anthropic/claude-sonnet-4-6",
+                fallbacks: ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"],
+              },
+            },
+            list: [
+              {
+                id: "main",
+                model: "anthropic/claude-sonnet-4-6",
+              },
+            ],
+          },
+        },
+        agentId: "main",
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("keeps object-style agent primaries strict for cron runs", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "deepseek/deepseek-v4-pro",
+                fallbacks: ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"],
+              },
+            },
+            list: [
+              {
+                id: "main",
+                model: {
+                  primary: "deepseek/deepseek-v4-pro",
+                },
+              },
+            ],
+          },
+        },
+        agentId: "main",
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("keeps string agent primaries strict when they differ from the default primary", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "deepseek/deepseek-v4-pro",
+                fallbacks: ["deepseek/deepseek-v4-flash", "moonshot/kimi-k2.6"],
+              },
+            },
+            list: [
+              {
+                id: "main",
+                model: "anthropic/claude-sonnet-4-6",
+              },
+            ],
+          },
+        },
+        agentId: "main",
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toStrictEqual([]);
   });
 
   it("treats string subagent model selection as strict when no fallbacks are configured", () => {
@@ -233,7 +350,7 @@ describe("resolveCronFallbacksOverride", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
-                  fallbacks: ["openai-codex/gpt-5.4", "zai/glm-5"],
+                  fallbacks: ["openai/gpt-5.4", "zai/glm-5"],
                 },
               },
             },

@@ -1,8 +1,9 @@
+// Workshop service orchestrates skill draft creation, validation, and persistence.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readLocalFileSafely, root, walkDirectory } from "../../infra/fs-safe.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
   buildWorkspaceSkillStatus,
@@ -49,6 +50,7 @@ import {
   type SkillProposalActionInput,
   type SkillProposalApplyResult,
   type SkillProposalCreateInput,
+  type SkillProposalOrigin,
   type SkillProposalManifest,
   type SkillProposalReadResult,
   type SkillProposalRecord,
@@ -74,6 +76,7 @@ const MAX_PROPOSAL_DRAFT_BYTES = 1024 * 1024;
 const MAX_PROPOSAL_DIRECTORY_ENTRIES = MAX_PROPOSAL_SUPPORT_FILES * 4;
 const MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES = 160;
 
+/** Lists skill workshop proposals, optionally scoped to a workspace. */
 export async function listSkillProposals(
   options: SkillProposalScopeOptions = {},
 ): Promise<SkillProposalManifest> {
@@ -161,6 +164,24 @@ function decodeProposalTextFile(buffer: Buffer, label: string): string {
   return content;
 }
 
+function normalizeProposalOrigin(
+  origin: SkillProposalOrigin | undefined,
+): SkillProposalOrigin | undefined {
+  const agentId = normalizeOptionalString(origin?.agentId);
+  const sessionKey = normalizeOptionalString(origin?.sessionKey);
+  const runId = normalizeOptionalString(origin?.runId);
+  const messageId = normalizeOptionalString(origin?.messageId);
+  if (!agentId && !sessionKey && !runId && !messageId) {
+    return undefined;
+  }
+  return {
+    ...(agentId ? { agentId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(runId ? { runId } : {}),
+    ...(messageId ? { messageId } : {}),
+  };
+}
+
 export async function inspectSkillProposal(
   proposalId: string,
   options: SkillProposalScopeOptions = {},
@@ -242,6 +263,7 @@ export async function proposeCreateSkill(
   const id = createSkillProposalId(name);
   const goal = normalizeOptionalString(input.goal);
   const evidence = normalizeOptionalString(input.evidence);
+  const origin = normalizeProposalOrigin(input.origin);
   const record: SkillProposalRecord = {
     schema: SKILL_WORKSHOP_SCHEMA,
     id,
@@ -252,6 +274,7 @@ export async function proposeCreateSkill(
     createdAt: now,
     updatedAt: now,
     createdBy: input.createdBy ?? "skill-workshop",
+    ...(origin ? { origin } : {}),
     proposedVersion: "v1",
     draftFile: "PROPOSAL.md",
     draftHash: hashSkillProposalContent(proposalContent),
@@ -313,6 +336,7 @@ export async function proposeUpdateSkill(
   const id = createSkillProposalId(targetSkill.skillKey || targetSkill.name);
   const goal = normalizeOptionalString(input.goal);
   const evidence = normalizeOptionalString(input.evidence);
+  const origin = normalizeProposalOrigin(input.origin);
   const record: SkillProposalRecord = {
     schema: SKILL_WORKSHOP_SCHEMA,
     id,
@@ -323,6 +347,7 @@ export async function proposeUpdateSkill(
     createdAt: now,
     updatedAt: now,
     createdBy: input.createdBy ?? "skill-workshop",
+    ...(origin ? { origin } : {}),
     proposedVersion: "v1",
     draftFile: "PROPOSAL.md",
     draftHash: hashSkillProposalContent(proposalContent),
@@ -980,8 +1005,8 @@ function proposalMatchesName(
     }
     const normalizedCandidate = normalizeSkillIndexName(candidate);
     return (
-      !!normalizedName &&
-      !!normalizedCandidate &&
+      Boolean(normalizedName) &&
+      Boolean(normalizedCandidate) &&
       (normalizedCandidate === normalizedName ||
         normalizedCandidate.includes(normalizedName) ||
         normalizedName.includes(normalizedCandidate))

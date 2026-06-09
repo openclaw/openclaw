@@ -1,3 +1,4 @@
+// Control UI view renders sessions screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
@@ -93,9 +94,7 @@ function getAgentIdentity(
   agentIdentityById: Record<string, AgentIdentityResult>,
   agentId: string,
 ): AgentIdentityResult | null {
-  return Object.prototype.hasOwnProperty.call(agentIdentityById, agentId)
-    ? (agentIdentityById[agentId] ?? null)
-    : null;
+  return Object.hasOwn(agentIdentityById, agentId) ? (agentIdentityById[agentId] ?? null) : null;
 }
 
 function rowMatchesSessionDefaults(

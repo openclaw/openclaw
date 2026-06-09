@@ -1,14 +1,16 @@
+// OAuth TLS preflight tests cover timeout handling, TLS diagnostics, and suggested fixes.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { withEnv } from "../test-utils/env.js";
 import {
   formatOpenAIOAuthTlsPreflightFix,
   runOpenAIOAuthTlsPreflight,
+  shouldRunOpenAIOAuthTlsPrerequisites,
 } from "./oauth-tls-preflight.js";
 
 describe("runOpenAIOAuthTlsPreflight", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.unstubAllEnvs();
   });
 
   it("returns ok when OpenAI auth endpoint is reachable", async () => {
@@ -75,22 +77,42 @@ describe("runOpenAIOAuthTlsPreflight", () => {
 
 describe("formatOpenAIOAuthTlsPreflightFix", () => {
   it("includes remediation commands for TLS failures", () => {
-    vi.stubEnv("HOMEBREW_PREFIX", "");
-    const text = formatOpenAIOAuthTlsPreflightFix({
-      ok: false,
-      kind: "tls-cert",
-      code: "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
-      message: "unable to get local issuer certificate",
+    withEnv({ HOMEBREW_PREFIX: "" }, () => {
+      const text = formatOpenAIOAuthTlsPreflightFix({
+        ok: false,
+        kind: "tls-cert",
+        code: "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+        message: "unable to get local issuer certificate",
+      });
+      expect(text).toContain(
+        "OpenAI OAuth prerequisites check failed: Node/OpenSSL cannot validate TLS certificates.",
+      );
+      expect(text).toContain(
+        "Cause: UNABLE_TO_GET_ISSUER_CERT_LOCALLY (unable to get local issuer certificate)",
+      );
+      expect(text).toContain("Fix (Homebrew Node/OpenSSL):");
+      expect(text).toContain("- brew postinstall ca-certificates");
+      expect(text).toContain("- brew postinstall openssl@3");
+      expect(text).toContain("- Retry the OAuth login flow.");
     });
-    expect(text).toContain(
-      "OpenAI OAuth prerequisites check failed: Node/OpenSSL cannot validate TLS certificates.",
-    );
-    expect(text).toContain(
-      "Cause: UNABLE_TO_GET_ISSUER_CERT_LOCALLY (unable to get local issuer certificate)",
-    );
-    expect(text).toContain("Fix (Homebrew Node/OpenSSL):");
-    expect(text).toContain("- brew postinstall ca-certificates");
-    expect(text).toContain("- brew postinstall openssl@3");
-    expect(text).toContain("- Retry the OAuth login flow.");
+  });
+});
+
+describe("shouldRunOpenAIOAuthTlsPrerequisites", () => {
+  it("runs for OpenAI OAuth profiles", () => {
+    expect(
+      shouldRunOpenAIOAuthTlsPrerequisites({
+        cfg: {
+          auth: {
+            profiles: {
+              "openai:default": {
+                provider: "openai",
+                mode: "oauth",
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
   });
 });

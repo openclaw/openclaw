@@ -1,3 +1,4 @@
+// Voyage plugin module implements embedding batch behavior.
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
 import {
@@ -54,7 +55,10 @@ function resolveVoyageBatchDeps(overrides: Partial<VoyageBatchDeps> | undefined)
     now: overrides?.now ?? Date.now,
     sleep:
       overrides?.sleep ??
-      (async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms))),
+      (async (ms: number) =>
+        await new Promise((resolve) => {
+          setTimeout(resolve, ms);
+        })),
     postJsonWithRetry: overrides?.postJsonWithRetry ?? postJsonWithRetry,
     uploadBatchJsonlFile: overrides?.uploadBatchJsonlFile ?? uploadBatchJsonlFile,
     withRemoteHttpResponse: overrides?.withRemoteHttpResponse ?? withRemoteHttpResponse,
@@ -228,7 +232,7 @@ export async function runVoyageEmbeddingBatches(
       maxRequests: VOYAGE_BATCH_MAX_REQUESTS,
       debugLabel: "memory embeddings: voyage batch submit",
     }),
-    runGroup: async ({ group, groupIndex, groups, byCustomId }) => {
+    runGroup: async ({ group, groupIndex, groups, byCustomId, pollIntervalMs, timeoutMs }) => {
       const batchInfo = await submitVoyageBatch({
         client: params.client,
         requests: group,
@@ -257,8 +261,8 @@ export async function runVoyageEmbeddingBatches(
             client: params.client,
             batchId,
             wait: params.wait,
-            pollIntervalMs: params.pollIntervalMs,
-            timeoutMs: params.timeoutMs,
+            pollIntervalMs,
+            timeoutMs,
             debug: params.debug,
             initial: batchInfo,
             deps,

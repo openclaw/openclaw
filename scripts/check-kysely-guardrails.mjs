@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Enforces Kysely and SQLite guardrails in infrastructure code.
 import { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -49,10 +50,14 @@ const rawSqliteAllowPathGroups = {
     "src/acp/event-ledger.ts",
     "src/agents/subagent-registry.store.ts",
     "src/cron/run-log.ts",
+    "src/cron/run-log/sqlite-store.ts",
     "src/cron/store.ts",
     "src/infra/outbound/current-conversation-bindings.ts",
     "src/media/store.ts",
     "src/plugin-sdk/memory-core-host-engine-storage.ts",
+    "src/config/sessions/store-sqlite.ts",
+    "src/plugins/installed-plugin-index-record-reader.ts",
+    "src/plugins/installed-plugin-index-store.ts",
     "src/plugin-state/plugin-state-store.sqlite.ts",
     "src/proxy-capture/store.sqlite.ts",
     "src/tasks/task-flow-registry.store.sqlite.ts",
@@ -127,8 +132,7 @@ function collectImports(sourceFile) {
           const importedName = element.propertyName?.text ?? element.name.text;
           if (
             importedName === "executeSqliteQuerySync" ||
-            importedName === "executeSqliteQueryTakeFirstSync" ||
-            importedName === "executeSqliteQueryTakeFirstOrThrowSync"
+            importedName === "executeSqliteQueryTakeFirstSync"
           ) {
             syncHelperNames.add(element.name.text);
           }
@@ -215,6 +219,9 @@ function isPersistedStringCastType(typeText) {
   ].some((pattern) => pattern.test(typeText));
 }
 
+/**
+ * Collects Kysely/raw SQLite violations from one source file.
+ */
 export function collectKyselyGuardrailViolations(content, relativePath) {
   const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
   const imports = collectImports(sourceFile);
@@ -336,6 +343,9 @@ export function collectKyselyGuardrailViolations(content, relativePath) {
   return violations;
 }
 
+/**
+ * Collects Kysely guardrail violations across configured source roots.
+ */
 export async function collectKyselyGuardrails() {
   const files = await collectTypeScriptFilesFromRoots(sourceRoots, { includeTests: true });
   const violations = [];
@@ -349,6 +359,9 @@ export async function collectKyselyGuardrails() {
   return violations;
 }
 
+/**
+ * Runs the Kysely guardrail check.
+ */
 export async function main() {
   const violations = await collectKyselyGuardrails();
   if (violations.length === 0) {

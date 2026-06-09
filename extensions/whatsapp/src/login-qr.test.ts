@@ -1,3 +1,4 @@
+// Whatsapp tests cover login qr plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
@@ -13,8 +14,8 @@ import {
 
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
-  const createWaSocket = vi.fn();
-  const waitForWaConnection = vi.fn();
+  const createWaSocketLocal = vi.fn();
+  const waitForWaConnectionLocal = vi.fn();
   const formatError = vi.fn((err: unknown) => `formatted:${String(err)}`);
   const getStatusCode = vi.fn(
     (err: unknown) =>
@@ -22,21 +23,21 @@ vi.mock("./session.js", async () => {
       (err as { status?: number })?.status ??
       (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode,
   );
-  const readWebAuthExistsForDecision = vi.fn(async () => ({
+  const readWebAuthExistsForDecisionLocal = vi.fn(async () => ({
     outcome: "stable" as const,
     exists: false,
   }));
-  const readWebSelfId = vi.fn(() => ({ e164: null, jid: null, lid: null }));
-  const logoutWeb = vi.fn(async () => true);
+  const readWebSelfIdLocal = vi.fn(() => ({ e164: null, jid: null, lid: null }));
+  const logoutWebLocal = vi.fn(async () => true);
   return {
     ...actual,
-    createWaSocket,
-    waitForWaConnection,
+    createWaSocket: createWaSocketLocal,
+    waitForWaConnection: waitForWaConnectionLocal,
     formatError,
     getStatusCode,
-    readWebAuthExistsForDecision,
-    readWebSelfId,
-    logoutWeb,
+    readWebAuthExistsForDecision: readWebAuthExistsForDecisionLocal,
+    readWebSelfId: readWebSelfIdLocal,
+    logoutWeb: logoutWebLocal,
   };
 });
 
@@ -58,7 +59,9 @@ async function flushTasks() {
 }
 
 async function waitMs(ms: number) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function waitForQrRenderCallCount(count: number) {
@@ -302,7 +305,10 @@ describe("login-qr", () => {
   it("does not short-circuit on an existing QR when the waiter has no current QR image", async () => {
     const accountId = "wait-without-current-qr";
     waitForWaConnectionMock.mockImplementationOnce(
-      () => new Promise((resolve) => setTimeout(() => resolve(undefined), 20)),
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve(undefined), 20);
+        }),
     );
 
     const start = await startWebLoginWithQr({

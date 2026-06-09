@@ -1,3 +1,4 @@
+// Covers plugin discovery from manifests, installs, and config.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -103,7 +104,7 @@ function buildDiscoveryEnvWithOverrides(
   overrides: Partial<NodeJS.ProcessEnv> = {},
 ): NodeJS.ProcessEnv {
   const enablesBundledOverride =
-    Object.prototype.hasOwnProperty.call(overrides, "OPENCLAW_BUNDLED_PLUGINS_DIR") &&
+    Object.hasOwn(overrides, "OPENCLAW_BUNDLED_PLUGINS_DIR") &&
     overrides.OPENCLAW_BUNDLED_PLUGINS_DIR !== undefined;
   return {
     ...buildDiscoveryEnv(stateDir),

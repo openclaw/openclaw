@@ -1,3 +1,4 @@
+// Diffs plugin module implements store behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -226,7 +227,7 @@ export class DiffArtifactStore {
 
     this.nextCleanupAt = now + this.cleanupIntervalMs;
     const cleanupPromise = this.cleanupExpired()
-      .catch((error) => {
+      .catch((error: unknown) => {
         this.nextCleanupAt = 0;
         this.logger?.warn(`Failed to clean expired diff artifacts: ${String(error)}`);
       })

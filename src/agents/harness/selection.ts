@@ -1,7 +1,16 @@
+/**
+ * Selects and invokes native agent harnesses for embedded run attempts.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  createChildDiagnosticTraceContext,
+  createDiagnosticTraceContext,
+  freezeDiagnosticTraceContext,
+  getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   resolveEffectiveToolPolicy,
@@ -9,13 +18,11 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../agent-tools.policy.js";
-import type { CompactEmbeddedAgentSessionParams } from "../embedded-agent-runner/compact.types.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
-import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
-import { isCliRuntimeAliasForProvider, isCliRuntimeProvider } from "../model-runtime-aliases.js";
+import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSenderToolPolicy } from "../sender-tool-policy.js";
 import {
@@ -25,13 +32,13 @@ import {
 import { expandToolGroups, normalizeToolName } from "../tool-policy.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
 import { MissingAgentHarnessError } from "./errors.js";
+import { runAgentHarnessLifecycleAttempt } from "./lifecycle.js";
 import {
   resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy,
   type AgentHarnessPolicy,
 } from "./policy.js";
 import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./registry.js";
 import type { AgentHarness, AgentHarnessSupport } from "./types.js";
-import { adaptAgentHarnessToV2, runAgentHarnessV2LifecycleAttempt } from "./v2.js";
 
 const log = createSubsystemLogger("agents/harness");
 export { resolveAgentHarnessPolicy } from "./policy.js";
@@ -258,6 +265,10 @@ function selectAgentHarnessDecision(params: {
 export async function runAgentHarnessAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
+  const activeTrace = getActiveDiagnosticTraceContext();
+  const harnessTrace = freezeDiagnosticTraceContext(
+    activeTrace ? createChildDiagnosticTraceContext(activeTrace) : createDiagnosticTraceContext(),
+  );
   const selection = selectAgentHarnessDecision({
     provider: params.provider,
     modelId: params.modelId,
@@ -276,13 +287,13 @@ export async function runAgentHarnessAttempt(
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });
-  const v2Harness = adaptAgentHarnessToV2(harness);
+  const runAttempt = () => runAgentHarnessLifecycleAttempt(harness, attemptParams);
   if (harness.id === "openclaw") {
-    return await runAgentHarnessV2LifecycleAttempt(v2Harness, attemptParams);
+    return await runWithDiagnosticTraceContext(harnessTrace, runAttempt);
   }
 
   try {
-    return await runAgentHarnessV2LifecycleAttempt(v2Harness, attemptParams);
+    return await runWithDiagnosticTraceContext(harnessTrace, runAttempt);
   } catch (error) {
     log.warn(`${harness.label} failed; not falling back to embedded OpenClaw backend`, {
       harnessId: harness.id,
@@ -485,62 +496,6 @@ function logAgentHarnessSelection(
   });
 }
 
-export async function maybeCompactAgentHarnessSession(
-  params: CompactEmbeddedAgentSessionParams,
-): Promise<EmbeddedAgentCompactResult | undefined> {
-  if (params.provider && isCliRuntimeProvider(params.provider, { config: params.config })) {
-    return undefined;
-  }
-  const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey;
-  const runtimePolicyAgentId =
-    params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
-      ? undefined
-      : params.agentId;
-  const runtime = resolveConfiguredAgentHarnessPolicy({
-    provider: params.provider,
-    modelId: params.model,
-    config: params.config,
-    agentId: runtimePolicyAgentId,
-    sessionKey: runtimePolicySessionKey,
-  }).runtime;
-  if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider, cfg: params.config })) {
-    return undefined;
-  }
-  const selectedRuntime = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
-  const agentHarnessRuntimeOverride =
-    selectedRuntime && !isDefaultAgentRuntimeId(selectedRuntime) ? selectedRuntime : undefined;
-  let harness: AgentHarness;
-  try {
-    harness = selectAgentHarness({
-      provider: params.provider ?? "",
-      modelId: params.model,
-      config: params.config,
-      agentId: runtimePolicyAgentId,
-      sessionKey: runtimePolicySessionKey,
-      agentHarnessRuntimeOverride,
-    });
-  } catch (err) {
-    if (agentHarnessRuntimeOverride) {
-      const message = formatErrorMessage(err);
-      if (message.includes("does not support")) {
-        return undefined;
-      }
-    }
-    throw err;
-  }
-  if (!harness.compact) {
-    if (harness.id !== "openclaw") {
-      return {
-        ok: false,
-        compacted: false,
-        reason: `Agent harness "${harness.id}" does not support compaction.`,
-        failure: { reason: "unsupported_harness_compaction" },
-      };
-    }
-    return undefined;
-  }
-  return harness.compact(params);
-}
 function formatProviderModel(params: { provider: string; modelId?: string }): string {
   return params.modelId ? `${params.provider}/${params.modelId}` : params.provider;
 }

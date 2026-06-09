@@ -1,3 +1,4 @@
+// Line tests cover download plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getMessageContentMock = vi.hoisted(() => vi.fn());
@@ -75,11 +76,11 @@ describe("downloadLineMedia", () => {
     saveMediaStreamMock.mockReset();
     saveMediaStreamMock.mockImplementation(
       async (stream: AsyncIterable<Buffer>, contentType?: string, subdir?: string) => {
-        const chunks: Buffer[] = [];
+        const chunksLocal: Buffer[] = [];
         for await (const chunk of stream) {
-          chunks.push(Buffer.from(chunk));
+          chunksLocal.push(Buffer.from(chunk));
         }
-        const buffer = Buffer.concat(chunks);
+        const buffer = Buffer.concat(chunksLocal);
         return {
           path: `/home/user/.openclaw/media/${subdir ?? "unknown"}/saved-media`,
           contentType: detectMockContentType(buffer, contentType),

@@ -1,3 +1,4 @@
+// Update Clawtributors script supports OpenClaw repository automation.
 import { execFileSync, execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -109,7 +110,7 @@ for (const line of log.split("\n")) {
     continue;
   }
 
-  let login = resolveLogin(currentName, currentEmail, apiByLogin, nameToLogin, emailToLogin);
+  const login = resolveLogin(currentName, currentEmail, apiByLogin, nameToLogin, emailToLogin);
   if (!login) {
     continue;
   }
@@ -156,7 +157,7 @@ function computeScore(loc: number, commits: number, prs: number, firstDate: stri
     ? Math.max(0, (now - new Date(firstDate.slice(0, 10)).getTime()) / 86_400_000)
     : 0;
   const tenureRatio = Math.min(1, daysIn / repoAgeDays);
-  const tenure = 1.0 + tenureRatio * tenureRatio * 0.5;
+  const tenure = 1 + tenureRatio * tenureRatio * 0.5;
   return base * tenure;
 }
 
@@ -330,7 +331,7 @@ for (const [index, entry] of visibleEntries.slice(0, 25).entries()) {
   const daysIn =
     fd !== "?" ? Math.max(0, (now - new Date(fd.slice(0, 10)).getTime()) / 86_400_000) : 0;
   const tr = Math.min(1, daysIn / repoAgeDays);
-  const tenure = 1.0 + tr * tr * 0.5;
+  const tenure = 1 + tr * tr * 0.5;
   console.log(
     `${index + 1}`.padStart(3) +
       `  ${login.padEnd(24)} ${entry.score.toFixed(0).padStart(8)} ${tenure.toFixed(2).padStart(6)}x ${String(entry.commits).padStart(8)} ${String(entry.prs).padStart(6)} ${String(entry.lines).padStart(10)}  ${fd}`,
@@ -345,9 +346,9 @@ function run(cmd: string): string {
   }).trim();
 }
 
-function parsePaginatedJson(raw: string): unknown[] {
+function parsePaginatedJson(rawLocal: string): unknown[] {
   const items: unknown[] = [];
-  for (const line of raw.split("\n")) {
+  for (const line of rawLocal.split("\n")) {
     if (!line.trim()) {
       continue;
     }
@@ -508,10 +509,10 @@ async function readAvatarProbeBuffer(response: Response): Promise<Buffer> {
 }
 
 async function filterVisibleEntries(
-  entries: Entry[],
+  entriesResult: Entry[],
   hiddenLogins: ReadonlySet<string>,
 ): Promise<Entry[]> {
-  const results = await mapConcurrent(entries, 8, async (entry) => {
+  const results = await mapConcurrent(entriesResult, 8, async (entry) => {
     const login = entry.login ?? entry.key;
     if (!login) {
       return entry;
@@ -630,16 +631,16 @@ function readJpegDimensions(buffer: Buffer): { width: number; height: number } |
 function resolveLogin(
   name: string,
   email: string | null,
-  apiByLogin: Map<string, User>,
-  nameToLogin: Record<string, string>,
-  emailToLogin: Record<string, string>,
+  apiByLoginValue: Map<string, User>,
+  nameToLoginLocal: Record<string, string>,
+  emailToLoginLocal: Record<string, string>,
 ): string | null {
-  if (email && emailToLogin[email]) {
-    return normalizeLogin(emailToLogin[email]);
+  if (email && emailToLoginLocal[email]) {
+    return normalizeLogin(emailToLoginLocal[email]);
   }
 
   if (email && name) {
-    const guessed = guessLoginFromEmailName(name, email, apiByLogin);
+    const guessed = guessLoginFromEmailName(name, email, apiByLoginValue);
     if (guessed) {
       return normalizeLogin(guessed);
     }
@@ -653,26 +654,26 @@ function resolveLogin(
 
   if (email && email.endsWith("@github.com")) {
     const login = email.split("@", 1)[0];
-    if (apiByLogin.has(login.toLowerCase())) {
+    if (apiByLoginValue.has(login.toLowerCase())) {
       return normalizeLogin(login);
     }
   }
 
   const normalized = normalizeName(name);
-  if (nameToLogin[normalized]) {
-    return normalizeLogin(nameToLogin[normalized]);
+  if (nameToLoginLocal[normalized]) {
+    return normalizeLogin(nameToLoginLocal[normalized]);
   }
 
   const compact = normalized.replace(/\s+/g, "");
-  if (nameToLogin[compact]) {
-    return normalizeLogin(nameToLogin[compact]);
+  if (nameToLoginLocal[compact]) {
+    return normalizeLogin(nameToLoginLocal[compact]);
   }
 
-  if (apiByLogin.has(normalized)) {
+  if (apiByLoginValue.has(normalized)) {
     return normalizeLogin(normalized);
   }
 
-  if (apiByLogin.has(compact)) {
+  if (apiByLoginValue.has(compact)) {
     return normalizeLogin(compact);
   }
 
@@ -682,7 +683,7 @@ function resolveLogin(
 function guessLoginFromEmailName(
   name: string,
   email: string,
-  apiByLogin: Map<string, User>,
+  apiByLoginLocal: Map<string, User>,
 ): string | null {
   const local = email.split("@", 1)[0]?.trim();
   if (!local) {
@@ -701,7 +702,7 @@ function guessLoginFromEmailName(
       continue;
     }
     const key = candidate.toLowerCase();
-    if (apiByLogin.has(key)) {
+    if (apiByLoginLocal.has(key)) {
       return key;
     }
   }
@@ -719,61 +720,65 @@ function escapeMarkdownLabel(value: string): string {
 function parseReadmeEntries(
   content: string,
 ): Array<{ display: string; html_url: string; avatar_url: string }> {
-  const range = findClawtributorsRange(content);
-  if (!range) {
+  const rangeValue = findClawtributorsRange(content);
+  if (!rangeValue) {
     return [];
   }
-  const block = content.slice(range.start, range.end);
-  const entries: Array<{ display: string; html_url: string; avatar_url: string }> = [];
+  const blockValue = content.slice(rangeValue.start, rangeValue.end);
+  const entriesValue: Array<{ display: string; html_url: string; avatar_url: string }> = [];
   const markdown = /\[!\[([^\]]+)\]\(([^)]+)\)\]\(([^)]+)\)/g;
-  for (const match of block.matchAll(markdown)) {
+  for (const match of blockValue.matchAll(markdown)) {
     const [, alt, src, href] = match;
     if (!href || !src || !alt) {
       continue;
     }
-    entries.push({ html_url: href, avatar_url: src, display: alt.replace(/\\([\\[\]])/g, "$1") });
+    entriesValue.push({
+      html_url: href,
+      avatar_url: src,
+      display: alt.replace(/\\([\\[\]])/g, "$1"),
+    });
   }
   const linked = /<a href="([^"]+)"><img src="([^"]+)"[^>]*alt="([^"]+)"[^>]*>/g;
-  for (const match of block.matchAll(linked)) {
+  for (const match of blockValue.matchAll(linked)) {
     const [, href, src, alt] = match;
     if (!href || !src || !alt) {
       continue;
     }
-    entries.push({ html_url: href, avatar_url: src, display: alt });
+    entriesValue.push({ html_url: href, avatar_url: src, display: alt });
   }
   const standalone = /<img src="([^"]+)"[^>]*alt="([^"]+)"[^>]*>/g;
-  for (const match of block.matchAll(standalone)) {
+  for (const match of blockValue.matchAll(standalone)) {
     const [, src, alt] = match;
     if (!src || !alt) {
       continue;
     }
-    if (entries.some((entry) => entry.display === alt && entry.avatar_url === src)) {
+    if (entriesValue.some((entry) => entry.display === alt && entry.avatar_url === src)) {
       continue;
     }
-    entries.push({ html_url: fallbackHref(alt), avatar_url: src, display: alt });
+    entriesValue.push({ html_url: fallbackHref(alt), avatar_url: src, display: alt });
   }
-  return entries;
+  return entriesValue;
 }
 
 function parseHiddenReadmeLogins(content: string): string[] {
-  const range = findHiddenReadmeRange(content);
-  if (!range) {
+  const rangeLocal = findHiddenReadmeRange(content);
+  if (!rangeLocal) {
     return [];
   }
-  const block = content.slice(range.start, range.end);
-  return block
+  const blockLocal = content.slice(rangeLocal.start, rangeLocal.end);
+  return blockLocal
     .split("\n")
     .map((line) => normalizeLogin(line.trim())?.toLowerCase() ?? null)
     .filter((login): login is string => Boolean(login));
 }
 
-function buildHiddenReadmeBlock(entries: Entry[], visibleEntries: Entry[]): string {
+function buildHiddenReadmeBlock(entriesLocal: Entry[], visibleEntriesLocal: Entry[]): string {
   const visibleLogins = new Set(
-    visibleEntries
+    visibleEntriesLocal
       .map((entry) => normalizeLogin(entry.login ?? entry.key)?.toLowerCase() ?? null)
       .filter((login): login is string => Boolean(login)),
   );
-  const hiddenLogins = entries
+  const hiddenLogins = entriesLocal
     .map((entry) => normalizeLogin(entry.login ?? entry.key)?.toLowerCase() ?? null)
     .filter((login): login is string => Boolean(login))
     .filter((login) => !visibleLogins.has(login))

@@ -1,3 +1,4 @@
+// Codex tests cover run attempt.hooks plugin behavior.
 import path from "node:path";
 import {
   abortAgentHarnessRun,
@@ -66,7 +67,9 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     expect(llmInput).toHaveBeenCalled();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const [llmInputPayload, llmInputContext] = mockCall(llmInput, "llm_input") as [
       {

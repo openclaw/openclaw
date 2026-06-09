@@ -1,3 +1,4 @@
+// Amazon Bedrock tests cover index plugin behavior.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -272,7 +273,7 @@ describe("amazon-bedrock provider plugin", () => {
     setBedrockAppProfileControlPlaneForTest((region) => ({
       async getInferenceProfile(input) {
         class GetInferenceProfileCommand {
-          constructor(readonly input: Record<string, unknown> = {}) {}
+          constructor(readonly inputLocal: Record<string, unknown> = {}) {}
         }
         bedrockClientConfigs.push(region ? { region } : {});
         return await sendBedrockCommand(new GetInferenceProfileCommand(input));

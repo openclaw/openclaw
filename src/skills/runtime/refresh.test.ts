@@ -1,11 +1,12 @@
+// Skill refresh tests cover runtime reload events and refresh-state updates.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillsChangeEvent } from "./refresh.js";
 
-type WatchEvent = "add" | "change" | "unlink" | "unlinkDir" | "error";
-type WatchCallback = (watchPath: string) => void;
+type WatchEvent = "add" | "addDir" | "change" | "unlink" | "unlinkDir" | "raw" | "error";
+type WatchCallback = (...args: unknown[]) => void;
 
 function createMockWatcher() {
   const handlers = new Map<WatchEvent, WatchCallback[]>();
@@ -15,9 +16,9 @@ function createMockWatcher() {
       return watcher;
     }),
     close: vi.fn(async () => undefined),
-    emit: (event: WatchEvent, watchPath: string) => {
+    emit: (event: WatchEvent, ...args: unknown[]) => {
       for (const callback of handlers.get(event) ?? []) {
-        callback(watchPath);
+        callback(...args);
       }
     },
   };
@@ -70,7 +71,7 @@ describe("ensureSkillsWatcher", () => {
       const opts = calls[0]?.[1] ?? {};
       const workspaceSkillsRoot = path.join(workspaceDir, "skills").replaceAll("\\", "/");
 
-      expect(opts.ignored).toBe(refreshModule.shouldIgnoreSkillsWatchPath);
+      expect(typeof opts.ignored).toBe("function");
       expect(opts.followSymlinks).toBe(false);
       const posix = (p: string) => p.replaceAll("\\", "/");
       expect(targets).toContain(workspaceSkillsRoot);
@@ -99,13 +100,84 @@ describe("ensureSkillsWatcher", () => {
       expect(ignored("/tmp/workspace/skills/build/output.js")).toBe(true);
       expect(ignored("/tmp/workspace/skills/.cache/data.json")).toBe(true);
 
-      // Should NOT ignore normal skill files
+      // Paths without stats stay visible so chokidar can stat and classify them.
       expect(ignored("/tmp/.hidden/skills/index.md")).toBe(false);
       expect(ignored("/tmp/workspace/skills/my-skill", { isDirectory: () => true })).toBe(false);
       expect(ignored("/tmp/workspace/skills/my-skill", { isSymbolicLink: () => true })).toBe(false);
       expect(ignored("/tmp/workspace/skills/my-skill/README.md", {})).toBe(true);
-      expect(ignored("/tmp/workspace/skills/my-skill/SKILL.md", {})).toBe(false);
+      expect(ignored("/tmp/workspace/skills/my-skill/SKILL.md", {})).toBe(true);
+      expect(ignored("/tmp/workspace/skills/my-skill/SKILL.md", {}, { usePolling: true })).toBe(
+        false,
+      );
     } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps SKILL.md file watches in chokidar polling mode", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-polling-"));
+    const previousPolling = process.env.CHOKIDAR_USEPOLLING;
+    try {
+      process.env.CHOKIDAR_USEPOLLING = "true";
+      refreshModule.ensureSkillsWatcher({ workspaceDir });
+
+      const calls = watchMock.mock.calls as unknown as Array<
+        [
+          string,
+          {
+            ignored?: (
+              watchPath: string,
+              stats?: { isDirectory?: () => boolean; isSymbolicLink?: () => boolean },
+            ) => boolean;
+            usePolling?: boolean;
+          },
+        ]
+      >;
+      const opts = calls[0]?.[1] ?? {};
+      expect(opts.usePolling).toBe(true);
+      expect(opts.ignored?.("/tmp/workspace/skills/my-skill/SKILL.md", {})).toBe(false);
+    } finally {
+      if (previousPolling === undefined) {
+        delete process.env.CHOKIDAR_USEPOLLING;
+      } else {
+        process.env.CHOKIDAR_USEPOLLING = previousPolling;
+      }
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not double-refresh polling SKILL.md changes from raw events", async () => {
+    vi.useFakeTimers();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-polling-raw-"));
+    const previousPolling = process.env.CHOKIDAR_USEPOLLING;
+    const seen: SkillsChangeEvent[] = [];
+    try {
+      process.env.CHOKIDAR_USEPOLLING = "true";
+      refreshModule.registerSkillsChangeListener((change) => {
+        seen.push(change);
+      });
+      refreshModule.ensureSkillsWatcher({
+        workspaceDir,
+        config: { skills: { load: { watchDebounceMs: 10 } } },
+      });
+
+      createdWatchers[0]?.emit(
+        "raw",
+        "change",
+        path.join(workspaceDir, "skills", "demo", "SKILL.md"),
+        {
+          watchedPath: path.join(workspaceDir, "skills", "demo"),
+        },
+      );
+      await vi.advanceTimersByTimeAsync(20);
+
+      expect(seen).toEqual([]);
+    } finally {
+      if (previousPolling === undefined) {
+        delete process.env.CHOKIDAR_USEPOLLING;
+      } else {
+        process.env.CHOKIDAR_USEPOLLING = previousPolling;
+      }
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
@@ -139,6 +211,103 @@ describe("ensureSkillsWatcher", () => {
           workspaceDir,
           reason: "watch",
           changedPath,
+        },
+      ]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes snapshots from raw directory events for SKILL.md files", async () => {
+    vi.useFakeTimers();
+    const workspaceDir = "/tmp/workspace";
+    const seen: SkillsChangeEvent[] = [];
+    refreshModule.registerSkillsChangeListener((change) => {
+      seen.push(change);
+    });
+
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    createdWatchers[0]?.emit("raw", "rename", "README.md", {
+      watchedPath: "/tmp/workspace/skills/demo",
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(seen).toEqual([]);
+
+    createdWatchers[0]?.emit("raw", "rename", "SKILL.md", {
+      watchedPath: "/tmp/workspace/skills/demo",
+    });
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(seen).toEqual([
+      {
+        workspaceDir,
+        reason: "watch",
+        changedPath: "/tmp/workspace/skills/demo/SKILL.md",
+      },
+    ]);
+  });
+
+  it("falls back to a watched-directory refresh when raw events omit a filename", async () => {
+    vi.useFakeTimers();
+    const workspaceDir = "/tmp/workspace";
+    const seen: SkillsChangeEvent[] = [];
+    refreshModule.registerSkillsChangeListener((change) => {
+      seen.push(change);
+    });
+
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    createdWatchers[0]?.emit("raw", "rename", undefined, {
+      watchedPath: "/tmp/workspace/skills",
+    });
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(seen).toEqual([
+      {
+        workspaceDir,
+        reason: "watch",
+        changedPath: "/tmp/workspace/skills",
+      },
+    ]);
+  });
+
+  it("waits for raw SKILL.md files to stabilize before refreshing", async () => {
+    vi.useFakeTimers();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-stable-"));
+    const skillDir = path.join(workspaceDir, "skills", "demo");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const seen: SkillsChangeEvent[] = [];
+    try {
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(skillFile, "---\nname: demo\ndescription: Demo\n---\n");
+      refreshModule.registerSkillsChangeListener((change) => {
+        seen.push(change);
+      });
+
+      refreshModule.ensureSkillsWatcher({
+        workspaceDir,
+        config: { skills: { load: { watchDebounceMs: 10 } } },
+      });
+
+      createdWatchers[0]?.emit("raw", "change", "SKILL.md", { watchedPath: skillDir });
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(seen).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(seen).toEqual([
+        {
+          workspaceDir,
+          reason: "watch",
+          changedPath: skillFile,
         },
       ]);
     } finally {
@@ -528,7 +697,7 @@ describe("ensureSkillsWatcher", () => {
     },
   );
 
-  it.each(["add", "change", "unlink", "unlinkDir"] as const)(
+  it.each(["add", "addDir", "change", "unlink", "unlinkDir"] as const)(
     "refreshes skills snapshots on %s",
     async (event) => {
       vi.useFakeTimers();
@@ -657,6 +826,7 @@ describe("ensureSkillsWatcher", () => {
       workspaceDir: "/tmp/ws-a",
       config: { skills: { load: { extraDirs: ["/tmp/shared"], watch: false } } },
     });
+    seen.length = 0;
 
     const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
     const sharedIndex = callPaths.findIndex((target) => target.includes("/tmp/shared"));
@@ -671,6 +841,99 @@ describe("ensureSkillsWatcher", () => {
       changedPath: "/tmp/shared/demo/SKILL.md",
     });
     expect(seen.some((change) => change.workspaceDir === "/tmp/ws-a")).toBe(false);
+  });
+
+  it("clears workspace version state on watch disable without losing pending invalidation", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const workspaceDir = "/tmp/workspace-version-cleanup";
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    const firstVersion = refreshModule.bumpSkillsSnapshotVersion({
+      workspaceDir,
+      reason: "watch",
+      changedPath: `${workspaceDir}/skills/demo/SKILL.md`,
+    });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      config: { skills: { load: { watch: false } } },
+    });
+
+    const nextVersion = refreshModule.getSkillsSnapshotVersion(workspaceDir);
+    expect(nextVersion).toBeGreaterThan(firstVersion);
+    expect(refreshModule.shouldRefreshSnapshotForVersion(firstVersion, nextVersion)).toBe(true);
+    vi.setSystemTime(new Date(nextVersion));
+    const followupVersion = refreshModule.bumpSkillsSnapshotVersion({
+      workspaceDir,
+      reason: "watch",
+    });
+    expect(followupVersion).toBeGreaterThan(nextVersion);
+  });
+
+  it("evicts idle workspace subscriptions on a later ensure call", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const idleWorkspaceDir = "/tmp/workspace-idle";
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: idleWorkspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+    const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
+    const idleSkillsIndex = callPaths.findIndex(
+      (target) => target === `${idleWorkspaceDir}/skills`,
+    );
+    expect(idleSkillsIndex).toBeGreaterThanOrEqual(0);
+    const firstVersion = refreshModule.bumpSkillsSnapshotVersion({
+      workspaceDir: idleWorkspaceDir,
+      reason: "watch",
+    });
+
+    vi.advanceTimersByTime(60 * 60_000 + 1_000);
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace-active",
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    expect(createdWatchers[idleSkillsIndex]?.close).toHaveBeenCalledTimes(1);
+    const evictedVersion = refreshModule.getSkillsSnapshotVersion(idleWorkspaceDir);
+    expect(evictedVersion).toBeGreaterThan(firstVersion);
+    expect(refreshModule.shouldRefreshSnapshotForVersion(firstVersion, evictedVersion)).toBe(true);
+    vi.setSystemTime(new Date(evictedVersion));
+    const followupVersion = refreshModule.bumpSkillsSnapshotVersion({
+      workspaceDir: idleWorkspaceDir,
+    });
+    expect(followupVersion).toBeGreaterThan(evictedVersion);
+  });
+
+  it("keeps refreshed workspace subscriptions within the idle TTL", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const activeWorkspaceDir = "/tmp/workspace-active-refresh";
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: activeWorkspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+    const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
+    const activeSkillsIndex = callPaths.findIndex(
+      (target) => target === `${activeWorkspaceDir}/skills`,
+    );
+    expect(activeSkillsIndex).toBeGreaterThanOrEqual(0);
+
+    vi.advanceTimersByTime(30 * 60_000);
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: activeWorkspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+    vi.advanceTimersByTime(31 * 60_000);
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace-other",
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    expect(createdWatchers[activeSkillsIndex]?.close).not.toHaveBeenCalled();
   });
 
   it("rebuilds a shared watcher with last-writer debounce while preserving subscribers", async () => {

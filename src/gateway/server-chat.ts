@@ -1,3 +1,6 @@
+// Gateway chat runtime projects agent events into chat/session subscriber
+// streams, lifecycle persistence, heartbeat visibility, and live UI updates.
+import { performance } from "node:perf_hooks";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
@@ -16,6 +19,7 @@ import {
 } from "./live-chat-projector.js";
 import type {
   BufferedAgentEvent,
+  ChatRunEntry,
   ChatRunState,
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
@@ -23,7 +27,10 @@ import type {
 } from "./server-chat-state.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
-import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
+import {
+  deriveGatewaySessionLifecycleSnapshot,
+  isStaleLifecycleEventForSession,
+} from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -252,6 +259,10 @@ export type AgentEventHandlerOptions = {
   }) => void;
 };
 
+function roundedChatSendTimingMs(value: number): number {
+  return Math.max(0, Math.round(value * 1000) / 1000);
+}
+
 export function createAgentEventHandler({
   broadcast,
   broadcastToConnIds,
@@ -333,21 +344,26 @@ export function createAgentEventHandler({
   ) => {
     const row = loadGatewaySessionRowForSnapshot(sessionKey, agentId ? { agentId } : undefined);
     const omitUnscopedGlobalGoal = sessionKey === "global" && !agentId;
-    const lifecyclePatch = evt
-      ? deriveGatewaySessionLifecycleSnapshot({
-          session: row
-            ? {
-                updatedAt: row.updatedAt ?? undefined,
-                status: row.status,
-                startedAt: row.startedAt,
-                endedAt: row.endedAt,
-                runtimeMs: row.runtimeMs,
-                abortedLastRun: row.abortedLastRun,
-              }
-            : undefined,
-          event: evt,
-        })
-      : {};
+    const lifecyclePatch =
+      evt &&
+      !isStaleLifecycleEventForSession({
+        owningSessionId: evt.sessionId,
+        currentSessionId: row?.sessionId,
+      })
+        ? deriveGatewaySessionLifecycleSnapshot({
+            session: row
+              ? {
+                  updatedAt: row.updatedAt ?? undefined,
+                  status: row.status,
+                  startedAt: row.startedAt,
+                  endedAt: row.endedAt,
+                  runtimeMs: row.runtimeMs,
+                  abortedLastRun: row.abortedLastRun,
+                }
+              : undefined,
+            event: evt,
+          })
+        : {};
     const session = row ? { ...row, ...lifecyclePatch } : undefined;
     if (session && omitUnscopedGlobalGoal) {
       delete session.goal;
@@ -436,6 +452,33 @@ export function createAgentEventHandler({
     }
   };
 
+  const emitFirstAssistantChatSendTiming = (chatLink: ChatRunEntry | undefined) => {
+    const timing = chatLink?.chatSendTiming;
+    if (!timing || timing.firstAssistantEventSent) {
+      return;
+    }
+    timing.firstAssistantEventSent = true;
+    const nowMs = performance.now();
+    broadcastToConnIds(
+      "chat.send_timing",
+      {
+        phase: "first-assistant-event",
+        runId: chatLink.clientRunId,
+        sessionKey: chatLink.sessionKey,
+        ...(chatLink.agentId ? { agentId: chatLink.agentId } : {}),
+        ackToPhaseMs: roundedChatSendTimingMs(nowMs - timing.ackedAtMs),
+        receivedToPhaseMs: roundedChatSendTimingMs(nowMs - timing.receivedAtMs),
+        ...(timing.dispatchStartedAtMs !== undefined
+          ? {
+              dispatchStartedToPhaseMs: roundedChatSendTimingMs(nowMs - timing.dispatchStartedAtMs),
+            }
+          : {}),
+      },
+      new Set([timing.connId]),
+      { dropIfSlow: true },
+    );
+  };
+
   const finalizeLifecycleEvent = (evt: AgentEventPayload, opts?: TerminalLifecycleOptions) => {
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
@@ -486,7 +529,11 @@ export function createAgentEventHandler({
               evt.data?.error,
               evtStopReason,
               evtErrorKind,
-              { agentId: finished.agentId, controlUiVisible: isControlUiVisible },
+              {
+                agentId: finished.agentId,
+                controlUiVisible: isControlUiVisible,
+                firstAssistantTimingEntry: finished,
+              },
             );
           }
         } else if (!(opts?.skipChatErrorFinal && lifecyclePhase === "error")) {
@@ -622,6 +669,7 @@ export function createAgentEventHandler({
         timestamp: now,
       },
     };
+    emitFirstAssistantChatSendTiming(chatRunState.registry.peek(sourceRunId));
     sendChatPayload(sessionKey, payload, {
       agentId,
       controlUiVisible: opts?.controlUiVisible ?? true,
@@ -657,7 +705,7 @@ export function createAgentEventHandler({
     clientRunId: string,
     sourceRunId: string,
     seq: number,
-    opts?: { controlUiVisible?: boolean },
+    opts?: { controlUiVisible?: boolean; firstAssistantTimingEntry?: ChatRunEntry },
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
       suppressLeadFragments: true,
@@ -694,6 +742,9 @@ export function createAgentEventHandler({
         timestamp: now,
       },
     };
+    emitFirstAssistantChatSendTiming(
+      opts?.firstAssistantTimingEntry ?? chatRunState.registry.peek(sourceRunId),
+    );
     sendChatPayload(sessionKey, flushPayload, {
       agentId,
       controlUiVisible: opts?.controlUiVisible ?? true,
@@ -730,7 +781,11 @@ export function createAgentEventHandler({
     error?: unknown,
     stopReason?: string,
     errorKind?: ErrorKind,
-    opts?: { agentId?: string; controlUiVisible?: boolean },
+    opts?: {
+      agentId?: string;
+      controlUiVisible?: boolean;
+      firstAssistantTimingEntry?: ChatRunEntry;
+    },
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
       suppressLeadFragments: false,

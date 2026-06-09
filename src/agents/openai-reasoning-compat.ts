@@ -1,14 +1,23 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { resolveOpenAIReasoningEffortForModel } from "./openai-reasoning-effort.js";
+/**
+ * OpenAI reasoning-effort compatibility helpers.
+ *
+ * Keeps provider metadata and built-in model exceptions on one path before request payloads are built.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+/** Minimal model fields needed to resolve OpenAI reasoning effort compatibility. */
 type OpenAIReasoningCompatModel = {
   provider?: string | null;
   id?: string | null;
   compat?: unknown;
 };
 
+// These OpenAI models reject minimal/low reasoning but accept medium. Map lower
+// efforts up unless provider metadata supplies a more specific compat map.
 const OPENAI_MEDIUM_ONLY_REASONING_MODEL_IDS = new Set(["gpt-5.1-codex-mini"]);
 
+// Provider metadata can remap reasoning effort names. Keep only string pairs so
+// malformed compat data cannot poison request parameters.
 function readCompatReasoningEffortMap(compat: unknown): Record<string, string> {
   if (!compat || typeof compat !== "object") {
     return {};
@@ -25,6 +34,7 @@ function readCompatReasoningEffortMap(compat: unknown): Record<string, string> {
   );
 }
 
+/** Resolves the reasoning effort remap for an OpenAI-compatible model. */
 export function resolveOpenAIReasoningEffortMap(
   model: OpenAIReasoningCompatModel,
   fallbackMap: Record<string, string> = {},
@@ -40,20 +50,4 @@ export function resolveOpenAIReasoningEffortMap(
     ...builtinMap,
     ...readCompatReasoningEffortMap(model.compat),
   };
-}
-
-export function mapOpenAIReasoningEffortForModel(params: {
-  model: OpenAIReasoningCompatModel;
-  effort?: string;
-  fallbackMap?: Record<string, string>;
-}): string | undefined {
-  const { effort } = params;
-  if (effort === undefined) {
-    return effort;
-  }
-  return resolveOpenAIReasoningEffortForModel({
-    model: params.model,
-    effort,
-    fallbackMap: resolveOpenAIReasoningEffortMap(params.model, params.fallbackMap),
-  });
 }

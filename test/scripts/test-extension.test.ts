@@ -1,5 +1,9 @@
-import { execFileSync, spawnSync } from "node:child_process";
+// Test Extension tests cover test extension script behavior.
+import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -13,6 +17,7 @@ import {
   resolveExtensionBatchPlan,
   resolveExtensionTestPlan,
 } from "../../scripts/lib/extension-test-plan.mjs";
+import { relativizeExtensionVitestArgs } from "../../scripts/lib/extension-vitest-paths.mjs";
 import { buildVitestBatchPnpmArgs } from "../../scripts/lib/vitest-batch-runner.mjs";
 import {
   parseExtensionIds,
@@ -23,6 +28,7 @@ import {
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
+const posixIt = process.platform === "win32" ? it.skip : it;
 
 type RunGroupParams = {
   args: string[];
@@ -30,14 +36,6 @@ type RunGroupParams = {
   env: Record<string, string | undefined>;
   targets: string[];
 };
-
-function runScript(args: string[], cwd = process.cwd()) {
-  return execFileSync(process.execPath, [scriptPath, ...args], {
-    cwd,
-    encoding: "utf8",
-  });
-}
-
 function runScriptResult(args: string[], cwd = process.cwd()) {
   return spawnSync(process.execPath, [scriptPath, ...args], {
     cwd,
@@ -230,11 +228,11 @@ describe("scripts/test-extension.mjs", () => {
     );
   });
 
-  it("keeps unmatched non-provider extensions on the shared extensions vitest config", () => {
+  it("resolves codex onto the codex vitest config", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "codex", cwd: process.cwd() });
 
     expect(plan.extensionId).toBe("codex");
-    expect(plan.config).toBe("test/vitest/vitest.extensions.config.ts");
+    expect(plan.config).toBe("test/vitest/vitest.extension-codex.config.ts");
     expect(plan.roots).toContain(bundledPluginRoot("codex"));
     expect(plan.hasTests).toBe(true);
   });
@@ -475,7 +473,9 @@ describe("scripts/test-extension.mjs", () => {
       extensionIds: [extensionId, "firecrawl"],
     });
 
-    expect(batch.extensionIds).toEqual([extensionId, "firecrawl"].toSorted());
+    expect(batch.extensionIds).toEqual(
+      [extensionId, "firecrawl"].toSorted((left, right) => left.localeCompare(right)),
+    );
     expect(batch.extensionCount).toBe(2);
     expect(batch.noTestExtensionIds).toEqual([extensionId]);
     expect(batch.hasTests).toBe(true);
@@ -532,6 +532,16 @@ describe("scripts/test-extension.mjs", () => {
     }
   });
 
+  it("rejects malformed extension shard counts", () => {
+    expect(() =>
+      createExtensionTestShards({
+        cwd: process.cwd(),
+        extensionIds: ["matrix", "openai"],
+        shardCount: "2x",
+      }),
+    ).toThrow("shardCount must be a positive integer");
+  });
+
   it("runs extension batch config groups concurrently when requested", async () => {
     const started: string[] = [];
     const resolvers: Array<() => void> = [];
@@ -582,7 +592,9 @@ describe("scripts/test-extension.mjs", () => {
     await Promise.resolve();
     expect(started).toEqual(["heavy", "middle"]);
     resolvers.shift()?.();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(started).toEqual(["heavy", "middle", "light"]);
     while (resolvers.length > 0) {
       resolvers.shift()?.();
@@ -603,16 +615,22 @@ describe("scripts/test-extension.mjs", () => {
           "0-heavy",
         ),
       },
-      targets: ["extensions/two"],
+      targets: ["two"],
     });
   });
 
   it("keeps extension batch parallelism bounded by group count", () => {
     expect(resolveExtensionBatchParallelism(3, { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" })).toBe(2);
     expect(resolveExtensionBatchParallelism(1, { OPENCLAW_EXTENSION_BATCH_PARALLEL: "4" })).toBe(1);
-    expect(resolveExtensionBatchParallelism(3, { OPENCLAW_EXTENSION_BATCH_PARALLEL: "nope" })).toBe(
-      1,
-    );
+    expect(resolveExtensionBatchParallelism(3, {})).toBe(1);
+  });
+
+  it("rejects malformed extension batch parallelism", () => {
+    for (const value of ["nope", "2x", "0"]) {
+      expect(() =>
+        resolveExtensionBatchParallelism(3, { OPENCLAW_EXTENSION_BATCH_PARALLEL: value }),
+      ).toThrow("OPENCLAW_EXTENSION_BATCH_PARALLEL must be a positive integer");
+    }
   });
 
   it("preserves positional Vitest args after the extension batch separator", () => {
@@ -633,9 +651,9 @@ describe("scripts/test-extension.mjs", () => {
   it("places Vitest passthrough options before batch target roots", () => {
     expect(
       buildVitestBatchPnpmArgs({
-        args: ["--exclude", "extensions/codex/src/app-server/run-attempt.test.ts"],
+        args: ["--exclude", "codex/src/app-server/run-attempt.test.ts"],
         config: "test/vitest/vitest.extensions.config.ts",
-        targets: ["extensions/codex"],
+        targets: ["codex"],
       }),
     ).toEqual([
       "exec",
@@ -644,10 +662,131 @@ describe("scripts/test-extension.mjs", () => {
       "--config",
       "test/vitest/vitest.extensions.config.ts",
       "--exclude",
-      "extensions/codex/src/app-server/run-attempt.test.ts",
-      "extensions/codex",
+      "codex/src/app-server/run-attempt.test.ts",
+      "codex",
     ]);
   });
+
+  it("relativizes extension Vitest path args to the scoped extensions dir", () => {
+    expect(
+      relativizeExtensionVitestArgs([
+        "--exclude",
+        "extensions/codex/src/app-server/run-attempt.test.ts",
+        "--outputFile",
+        "extensions/codex/report.json",
+        "-c",
+        "./vitest.local.ts",
+        "-r",
+        ".",
+        "--exclude=extensions/codex/src/app-server/client.test.ts",
+        "extensions/codex/src/app-server/models.test.ts",
+        "--reporter=dot",
+      ]),
+    ).toEqual([
+      "--exclude",
+      "codex/src/app-server/run-attempt.test.ts",
+      "--outputFile",
+      "extensions/codex/report.json",
+      "-c",
+      "./vitest.local.ts",
+      "-r",
+      ".",
+      "--exclude=codex/src/app-server/client.test.ts",
+      "codex/src/app-server/models.test.ts",
+      "--reporter=dot",
+    ]);
+  });
+
+  posixIt("relativizes single-extension Vitest paths from extension cwd", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-args-"));
+    const fakePnpmPath = path.join(root, "pnpm");
+    const argsPath = path.join(root, "args.json");
+    const extensionCwd = path.join(process.cwd(), "extensions", "codex");
+
+    writeFakePnpm(fakePnpmPath);
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [
+          scriptPath,
+          "codex",
+          "--exclude",
+          path.join(extensionCwd, "src", "app-server", "run-attempt.test.ts"),
+          path.join(extensionCwd, "src", "app-server", "client.test.ts"),
+        ],
+        {
+          cwd: extensionCwd,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_FAKE_PNPM_ARGS_PATH: argsPath,
+            npm_execpath: fakePnpmPath,
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(JSON.parse(readFileSync(argsPath, "utf8"))).toEqual([
+        "exec",
+        "vitest",
+        "run",
+        "--config",
+        "test/vitest/vitest.extension-codex.config.ts",
+        "--exclude",
+        "codex/src/app-server/run-attempt.test.ts",
+        "codex/src/app-server/client.test.ts",
+        "codex",
+      ]);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  posixIt(
+    "preserves wrapper termination when the pnpm child exits cleanly after SIGTERM",
+    async () => {
+      const root = mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-signal-"));
+      const fakePnpmPath = path.join(root, "pnpm");
+      const childPidPath = path.join(root, "child.pid");
+      const signaledPath = path.join(root, "signaled");
+
+      writeFakePnpm(fakePnpmPath);
+      const runner = spawn(process.execPath, [scriptPath, "firecrawl"], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
+          OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
+          npm_execpath: fakePnpmPath,
+        },
+        stdio: "ignore",
+      });
+      let childPid = 0;
+
+      try {
+        await waitFor(() => fileExists(childPidPath), 5_000);
+        childPid = Number(readFileSync(childPidPath, "utf8"));
+        expect(Number.isInteger(childPid)).toBe(true);
+
+        expect(runner.pid).toBeGreaterThan(0);
+        process.kill(runner.pid!, "SIGTERM");
+        const result = await waitForClose(runner);
+
+        expect(result).toEqual({ code: null, signal: "SIGTERM" });
+        await waitFor(() => fileExists(signaledPath), 5_000);
+        expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
+        await waitFor(() => !isProcessAlive(childPid), 5_000);
+      } finally {
+        if (runner.pid && isProcessAlive(runner.pid)) {
+          process.kill(runner.pid, "SIGKILL");
+        }
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("expands extension batch roots before applying exact Vitest excludes", async () => {
     const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
@@ -676,7 +815,8 @@ describe("scripts/test-extension.mjs", () => {
 
     const runParams = requireFirstMockArg<RunGroupParams>(runGroup);
     expect(runParams.targets).not.toContain("extensions/codex/src/app-server/run-attempt.test.ts");
-    expect(runParams.targets).toContain("extensions/codex/src/app-server/client.test.ts");
+    expect(runParams.targets).not.toContain("codex/src/app-server/run-attempt.test.ts");
+    expect(runParams.targets).toContain("codex/src/app-server/client.test.ts");
   });
 
   it("fails extension batch groups when exact excludes remove every test", async () => {
@@ -686,6 +826,20 @@ describe("scripts/test-extension.mjs", () => {
       {
         runGroup,
         vitestArgs: ["--exclude", bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts")],
+      },
+    );
+
+    expect(result).toBe(1);
+    expect(runGroup).not.toHaveBeenCalled();
+  });
+
+  it("fails extension batch groups when dir-relative exact excludes remove every test", async () => {
+    const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
+    const result = await runExtensionBatchPlan(
+      resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["firecrawl"] }),
+      {
+        runGroup,
+        vitestArgs: ["--exclude", "firecrawl/src/firecrawl-tools.test.ts"],
       },
     );
 
@@ -741,3 +895,67 @@ describe("scripts/test-extension.mjs", () => {
     expect(result.stderr).toContain(`No tests found for ${bundledPluginRoot(extensionId)}.`);
   });
 });
+
+function writeFakePnpm(filePath: string): void {
+  writeFileSync(
+    filePath,
+    [
+      "#!/usr/bin/env node",
+      'const fs = require("node:fs");',
+      "if (process.env.OPENCLAW_FAKE_PNPM_ARGS_PATH) {",
+      "  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_ARGS_PATH, JSON.stringify(process.argv.slice(2)));",
+      "  process.exit(0);",
+      "}",
+      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_PID_PATH, String(process.pid));",
+      'process.on("SIGTERM", () => {',
+      '  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, "SIGTERM");',
+      "  process.exit(0);",
+      "});",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(filePath, 0o755);
+}
+
+async function waitFor(condition: () => boolean, timeoutMs = 3_000): Promise<void> {
+  const startedAt = Date.now();
+  while (!condition()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("timed out waiting for condition");
+    }
+    await delay(25);
+  }
+}
+
+async function waitForClose(
+  child: ReturnType<typeof spawn>,
+  timeoutMs = 5_000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return await Promise.race([
+    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    }),
+    delay(timeoutMs).then(() => {
+      throw new Error("timed out waiting for child close");
+    }),
+  ]);
+}
+
+function fileExists(filePath: string): boolean {
+  try {
+    readFileSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}

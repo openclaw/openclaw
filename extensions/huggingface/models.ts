@@ -1,3 +1,4 @@
+// Huggingface plugin module implements models behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
@@ -47,7 +48,7 @@ export const HUGGINGFACE_MODEL_CATALOG: ModelDefinitionConfig[] = [
     input: ["text"],
     contextWindow: 131072,
     maxTokens: 8192,
-    cost: { input: 3.0, output: 7.0, cacheRead: 3.0, cacheWrite: 3.0 },
+    cost: { input: 3, output: 7, cacheRead: 3, cacheWrite: 3 },
   },
   {
     id: "deepseek-ai/DeepSeek-V3.1",

@@ -1,3 +1,4 @@
+/** Tests CLI credential parsing, cache expiry, and safe keychain/file writes. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,7 @@ let readCodexCliCredentials: typeof import("./cli-credentials.js").readCodexCliC
 let readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
 
 function mockExistingClaudeKeychainItem() {
+  // The macOS security CLI returns the whole JSON payload as password data.
   execFileSyncMock.mockImplementation((file: unknown, args: unknown) => {
     const argv = Array.isArray(args) ? args.map(String) : [];
     if (String(file) === "security" && argv.includes("find-generic-password")) {
@@ -49,6 +51,8 @@ async function readCachedClaudeCliCredentials(allowKeychainPrompt: boolean) {
 }
 
 function createJwtWithExp(expSeconds: number): string {
+  // Signature verification is out of scope; expiration extraction only needs a
+  // syntactically valid JWT-like payload.
   const encode = (value: Record<string, unknown>) =>
     Buffer.from(JSON.stringify(value)).toString("base64url");
   return `${encode({ alg: "RS256", typ: "JWT" })}.${encode({ exp: expSeconds })}.signature`;
@@ -67,6 +71,8 @@ function mockClaudeCliCredentialRead() {
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  // Keeps large credential objects readable while still asserting exact fields
+  // relevant to the branch under test.
   if (!value || typeof value !== "object") {
     throw new Error("expected fields object");
   }
@@ -350,7 +356,7 @@ describe("cli credentials", () => {
     expectFields(creds, {
       access: createJwtWithExp(expSeconds),
       refresh: "keychain-refresh",
-      provider: "openai-codex",
+      provider: "openai",
       expires: expSeconds * 1000,
       idToken: "keychain-id-token",
     });
@@ -380,7 +386,7 @@ describe("cli credentials", () => {
 
     expectFields(creds, {
       refresh: "keychain-refresh",
-      provider: "openai-codex",
+      provider: "openai",
       expires: fallbackExpiry,
     });
   });
@@ -436,7 +442,7 @@ describe("cli credentials", () => {
     expectFields(creds, {
       access: createJwtWithExp(expSeconds),
       refresh: "file-refresh",
-      provider: "openai-codex",
+      provider: "openai",
       expires: expSeconds * 1000,
       idToken: "file-id-token",
     });
@@ -497,7 +503,7 @@ describe("cli credentials", () => {
 
       expectFields(creds, {
         refresh: "file-refresh",
-        provider: "openai-codex",
+        provider: "openai",
         expires: Math.floor(mtimeMs) + 60 * 60 * 1000,
       });
     } finally {
@@ -532,7 +538,7 @@ describe("cli credentials", () => {
     expectFields(creds, {
       access: createJwtWithExp(expSeconds),
       refresh: "file-refresh",
-      provider: "openai-codex",
+      provider: "openai",
     });
     expect(execSyncMock).not.toHaveBeenCalled();
   });
@@ -568,7 +574,7 @@ describe("cli credentials", () => {
     expectFields(withKeychain, {
       access: createJwtWithExp(expSeconds),
       refresh: "keychain-refresh",
-      provider: "openai-codex",
+      provider: "openai",
     });
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
@@ -615,12 +621,12 @@ describe("cli credentials", () => {
     expectFields(withKeychain, {
       refresh: "keychain-refresh",
       expires: keychainExpiry * 1000,
-      provider: "openai-codex",
+      provider: "openai",
     });
     expectFields(withoutPrompt, {
       refresh: "file-refresh",
       expires: fileExpiry * 1000,
-      provider: "openai-codex",
+      provider: "openai",
     });
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });

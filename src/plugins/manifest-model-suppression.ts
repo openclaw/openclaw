@@ -1,10 +1,11 @@
+// Resolves model suppression metadata declared by plugin manifests.
 import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   planManifestModelCatalogSuppressions,
   type ManifestModelCatalogSuppressionEntry,
 } from "../model-catalog/index.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestMetadataSnapshot,

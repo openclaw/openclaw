@@ -1,3 +1,4 @@
+// Input file fetch guard tests cover network fetch limits for media inputs.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.fn();
@@ -12,12 +13,14 @@ vi.mock("./media-services.js", () => ({
   convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
 }));
 
-vi.mock("./mime.js", () => ({
+vi.mock("@openclaw/media-core/mime", () => ({
   detectMime: (...args: unknown[]) => detectMimeMock(...args),
 }));
 
 async function waitForMicrotaskTurn(): Promise<void> {
-  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  await new Promise<void>((resolve) => {
+    queueMicrotask(resolve);
+  });
 }
 
 let fetchWithGuard: typeof import("./input-files.js").fetchWithGuard;

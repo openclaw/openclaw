@@ -1,4 +1,17 @@
+/**
+ * Resolves sandbox tool policies for agents, providers, sub-agents, and group
+ * sessions. Keeps runtime tool filtering tied to canonical config, session
+ * provenance, and inherited sub-agent capabilities.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeUniqueSingleOrTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionConversation } from "../channels/plugins/session-conversation.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
@@ -11,14 +24,6 @@ import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import {
-  normalizeUniqueSingleOrTrimmedStringList,
-  uniqueStrings,
-} from "../shared/string-normalization.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -97,6 +102,7 @@ function mergeConfiguredSubagentAllow(
   return allow && alsoAllow ? uniqueStrings([...allow, ...alsoAllow]) : allow;
 }
 
+/** Resolve depth-based default deny rules plus configured sub-agent overrides. */
 export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
   const maxSpawnDepth =
@@ -116,6 +122,7 @@ export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number):
   return { allow: mergedAllow, deny };
 }
 
+/** Resolve sub-agent tool policy from stored session capabilities. */
 export function resolveSubagentToolPolicyForSession(
   cfg: OpenClawConfig | undefined,
   sessionKey: string,
@@ -147,6 +154,7 @@ export function resolveSubagentToolPolicyForSession(
   return { allow: mergedAllow, deny };
 }
 
+/** Resolve the tool policy inherited from a parent sub-agent session. */
 export function resolveInheritedToolPolicyForSession(
   cfg: OpenClawConfig | undefined,
   sessionKey: string | undefined | null,
@@ -171,6 +179,7 @@ export function resolveInheritedToolPolicyForSession(
   };
 }
 
+/** Filter runtime tools by sandbox allow/deny policy. */
 export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {
   if (!policy) {
     return tools;
@@ -339,6 +348,7 @@ function resolveTrustedGroupIdFromContexts(params: {
   return { groupId: null, dropped: true };
 }
 
+/** Validate caller-supplied group ids against server-derived session context. */
 export function resolveTrustedGroupId(params: {
   groupId?: string | null;
   sessionKey?: string | null;
@@ -354,6 +364,7 @@ export function resolveTrustedGroupId(params: {
   });
 }
 
+/** Resolve model/provider-scoped tool policy from canonical provider keys. */
 export function resolveProviderToolPolicy(params: {
   byProvider?: Record<string, ToolPolicyConfig>;
   modelProvider?: string;
@@ -435,6 +446,7 @@ function formatToolListForWarning(toolNames: string[]): string {
   return toolNames.map((toolName) => `"${toolName}"`).join(", ");
 }
 
+/** Resolve the layered global, provider, agent, and profile tool policies. */
 export function resolveEffectiveToolPolicy(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
@@ -523,6 +535,7 @@ export function resolveEffectiveToolPolicy(params: {
   };
 }
 
+/** Resolve group-scoped tool policy after validating session provenance. */
 export function resolveGroupToolPolicy(params: {
   config?: OpenClawConfig;
   sessionKey?: string;

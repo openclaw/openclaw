@@ -1,3 +1,5 @@
+// Background media generation tests cover detached task completion, requester
+// wake delivery, and direct media fallback behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const subagentAnnounceDeliveryMocks = vi.hoisted(() => ({
@@ -13,6 +15,7 @@ vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliv
 import {
   createMediaGenerationTaskLifecycle,
   scheduleMediaGenerationTaskCompletion,
+  shouldDetachMediaGenerationTask,
 } from "./media-generate-background-shared.js";
 
 beforeEach(() => {
@@ -20,8 +23,19 @@ beforeEach(() => {
   taskRegistryDeliveryRuntimeMocks.sendMessage.mockReset();
 });
 
+describe("shouldDetachMediaGenerationTask", () => {
+  it("detaches session-backed media generation", () => {
+    expect(shouldDetachMediaGenerationTask("agent:main:discord:direct:123")).toBe(true);
+    expect(shouldDetachMediaGenerationTask("agent:main:cron:daily-media")).toBe(true);
+    expect(shouldDetachMediaGenerationTask("agent:main:cron:daily-media:run:run-123")).toBe(true);
+    expect(shouldDetachMediaGenerationTask(undefined)).toBe(false);
+  });
+});
+
 describe("scheduleMediaGenerationTaskCompletion", () => {
   it("keeps a generated media task active until completion delivery finishes", async () => {
+    // Mark completion only after the requester wake has been attempted; otherwise
+    // task status can say done before the visible media reaches the requester.
     const order: string[] = [];
     const scheduled: Array<() => Promise<void>> = [];
     const completeTaskRun = vi.fn(() => {
@@ -487,6 +501,8 @@ describe("createMediaGenerationTaskLifecycle", () => {
   });
 
   it("does not direct-deliver generated media after requester abandonment", async () => {
+    // Abandoned requester sessions are terminal; direct delivery would re-open a
+    // conversation the task lifecycle already decided to stop.
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
       delivered: false,
       path: "none",

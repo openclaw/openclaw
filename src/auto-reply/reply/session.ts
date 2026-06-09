@@ -1,13 +1,23 @@
+// Manages reply session records, labels, ids, and route persistence.
 import crypto from "node:crypto";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
+import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
+import {
+  hasTerminalMainSessionTranscriptNewerThanRegistry,
+  resolveSessionLifecycleTimestamps,
+} from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
@@ -40,17 +50,11 @@ import {
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { closeTrackedBrowserTabsForSessions } from "../../plugin-sdk/browser-maintenance.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeSessionDeliveryFields,
@@ -292,14 +296,13 @@ export async function initSessionState(params: {
         `elapsedMs=${Date.now() - sessionStoreLoadStartMs} path=${storePath}`,
     );
   }
-  let sessionKey: string | undefined;
   let sessionEntry: SessionEntry;
 
   let sessionId: string | undefined;
   let isNewSession = false;
   let bodyStripped: string | undefined;
-  let systemSent = false;
-  let abortedLastRun = false;
+  let systemSent;
+  let abortedLastRun;
   let resetTriggered = false;
 
   let persistedThinking: string | undefined;
@@ -391,7 +394,7 @@ export async function initSessionState(params: {
   // Canonicalize so the written key matches what all read paths produce.
   // resolveSessionKey uses DEFAULT_AGENT_ID="main"; the configured default
   // agent may differ, causing key mismatch and orphaned sessions (#29683).
-  sessionKey = canonicalizeMainSessionAlias({
+  const sessionKey: string | undefined = canonicalizeMainSessionAlias({
     cfg,
     agentId,
     sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey),
@@ -467,10 +470,20 @@ export async function initSessionState(params: {
         skipConfiguredFallbackWhenActiveSessionNonAcp: false,
       }) ?? "",
     );
+  const terminalMainTranscriptNewerThanRegistry =
+    !isSystemEvent &&
+    (await hasTerminalMainSessionTranscriptNewerThanRegistry({
+      entry,
+      sessionScope,
+      sessionKey,
+      agentId,
+      mainKey,
+      storePath,
+    }));
   const freshEntry =
     (isSystemEvent && canReuseExistingEntry) ||
-    (entryFreshness?.fresh ?? false) ||
-    (softResetAllowed && canReuseExistingEntry);
+    (((entryFreshness?.fresh ?? false) || (softResetAllowed && canReuseExistingEntry)) &&
+      !terminalMainTranscriptNewerThanRegistry);
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
@@ -858,8 +871,8 @@ export async function initSessionState(params: {
     await retireSessionMcpRuntime({
       sessionId: previousSessionEntry.sessionId,
       reason: "reply-session-rollover",
-      onError: (error, sessionId) => {
-        log.warn(`failed to dispose bundle MCP runtime for session ${sessionId}`, {
+      onError: (error, sessionIdLocal) => {
+        log.warn(`failed to dispose bundle MCP runtime for session ${sessionIdLocal}`, {
           error: String(error),
         });
       },
@@ -870,11 +883,11 @@ export async function initSessionState(params: {
       sessionFile: previousSessionEntry.sessionFile,
       reason: previousSessionEndReason ?? "unknown",
     });
-    void closeTrackedBrowserTabsForSessions({
+    void cleanupBrowserSessionsForLifecycleEnd({
+      cfg,
       sessionKeys: [previousSessionEntry.sessionId, sessionKey],
       onWarn: (message) => log.warn(message),
-    }).catch((error) => {
-      log.warn(`browser tab cleanup failed: ${String(error)}`);
+      onError: (error) => log.warn(`browser tab cleanup failed: ${String(error)}`),
     });
   }
 

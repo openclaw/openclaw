@@ -1,4 +1,13 @@
-import { accessSync, chmodSync, constants, existsSync, mkdtempSync, writeFileSync } from "node:fs";
+// Runs the changed-file check lanes selected by `scripts/changed-lanes.mjs`.
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -33,8 +42,10 @@ const SHRINKWRAP_POLICY_PATH_RE =
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const TARGETED_CORE_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
-const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE = /^(?:scripts|test\/scripts)\//u;
+const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
+  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$/u;
 let corepackPnpmShimDir;
+let corepackPnpmShimCleanupRegistered = false;
 
 export function createChangedCheckChildEnv(baseEnv = process.env) {
   const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
@@ -81,7 +92,7 @@ export function shouldSkipAppLintForMissingSwiftlint(options = {}) {
 }
 
 export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env) {
-  if (!isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
+  if (isTruthyEnvFlag(env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD)) {
     return false;
   }
   if (isTruthyEnvFlag(env.CI) || isTruthyEnvFlag(env.GITHUB_ACTIONS)) {
@@ -93,7 +104,8 @@ export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env
   return true;
 }
 
-export function buildChangedCheckCrabboxArgs(argv = []) {
+export function buildChangedCheckCrabboxArgs(argv = [], options = {}) {
+  const delegatedArgv = buildDelegatedChangedCheckArgv(argv, options);
   return [
     "crabbox:run",
     "--",
@@ -113,11 +125,35 @@ export function buildChangedCheckCrabboxArgs(argv = []) {
     "240m",
     "--timing-json",
     "--",
+    "env",
+    "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1",
+    "OPENCLAW_CHANGED_LANES_RAW_SYNC=1",
+    "CI=1",
+    "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false",
     "corepack",
     "pnpm",
     "check:changed",
-    ...argv,
+    ...delegatedArgv,
   ];
+}
+
+function buildDelegatedChangedCheckArgv(argv, options = {}) {
+  const args = parseArgs(argv);
+  if (!args.staged || args.paths.length > 0) {
+    return argv;
+  }
+  const stagedPaths = listStagedChangedPaths(options.cwd);
+  const next = [];
+  if (args.timed) {
+    next.push("--timed");
+  }
+  if (stagedPaths.length === 0) {
+    next.push("--no-changes");
+    return next;
+  }
+  next.push("--base", "HEAD", "--head", "HEAD");
+  next.push("--", ...stagedPaths);
+  return next;
 }
 
 export function shouldRunShrinkwrapGuard(paths) {
@@ -147,9 +183,7 @@ export function createShrinkwrapGuardCommand(paths) {
 }
 
 export async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
-  console.error(
-    "[check:changed] OPENCLAW_TESTBOX=1 set; delegating to Blacksmith Testbox via `pnpm crabbox:run`.",
-  );
+  console.error("[check:changed] delegating to Blacksmith Testbox via `pnpm crabbox:run`.");
   return await runManagedCommand({
     bin: "pnpm",
     args: buildChangedCheckCrabboxArgs(argv),
@@ -440,7 +474,25 @@ function ensureCorepackPnpmShimDir() {
   chmodSync(pnpmPath, 0o755);
   writeFileSync(path.join(dir, "pnpm.cmd"), "@echo off\r\ncorepack pnpm %*\r\n", "utf8");
   corepackPnpmShimDir = dir;
+  registerCorepackPnpmShimCleanup();
   return dir;
+}
+
+function registerCorepackPnpmShimCleanup() {
+  if (corepackPnpmShimCleanupRegistered) {
+    return;
+  }
+  corepackPnpmShimCleanupRegistered = true;
+  process.once("exit", cleanupCorepackPnpmShimDir);
+}
+
+export function cleanupCorepackPnpmShimDir() {
+  if (!corepackPnpmShimDir) {
+    return;
+  }
+  const dir = corepackPnpmShimDir;
+  corepackPnpmShimDir = undefined;
+  rmSync(dir, { recursive: true, force: true });
 }
 
 async function runCommand(command, timings) {
@@ -476,6 +528,7 @@ function parseArgs(argv) {
     staged: false,
     dryRun: false,
     timed: false,
+    noChanges: false,
     help: false,
     paths: [],
   };
@@ -488,6 +541,7 @@ function parseArgs(argv) {
       booleanFlag("--staged", "staged"),
       booleanFlag("--dry-run", "dryRun"),
       booleanFlag("--timed", "timed"),
+      booleanFlag("--no-changes", "noChanges"),
       booleanFlag("--help", "help"),
       booleanFlag("-h", "help"),
     ],
@@ -514,6 +568,7 @@ function printUsage() {
       "  --staged         Check staged paths instead of git diff paths",
       "  --dry-run        Print the planned checks without running them",
       "  --timed          Print timing summary",
+      "  --no-changes     Treat the changed path set as empty",
       "  -h, --help       Show this help",
       "",
     ].join("\n"),
@@ -533,8 +588,9 @@ if (isDirectRun()) {
   } else if (shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
     process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
   } else {
-    const paths =
-      args.paths.length > 0
+    const paths = args.noChanges
+      ? []
+      : args.paths.length > 0
         ? args.paths
         : args.staged
           ? listStagedChangedPaths()

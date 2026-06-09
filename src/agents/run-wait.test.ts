@@ -1,9 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+/**
+ * Regression coverage for gateway-backed agent run waiting.
+ * Exercises timeout normalization, reply snapshots, and dynamic drain loops.
+ */
 import {
   addTimerTimeoutGraceMs,
   MAX_DATE_TIMESTAMP_MS,
   MAX_TIMER_TIMEOUT_MS,
-} from "../shared/number-coercion.js";
+} from "@openclaw/normalization-core/number-coercion";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({

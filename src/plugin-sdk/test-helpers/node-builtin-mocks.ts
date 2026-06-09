@@ -1,3 +1,8 @@
+/**
+ * Shared Vitest mocks for Node builtin modules used by plugin tests.
+ */
+import { vi } from "vitest";
+
 type MockFactory<TModule extends object> =
   | Partial<TModule>
   | ((actual: TModule) => Partial<TModule>);
@@ -5,7 +10,8 @@ type MockFactory<TModule extends object> =
 let childProcessModulePromise: Promise<typeof import("node:child_process")> | null = null;
 
 const loadChildProcessModule = async () => {
-  childProcessModulePromise ??= import("node:child_process");
+  childProcessModulePromise ??=
+    vi.importActual<typeof import("node:child_process")>("node:child_process");
   return await childProcessModulePromise;
 };
 
@@ -51,16 +57,18 @@ export async function mockNodeBuiltinModule<TModule extends object>(
 
 export async function mockNodeChildProcessSpawnSync(
   spawnSync: (...args: unknown[]) => unknown,
+  loadActual: () => Promise<typeof import("node:child_process")> = loadChildProcessModule,
 ): Promise<typeof import("node:child_process")> {
-  return mockNodeBuiltinModule(loadChildProcessModule, {
+  return mockNodeBuiltinModule(loadActual, {
     spawnSync: (...args: unknown[]) => spawnSync(...args),
   } as Partial<typeof import("node:child_process")>);
 }
 
 export async function mockNodeChildProcessExecFile(
   execFile: typeof import("node:child_process").execFile,
+  loadActual: () => Promise<typeof import("node:child_process")> = loadChildProcessModule,
 ): Promise<typeof import("node:child_process")> {
-  return mockNodeBuiltinModule(loadChildProcessModule, {
+  return mockNodeBuiltinModule(loadActual, {
     execFile,
   } as Partial<typeof import("node:child_process")>);
 }

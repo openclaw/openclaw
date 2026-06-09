@@ -1,6 +1,10 @@
+/** Doctor checks and repairs for state dir durability, sessions, transcripts, and credentials. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
@@ -30,9 +34,6 @@ import { resolveOpenClawAgentDir } from "../plugin-sdk/agent-dir-compat.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { asNullableObjectRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
@@ -218,8 +219,8 @@ function countJsonlLines(filePath: string): number {
       return 0;
     }
     let count = 0;
-    for (let i = 0; i < raw.length; i += 1) {
-      if (raw[i] === "\n") {
+    for (const char of raw) {
+      if (char === "\n") {
         count += 1;
       }
     }
@@ -238,7 +239,7 @@ function findOtherStateDirs(stateDir: string): string[] {
     process.platform === "darwin" ? ["/Users"] : process.platform === "linux" ? ["/home"] : [];
   const found: string[] = [];
   for (const root of roots) {
-    let entries: fs.Dirent[] = [];
+    let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(root, { withFileTypes: true });
     } catch {
@@ -418,6 +419,7 @@ function tryReadLinuxMountInfo(): string | null {
   }
 }
 
+/** Detects Linux state directories mounted from SD/eMMC-style block devices. */
 export function detectLinuxSdBackedStateDir(
   stateDir: string,
   deps?: {
@@ -470,6 +472,7 @@ export function detectLinuxSdBackedStateDir(
   };
 }
 
+/** Formats the warning for state stored on SD/eMMC media. */
 export function formatLinuxSdBackedStateDirWarning(
   displayStateDir: string,
   linuxSdBackedStateDir: LinuxSdBackedStateDir,
@@ -488,6 +491,7 @@ export function formatLinuxSdBackedStateDirWarning(
   ].join("\n");
 }
 
+/** Detects macOS state directories under iCloud Drive or CloudStorage providers. */
 export function detectMacCloudSyncedStateDir(
   stateDir: string,
   deps?: {
@@ -611,6 +615,7 @@ function shouldSuppressOrphanTranscriptWarning(cfg: OpenClawConfig, agentId: str
   return backendConfig?.backend === "qmd" && backendConfig.qmd?.sessions.enabled === true;
 }
 
+/** Emits state integrity warnings and applies selected runtime repairs. */
 export async function noteStateIntegrity(
   cfg: OpenClawConfig,
   prompter: DoctorPrompterLike,
@@ -1057,6 +1062,7 @@ export async function noteStateIntegrity(
   }
 }
 
+/** Returns the workspace git-backup tip when the workspace exists but is not a git repo. */
 export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   if (!existsDir(workspaceDir)) {
     return null;
@@ -1072,6 +1078,7 @@ export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   ].join("\n");
 }
 
+/** Emits the workspace backup tip when applicable. */
 export function noteWorkspaceBackupTip(workspaceDir: string) {
   const tip = collectWorkspaceBackupTip(workspaceDir);
   if (tip) {

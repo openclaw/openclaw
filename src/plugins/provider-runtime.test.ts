@@ -1,3 +1,4 @@
+/** Exercises provider runtime loading, ordering, and manifest-backed discovery paths. */
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
@@ -66,6 +67,7 @@ let resolveProviderConfigApiKeyWithPlugin: typeof import("./provider-runtime.js"
 let resolveProviderExtraParamsForTransport: typeof import("./provider-runtime.js").resolveProviderExtraParamsForTransport;
 let resolveProviderFollowupFallbackRoute: typeof import("./provider-runtime.js").resolveProviderFollowupFallbackRoute;
 let resolveProviderStreamFn: typeof import("./provider-runtime.js").resolveProviderStreamFn;
+let resolveProviderTransportTurnStateWithPlugin: typeof import("./provider-runtime.js").resolveProviderTransportTurnStateWithPlugin;
 let resolveProviderCacheTtlEligibility: typeof import("./provider-runtime.js").resolveProviderCacheTtlEligibility;
 let resolveProviderBinaryThinking: typeof import("./provider-runtime.js").resolveProviderBinaryThinking;
 let createProviderEmbeddingProvider: typeof import("./provider-runtime.js").createProviderEmbeddingProvider;
@@ -329,6 +331,7 @@ describe("provider-runtime", () => {
       resolveProviderExtraParamsForTransport,
       resolveProviderFollowupFallbackRoute,
       resolveProviderStreamFn,
+      resolveProviderTransportTurnStateWithPlugin,
       resolveProviderCacheTtlEligibility,
       resolveProviderBinaryThinking,
       createProviderEmbeddingProvider,
@@ -602,6 +605,62 @@ describe("provider-runtime", () => {
         provider: DEMO_PROVIDER_ID,
         allowRuntimePluginLoad: false,
         context: createDemoResolvedModelContext({}),
+      }),
+    ).toBeUndefined();
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("uses loaded transport turn-state hooks without loading runtime plugins when requested", () => {
+    const resolveTransportTurnState = vi.fn(() => ({
+      headers: { "x-demo-turn": "turn-1" },
+    }));
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+      resolveTransportTurnState,
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: DEMO_PROVIDER_ID,
+      provider,
+      source: "test",
+    });
+    setActivePluginRegistry(registry, "startup-registry", "gateway-bindable", "/tmp/workspace");
+
+    expect(
+      resolveProviderTransportTurnStateWithPlugin({
+        provider: DEMO_PROVIDER_ID,
+        workspaceDir: "/tmp/workspace",
+        allowRuntimePluginLoad: false,
+        context: {
+          provider: DEMO_PROVIDER_ID,
+          modelId: MODEL.id,
+          model: MODEL,
+          sessionId: "session-1",
+          turnId: "turn-1",
+          attempt: 1,
+          transport: "stream",
+        },
+      }),
+    ).toEqual({ headers: { "x-demo-turn": "turn-1" } });
+    expect(resolveTransportTurnState).toHaveBeenCalledOnce();
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("does not load runtime plugins for transport turn-state hooks when loading is disabled", () => {
+    expect(
+      resolveProviderTransportTurnStateWithPlugin({
+        provider: DEMO_PROVIDER_ID,
+        allowRuntimePluginLoad: false,
+        context: {
+          provider: DEMO_PROVIDER_ID,
+          modelId: MODEL.id,
+          model: MODEL,
+          turnId: "turn-1",
+          attempt: 1,
+          transport: "stream",
+        },
       }),
     ).toBeUndefined();
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
@@ -1253,7 +1312,7 @@ describe("provider-runtime", () => {
 
   it("keeps OpenAI plugin personality fallback for OpenAI-family GPT-5 providers", () => {
     const contribution = resolveProviderSystemPromptContribution({
-      provider: "openai-codex",
+      provider: "openai",
       config: {
         plugins: {
           entries: {
@@ -1262,7 +1321,7 @@ describe("provider-runtime", () => {
         },
       },
       context: {
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         promptMode: "full",
       } as never,
@@ -1453,8 +1512,12 @@ describe("provider-runtime", () => {
         auth: [],
         matchesContextOverflowError: ({ errorMessage }) =>
           /\bcontent_filter\b.*\btoo long\b/i.test(errorMessage),
-        classifyFailoverReason: ({ errorMessage }) =>
-          /\bquota exceeded\b/i.test(errorMessage) ? "rate_limit" : undefined,
+        classifyFailoverReason: ({ errorMessage, code, status }) => {
+          if (status === 403 && code === "PROVIDER_QUOTA_EXHAUSTED") {
+            return "billing";
+          }
+          return /\bquota exceeded\b/i.test(errorMessage) ? "rate_limit" : undefined;
+        },
       },
     ]);
 
@@ -1476,6 +1539,69 @@ describe("provider-runtime", () => {
         },
       }),
     ).toBe("rate_limit");
+    expect(
+      classifyProviderFailoverReasonWithPlugin({
+        provider: "azure-openai-responses",
+        context: {
+          provider: "azure-openai-responses",
+          errorMessage: "Forbidden",
+          status: 403,
+          code: "PROVIDER_QUOTA_EXHAUSTED",
+        },
+      }),
+    ).toBe("billing");
+  });
+
+  it("falls back to all failover hooks when a provider owner cannot be resolved", () => {
+    const classifyFailoverReason = vi.fn(({ errorMessage }) =>
+      /\bconcurrency limit breached\b/i.test(errorMessage) ? "rate_limit" : undefined,
+    );
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "together",
+        label: "Together",
+        auth: [],
+        classifyFailoverReason,
+      },
+    ]);
+
+    expect(
+      classifyProviderFailoverReasonWithPlugin({
+        provider: "my-together",
+        context: {
+          provider: "my-together",
+          errorMessage: "concurrency limit breached",
+        },
+      }),
+    ).toBe("rate_limit");
+    expect(classifyFailoverReason).toHaveBeenCalledWith({
+      provider: "my-together",
+      errorMessage: "concurrency limit breached",
+    });
+  });
+
+  it("does not broad-scan failover hooks for unresolved providers with structured descriptors", () => {
+    const classifyFailoverReason = vi.fn(() => "overloaded" as const);
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "mantle",
+        label: "Mantle",
+        auth: [],
+        classifyFailoverReason,
+      },
+    ]);
+
+    expect(
+      classifyProviderFailoverReasonWithPlugin({
+        provider: "my-openai-compatible",
+        context: {
+          provider: "my-openai-compatible",
+          status: 403,
+          errorMessage: "service unavailable",
+        },
+      }),
+    ).toBeUndefined();
+    expect(classifyFailoverReason).not.toHaveBeenCalled();
   });
 
   it("resolves stream wrapper hooks through hook-only aliases without provider ownership", () => {
@@ -1593,6 +1719,78 @@ describe("provider-runtime", () => {
       api: "google-generative-ai",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     });
+  });
+
+  it("does not broad-scan provider hooks for configured core transport providers", () => {
+    resolvePluginProvidersMock.mockImplementation((params) => {
+      if (params.providerRefs?.includes("mock-openai")) {
+        return [];
+      }
+      throw new Error("unexpected broad provider hook scan");
+    });
+
+    expect(
+      normalizeProviderTransportWithPlugin({
+        provider: "mock-openai",
+        config: {
+          models: {
+            providers: {
+              "mock-openai": {
+                api: "openai-responses",
+                baseUrl: "http://127.0.0.1:64087/v1",
+                models: [{ id: "gpt-5.5" }],
+              },
+            },
+          },
+        } as never,
+        context: {
+          provider: "mock-openai",
+          api: "openai-responses",
+          baseUrl: "http://127.0.0.1:64087/v1",
+        },
+      }),
+    ).toBeUndefined();
+    expect(resolvePluginProvidersMock).toHaveBeenCalledOnce();
+  });
+
+  it("scopes resolved transport hook lookup to explicit custom provider models", () => {
+    const openaiPlugin: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      normalizeTransport: () => ({ api: "openai-responses" }),
+    };
+    resolvePluginProvidersMock.mockReturnValue([openaiPlugin]);
+
+    expect(
+      applyProviderResolvedTransportWithPlugin({
+        provider: "tui-pty-mock",
+        config: {
+          models: {
+            providers: {
+              "tui-pty-mock": {
+                api: "openai-responses",
+                baseUrl: "http://127.0.0.1:64087/v1",
+                models: [{ id: "gpt-5.5" }],
+              },
+            },
+          },
+        } as never,
+        context: createDemoResolvedModelContext({
+          provider: "tui-pty-mock",
+          modelId: "gpt-5.5",
+          model: {
+            ...MODEL,
+            provider: "tui-pty-mock",
+            id: "gpt-5.5",
+            api: "openai-responses",
+            baseUrl: "http://127.0.0.1:64087/v1",
+          },
+        }),
+      }),
+    ).toBeUndefined();
+    expect(getLastResolvePluginProvidersParams().providerRefs).toEqual(["tui-pty-mock"]);
+    expect(getLastResolvePluginProvidersParams().modelRefs).toEqual(["tui-pty-mock/gpt-5.5"]);
   });
 
   it("invalidates cached runtime providers when config mutates in place", () => {
@@ -1756,7 +1954,7 @@ describe("provider-runtime", () => {
           shouldDeferSyntheticProfileAuth,
           normalizeResolvedModel: ({ model }) => ({
             ...model,
-            api: "openai-codex-responses",
+            api: "openai-chatgpt-responses",
           }),
           formatApiKey: (cred) =>
             cred.type === "oauth" ? JSON.stringify({ token: cred.access }) : "",
@@ -2052,7 +2250,7 @@ describe("provider-runtime", () => {
       }),
     ).toEqual({
       ...MODEL,
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
     });
 
     expect(
@@ -2247,6 +2445,37 @@ describe("provider-runtime", () => {
     expect(getLastResolvePluginProvidersParams().providerRefs).toEqual(["ollama-spark", "ollama"]);
   });
 
+  it("does not treat core transport apis as custom provider plugin owners", () => {
+    const openaiPlugin: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      hookAliases: ["openai-responses"],
+      auth: [],
+      createStreamFn: vi.fn(() => vi.fn()),
+    };
+    resolvePluginProvidersMock.mockReturnValue([openaiPlugin]);
+
+    const plugin = resolveProviderRuntimePlugin({
+      provider: "tui-pty-mock",
+      modelId: "gpt-5.5",
+      config: {
+        models: {
+          providers: {
+            "tui-pty-mock": {
+              api: "openai-responses",
+              baseUrl: "http://127.0.0.1:64087/v1",
+              models: [{ id: "gpt-5.5" }],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(plugin).toBeUndefined();
+    expect(getLastResolvePluginProvidersParams().providerRefs).toEqual(["tui-pty-mock"]);
+    expect(getLastResolvePluginProvidersParams().modelRefs).toEqual(["tui-pty-mock/gpt-5.5"]);
+  });
+
   it("does not match alias hooks when an exact custom provider declares a foreign api owner", () => {
     const qwenPlugin: ProviderPlugin = {
       id: "qwen",
@@ -2263,7 +2492,7 @@ describe("provider-runtime", () => {
         models: {
           providers: {
             modelstudio: {
-              api: "openai-completions",
+              api: "dashscope",
               baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
               models: [],
             },
@@ -2275,7 +2504,7 @@ describe("provider-runtime", () => {
     expect(plugin).toBeUndefined();
     expect(getLastResolvePluginProvidersParams().providerRefs).toEqual([
       "modelstudio",
-      "openai-completions",
+      "dashscope",
     ]);
   });
 
@@ -2344,7 +2573,7 @@ describe("provider-runtime", () => {
             { provider: "openai", id: "gpt-5.4-pro", name: "GPT-5.2 Pro" },
             { provider: "openai", id: "gpt-5.4-mini", name: "GPT-5 mini" },
             { provider: "openai", id: "gpt-5.4-nano", name: "GPT-5 nano" },
-            { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
+            { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
           ],
         },
       }),
