@@ -57,11 +57,14 @@
     "DOTNET_ADDITIONAL_DEPS",
     "GLIBC_TUNABLES",
     "MAVEN_OPTS",
+    "MAKE",
     "MAKEFLAGS",
     "MFLAGS",
     "SBT_OPTS",
     "GRADLE_OPTS",
     "ANT_OPTS",
+    "HGEDITOR",
+    "HGMERGE",
     "HGRCPATH",
     "EXINIT",
     "VIMINIT",
@@ -294,7 +297,6 @@
     "GIT_CONFIG_",
     "NPM_CONFIG_",
     "CARGO_REGISTRIES_",
-    "CARGO_TARGET_",
     "TF_VAR_"
   ],
   "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_"]

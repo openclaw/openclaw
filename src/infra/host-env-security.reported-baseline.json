@@ -53,6 +53,8 @@
     "GRADLE_OPTS",
     "GVIMINIT",
     "HELM_PLUGINS",
+    "HGEDITOR",
+    "HGMERGE",
     "HGRCPATH",
     "HOSTALIASES",
     "IFS",
@@ -65,6 +67,7 @@
     "LUA_INIT_5_2",
     "LUA_INIT_5_3",
     "LUA_INIT_5_4",
+    "MAKE",
     "MAKEFLAGS",
     "MAVEN_OPTS",
     "MFLAGS",
@@ -255,5 +258,5 @@
     "YARN_RC_FILENAME",
     "ZDOTDIR"
   ],
-  "expectedTotalReportedEntries": 250
+  "expectedTotalReportedEntries": 253
 }

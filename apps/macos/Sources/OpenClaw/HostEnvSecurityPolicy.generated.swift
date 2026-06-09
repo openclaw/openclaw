@@ -111,6 +111,8 @@ enum HostEnvSecurityPolicy {
         "GVIMINIT",
         "HELM_HOME",
         "HELM_PLUGINS",
+        "HGEDITOR",
+        "HGMERGE",
         "HGRCPATH",
         "HOSTALIASES",
         "IFS",
@@ -129,6 +131,7 @@ enum HostEnvSecurityPolicy {
         "LUA_INIT_5_3",
         "LUA_INIT_5_4",
         "LUA_PATH",
+        "MAKE",
         "MAKEFLAGS",
         "MAVEN_OPTS",
         "MFLAGS",
@@ -260,6 +263,8 @@ enum HostEnvSecurityPolicy {
         "GRADLE_OPTS",
         "GVIMINIT",
         "HELM_PLUGINS",
+        "HGEDITOR",
+        "HGMERGE",
         "HGRCPATH",
         "HOSTALIASES",
         "IFS",
@@ -272,6 +277,7 @@ enum HostEnvSecurityPolicy {
         "LUA_INIT_5_2",
         "LUA_INIT_5_3",
         "LUA_INIT_5_4",
+        "MAKE",
         "MAKEFLAGS",
         "MAVEN_OPTS",
         "MFLAGS",
@@ -466,7 +472,6 @@ enum HostEnvSecurityPolicy {
 
     static let blockedOverridePrefixes: [String] = [
         "CARGO_REGISTRIES_",
-        "CARGO_TARGET_",
         "GIT_CONFIG_",
         "NPM_CONFIG_",
         "TF_VAR_"

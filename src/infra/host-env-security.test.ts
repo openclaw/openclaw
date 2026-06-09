@@ -198,6 +198,8 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("glibc_tunables")).toBe(true);
     expect(isDangerousHostEnvVarName("MAVEN_OPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("maven_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("MAKE")).toBe(true);
+    expect(isDangerousHostEnvVarName("make")).toBe(true);
     expect(isDangerousHostEnvVarName("MAKEFLAGS")).toBe(true);
     expect(isDangerousHostEnvVarName("makeflags")).toBe(true);
     expect(isDangerousHostEnvVarName("NODE_REDIRECT_WARNINGS")).toBe(true);
@@ -216,6 +218,8 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("gradle_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("ANT_OPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ant_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("HGEDITOR")).toBe(true);
+    expect(isDangerousHostEnvVarName("hgmerge")).toBe(true);
     expect(isDangerousHostEnvVarName("HGRCPATH")).toBe(true);
     expect(isDangerousHostEnvVarName("hgrcpath")).toBe(true);
     expect(isDangerousHostEnvVarName("HTTPS_PROXY")).toBe(false);
@@ -335,8 +339,11 @@ describe("sanitizeHostExecEnv", () => {
         RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
         RUSTDOC: "/tmp/evil-rustdoc",
         JAVA_OPTS: "-javaagent:/tmp/evil.jar",
+        MAKE: "/tmp/evil-make",
         MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
         MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
+        HGEDITOR: "/tmp/evil-hgeditor",
+        HGMERGE: "/tmp/evil-hgmerge",
         KUBECONFIG: "/tmp/kubeconfig",
         GOOGLE_APPLICATION_CREDENTIALS: "/tmp/gcp.json",
         AWS_SHARED_CREDENTIALS_FILE: "/tmp/aws-credentials",
@@ -403,7 +410,7 @@ describe("sanitizeHostExecEnv", () => {
         CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER: "/tmp/evil-rustc-workspace-wrapper",
         CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
         CARGO_BUILD_RUSTDOC: "/tmp/evil-rustdoc",
-        CARGO_TARGET_DIR: "/tmp/evil-target",
+        CARGO_TARGET_DIR: "/tmp/custom-target",
         CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: "/tmp/evil-linker",
         CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "/tmp/evil-runner",
         CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
@@ -483,8 +490,11 @@ describe("sanitizeHostExecEnv", () => {
         JAVA_OPTS: "-javaagent:/tmp/evil.jar",
         GOFLAGS: "-mod=mod",
         RUSTFLAGS: "-C link-args=-l/tmp/evil.so",
+        MAKE: "/tmp/evil-make",
         MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
         MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
+        HGEDITOR: "/tmp/evil-hgeditor",
+        HGMERGE: "/tmp/evil-hgmerge",
         PHPRC: "/tmp/evil-php.ini",
         XDG_CONFIG_HOME: "/tmp/evil-config",
         SAFE: "ok",
@@ -505,7 +515,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER).toBeUndefined();
     expect(env.CARGO_BUILD_RUSTC_WRAPPER).toBeUndefined();
     expect(env.CARGO_BUILD_RUSTDOC).toBeUndefined();
-    expect(env.CARGO_TARGET_DIR).toBeUndefined();
+    expect(env.CARGO_TARGET_DIR).toBe("/tmp/custom-target");
     expect(env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER).toBeUndefined();
     expect(env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER).toBeUndefined();
     expect(env.CMAKE_C_COMPILER).toBeUndefined();
@@ -539,8 +549,11 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.JAVA_OPTS).toBeUndefined();
     expect(env.GOFLAGS).toBeUndefined();
     expect(env.RUSTFLAGS).toBeUndefined();
+    expect(env.MAKE).toBeUndefined();
     expect(env.MAKEFLAGS).toBeUndefined();
     expect(env.MFLAGS).toBeUndefined();
+    expect(env.HGEDITOR).toBeUndefined();
+    expect(env.HGMERGE).toBeUndefined();
     expect(env.PHPRC).toBeUndefined();
     expect(env.XDG_CONFIG_HOME).toBeUndefined();
     expect(env.YARN_RC_FILENAME).toBeUndefined();
@@ -855,7 +868,7 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("git_config_global")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CARGO_REGISTRIES_CRATES_IO_INDEX")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("cargo_registries_internal_index")).toBe(true);
-    expect(isDangerousHostEnvOverrideVarName("CARGO_TARGET_DIR")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CARGO_TARGET_DIR")).toBe(false);
     expect(isDangerousHostEnvOverrideVarName("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER")).toBe(
       true,
     );
@@ -1041,10 +1054,13 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER: "/tmp/evil-rustc-workspace-wrapper",
         CARGO_BUILD_RUSTDOC: "/tmp/evil-rustdoc",
         CARGO_HOME: "/tmp/evil-cargo",
-        CARGO_TARGET_DIR: "/tmp/evil-target",
+        CARGO_TARGET_DIR: "/tmp/custom-target",
         CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: "/tmp/evil-linker",
         CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "/tmp/evil-runner",
         HGRCPATH: "/tmp/evil-hgrc",
+        HGEDITOR: "/tmp/evil-hgeditor",
+        HGMERGE: "/tmp/evil-hgmerge",
+        MAKE: "/tmp/evil-make",
         MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
         MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
         HELM_HOME: "/tmp/evil-helm",
@@ -1080,7 +1096,6 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "CARGO_BUILD_RUSTDOC",
       "CARGO_HOME",
       "CARGO_REGISTRIES_CRATES_IO_INDEX",
-      "CARGO_TARGET_DIR",
       "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
       "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER",
       "CLASSPATH",
@@ -1113,11 +1128,14 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "GOPRIVATE",
       "GOPROXY",
       "HELM_HOME",
+      "HGEDITOR",
+      "HGMERGE",
       "HGRCPATH",
       "HTTPS_PROXY",
       "JAVA_OPTS",
       "KUBECONFIG",
       "LIBRARY_PATH",
+      "MAKE",
       "MAKEFLAGS",
       "MFLAGS",
       "NODE_EXTRA_CA_CERTS",
@@ -1161,7 +1179,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER).toBeUndefined();
     expect(result.env.CARGO_BUILD_RUSTDOC).toBeUndefined();
     expect(result.env.CARGO_REGISTRIES_CRATES_IO_INDEX).toBeUndefined();
-    expect(result.env.CARGO_TARGET_DIR).toBeUndefined();
+    expect(result.env.CARGO_TARGET_DIR).toBe("/tmp/custom-target");
     expect(result.env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER).toBeUndefined();
     expect(result.env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER).toBeUndefined();
     expect(result.env.PIP_INDEX_URL).toBeUndefined();
@@ -1212,6 +1230,8 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.GOENV).toBeUndefined();
     expect(result.env.GOPATH).toBeUndefined();
     expect(result.env.CARGO_HOME).toBeUndefined();
+    expect(result.env.HGEDITOR).toBeUndefined();
+    expect(result.env.HGMERGE).toBeUndefined();
     expect(result.env.HGRCPATH).toBeUndefined();
     expect(result.env.HELM_HOME).toBeUndefined();
     expect(result.env.NODE_REDIRECT_WARNINGS).toBeUndefined();
@@ -1220,6 +1240,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.NODE_V8_COVERAGE).toBeUndefined();
     expect(result.env.HTTPS_PROXY).toBeUndefined();
     expect(result.env.JAVA_OPTS).toBeUndefined();
+    expect(result.env.MAKE).toBeUndefined();
     expect(result.env.MAKEFLAGS).toBeUndefined();
     expect(result.env.MFLAGS).toBeUndefined();
     expect(result.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
