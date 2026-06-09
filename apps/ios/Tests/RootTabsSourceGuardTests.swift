@@ -142,13 +142,23 @@ import Testing
 
     @Test func agentsDirectRouteKeepsSingleSidebarControl() throws {
         let source = try String(contentsOf: Self.agentProTabSourceURL(), encoding: .utf8)
+        let destinationsSource = try String(contentsOf: Self.agentProTabDestinationsSourceURL(), encoding: .utf8)
+        let nodesSource = try String(contentsOf: Self.agentProNodesDestinationSourceURL(), encoding: .utf8)
+        let dreamingSource = try String(contentsOf: Self.agentProDreamingDestinationSourceURL(), encoding: .utf8)
         let directDestination = try Self.extract(
             source,
             from: "private func directDestination(for route: AgentRoute) -> some View",
             to: "private func applyInitialRouteIfNeeded()")
 
-        #expect(directDestination.contains("if route != .agents, let headerLeadingAction"))
-        #expect(directDestination.contains("OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)"))
+        #expect(!directDestination.contains("ToolbarItem"))
+        #expect(directDestination.contains("self.directHeaderLeadingAction(for: route) == nil ? .visible : .hidden"))
+        #expect(destinationsSource.contains("self.directHeaderLeadingAction(for: .instances)"))
+        #expect(destinationsSource.contains("self.directHeaderLeadingAction(for: .dreaming)"))
+        #expect(destinationsSource.contains("self.directHeader(\n                        for: .usage"))
+        #expect(destinationsSource.contains("self.directHeader(\n                        for: .cron"))
+        #expect(destinationsSource.contains("self.directRoute == route ? self.headerLeadingAction : nil"))
+        #expect(nodesSource.contains("OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)"))
+        #expect(dreamingSource.contains("OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)"))
     }
 
     @Test func routedHeadersUseSharedAdaptiveLayout() throws {
@@ -625,6 +635,27 @@ import Testing
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Design/AgentProTab+Overview.swift")
+    }
+
+    private static func agentProTabDestinationsSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Design/AgentProTab+Destinations.swift")
+    }
+
+    private static func agentProNodesDestinationSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Design/AgentProNodesDestination.swift")
+    }
+
+    private static func agentProDreamingDestinationSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Design/AgentProDreamingDestination.swift")
     }
 
     private static func rootTabsNavigationSourceURL() -> URL {

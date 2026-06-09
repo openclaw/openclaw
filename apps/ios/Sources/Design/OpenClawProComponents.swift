@@ -258,7 +258,7 @@ struct OpenClawSidebarRevealButton: View {
     }
 
     var body: some View {
-        Button(action: self.headerAction.action) {
+        let button = Button(action: self.headerAction.action) {
             Image(systemName: self.headerAction.systemName)
                 .font(.system(size: 16, weight: .semibold))
                 .frame(width: 38, height: 38)
@@ -267,7 +267,12 @@ struct OpenClawSidebarRevealButton: View {
         .buttonStyle(.plain)
         .foregroundStyle(OpenClawBrand.accent)
         .accessibilityLabel(self.headerAction.accessibilityLabel)
-        .accessibilityIdentifier(self.headerAction.accessibilityIdentifier ?? "")
+
+        if let accessibilityIdentifier = self.headerAction.accessibilityIdentifier {
+            button.accessibilityIdentifier(accessibilityIdentifier)
+        } else {
+            button
+        }
     }
 }
 

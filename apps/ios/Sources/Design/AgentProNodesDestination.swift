@@ -3,6 +3,7 @@ import SwiftUI
 import UIKit
 
 struct AgentProNodesDestination: View {
+    let headerLeadingAction: OpenClawSidebarHeaderAction?
     let overview: AgentOverviewSnapshot?
     let gatewayConnected: Bool
     let agentCount: Int
@@ -16,6 +17,7 @@ struct AgentProNodesDestination: View {
             OpenClawProBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    self.header
                     self.summaryCard
                     self.totalsCard
                     self.nodesList
@@ -29,6 +31,23 @@ struct AgentProNodesDestination: View {
         }
         .navigationTitle("Instances")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder
+    private var header: some View {
+        if let headerLeadingAction {
+            OpenClawAdaptiveHeaderRow(
+                title: "Instances",
+                subtitle: self.instancesDetail,
+                titleFont: .title3.weight(.semibold),
+                subtitleFont: .callout)
+            {
+                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+            } accessory: {
+                EmptyView()
+            }
+            .padding(.horizontal, OpenClawProMetric.pagePadding)
+        }
     }
 
     private var summaryCard: some View {

@@ -244,7 +244,7 @@ extension SettingsProTab {
         }
         .navigationTitle(self.title(for: route))
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarHidden(self.headerLeadingAction != nil)
+        .toolbar(self.headerLeadingAction == nil ? .visible : .hidden, for: .navigationBar)
     }
 
     func routeHeader(for route: SettingsRoute) -> some View {

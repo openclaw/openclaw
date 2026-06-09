@@ -191,13 +191,9 @@ struct AgentProTab: View {
 
     private func directDestination(for route: AgentRoute) -> some View {
         self.destination(for: route)
-            .toolbar {
-                if route != .agents, let headerLeadingAction {
-                    ToolbarItem(placement: .topBarLeading) {
-                        OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
-                    }
-                }
-            }
+            .toolbar(
+                self.directHeaderLeadingAction(for: route) == nil ? .visible : .hidden,
+                for: .navigationBar)
     }
 
     private func applyInitialRouteIfNeeded() {
