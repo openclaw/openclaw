@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { canonicalizeBase64 } from "@openclaw/media-core/base64";
+import { sanitizeInlineImageBase64 } from "@openclaw/media-core/inline-image-data-url";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { makeMissingToolResult } from "./session-transcript-repair.js";
@@ -127,14 +127,19 @@ function isCorruptedImageContentBlock(block: unknown): boolean {
     data?: unknown;
     mimeType?: unknown;
     mediaType?: unknown;
+    media_type?: unknown;
   };
   if (record.type !== "image" || typeof record.data !== "string") {
     return false;
   }
-  if (!isImageMimeType(record.mimeType) && !isImageMimeType(record.mediaType)) {
+  const mimeType = [record.mimeType, record.mediaType, record.media_type].find(isImageMimeType);
+  if (!mimeType) {
     return false;
   }
-  return containsNonAscii(record.data) || canonicalizeBase64(record.data) === undefined;
+  return (
+    containsNonAscii(record.data) ||
+    sanitizeInlineImageBase64({ base64: record.data, mimeType }) === undefined
+  );
 }
 
 function repairEntryWithCorruptedImageBlocks(entry: SessionMessageEntry): {

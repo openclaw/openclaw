@@ -3,8 +3,10 @@
  *
  * Applies logging redaction rules to persisted messages while preserving unchanged object identity.
  */
-import { Buffer } from "node:buffer";
-import { canonicalizeBase64 } from "@openclaw/media-core/base64";
+import {
+  sanitizeInlineImageBase64,
+  sanitizeInlineImageDataUrlForStorage,
+} from "@openclaw/media-core/inline-image-data-url";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLoggingConfig } from "../logging/config.js";
 import {
@@ -72,40 +74,19 @@ function imageMimeTypeForRecord(value: Record<string, unknown>): string | undefi
   );
 }
 
-function base64HasImageSignature(base64: string, mimeType: string): boolean {
-  const canonical = canonicalizeBase64(base64);
-  if (!canonical) {
-    return false;
-  }
-  const header = Buffer.from(canonical.slice(0, 64), "base64");
-  if (mimeType === "image/png") {
-    return header
-      .subarray(0, 8)
-      .equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-  }
-  if (mimeType === "image/jpeg" || mimeType === "image/jpg") {
-    return header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff;
-  }
-  if (mimeType === "image/gif") {
-    return (
-      header.subarray(0, 6).equals(Buffer.from("GIF87a")) ||
-      header.subarray(0, 6).equals(Buffer.from("GIF89a"))
-    );
-  }
-  if (mimeType === "image/webp") {
-    return (
-      header.subarray(0, 4).equals(Buffer.from("RIFF")) &&
-      header.subarray(8, 12).equals(Buffer.from("WEBP"))
-    );
-  }
-  if (mimeType === "image/bmp") {
-    return header.subarray(0, 2).equals(Buffer.from("BM"));
-  }
-  return false;
+function imageMimeTypeFieldsForRecord(value: Record<string, unknown>): string[] {
+  return ["mimeType", "mediaType", "media_type"].filter((key) => isImageMimeType(value[key]));
+}
+
+function sanitizeOpaqueImageBase64(
+  base64: string,
+  mimeType: string | undefined,
+): { mimeType: string; base64: string } | undefined {
+  return mimeType ? sanitizeInlineImageBase64({ mimeType, base64 }) : undefined;
 }
 
 function isValidOpaqueImageBase64(base64: string, mimeType: string | undefined): boolean {
-  return mimeType !== undefined && base64HasImageSignature(base64, mimeType);
+  return sanitizeOpaqueImageBase64(base64, mimeType) !== undefined;
 }
 
 function isTranscriptImageContentBlock(value: Record<string, unknown>): boolean {
@@ -124,47 +105,48 @@ function isImageBase64SourceBlock(value: Record<string, unknown>): boolean {
   );
 }
 
-function imageDataUrlPayload(value: string): { mimeType: string; base64: string } | undefined {
-  const trimmed = value.trimStart();
-  if (!trimmed.toLowerCase().startsWith("data:")) {
+function sanitizeImageRecord(source: Record<string, unknown>): Record<string, unknown> | undefined {
+  const isImageBlock = source.type === "image";
+  const isBase64SourceBlock = source.type === "base64";
+  if ((!isImageBlock && !isBase64SourceBlock) || typeof source.data !== "string") {
     return undefined;
   }
-  const commaIndex = trimmed.indexOf(",");
-  if (commaIndex < 0) {
+  const mimeTypeFields = imageMimeTypeFieldsForRecord(source);
+  if (mimeTypeFields.length === 0) {
     return undefined;
   }
-  const header = trimmed.slice("data:".length, commaIndex);
-  const [rawMimeType, ...metadata] = header.split(";");
-  const mimeType = rawMimeType.trim().toLowerCase();
-  if (
-    !isImageMimeType(mimeType) ||
-    !metadata.some((part) => part.trim().toLowerCase() === "base64")
-  ) {
+  const sanitized = sanitizeOpaqueImageBase64(source.data, imageMimeTypeForRecord(source));
+  if (!sanitized) {
     return undefined;
   }
-  return {
-    mimeType,
-    base64: trimmed.slice(commaIndex + 1),
-  };
+  const hasCanonicalMimeTypes = mimeTypeFields.every((key) => source[key] === sanitized.mimeType);
+  if (source.data === sanitized.base64 && hasCanonicalMimeTypes) {
+    return source;
+  }
+  const next: Record<string, unknown> = { ...source, data: sanitized.base64 };
+  for (const field of mimeTypeFields) {
+    next[field] = sanitized.mimeType;
+  }
+  return next;
 }
 
-function isImageDataUrlField(source: Record<string, unknown>, key: string, value: string): boolean {
-  const parsed = imageDataUrlPayload(value);
-  if (!parsed || !isValidOpaqueImageBase64(parsed.base64, parsed.mimeType)) {
-    return false;
-  }
-  if (source.type === "input_image" && key === "image_url") {
-    return true;
-  }
-  if ((source.type === "image" || source.type === "image_url") && key === "url") {
-    return true;
-  }
-  return source.type === "image" && (key === "source" || key === "data");
+function startsWithDataUrl(value: string): boolean {
+  return value.slice(0, "data:".length).toLowerCase() === "data:";
 }
 
-function isValidImageDataUrl(value: string): boolean {
-  const parsed = imageDataUrlPayload(value);
-  return Boolean(parsed && isValidOpaqueImageBase64(parsed.base64, parsed.mimeType));
+function sanitizeImageDataUrlField(
+  source: Record<string, unknown>,
+  key: string,
+  value: string,
+): string | undefined {
+  if (!startsWithDataUrl(value)) {
+    return undefined;
+  }
+  const isImageDataUrlField =
+    (source.type === "input_image" && key === "image_url") ||
+    ((source.type === "image" || source.type === "image_url") && key === "url") ||
+    (source.type === "image" && (key === "source" || key === "data"));
+  return isImageDataUrlField ? sanitizeInlineImageDataUrlForStorage(value) : undefined;
 }
 
 function shouldPreserveOpaqueImagePayload(
@@ -183,9 +165,9 @@ function shouldPreserveOpaqueImagePayload(
     return true;
   }
   if (preserveImageDataUrlFields && key === "url") {
-    return isValidImageDataUrl(item);
+    return startsWithDataUrl(item) && sanitizeInlineImageDataUrlForStorage(item) !== undefined;
   }
-  return isImageDataUrlField(source, key, item);
+  return sanitizeImageDataUrlField(source, key, item) !== undefined;
 }
 
 function shouldPreserveNestedImageDataUrlFields(
@@ -246,9 +228,28 @@ function redactTranscriptStructuredValue(
   }
 
   seen.add(value);
-  const source = value;
+  const sanitizedImageRecord = sanitizeImageRecord(value);
+  const source = sanitizedImageRecord ?? value;
   let next: Record<string, unknown> | null = null;
+  if (source !== value) {
+    next = { ...source };
+  }
   for (const [key, item] of Object.entries(source)) {
+    if (typeof item === "string") {
+      const sanitizedDataUrl =
+        preserveImageDataUrlFields && key === "url"
+          ? startsWithDataUrl(item)
+            ? sanitizeInlineImageDataUrlForStorage(item)
+            : undefined
+          : sanitizeImageDataUrlField(source, key, item);
+      if (sanitizedDataUrl !== undefined) {
+        if (sanitizedDataUrl !== item) {
+          next ??= { ...source };
+          next[key] = sanitizedDataUrl;
+        }
+        continue;
+      }
+    }
     if (shouldPreserveOpaqueImagePayload(source, key, item, preserveImageDataUrlFields)) {
       continue;
     }

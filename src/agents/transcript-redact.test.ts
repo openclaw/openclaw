@@ -30,6 +30,10 @@ function cfg(mode: "tools" | "off", patterns?: string[]): OpenClawConfig {
 const EMAIL_PATTERN = String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`;
 const IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAARcnVOZAAAAKIDABCDEFGHIJKLMNOP8JJRuAAAAABJRU5ErkJggg==";
+const BMP_BASE64_WITH_SECRET_TOKEN_SUBSTRING = Buffer.from(
+  "BMsk-abcdef1234567890xyz",
+  "ascii",
+).toString("base64");
 
 describe("redactTranscriptMessage", () => {
   it("redacts text block matching default patterns (sk- token)", () => {
@@ -334,6 +338,25 @@ describe("redactTranscriptMessage", () => {
     expect(content[0].data).toBe("sk-abc…0xyz");
   });
 
+  it("preserves valid BMP image base64 while redacting adjacent text", () => {
+    const msg = {
+      role: "user",
+      content: [
+        { type: "text", text: "my key is sk-abcdef1234567890xyz" },
+        {
+          type: "image",
+          data: BMP_BASE64_WITH_SECRET_TOKEN_SUBSTRING,
+          mimeType: "image/bmp",
+        },
+      ],
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const content = msgContent(result) as Array<{ type: string; text?: string; data?: string }>;
+    expect(content[0].text).not.toContain("sk-abcdef1234567890xyz");
+    expect(content[1].data).toBe(BMP_BASE64_WITH_SECRET_TOKEN_SUBSTRING);
+  });
+
   it("preserves provider-style image base64 source data", () => {
     const msg = {
       role: "assistant",
@@ -356,6 +379,29 @@ describe("redactTranscriptMessage", () => {
     expect(block.apiKey).toBe("plains…e123");
   });
 
+  it("canonicalizes preserved image MIME from sniffed base64 bytes", () => {
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "gatewayCustom",
+          source: {
+            type: "base64",
+            media_type: "image/jpeg",
+            data: IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING,
+          },
+        },
+      ],
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const block = (
+      msgContent(result) as Array<{ source: { data: string; media_type: string } }>
+    )[0];
+    expect(block.source.data).toBe(IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING);
+    expect(block.source.media_type).toBe("image/png");
+  });
+
   it("preserves image data URLs without exempting non-image data fields", () => {
     const dataUrl = `data:image/png;base64,${IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`;
     const msg = {
@@ -375,8 +421,8 @@ describe("redactTranscriptMessage", () => {
     expect(block.data).toBe("AKIDAB…MNOP");
   });
 
-  it("preserves image data URLs with metadata parameters before base64", () => {
-    const dataUrl = `data:image/png;charset=utf-8;base64,${IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`;
+  it("preserves valid non-browser image data URLs in transcripts", () => {
+    const dataUrl = `data:image/bmp;base64,${BMP_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`;
     const msg = {
       role: "assistant",
       content: [
@@ -390,6 +436,24 @@ describe("redactTranscriptMessage", () => {
     const result = redactTranscriptMessage(msg, cfg("tools"));
     const block = (msgContent(result) as Array<{ image_url: string }>)[0];
     expect(block.image_url).toBe(dataUrl);
+  });
+
+  it("preserves image data URLs with metadata parameters before base64", () => {
+    const dataUrl = `data:image/png;charset=utf-8;base64,${IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`;
+    const canonicalDataUrl = `data:image/png;base64,${IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`;
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "input_image",
+          image_url: dataUrl,
+        },
+      ],
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const block = (msgContent(result) as Array<{ image_url: string }>)[0];
+    expect(block.image_url).toBe(canonicalDataUrl);
   });
 
   it("preserves nested image_url data URL payloads", () => {
