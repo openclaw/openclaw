@@ -1,7 +1,7 @@
 // Covers Codex provider usage fetch parsing.
 import { describe, expect, it } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
-import { fetchCodexUsage } from "./provider-usage.fetch.codex.js";
+import { buildCodexAppServerUsageSnapshot, fetchCodexUsage } from "./provider-usage.fetch.codex.js";
 
 describe("fetchCodexUsage", () => {
   it("returns token expired for auth failures", async () => {
@@ -158,5 +158,59 @@ describe("fetchCodexUsage", () => {
 
     const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
     expect(result.plan).toBe("Plus ($0.00)");
+  });
+});
+
+describe("buildCodexAppServerUsageSnapshot", () => {
+  it("parses Codex app-server rate-limit windows as OpenAI usage", () => {
+    const result = buildCodexAppServerUsageSnapshot({
+      rateLimitsByLimitId: {
+        premium: {
+          limitId: "premium",
+          primary: null,
+        },
+        codex: {
+          limitId: "codex",
+          planType: "plus",
+          primary: {
+            usedPercent: 9,
+            windowDurationMins: 300,
+            resetsAt: 1_700_003_600,
+          },
+          secondary: {
+            usedPercent: 30,
+            windowDurationMins: 7 * 24 * 60,
+            resetsAt: 1_700_604_800,
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      provider: "openai",
+      displayName: "OpenAI",
+      plan: "plus",
+      windows: [
+        { label: "5h", usedPercent: 9, resetAt: 1_700_003_600_000 },
+        { label: "Week", usedPercent: 30, resetAt: 1_700_604_800_000 },
+      ],
+    });
+  });
+
+  it("accepts snake_case Codex core payload fields", () => {
+    const result = buildCodexAppServerUsageSnapshot({
+      rate_limits: {
+        limit_id: "codex",
+        plan_type: "pro",
+        primary: {
+          used_percent: 25,
+          window_minutes: 60,
+          resets_at: 1_700_000_060,
+        },
+      },
+    });
+
+    expect(result.windows).toEqual([{ label: "1h", usedPercent: 25, resetAt: 1_700_000_060_000 }]);
+    expect(result.plan).toBe("pro");
   });
 });

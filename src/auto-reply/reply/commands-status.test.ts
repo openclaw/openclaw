@@ -818,6 +818,74 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
+  it("loads Codex synthetic usage when OpenAI Codex auth has no local profile", async () => {
+    registerStatusCodexHarness();
+    const usageResetBase = Math.floor(Date.now() / 1000);
+    providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: Date.now(),
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [
+            {
+              label: "5h",
+              usedPercent: 9,
+              resetAt: (usageResetBase + 60 * 60) * 1000,
+            },
+          ],
+        },
+      ],
+    });
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-codex-synthetic-usage",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.5",
+      contextTokens: 32_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-5.5");
+    expect(normalized).toContain("Runtime: OpenAI Codex");
+    expect(normalized).toContain("Usage: 5h 91% left");
+    const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+      ([params]) => params?.providers?.includes("openai"),
+    );
+    if (!providerUsageCall) {
+      throw new Error("expected provider usage summary call for synthetic Codex auth");
+    }
+    expect(providerUsageCall[0]).toMatchObject({
+      providers: ["openai"],
+      config: expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({ agentRuntime: { id: "codex" } }),
+        }),
+      }),
+    });
+  });
+
   it("shows DeepSeek balance summaries in /status output", async () => {
     providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
       updatedAt: Date.now(),

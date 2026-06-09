@@ -9,6 +9,7 @@ import {
   type ModelProviderConfig,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildCodexAppServerUsageSnapshot } from "openclaw/plugin-sdk/provider-usage";
 import { resolveCodexSystemPromptContribution } from "./prompt-overlay.js";
 import {
   buildCodexModelDefinition,
@@ -43,9 +44,16 @@ type CodexModelLister = (options: {
   sharedClient?: boolean;
 }) => Promise<CodexAppServerModelListResult>;
 
+type CodexRateLimitReader = (options: {
+  timeoutMs: number;
+  agentDir?: string;
+  config?: Parameters<typeof requestCodexAppServerRateLimitsLazy>[0]["config"];
+}) => Promise<unknown>;
+
 type BuildCodexProviderOptions = {
   pluginConfig?: unknown;
   listModels?: CodexModelLister;
+  readRateLimits?: CodexRateLimitReader;
 };
 
 type BuildCatalogOptions = {
@@ -107,6 +115,17 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
       source: "codex-app-server",
       mode: "token",
     }),
+    fetchUsageSnapshot: async (ctx) => {
+      if (ctx.token !== CODEX_APP_SERVER_AUTH_MARKER) {
+        return null;
+      }
+      const rateLimits = await (options.readRateLimits ?? requestCodexAppServerRateLimitsLazy)({
+        timeoutMs: ctx.timeoutMs,
+        agentDir: ctx.agentDir,
+        config: ctx.config,
+      });
+      return buildCodexAppServerUsageSnapshot(rateLimits);
+    },
     resolveThinkingProfile: ({ modelId }) => ({
       levels: [
         { id: "off" },
@@ -208,6 +227,24 @@ async function listCodexAppServerModelsLazy(options: {
 }): Promise<CodexAppServerModelListResult> {
   const { listCodexAppServerModels } = await import("./src/app-server/models.js");
   return listCodexAppServerModels(options);
+}
+
+async function requestCodexAppServerRateLimitsLazy(options: {
+  timeoutMs: number;
+  agentDir?: string;
+  config?: Parameters<
+    typeof import("./src/app-server/request.js").requestCodexAppServerJson
+  >[0]["config"];
+}): Promise<unknown> {
+  const { requestCodexAppServerJson } = await import("./src/app-server/request.js");
+  return await requestCodexAppServerJson({
+    method: "account/rateLimits/read",
+    timeoutMs: options.timeoutMs,
+    authProfileId: null,
+    agentDir: options.agentDir,
+    config: options.config,
+    isolated: true,
+  });
 }
 
 function normalizeTimeoutMs(value: unknown): number {

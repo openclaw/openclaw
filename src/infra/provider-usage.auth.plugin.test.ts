@@ -7,6 +7,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const resolveProviderUsageAuthWithPluginMock = vi.fn(
   async (..._args: unknown[]): Promise<unknown> => null,
 );
+const resolveProviderSyntheticAuthWithPluginMock = vi.fn(() => undefined);
 const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);
 const ensureAuthProfileStoreMock = vi.fn(() => ({
   profiles: {},
@@ -33,6 +34,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   );
   return {
     ...actual,
+    resolveProviderSyntheticAuthWithPlugin: resolveProviderSyntheticAuthWithPluginMock,
     resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
   };
 });
@@ -113,6 +115,8 @@ describe("resolveProviderAuths plugin boundary", () => {
     resolveAuthProfileOrderMock.mockReturnValue([]);
     resolveProviderUsageAuthWithPluginMock.mockReset();
     resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
+    resolveProviderSyntheticAuthWithPluginMock.mockReset();
+    resolveProviderSyntheticAuthWithPluginMock.mockReturnValue(undefined);
   });
 
   it("prefers plugin-owned usage auth when available", async () => {
@@ -131,6 +135,35 @@ describe("resolveProviderAuths plugin boundary", () => {
       },
     ]);
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("uses Codex synthetic app-server auth for OpenAI usage when OAuth is absent", async () => {
+    resolveProviderSyntheticAuthWithPluginMock.mockReturnValueOnce({
+      apiKey: "codex-app-server",
+      source: "codex-app-server",
+      mode: "token",
+    });
+
+    await expect(
+      resolveProviderAuthsForTest({
+        providers: ["openai"],
+      }),
+    ).resolves.toEqual([
+      {
+        provider: "openai",
+        token: "codex-app-server",
+        hookProvider: "codex",
+      },
+    ]);
+
+    expect(resolveProviderSyntheticAuthWithPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "codex",
+        context: expect.objectContaining({
+          provider: "codex",
+        }),
+      }),
+    );
   });
 
   it("skips plugin usage auth when requested and no direct credential source exists", async () => {

@@ -55,7 +55,7 @@ async function fetchProviderUsageSnapshot(params: {
   fetchFn: typeof fetch;
 }): Promise<ProviderUsageSnapshot> {
   const pluginSnapshot = await resolveProviderUsageSnapshotWithPlugin({
-    provider: params.auth.provider,
+    provider: params.auth.hookProvider ?? params.auth.provider,
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,

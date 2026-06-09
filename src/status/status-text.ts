@@ -109,6 +109,7 @@ function resolveStatusRuntimeContextTokens(params: {
 function shouldLoadUsageSummary(params: {
   provider?: string;
   selectedModelAuth?: string;
+  credentialType?: string;
 }): boolean {
   if (!params.provider) {
     return false;
@@ -119,7 +120,12 @@ function shouldLoadUsageSummary(params: {
   // OAuth/token usage endpoints are meaningful only for providers authenticated
   // through those modes; skip API-key sessions to avoid slow unavailable calls.
   const auth = normalizeOptionalLowercaseString(params.selectedModelAuth);
-  return Boolean(auth?.startsWith("oauth") || auth?.startsWith("token"));
+  return Boolean(
+    params.credentialType === "oauth" ||
+    params.credentialType === "token" ||
+    auth?.startsWith("oauth") ||
+    auth?.startsWith("token"),
+  );
 }
 
 function resolveUsageCredentialType(authLabel?: string): "oauth" | "token" | "api_key" | undefined {
@@ -137,6 +143,19 @@ function resolveUsageCredentialType(authLabel?: string): "oauth" | "token" | "ap
     return "api_key";
   }
   return undefined;
+}
+
+function shouldUseCodexSyntheticUsage(params: {
+  provider?: string;
+  effectiveHarness?: string;
+  authLabel?: string;
+}): boolean {
+  const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
+  const provider = normalizeOptionalLowercaseString(params.provider);
+  const auth = normalizeOptionalLowercaseString(params.authLabel);
+  return (
+    harness === "codex" && (provider === "openai" || provider === "codex") && auth === "unknown"
+  );
 }
 
 function formatSessionTaskLine(sessionKey: string): string | undefined {
@@ -323,7 +342,15 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     selectedModelAuth = activeModelAuth;
   }
   const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
-  const usageCredentialType = resolveUsageCredentialType(usageAuthLabel);
+  const usageCredentialType =
+    resolveUsageCredentialType(usageAuthLabel) ??
+    (shouldUseCodexSyntheticUsage({
+      provider: activeStatusProvider,
+      effectiveHarness,
+      authLabel: usageAuthLabel,
+    })
+      ? "token"
+      : undefined);
   const currentUsageProvider =
     resolveUsageProviderId(activeStatusProvider, { credentialType: usageCredentialType }) ??
     resolveUsageProviderId(activeProvider, { credentialType: usageCredentialType });
@@ -333,6 +360,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     shouldLoadUsageSummary({
       provider: currentUsageProvider,
       selectedModelAuth: usageAuthLabel,
+      credentialType: usageCredentialType,
     })
   ) {
     try {
@@ -345,6 +373,8 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           timeoutMs: usageSummaryTimeoutMs,
           providers: [currentUsageProvider],
           agentDir: statusAgentDir,
+          workspaceDir: statusWorkspaceDir,
+          config: cfg,
         }),
         new Promise<never>((_, reject) => {
           usageTimeout = setTimeout(

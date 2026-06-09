@@ -362,6 +362,43 @@ describe("codex provider", () => {
     });
   });
 
+  it("fetches usage from native Codex app-server rate limits for synthetic auth", async () => {
+    const readRateLimits = vi.fn(async () => ({
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          primary: {
+            usedPercent: 9,
+            windowDurationMins: 300,
+            resetsAt: 1_700_003_600,
+          },
+        },
+      },
+    }));
+    const provider = buildCodexProvider({ readRateLimits });
+
+    await expect(
+      provider.fetchUsageSnapshot?.({
+        provider: "openai",
+        token: "codex-app-server",
+        timeoutMs: 3500,
+        config: {},
+        env: {},
+        fetchFn: fetch,
+      } as never),
+    ).resolves.toEqual({
+      provider: "openai",
+      displayName: "OpenAI",
+      windows: [{ label: "5h", usedPercent: 9, resetAt: 1_700_003_600_000 }],
+      plan: undefined,
+    });
+    expect(readRateLimits).toHaveBeenCalledWith({
+      timeoutMs: 3500,
+      agentDir: undefined,
+      config: {},
+    });
+  });
+
   it("exposes a setup auth choice for installing Codex as an external provider", async () => {
     const provider = buildCodexProvider();
 

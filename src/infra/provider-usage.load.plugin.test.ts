@@ -94,4 +94,33 @@ describe("provider-usage.load plugin boundary", () => {
     expect(pluginCall.context?.token).toBe("copilot-token");
     expect(pluginCall.context?.timeoutMs).toBe(5_000);
   });
+
+  it("routes synthetic Codex usage through the Codex hook while preserving OpenAI context", async () => {
+    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValueOnce({
+      provider: "openai",
+      displayName: "OpenAI",
+      windows: [{ label: "5h", usedPercent: 9 }],
+    });
+
+    await expect(
+      loadProviderUsageSummary({
+        now: usageNow,
+        auth: [{ provider: "openai", token: "codex-app-server", hookProvider: "codex" }],
+      }),
+    ).resolves.toEqual({
+      updatedAt: usageNow,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "5h", usedPercent: 9 }],
+        },
+      ],
+    });
+
+    const pluginCall = requireFirstPluginUsageCall();
+    expect(pluginCall.provider).toBe("codex");
+    expect(pluginCall.context?.provider).toBe("openai");
+    expect(pluginCall.context?.token).toBe("codex-app-server");
+  });
 });
