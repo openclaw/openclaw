@@ -12,13 +12,11 @@ function testScorecardProfiles(categoryId = TEST_EXECUTABLE_CATEGORY_ID, profile
       id: "smoke-ci",
       description: "Test smoke profile.",
       categoryIds: profileId === "smoke-ci" ? [categoryId] : [],
-      lanes: [],
     },
     {
       id: "release",
       description: "Test release profile.",
       categoryIds: profileId === "release" ? [categoryId] : [],
-      lanes: [],
     },
   ];
 }
@@ -125,7 +123,7 @@ describe("qa coverage report", () => {
     expect(report).toContain("- Categories: 16 (7 LTS-included, 8 deferred, 1 advisory)");
     expect(report).toContain("- Profiles: 2");
     expect(report).toContain(
-      "- smoke-ci: 14 categories; lanes: qa-lab-smoke-ci, openclaw-multipass-channel-smoke;",
+      "- smoke-ci: 14 categories; agent-runtime-and-provider-execution.agent-turn-execution,",
     );
     expect(report).toContain(
       "- browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution (browser-automation-and-exec-sandbox-tools / Tool Invocation and Execution; lts-included, release-blocking, mapped): profiles: release, smoke-ci; coverage: tools.apply-patch, tools.exec, tools.fs.read, tools.fs.write, tools.web-search;",
@@ -390,20 +388,11 @@ describe("qa coverage report", () => {
           id: "smoke-ci",
           description: "Test smoke profile.",
           categoryIds: ["missing.category"],
-          lanes: [
-            {
-              id: "smoke-lane",
-              description: "Lane with stale refs.",
-              surfaceIds: ["missing-surface"],
-              categoryIds: ["missing.category"],
-            },
-          ],
         },
         {
           id: "release",
           description: "Test release profile.",
           categoryIds: [],
-          lanes: [],
         },
       ],
       categories: [
@@ -436,8 +425,6 @@ describe("qa coverage report", () => {
 
     expect(report.validationIssues.map((issue) => issue.code)).toEqual([
       "profile-category-ref-not-found",
-      "profile-surface-ref-not-found",
-      "profile-category-ref-not-found",
     ]);
   });
 
@@ -459,7 +446,6 @@ describe("qa coverage report", () => {
           id: "extended",
           description: "Retired profile.",
           categoryIds: [TEST_EXECUTABLE_CATEGORY_ID],
-          lanes: [],
         },
       ],
       categories: [
@@ -514,7 +500,6 @@ describe("qa coverage report", () => {
           id: "extended",
           description: "Retired profile.",
           categoryIds: [TEST_EXECUTABLE_CATEGORY_ID],
-          lanes: [],
         },
       ],
       categories: [

@@ -1,0 +1,489 @@
+version: 1
+id: stable-lts-initial
+title: Initial Stable/LTS QA maturity evidence map
+sourceRef: taxonomy.yaml
+taxonomyRef: taxonomy.yaml
+scoreSnapshotRef: docs/maturity-scores.yaml
+status: initial
+mappingAuthority: scaffold
+mappingOwner: "@kevinlin-openai"
+reportOnly: true
+notes: Executable QA coverage/profile mapping layer over taxonomy.yaml. taxonomy.yaml is
+  authoritative for maturity surfaces, categories, and levels; this file only maps existing QA
+  coverage IDs and runnable smoke-ci/release profile selectors to those taxonomy categories. It is
+  not Kevin's final requirement-to-code-path mapping.
+profiles:
+  - id: smoke-ci
+    description:
+      Deterministic PR and merge proof with mock model providers, synthetic qa-channel, and
+      local SDK-backed channel upstreams; no live external service required.
+    categoryIds:
+      - agent-runtime-and-provider-execution.agent-turn-execution
+      - session-memory-and-context-engine.token-management
+      - browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution
+      - security-auth-pairing-and-secrets.approval-policy-and-tool-safeguards
+      - telemetry-diagnostics-and-observability.telemetry-export
+      - channel-framework.conversation-routing-and-delivery
+      - session-memory-and-context-engine.memory
+      - session-memory-and-context-engine.diagnostics-maintenance-and-recovery
+      - automation-cron-hooks-tasks-polling.cron-jobs
+      - plugin-sdk-and-bundled-plugin-architecture.installing-and-running-plugins
+      - media-understanding-and-media-generation.media-understanding
+      - media-understanding-and-media-generation.media-generation
+      - browser-control-ui-and-webchat.browser-ui
+      - security-auth-pairing-and-secrets.credential-and-secret-hygiene
+  - id: release
+    description:
+      Stable/LTS proof selector for live providers, live channels, package artifacts, upgrade
+      paths, and platform proof where the claim depends on real upstreams or release artifacts.
+    categoryIds:
+      - agent-runtime-and-provider-execution.agent-turn-execution
+      - session-memory-and-context-engine.token-management
+      - browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution
+      - security-auth-pairing-and-secrets.approval-policy-and-tool-safeguards
+      - telemetry-diagnostics-and-observability.telemetry-export
+      - openai-codex-provider-path.responses-and-tool-compatibility
+      - session-memory-and-context-engine.memory
+      - session-memory-and-context-engine.diagnostics-maintenance-and-recovery
+      - automation-cron-hooks-tasks-polling.cron-jobs
+      - plugin-sdk-and-bundled-plugin-architecture.installing-and-running-plugins
+      - media-understanding-and-media-generation.media-understanding
+      - media-understanding-and-media-generation.media-generation
+      - browser-control-ui-and-webchat.browser-ui
+      - security-auth-pairing-and-secrets.credential-and-secret-hygiene
+categories:
+  - id: agent-runtime-and-provider-execution.agent-turn-execution
+    supportStatus: lts-included
+    releaseBlocking: true
+    requirement:
+      A normal user turn streams, calls tools when needed, finishes once, and records visible
+      transcript evidence.
+    evidenceRequired: Deterministic QA Lab scenarios plus runtime e2e evidence on the target ref.
+    evidence:
+      profiles:
+        - smoke-ci
+        - release
+      liveProofRequired: false
+      freshness: target-ref
+      coverageIds:
+        - channels.dm
+        - channels.streaming
+        - runtime.delivery
+      scenarioRefs:
+        - qa/scenarios/channels/dm-chat-baseline.md
+        - qa/scenarios/runtime/streaming-final-integrity.md
+      docsRefs:
+        - docs/concepts/qa-e2e-automation.md
+        - docs/channels/qa-channel.md
+      codeRefs:
+        - extensions/qa-lab/src/suite.ts
+        - extensions/qa-lab/src/suite-runtime-transport.ts
+    taxonomySurfaceId: agent-runtime-and-provider-execution
+    taxonomyCategoryName: Agent Turn Execution
+  - id: session-memory-and-context-engine.token-management
+    supportStatus: lts-included
+    releaseBlocking: true
+    requirement: Long sessions compact or recover without hiding replay-unsafe mutating work.
+    evidenceRequired: QA Lab long-context or compaction scenario plus focused runtime e2e proof.
+    evidence:
+      profiles:
+        - smoke-ci
+        - release
+      liveProofRequired: false
+      freshness: target-ref
+      coverageIds:
+        - runtime.compaction
+        - runtime.retry-policy
+      scenarioRefs:
+        - qa/scenarios/runtime/compaction-retry-mutating-tool.md
+      docsRefs:
+        - docs/help/testing.md
+      codeRefs:
+        - extensions/qa-lab/src/suite.ts
+        - src/agents/embedded-agent-subscribe.ts
+    taxonomySurfaceId: session-memory-and-context-engine
+    taxonomyCategoryName: Token Management
+  - id: browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution
+    supportStatus: lts-included
+    releaseBlocking: true
+    requirement: File, shell, patch, search, and session tools execute through production tool paths
+      with correct result rendering.
+    evidenceRequired: Runtime tool fixture scenarios plus host e2e shard.
+    evidence:
+      profiles:
+        - smoke-ci
+        - release
+      liveProofRequired: false
+      freshness: target-ref
+      coverageIds:
+        - tools.apply-patch
+        - tools.exec
+        - tools.fs.read
+        - tools.fs.write
+        - tools.web-search
+      scenarioRefs:
+        - qa/scenarios/runtime/tools/apply-patch.md
+        - qa/scenarios/runtime/tools/exec.md
+        - qa/scenarios/runtime/tools/fs-read.md
+        - qa/scenarios/runtime/tools/fs-write.md
+        - qa/scenarios/runtime/tools/web-search.md
+      docsRefs:
+        - qa/scenarios/index.md
+      codeRefs:
+        - extensions/qa-lab/src/runtime-tool-fixture.ts
+    taxonomySurfaceId: browser-automation-and-exec-sandbox-tools
+    taxonomyCategoryName: Tool Invocation and Execution
+  - id: security-auth-pairing-and-secrets.approval-policy-and-tool-safeguards
+    supportStatus: lts-included
+    releaseBlocking: true
+    requirement: Approval, denial, retry, and terminal stop paths work through portable actions.
+    evidenceRequired: QA Lab approval scenarios plus channel action evidence where a channel claim exists.
+    evidence:
+      profiles:
+        - smoke-ci
+        - release
+      liveProofRequired: false
+      freshness: target-ref-and-release-package
+      coverageIds:
+        - runtime.approvals
+        - tools.followthrough
+        - personal.approval-denial
+      scenarioRefs:
+        - qa/scenarios/runtime/approval-turn-tool-followthrough.md
+        - qa/scenarios/personal/approval-denial-stop.md
+      docsRefs:
+        - docs/help/testing.md
+        - docs/channels/qa-channel.md
+      codeRefs:
+        - extensions/qa-lab/src/suite.ts
+        - src/agents/embedded-agent-runner/run/incomplete-turn.ts
+    taxonomySurfaceId: security-auth-pairing-and-secrets
+    taxonomyCategoryName: Approval Policy and Tool Safeguards
+  - id: telemetry-diagnostics-and-observability.telemetry-export
+    supportStatus: deferred
+    releaseBlocking: false
+    requirement:
+      User-visible runs emit bounded trace/run diagnostics with enough IDs to debug release
+      failures without leaking secrets.
+    evidenceRequired:
+      QA Lab telemetry scenario plus OTEL or Prometheus smoke; deferred because the LTS
+      proposal includes health/logging/session diagnostics first and leaves telemetry export
+      hardening for later.
+    evidence:
+      profiles:
+        - smoke-ci
+        - release
+      liveProofRequired: false
+      freshness: target-ref
+      coverageIds:
+        - telemetry.otel
+        - telemetry.prometheus
+        - harness.qa-lab
+      scenarioRefs:
+        - qa/scenarios/runtime/otel-trace-smoke.md
+        - qa/scenarios/runtime/docker-prometheus-smoke.md
+      docsRefs:
+        - docs/gateway/opentelemetry.md
+        - docs/concepts/qa-e2e-automation.md
+      codeRefs:
+        - extensions/qa-lab/src/suite.ts
+        - extensions/diagnostics-otel/src/service.ts
+    taxonomySurfaceId: telemetry-diagnostics-and-observability
+    taxonomyCategoryName: Telemetry Export
+  - id: openai-codex-provider-path.responses-and-tool-compatibility
+    supportStatus: lts-included
+    releaseBlocking: true
+    requirement: OpenAI auth, streaming, tools, native web search, and error handling work with live
+      credentials for release claims.
+    evidenceRequired: Live provider evidence and provider/tool e2e for release candidates.
+    evidence:
+      profiles:
+        - release
+      liveProofRequired: true
+      freshness: release-candidate
+      coverageIds:
+        - models.openai
+        - models.live-openai
+        - tools.web-search
+      scenarioRefs:
+        - qa/scenarios/models/openai-native-web-search-live.md
+        - qa/scenarios/plugins/kitchen-sink-live-openai.md
+      docsRefs:
+        - docs/tools/web.md
+        - docs/concepts/qa-e2e-automation.md
+      codeRefs:
+        - extensions/openai/openai-provider.ts
+        - extensions/openai/native-web-search.ts
+    taxonomySurfaceId: openai-codex-provider-path
+    taxonomyCategoryName: Responses and Tool Compatibility
+  - id: channel-framework.conversation-routing-and-delivery
+    supportStatus: deferred
+    releaseBlocking: false
+    requirement: The synthetic channel covers portable channel contract behavior used by normal PR CI.
+    evidenceRequired: Deterministic QA Lab qa-channel evidence.
+    evidence:
+      profiles:
+        - smoke-ci
+      liveProofRequired: false
+      freshness: target-ref
+      coverageIds:
+        - channels.qa-channel
+        - channels.dm
+        - channels.group-messages
+        - channels.group-visible-replies
+        - channels.threads
+        - channels.message-actions
+      scenarioRefs:
+        - qa/scenarios/channels/channel-chat-baseline.md
+        - qa/scenarios/channels/dm-chat-baseline.md
+        - qa/scenarios/channels/group-visible-reply-tool.md
+        - qa/scenarios/channels/reaction-edit-delete.md
+        - qa/scenarios/channels/thread-follow-up.md
+      docsRefs:
+        - docs/channels/qa-channel.md
+        - docs/concepts/qa-e2e-automation.md
+      codeRefs:
+        - extensions/qa-lab/src/suite-runtime-transport.ts
+    taxonomySurfaceId: channel-framework
+    taxonomyCategoryName: Conversation Routing and Delivery
+  - id: session-memory-and-context-engine.memory
+    supportStatus: deferred
+    releaseBlocking: false
+    requirement:
+      User preference and session memory recall work through normal conversation flow without
+      crossing thread or channel boundaries.
+    evidenceRequired: QA Lab memory scenarios; deferred because the LTS proposal includes
+      session/context categories but explicitly leaves Memory outside the initial slice.
+    evidence:
+      profiles:
+        - smoke-ci
+        - release
+      liveProofRequired: false
+      freshness: target-ref
+      coverageIds:
+        - memory.recall
+        - memory.active-recall
+        - memory.thread-isolation
+      scenarioRefs:
+        - qa/scenarios/memory/memory-recall.md
+        - qa/scenarios/memory/active-memory-preprompt-recall.md
+        - qa/scenarios/memory/thread-memory-isolation.md
+      docsRefs:
+        - docs/concepts/qa-e2e-automation.md
+      codeRefs:
+        - extensions/qa-lab/src/suite.ts
+        - src/agents/agent-tools.ts
+    taxonomySurfaceId: session-memory-and-context-engine
+    taxonomyCategoryName: Memory
+  - id: session-memory-and-context-engine.diagnostics-maintenance-and-recovery
+    supportStatus: deferred
+    releaseBlocking: false
+    requirement: Memory store failure produces visible fallback behavior without losing the active turn.
+    evidenceRequired: QA Lab memory failure scenario; deferred with Memory until the support boundary is accepted.
+    evidence:
+      profiles:
+        - smoke-ci
+        - release
+      liveProofRequired: false
+      freshness: target-ref
+      coverageIds:
+        - memory.failure-handling
+        - runtime.fallbacks
+      scenarioRefs:
+        - qa/scenarios/memory/memory-failure-fallback.md
+      docsRefs:
+        - docs/concepts/qa-e2e-automation.md
+      codeRefs:
+        - extensions/qa-lab/src/suite.ts
+    taxonomySurfaceId: session-memory-and-context-engine
+    taxonomyCategoryName: Diagnostics, Maintenance, and Recovery
+  - id: automation-cron-hooks-tasks-polling.cron-jobs
+    supportStatus: deferred
+    releaseBlocking: false
+    requirement:
+      Natural-language cron creation, due-run execution, duplicate prevention, delivery, and
+      run history work end to end.
+    evidenceRequired: QA Lab scheduling scenarios plus live delivery for release channel claims;
+      deferred because Automation is a first-wave non-LTS candidate, not part of the proposed
+      initial LTS slice.
+    evidence:
+      profiles:
+        - smoke-ci
+        - release
+      liveProofRequired: false
+      freshness: target-ref-and-release-package
+      coverageIds:
+        - scheduling.cron
+        - scheduling.dedup
+      scenarioRefs:
+        - qa/scenarios/scheduling/cron-natural-fire-no-duplicate.md
+        - qa/scenarios/scheduling/cron-single-run-no-duplicate.md
+      docsRefs:
+        - docs/help/testing.md
+        - docs/channels/qa-channel.md
+      codeRefs:
+        - src/cron/service.ts
+        - src/cron/run-log.ts
+    taxonomySurfaceId: automation-cron-hooks-tasks-polling
+    taxonomyCategoryName: Cron Jobs
+  - id: plugin-sdk-and-bundled-plugin-architecture.installing-and-running-plugins
+    supportStatus: lts-included
+    releaseBlocking: true
+    requirement: Built-in provider, tool, channel, and service plugins have at least one user-flow
+      scenario for behavior users depend on.
+    evidenceRequired: QA Lab plugin scenarios plus Kitchen Sink conformance where credentials are available.
+    evidence:
+      profiles:
+        - smoke-ci
+        - release
+      liveProofRequired: false
+      freshness: target-ref-and-release-package
+      coverageIds:
+        - plugins.lifecycle
+        - plugins.kitchen-sink
+        - plugins.mcp-tools
+        - runtime.gateway-log-sentinel.plugin-contracts
+      scenarioRefs:
+        - qa/scenarios/plugins/plugin-lifecycle-hot-reload.md
+        - qa/scenarios/plugins/kitchen-sink-live-openai.md
+        - qa/scenarios/plugins/mcp-plugin-tools-call.md
+        - qa/scenarios/plugins/plugin-manifest-contract-health.md
+      docsRefs:
+        - docs/plugins/manifest.md
+        - docs/concepts/qa-e2e-automation.md
+      codeRefs:
+        - src/plugins/manifest.ts
+        - extensions/qa-lab/src/suite.ts
+    taxonomySurfaceId: plugin-sdk-and-bundled-plugin-architecture
+    taxonomyCategoryName: Installing and running plugins
+  - id: media-understanding-and-media-generation.media-understanding
+    supportStatus: deferred
+    releaseBlocking: false
+    requirement:
+      Image, audio, or file input is staged, summarized, redacted where needed, and usable in
+      a normal agent turn.
+    evidenceRequired: QA Lab media scenarios plus live media evidence for release claims; deferred
+      because media is outside the proposed initial LTS support boundary.
+    evidence:
+      profiles:
+        - smoke-ci
+        - release
+      liveProofRequired: false
+      freshness: release-candidate
+      coverageIds:
+        - media.image-understanding
+      scenarioRefs:
+        - qa/scenarios/media/image-understanding-attachment.md
+        - qa/scenarios/ui/control-ui-qa-channel-image-roundtrip.md
+      docsRefs:
+        - docs/concepts/qa-e2e-automation.md
+        - docs/channels/qa-channel.md
+      codeRefs:
+        - extensions/qa-lab/src/suite.ts
+        - src/media-understanding/runner.ts
+    taxonomySurfaceId: media-understanding-and-media-generation
+    taxonomyCategoryName: Media Understanding
+  - id: media-understanding-and-media-generation.media-generation
+    supportStatus: deferred
+    releaseBlocking: false
+    requirement:
+      Generated image, TTS, or other media output reaches the requested channel or artifact
+      path with usable metadata.
+    evidenceRequired:
+      QA Lab media generation scenarios plus channel media evidence for release claims;
+      deferred because media generation is explicitly outside the initial LTS priority.
+    evidence:
+      profiles:
+        - smoke-ci
+        - release
+      liveProofRequired: false
+      freshness: release-candidate
+      coverageIds:
+        - media.image-generation
+        - tools.image-generate
+        - tools.tts
+      scenarioRefs:
+        - qa/scenarios/media/image-generation-roundtrip.md
+        - qa/scenarios/media/native-image-generation.md
+        - qa/scenarios/runtime/tools/image-generate.md
+        - qa/scenarios/runtime/tools/tts.md
+      docsRefs:
+        - docs/concepts/qa-e2e-automation.md
+      codeRefs:
+        - extensions/qa-lab/src/suite.ts
+        - src/media/outbound-attachment.ts
+    taxonomySurfaceId: media-understanding-and-media-generation
+    taxonomyCategoryName: Media Generation
+  - id: browser-control-ui-and-webchat.browser-ui
+    supportStatus: deferred
+    releaseBlocking: false
+    requirement:
+      Control UI can start, observe, and recover Gateway-backed runs with browser proof on
+      supported viewports.
+    evidenceRequired:
+      Control UI e2e shard or QA Lab Control UI scenario; deferred because Gateway Web
+      App is a first-wave non-LTS candidate.
+    evidence:
+      profiles:
+        - smoke-ci
+        - release
+      liveProofRequired: false
+      freshness: target-ref
+      coverageIds:
+        - ui.control
+        - channels.qa-channel
+        - media.image-understanding
+      scenarioRefs:
+        - qa/scenarios/ui/control-ui-qa-channel-image-roundtrip.md
+      docsRefs:
+        - docs/concepts/qa-e2e-automation.md
+      codeRefs:
+        - extensions/qa-lab/src/web-runtime.ts
+        - ui/src/ui/views/chat.ts
+    taxonomySurfaceId: browser-control-ui-and-webchat
+    taxonomyCategoryName: Browser UI
+  - id: security-auth-pairing-and-secrets.credential-and-secret-hygiene
+    supportStatus: lts-included
+    releaseBlocking: true
+    requirement: Logs, traces, summaries, transcripts, diagnostics, and PR artifacts do not leak credentials.
+    evidenceRequired: QA Lab redaction scenarios plus secret scanning gate.
+    evidence:
+      profiles:
+        - smoke-ci
+        - release
+      liveProofRequired: false
+      freshness: target-ref-and-release-package
+      coverageIds:
+        - security.redaction
+        - personal.redaction
+        - qa.artifact-safety
+      scenarioRefs:
+        - qa/scenarios/security/secret-redaction-tool-logs.md
+        - qa/scenarios/personal/redaction-no-secret-leak.md
+      docsRefs:
+        - docs/gateway/secrets.md
+        - docs/help/testing.md
+      codeRefs:
+        - src/logging/redact.ts
+        - src/agents/payload-redaction.ts
+    taxonomySurfaceId: security-auth-pairing-and-secrets
+    taxonomyCategoryName: Credential and Secret Hygiene
+  - id: clawhub-and-external-plugin-distribution.compatibility-and-trust
+    supportStatus: advisory
+    releaseBlocking: false
+    requirement:
+      External plugin corpus remains advisory unless a release explicitly claims ecosystem
+      compatibility for that package set.
+    evidenceRequired: Crabpot or plugin-inspector advisory summary.
+    evidence:
+      profiles: []
+      liveProofRequired: false
+      freshness: latest-advisory-run
+      coverageIds: []
+      scenarioRefs: []
+      docsRefs:
+        - docs/plugins/architecture.md
+      codeRefs: []
+      notes: Advisory placeholder only; external plugin corpus ownership stays outside OpenClaw core.
+    taxonomySurfaceId: clawhub-and-external-plugin-distribution
+    taxonomyCategoryName: Compatibility and Trust

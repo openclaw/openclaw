@@ -5,7 +5,7 @@ import YAML from "yaml";
 import { z } from "zod";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
-export const QA_SCORECARD_TAXONOMY_PATH = "qa/scorecard/stable-lts-taxonomy.yaml";
+export const QA_SCORECARD_TAXONOMY_PATH = "qa/scorecard/maturity-evidence-map.yaml";
 export const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
 
 const QA_SCORECARD_PROFILE_IDS = ["smoke-ci", "release"] as const;
@@ -55,25 +55,10 @@ const qaScorecardFreshnessRuleSchema = z.enum([
 
 const qaScorecardSupportStatusSchema = z.enum(["lts-included", "deferred", "advisory"]);
 
-const qaScorecardProfileLaneSchema = z.object({
-  id: qaScorecardIdSchema,
-  description: z.string().trim().min(1),
-  command: z.string().trim().min(1).optional(),
-  runner: z.string().trim().min(1).optional(),
-  channelDriver: z.string().trim().min(1).optional(),
-  providerMode: z.string().trim().min(1).optional(),
-  modelLive: z.boolean().optional(),
-  channelLive: z.boolean().optional(),
-  packageSource: z.string().trim().min(1).optional(),
-  surfaceIds: z.array(qaScorecardIdSchema).default([]),
-  categoryIds: z.array(qaScorecardIdSchema).default([]),
-});
-
 const qaScorecardProfileSchema = z.object({
   id: qaScorecardIdSchema,
   description: z.string().trim().min(1),
   categoryIds: z.array(qaScorecardIdSchema).default([]),
-  lanes: z.array(qaScorecardProfileLaneSchema).default([]),
 });
 
 const qaScorecardCategorySchema = z.object({
@@ -134,18 +119,6 @@ const qaScorecardTaxonomySchema = z
           });
         }
         seenProfileCategoryIds.add(categoryId);
-      }
-
-      const seenLaneIds = new Set<string>();
-      for (const [laneIndex, lane] of profile.lanes.entries()) {
-        if (seenLaneIds.has(lane.id)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["profiles", profileIndex, "lanes", laneIndex, "id"],
-            message: `duplicate lane id in profile ${profile.id}: ${lane.id}`,
-          });
-        }
-        seenLaneIds.add(lane.id);
       }
     }
 
@@ -231,7 +204,6 @@ export type QaScorecardValidationIssueCode =
   | "taxonomy-ref-not-found"
   | "taxonomy-category-ref-not-found"
   | "profile-category-ref-not-found"
-  | "profile-surface-ref-not-found"
   | "score-snapshot-ref-not-found"
   | "blocking-category-without-evidence-mapping"
   | "non-advisory-category-missing-profile-membership"
@@ -240,7 +212,6 @@ export type QaScorecardValidationIssueCode =
   | "unsupported-profile-name"
   | "category-profile-missing-top-level-membership"
   | "profile-membership-missing-category-profile"
-  | "profile-lane-misuses-multipass-runner"
   | "taxonomy-fixture-not-found";
 
 export type QaScorecardValidationIssue = {
@@ -270,7 +241,6 @@ export type QaScorecardCategoryMappingReport = {
 export type QaScorecardProfileReport = {
   id: string;
   categoryIds: string[];
-  laneIds: string[];
 };
 
 export type QaScorecardTaxonomyReport = {
@@ -395,10 +365,6 @@ function buildMaturityCategoryKeys(taxonomy: QaMaturityTaxonomy | null) {
   return categoryKeys;
 }
 
-function buildMaturitySurfaceIds(taxonomy: QaMaturityTaxonomy | null) {
-  return new Set((taxonomy?.surfaces ?? []).map((surface) => surface.id));
-}
-
 function scenarioCoverageIds(scenario: QaSeedScenarioWithSource) {
   return [...(scenario.coverage?.primary ?? []), ...(scenario.coverage?.secondary ?? [])];
 }
@@ -494,7 +460,6 @@ export function buildQaScorecardTaxonomyReport(params: {
   const categoryIds = new Set(params.taxonomy.categories.map((category) => category.id));
   const maturityTaxonomy = readQaMaturityTaxonomy(params.repoRoot, params.taxonomy.taxonomyRef);
   const maturityCategoryKeys = buildMaturityCategoryKeys(maturityTaxonomy);
-  const maturitySurfaceIds = buildMaturitySurfaceIds(maturityTaxonomy);
   const profileCategoryIdsByCategoryId = new Map<string, Set<string>>();
   const profiles = params.taxonomy.profiles.map((profile) => {
     const supportedProfile = isQaScorecardProfileId(profile.id);
@@ -527,45 +492,9 @@ export function buildQaScorecardTaxonomyReport(params: {
       profileCategoryIdsByCategoryId.set(categoryId, profileIds);
     }
 
-    for (const lane of profile.lanes) {
-      const runner = lane.runner?.toLowerCase();
-      const command = lane.command?.toLowerCase() ?? "";
-      if (runner === "multipass" || /--runner\s+['"]?multipass\b/u.test(command)) {
-        issues.push({
-          code: "profile-lane-misuses-multipass-runner",
-          severity: "warning",
-          ref: lane.id,
-          message: `${profile.id} lane ${lane.id} uses multipass as a runner; RFC 0007 multipass means the openclaw/multipass channel SDK driver on a host runner`,
-        });
-      }
-      if (maturityTaxonomy) {
-        for (const surfaceId of lane.surfaceIds) {
-          if (!maturitySurfaceIds.has(surfaceId)) {
-            issues.push({
-              code: "profile-surface-ref-not-found",
-              severity: "warning",
-              ref: surfaceId,
-              message: `${profile.id} lane ${lane.id} references missing taxonomy surface ${surfaceId}`,
-            });
-          }
-        }
-      }
-      for (const categoryId of lane.categoryIds) {
-        if (!categoryIds.has(categoryId)) {
-          issues.push({
-            code: "profile-category-ref-not-found",
-            severity: "warning",
-            ref: categoryId,
-            message: `${profile.id} lane ${lane.id} references missing executable scorecard category ${categoryId}`,
-          });
-        }
-      }
-    }
-
     return {
       id: profile.id,
       categoryIds: profile.categoryIds.filter((categoryId) => categoryIds.has(categoryId)),
-      laneIds: profile.lanes.map((lane) => lane.id),
     };
   });
 

@@ -341,10 +341,7 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
     lines.push("### Profiles", "");
     for (const profile of report.profiles) {
       const categories = profile.categoryIds.length > 0 ? profile.categoryIds.join(", ") : "none";
-      const lanes = profile.laneIds.length > 0 ? profile.laneIds.join(", ") : "none";
-      lines.push(
-        `- ${profile.id}: ${profile.categoryIds.length} categories; lanes: ${lanes}; categories: ${categories}`,
-      );
+      lines.push(`- ${profile.id}: ${profile.categoryIds.length} categories; ${categories}`);
     }
     lines.push("");
   }
