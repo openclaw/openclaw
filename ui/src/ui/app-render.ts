@@ -8,6 +8,7 @@ import {
   createChatSessionsLoadOverrides,
   hasAbortableSessionRun,
   refreshChat,
+  refreshChatCommands,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
@@ -3547,6 +3548,7 @@ export function renderApp(state: AppViewState) {
                   onDraftChange: (next) => state.handleChatDraftChange(next),
                   onRequestUpdate: requestHostUpdate,
                   onHistoryKeydown: (input) => state.handleChatInputHistoryKey(input),
+                  onSlashIntent: () => refreshChatCommands(state).finally(requestHostUpdate),
                   attachments: state.chatAttachments,
                   onAttachmentsChange: (next) => (state.chatAttachments = next),
                   onSend: () => void state.handleSendChat(),
