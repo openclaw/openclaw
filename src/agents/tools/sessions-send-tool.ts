@@ -212,25 +212,19 @@ async function startAgentRun(params: {
   deliveryTimeoutMs?: number;
   allowActiveRunQueueFallback?: boolean;
 }): Promise<
-  | {
-      ok: true;
-      runId: string;
-      activeRunQueue?: boolean;
-      a2aSessionKey?: string;
-      a2aDisplayKey?: string;
-    }
+  | { ok: true; runId: string; activeRunQueue?: boolean }
   | { ok: false; result: ReturnType<typeof jsonResult> }
 > {
   try {
     const activeRunSessionId = params.allowActiveRunQueueFallback
       ? resolveActiveEmbeddedRunSessionId(params.sessionKey)
       : undefined;
-    const fallbackSessionKey = activeRunSessionId
-      ? resolveRunScopedFallbackSessionKey(params.sessionKey)
-      : undefined;
+    const isRunScopedKey = activeRunSessionId
+      ? resolveRunScopedFallbackSessionKey(params.sessionKey) !== undefined
+      : false;
     const messageText =
       typeof params.sendParams.message === "string" ? params.sendParams.message : undefined;
-    if (activeRunSessionId && fallbackSessionKey && messageText) {
+    if (activeRunSessionId && isRunScopedKey && messageText) {
       const sourceReplyDeliveryMode =
         params.sendParams.sourceReplyDeliveryMode === "automatic" ||
         params.sendParams.sourceReplyDeliveryMode === "message_tool_only"
@@ -260,30 +254,9 @@ async function startAgentRun(params: {
       if (queueOutcome.queued) {
         return { ok: true, runId: params.runId, activeRunQueue: true };
       }
-      try {
-        const response = await params.callGateway<{ runId: string }>({
-          method: "agent",
-          params: {
-            ...params.sendParams,
-            sessionKey: fallbackSessionKey,
-            idempotencyKey: crypto.randomUUID(),
-          },
-          timeoutMs: 10_000,
-        });
-        return {
-          ok: true,
-          runId:
-            typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
-          a2aSessionKey: fallbackSessionKey,
-          a2aDisplayKey: fallbackSessionKey,
-        };
-      } catch (err) {
-        const queueSummary =
-          formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
-        throw new Error(`${queueSummary}; fallback_failed error=${formatErrorMessage(err)}`, {
-          cause: err,
-        });
-      }
+      throw new Error(
+        formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected",
+      );
     }
     const response = await params.callGateway<{ runId: string }>({
       method: "agent",
@@ -619,18 +592,13 @@ export function createSessionsSendTool(opts?: {
         ? ({ status: "skipped", mode: "announce" } as const)
         : ({ status: "pending", mode: "announce" } as const);
 
-      const startA2AFlow = (
-        roundOneReply?: string,
-        waitRunId?: string,
-        flowTargetSessionKey = resolvedKey,
-        flowDisplayKey = displayKey,
-      ) => {
+      const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
         if (skipA2AFlow) {
           return;
         }
         void runSessionsSendA2AFlow({
-          targetSessionKey: flowTargetSessionKey,
-          displayKey: flowDisplayKey,
+          targetSessionKey: resolvedKey,
+          displayKey,
           message,
           announceTimeoutMs,
           maxPingPongTurns,
@@ -656,7 +624,7 @@ export function createSessionsSendTool(opts?: {
         }
         runId = start.runId;
         if (!start.activeRunQueue) {
-          startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey);
+          startA2AFlow(undefined, runId);
         }
         return jsonResult({
           runId,
