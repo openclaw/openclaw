@@ -1,15 +1,14 @@
 // Nextcloud Talk plugin module implements send behavior.
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import {
   convertMarkdownTables,
-  fetchWithSsrFGuard,
   generateNextcloudTalkSignature,
   getNextcloudTalkRuntime,
   requireRuntimeConfig,
   resolveMarkdownTableMode,
   resolveNextcloudTalkAccount,
-  ssrfPolicyFromPrivateNetworkOptIn,
 } from "./send.runtime.js";
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
@@ -143,7 +142,7 @@ export async function sendMessageNextcloudTalk(
 
   const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v1/bot/${roomToken}/message`;
 
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url,
     init: {
       method: "POST",
@@ -155,8 +154,6 @@ export async function sendMessageNextcloudTalk(
       },
       body: bodyStr,
     },
-    auditContext: "nextcloud-talk-send",
-    policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
   });
 
   try {
@@ -229,7 +226,7 @@ export async function sendReactionNextcloudTalk(
   reaction: string,
   opts: Omit<NextcloudTalkSendOpts, "replyTo">,
 ): Promise<{ ok: true }> {
-  const { account, baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
+  const { baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
   const normalizedToken = normalizeRoomToken(roomToken);
 
   const body = JSON.stringify({ reaction });
@@ -241,7 +238,7 @@ export async function sendReactionNextcloudTalk(
 
   const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v1/bot/${normalizedToken}/reaction/${messageId}`;
 
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url,
     init: {
       method: "POST",
@@ -253,8 +250,6 @@ export async function sendReactionNextcloudTalk(
       },
       body,
     },
-    auditContext: "nextcloud-talk-reaction",
-    policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
   });
 
   try {

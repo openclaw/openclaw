@@ -1,9 +1,9 @@
 // Googlechat API module exposes the plugin public contract.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { shouldSuppressGoogleChatManualExecApprovalFollowupText } from "./approval-card-actions.js";
 import { getGoogleChatAccessToken } from "./auth.js";
@@ -31,20 +31,12 @@ async function withGoogleChatResponse<T>(params: {
   account: ResolvedGoogleChatAccount;
   url: string;
   init?: RequestInit;
-  auditContext: string;
   errorPrefix?: string;
   handleResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
-  const {
-    account,
-    url,
-    init,
-    auditContext,
-    errorPrefix = "Google Chat API",
-    handleResponse,
-  } = params;
+  const { account, url, init, errorPrefix = "Google Chat API", handleResponse } = params;
   const token = await getGoogleChatAccessToken(account);
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url,
     init: {
       ...init,
@@ -53,7 +45,6 @@ async function withGoogleChatResponse<T>(params: {
         Authorization: `Bearer ${token}`,
       },
     },
-    auditContext,
   });
   try {
     if (!response.ok) {
@@ -81,7 +72,6 @@ async function fetchJson<T>(
         "Content-Type": "application/json",
       },
     },
-    auditContext: "googlechat.api.json",
     handleResponse: async (response) =>
       await readGoogleChatJsonResponse<T>(response, "Google Chat API request failed"),
   });
@@ -96,7 +86,6 @@ async function fetchOk(
     account,
     url,
     init,
-    auditContext: "googlechat.api.ok",
     handleResponse: async () => undefined,
   });
 }
@@ -111,7 +100,6 @@ async function fetchBuffer(
     account,
     url,
     init,
-    auditContext: "googlechat.api.buffer",
     handleResponse: async (res) => {
       const maxBytes = options?.maxBytes;
       const lengthHeader = res.headers.get("content-length");
@@ -253,7 +241,6 @@ export async function uploadGoogleChatAttachment(params: {
       },
       body,
     },
-    auditContext: "googlechat.upload",
     errorPrefix: "Google Chat upload",
     handleResponse: async (response) =>
       await readGoogleChatJsonResponse<{

@@ -3,16 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(),
-  ssrfPolicyFromPrivateNetworkOptIn: vi.fn(() => undefined),
+  fetchWithResponseRelease: vi.fn(),
 }));
 
-vi.mock("../runtime-api.js", () => ({
-  fetchWithSsrFGuard: hoisted.fetchWithSsrFGuard,
-}));
-
-vi.mock("./send.runtime.js", () => ({
-  ssrfPolicyFromPrivateNetworkOptIn: hoisted.ssrfPolicyFromPrivateNetworkOptIn,
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchWithResponseRelease: hoisted.fetchWithResponseRelease,
 }));
 
 const { probeNextcloudTalkBotResponseFeature } = await import("./bot-preflight.js");
@@ -38,7 +33,7 @@ function account(
 }
 
 function mockBotAdmin(features: number | string): void {
-  hoisted.fetchWithSsrFGuard.mockResolvedValueOnce({
+  hoisted.fetchWithResponseRelease.mockResolvedValueOnce({
     response: new Response(
       JSON.stringify({
         ocs: {
@@ -55,17 +50,16 @@ function mockBotAdmin(features: number | string): void {
       { status: 200, headers: { "content-type": "application/json" } },
     ),
     release: async () => {},
-    finalUrl: "https://cloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/admin",
   });
 }
 
 describe("probeNextcloudTalkBotResponseFeature", () => {
   beforeEach(() => {
-    hoisted.fetchWithSsrFGuard.mockClear();
+    hoisted.fetchWithResponseRelease.mockClear();
   });
 
   afterEach(() => {
-    hoisted.fetchWithSsrFGuard.mockReset();
+    hoisted.fetchWithResponseRelease.mockReset();
   });
 
   it("passes when the matching bot has the response feature bit", async () => {
@@ -135,13 +129,12 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
   });
 
   it("reports malformed bot admin JSON with a stable channel error", async () => {
-    hoisted.fetchWithSsrFGuard.mockResolvedValueOnce({
+    hoisted.fetchWithResponseRelease.mockResolvedValueOnce({
       response: new Response("{ nope", {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
       release: async () => {},
-      finalUrl: "https://cloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/admin",
     });
 
     await expect(probeNextcloudTalkBotResponseFeature({ account: account() })).resolves.toEqual({
@@ -170,6 +163,6 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
       message:
         "Nextcloud Talk bot response feature probe skipped: apiUser/apiPassword are not configured.",
     });
-    expect(hoisted.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expect(hoisted.fetchWithResponseRelease).not.toHaveBeenCalled();
   });
 });

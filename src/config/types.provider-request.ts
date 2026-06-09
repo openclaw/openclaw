@@ -50,7 +50,5 @@ export type ConfiguredProviderRequest = {
   tls?: ConfiguredProviderRequestTls;
 };
 
-/** Model-provider request overrides plus the private-network opt-in used by model transports. */
-export type ConfiguredModelProviderRequest = ConfiguredProviderRequest & {
-  allowPrivateNetwork?: boolean;
-};
+/** Model-provider request overrides. */
+export type ConfiguredModelProviderRequest = ConfiguredProviderRequest;

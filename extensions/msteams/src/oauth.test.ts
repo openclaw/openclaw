@@ -2,8 +2,8 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: async (params: {
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchWithResponseRelease: async (params: {
     url: string;
     init?: RequestInit;
     fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;

@@ -32,7 +32,7 @@ describe("nextcloud-talk doctor", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("normalizes legacy private-network aliases", () => {
+  it("removes retired private-network config", () => {
     const normalize = getNextcloudTalkCompatibilityNormalizer();
 
     const result = normalize({
@@ -40,9 +40,16 @@ describe("nextcloud-talk doctor", () => {
         channels: {
           "nextcloud-talk": {
             allowPrivateNetwork: true,
+            network: {
+              dangerouslyAllowPrivateNetwork: true,
+            },
             accounts: {
               work: {
                 allowPrivateNetwork: false,
+                network: {
+                  dangerouslyAllowPrivateNetwork: false,
+                  owner: "preserved",
+                },
               },
             },
           },
@@ -50,9 +57,12 @@ describe("nextcloud-talk doctor", () => {
       } as never,
     });
 
-    expect(result.config.channels?.["nextcloud-talk"]?.network).toEqual({
-      dangerouslyAllowPrivateNetwork: true,
-    });
+    expect(result.changes).toEqual([
+      "Removed channels.nextcloud-talk private-network config. Nextcloud Talk private-network fetch enforcement moved to proxy.enabled plus external proxy policy.",
+      "Removed channels.nextcloud-talk.accounts.work private-network config. Nextcloud Talk private-network fetch enforcement moved to proxy.enabled plus external proxy policy.",
+    ]);
+    expect(result.config.channels?.["nextcloud-talk"]).not.toHaveProperty("allowPrivateNetwork");
+    expect(result.config.channels?.["nextcloud-talk"]).not.toHaveProperty("network");
     expect(
       (
         result.config.channels?.["nextcloud-talk"]?.accounts?.work as
@@ -60,7 +70,7 @@ describe("nextcloud-talk doctor", () => {
           | undefined
       )?.network,
     ).toEqual({
-      dangerouslyAllowPrivateNetwork: false,
+      owner: "preserved",
     });
   });
 

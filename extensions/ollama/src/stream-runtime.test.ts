@@ -5,8 +5,8 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchWithResponseRelease: fetchWithSsrFGuardMock,
 }));
 
 import {
@@ -23,10 +23,8 @@ import {
 type GuardedFetchCall = {
   url: string;
   init?: RequestInit;
-  policy?: unknown;
   signal?: AbortSignal;
   timeoutMs?: number;
-  auditContext?: string;
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -2276,7 +2274,6 @@ describe("createOllamaStreamFn", () => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
         const request = getGuardedFetchCall(fetchMock);
         expect(request.url).toBe("http://ollama-host:11434/api/chat");
-        expect(request.auditContext).toBe("ollama-stream.chat");
         expect(request.signal).toBe(signal);
         const requestInit = request.init ?? {};
         expect(requestInit.signal).toBeUndefined();
@@ -2568,7 +2565,7 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
-  it("uses the default loopback policy when baseUrl is empty", async () => {
+  it("uses the default loopback URL when baseUrl is empty", async () => {
     await withMockNdjsonFetch(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
@@ -2582,9 +2579,6 @@ describe("createOllamaStreamFn", () => {
 
         const request = getGuardedFetchCall(fetchMock);
         expect(request.url).toBe("http://127.0.0.1:11434/api/chat");
-        const policy = requireRecord(request.policy, "ssrf policy");
-        expect(policy.hostnameAllowlist).toEqual(["127.0.0.1"]);
-        expect(policy.allowPrivateNetwork).toBe(true);
       },
     );
   });

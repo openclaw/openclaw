@@ -1,18 +1,14 @@
 /** Tests self-hosted provider setup helpers and auth/config defaults. */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configureOpenAICompatibleSelfHostedProviderNonInteractive,
   discoverOpenAICompatibleLocalModels,
 } from "./provider-self-hosted-setup.js";
 import type { ProviderAuthMethodNonInteractiveContext } from "./types.js";
 
-const { fetchWithSsrFGuardMock, upsertAuthProfileWithLock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(),
+const { fetchMock, upsertAuthProfileWithLock } = vi.hoisted(() => ({
+  fetchMock: vi.fn(),
   upsertAuthProfileWithLock: vi.fn(async () => null),
-}));
-
-vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
 vi.mock("../agents/auth-profiles/upsert-with-lock.js", () => ({
@@ -21,7 +17,32 @@ vi.mock("../agents/auth-profiles/upsert-with-lock.js", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal("fetch", fetchMock);
 });
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function mockFetchJson(value: unknown, status = 200): void {
+  fetchMock.mockResolvedValueOnce(
+    new Response(JSON.stringify(value), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+}
+
+function expectFetchCall(index: number, url: string, headers?: Record<string, string>): void {
+  expect(fetchMock.mock.calls[index]?.[0]).toBe(url);
+  expect(fetchMock.mock.calls[index]?.[1]).toEqual(
+    expect.objectContaining({
+      headers,
+      redirect: "error",
+      signal: expect.any(AbortSignal),
+    }),
+  );
+}
 
 function createRuntime() {
   return {
@@ -87,21 +108,9 @@ async function configureSelfHostedTestProvider(params: {
 }
 
 describe("discoverOpenAICompatibleLocalModels", () => {
-  it("uses guarded fetch pinned to the configured self-hosted provider", async () => {
-    const release = vi.fn(async () => undefined);
-    const propsRelease = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ data: [{ id: "Qwen/Qwen3-32B" }] }), {
-        status: 200,
-      }),
-      finalUrl: "http://127.0.0.1:8000/v1/models",
-      release,
-    });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response("{}", { status: 404 }),
-      finalUrl: "http://127.0.0.1:8000/props",
-      release: propsRelease,
-    });
+  it("fetches models from the configured self-hosted provider", async () => {
+    mockFetchJson({ data: [{ id: "Qwen/Qwen3-32B" }] });
+    mockFetchJson({}, 404);
 
     const models = await discoverOpenAICompatibleLocalModels({
       baseUrl: "http://127.0.0.1:8000/v1/",
@@ -121,53 +130,24 @@ describe("discoverOpenAICompatibleLocalModels", () => {
         maxTokens: 8192,
       },
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(1, {
-      url: "http://127.0.0.1:8000/v1/models",
-      init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 5000,
+    expectFetchCall(0, "http://127.0.0.1:8000/v1/models", {
+      Authorization: "Bearer self-hosted-test-key",
     });
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(2, {
-      url: "http://127.0.0.1:8000/props",
-      init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
+    expectFetchCall(1, "http://127.0.0.1:8000/props", {
+      Authorization: "Bearer self-hosted-test-key",
     });
-    expect(release).toHaveBeenCalledOnce();
-    expect(propsRelease).toHaveBeenCalledOnce();
   });
 
   it("uses llama.cpp nested /props n_ctx as the runtime context cap", async () => {
-    const modelsRelease = vi.fn(async () => undefined);
-    const propsRelease = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({
-          data: [
-            {
-              id: "qwen3.6-mxfp4-moe",
-              meta: { n_ctx_train: 262_144 },
-            },
-          ],
-        }),
-        { status: 200 },
-      ),
-      finalUrl: "http://127.0.0.1:8080/v1/models",
-      release: modelsRelease,
+    mockFetchJson({
+      data: [
+        {
+          id: "qwen3.6-mxfp4-moe",
+          meta: { n_ctx_train: 262_144 },
+        },
+      ],
     });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ default_generation_settings: { n_ctx: 65_536 } }), {
-        status: 200,
-      }),
-      finalUrl: "http://127.0.0.1:8080/props",
-      release: propsRelease,
-    });
+    mockFetchJson({ default_generation_settings: { n_ctx: 65_536 } });
 
     const models = await discoverOpenAICompatibleLocalModels({
       baseUrl: "http://127.0.0.1:8080/v1",
@@ -187,56 +167,24 @@ describe("discoverOpenAICompatibleLocalModels", () => {
         maxTokens: 8192,
       },
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(2, {
-      url: "http://127.0.0.1:8080/props",
-      init: { headers: undefined },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
-    });
-    expect(modelsRelease).toHaveBeenCalledOnce();
-    expect(propsRelease).toHaveBeenCalledOnce();
+    expectFetchCall(1, "http://127.0.0.1:8080/props", undefined);
   });
 
   it("scopes llama.cpp /props runtime caps to each discovered model without autoloading", async () => {
-    const modelsRelease = vi.fn(async () => undefined);
-    const firstPropsRelease = vi.fn(async () => undefined);
-    const secondPropsRelease = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({
-          data: [
-            {
-              id: "qwen/router-a",
-              meta: { n_ctx_train: 262_144 },
-            },
-            {
-              id: "qwen/router-b",
-              meta: { n_ctx_train: 131_072 },
-            },
-          ],
-        }),
-        { status: 200 },
-      ),
-      finalUrl: "http://127.0.0.1:8080/v1/models",
-      release: modelsRelease,
+    mockFetchJson({
+      data: [
+        {
+          id: "qwen/router-a",
+          meta: { n_ctx_train: 262_144 },
+        },
+        {
+          id: "qwen/router-b",
+          meta: { n_ctx_train: 131_072 },
+        },
+      ],
     });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ default_generation_settings: { n_ctx: 65_536 } }), {
-        status: 200,
-      }),
-      finalUrl: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
-      release: firstPropsRelease,
-    });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ default_generation_settings: { n_ctx: 32_768 } }), {
-        status: 200,
-      }),
-      finalUrl: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
-      release: secondPropsRelease,
-    });
+    mockFetchJson({ default_generation_settings: { n_ctx: 65_536 } });
+    mockFetchJson({ default_generation_settings: { n_ctx: 32_768 } });
 
     const models = await discoverOpenAICompatibleLocalModels({
       baseUrl: "http://127.0.0.1:8080/v1",
@@ -266,52 +214,20 @@ describe("discoverOpenAICompatibleLocalModels", () => {
         maxTokens: 8192,
       },
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(2, {
-      url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
-      init: { headers: undefined },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
-    });
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(3, {
-      url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
-      init: { headers: undefined },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
-    });
-    expect(modelsRelease).toHaveBeenCalledOnce();
-    expect(firstPropsRelease).toHaveBeenCalledOnce();
-    expect(secondPropsRelease).toHaveBeenCalledOnce();
+    expectFetchCall(1, "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false");
+    expectFetchCall(2, "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false");
   });
 
   it("keeps top-level llama.cpp /props n_ctx as a compatibility fallback", async () => {
-    const modelsRelease = vi.fn(async () => undefined);
-    const propsRelease = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({
-          data: [
-            {
-              id: "qwen3.6-mxfp4-moe",
-              meta: { n_ctx_train: 262_144 },
-            },
-          ],
-        }),
-        { status: 200 },
-      ),
-      finalUrl: "http://127.0.0.1:8080/v1/models",
-      release: modelsRelease,
+    mockFetchJson({
+      data: [
+        {
+          id: "qwen3.6-mxfp4-moe",
+          meta: { n_ctx_train: 262_144 },
+        },
+      ],
     });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ n_ctx: 65_536 }), { status: 200 }),
-      finalUrl: "http://127.0.0.1:8080/props",
-      release: propsRelease,
-    });
+    mockFetchJson({ n_ctx: 65_536 });
 
     const models = await discoverOpenAICompatibleLocalModels({
       baseUrl: "http://127.0.0.1:8080/v1",
@@ -331,21 +247,11 @@ describe("discoverOpenAICompatibleLocalModels", () => {
         maxTokens: 8192,
       },
     ]);
-    expect(modelsRelease).toHaveBeenCalledOnce();
-    expect(propsRelease).toHaveBeenCalledOnce();
   });
 
   it("preserves explicit configured context windows ahead of llama.cpp /props", async () => {
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({
-          data: [{ id: "qwen3.6-mxfp4-moe", meta: { n_ctx_train: 262_144 } }],
-        }),
-        { status: 200 },
-      ),
-      finalUrl: "http://127.0.0.1:8080/v1/models",
-      release,
+    mockFetchJson({
+      data: [{ id: "qwen3.6-mxfp4-moe", meta: { n_ctx_train: 262_144 } }],
     });
 
     const models = await discoverOpenAICompatibleLocalModels({
@@ -367,19 +273,11 @@ describe("discoverOpenAICompatibleLocalModels", () => {
       },
     ]);
     expect(models[0]).not.toHaveProperty("contextTokens");
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    expect(release).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not allowlist always-blocked metadata hostnames", async () => {
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ data: [{ id: "metadata-probe" }] }), {
-        status: 200,
-      }),
-      finalUrl: "http://metadata.google.internal/v1/models",
-      release,
-    });
+  it("fetches configured metadata hostnames directly in direct mode", async () => {
+    mockFetchJson({ data: [{ id: "metadata-probe" }] });
 
     await discoverOpenAICompatibleLocalModels({
       baseUrl: "http://metadata.google.internal/v1",
@@ -387,13 +285,7 @@ describe("discoverOpenAICompatibleLocalModels", () => {
       env: {},
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
-      url: "http://metadata.google.internal/v1/models",
-      init: { headers: undefined },
-      policy: undefined,
-      timeoutMs: 5000,
-    });
-    expect(release).toHaveBeenCalledOnce();
+    expectFetchCall(0, "http://metadata.google.internal/v1/models", undefined);
   });
 });
 

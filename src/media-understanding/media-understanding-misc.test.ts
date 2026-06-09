@@ -78,7 +78,7 @@ describe("media understanding attachments SSRF", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("allows RFC2544 benchmark-range URLs only when media fetch policy opts in", async () => {
+  it("rejects retired RFC2544 benchmark-range media fetch policy opt-ins", async () => {
     const url = "http://198.18.0.153/file.jpg";
     const deniedCache = new MediaAttachmentCache([{ index: 0, url }]);
     await expect(
@@ -92,34 +92,28 @@ describe("media understanding attachments SSRF", () => {
     );
     globalThis.fetch = withFetchPreconnect(fetchSpy);
     const allowedCache = new MediaAttachmentCache([{ index: 0, url }], {
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true } as never,
     });
 
-    const result = await allowedCache.getBuffer({
-      attachmentIndex: 0,
-      maxBytes: 1024,
-      timeoutMs: 1000,
-    });
-    expect(result).toStrictEqual({
-      buffer: Buffer.from("image"),
-      mime: "image/jpeg",
-      fileName: "file.jpg",
-      size: 5,
-    });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    await expect(
+      allowedCache.getBuffer({
+        attachmentIndex: 0,
+        maxBytes: 1024,
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow(/no longer supports ssrfPolicy\.allowRfc2544BenchmarkRange/);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("uses fetched content type instead of wildcard selection hints", async () => {
-    const url = "http://198.18.0.153/image";
+    const url = "http://example.com/image";
     const fetchSpy = vi.fn().mockResolvedValue(
       new Response("image", {
         headers: { "content-type": "image/png" },
       }),
     );
     globalThis.fetch = withFetchPreconnect(fetchSpy);
-    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "image/*" }], {
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-    });
+    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "image/*" }]);
 
     const result = await cache.getBuffer({
       attachmentIndex: 0,

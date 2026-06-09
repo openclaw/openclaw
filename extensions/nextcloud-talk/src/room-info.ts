@@ -1,9 +1,9 @@
 // Nextcloud Talk plugin module implements room info behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
-import { fetchWithSsrFGuard, type RuntimeEnv } from "../runtime-api.js";
+import type { RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
 
@@ -81,7 +81,7 @@ export async function resolveNextcloudTalkRoomKind(params: {
   ).toString("base64");
 
   try {
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithResponseRelease({
       url,
       init: {
         method: "GET",
@@ -91,8 +91,6 @@ export async function resolveNextcloudTalkRoomKind(params: {
           Accept: "application/json",
         },
       },
-      auditContext: "nextcloud-talk.room-info",
-      policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
     });
     try {
       if (!response.ok) {

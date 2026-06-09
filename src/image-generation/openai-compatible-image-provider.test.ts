@@ -32,7 +32,6 @@ const {
         : undefined;
     return {
       baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-      allowPrivateNetwork: Boolean(params.allowPrivateNetwork ?? request?.allowPrivateNetwork),
       headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
       dispatcherPolicy: request ? { request } : undefined,
     };
@@ -186,7 +185,7 @@ describe("OpenAI-compatible image provider helper", () => {
           providers: {
             sample: {
               baseUrl: "https://sample.example/v1/",
-              request: { allowPrivateNetwork: true },
+              request: { headers: { "X-Provider": "sample" } },
             },
           },
         },
@@ -196,19 +195,19 @@ describe("OpenAI-compatible image provider helper", () => {
     const apiKeyParams = requireFirstCallArg(resolveApiKeyForProviderMock) as { provider?: string };
     expect(apiKeyParams.provider).toBe("sample");
     expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith({
-      allowPrivateNetwork: true,
+      headers: { "X-Provider": "sample" },
     });
     const jsonRequest = requireFirstCallArg(postJsonRequestMock) as {
       url?: string;
-      allowPrivateNetwork?: boolean;
       ssrfPolicy?: unknown;
       dispatcherPolicy?: unknown;
       body?: unknown;
     };
     expect(jsonRequest.url).toBe("https://sample.example/v1/images/generations");
-    expect(jsonRequest.allowPrivateNetwork).toBe(true);
     expect(jsonRequest.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
-    expect(jsonRequest.dispatcherPolicy).toEqual({ request: { allowPrivateNetwork: true } });
+    expect(jsonRequest.dispatcherPolicy).toEqual({
+      request: { headers: { "X-Provider": "sample" } },
+    });
     expect(jsonRequest.body).toEqual({
       model: "custom-image",
       prompt: "draw a square",

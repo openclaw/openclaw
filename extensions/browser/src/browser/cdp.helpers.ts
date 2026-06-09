@@ -5,7 +5,7 @@
  * redaction/headers, and request/response correlation over WebSocket.
  */
 import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-config";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
@@ -297,14 +297,13 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
   return { send, closeWithError };
 }
 
-/** Fetch and parse a CDP JSON endpoint through the configured SSRF guard. */
+/** Fetch and parse a CDP JSON endpoint. */
 export async function fetchJson<T>(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
-  ssrfPolicy?: SsrFPolicy,
 ): Promise<T> {
-  const { response, release } = await fetchCdpChecked(url, timeoutMs, init, ssrfPolicy);
+  const { response, release } = await fetchCdpChecked(url, timeoutMs, init);
   try {
     return (await response.json()) as T;
   } finally {
@@ -317,7 +316,6 @@ export async function fetchCdpChecked(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
-  ssrfPolicy?: SsrFPolicy,
 ): Promise<CdpFetchResult> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), normalizeBrowserTimerDelayMs(timeoutMs));
@@ -336,18 +334,10 @@ export async function fetchCdpChecked(
     const fetchUrl = stripUrlCredentials(url);
     const res = await withManagedProxyForCdpUrl(fetchUrl, () =>
       withNoProxyForCdpUrl(url, async () => {
-        const parsedUrl = new URL(fetchUrl);
-        // Loopback CDP is an OpenClaw control plane, not page navigation. Allow
-        // its exact host while preserving the caller's policy for remote hosts.
-        const policy = isLoopbackHost(parsedUrl.hostname)
-          ? withAllowedHostname(ssrfPolicy, parsedUrl.hostname)
-          : (ssrfPolicy ?? { allowPrivateNetwork: true });
-        const guarded = await fetchWithSsrFGuard({
+        const guarded = await fetchWithResponseRelease({
           url: fetchUrl,
           init: { ...init, headers },
           signal: ctrl.signal,
-          policy,
-          auditContext: "browser-cdp",
         });
         guardedRelease = guarded.release;
         return guarded.response;
@@ -375,9 +365,8 @@ export async function fetchOk(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
-  ssrfPolicy?: SsrFPolicy,
 ): Promise<void> {
-  const { release } = await fetchCdpChecked(url, timeoutMs, init, ssrfPolicy);
+  const { release } = await fetchCdpChecked(url, timeoutMs, init);
   await release();
 }
 

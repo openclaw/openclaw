@@ -11,11 +11,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
 }));
 
-const {
-  assertOkOrThrowProviderErrorMock,
-  postJsonRequestMock,
-  resolveProviderHttpRequestConfigMock,
-} = getProviderHttpMocks();
+const { assertOkOrThrowProviderErrorMock, postJsonRequestMock } = getProviderHttpMocks();
 
 let buildGoogleSpeechProvider: typeof import("./speech-provider.js").buildGoogleSpeechProvider;
 let testing: typeof import("./speech-provider.js").testing;
@@ -135,7 +131,6 @@ describe("Google speech provider", () => {
         },
       },
       fetchFn: fetch,
-      pinDns: false,
       timeoutMs: 12_345,
     }) as { headers?: HeadersInit };
     expect(new Headers(request.headers).get("x-goog-api-key")).toBe("google-test-key");
@@ -618,66 +613,5 @@ describe("Google speech provider", () => {
     ).rejects.toThrow(
       "Google TTS failed (429): Quota exceeded [code=RESOURCE_EXHAUSTED] [request_id=google_req_123]",
     );
-  });
-
-  it("honors configured private-network opt-in for Google TTS", async () => {
-    installGoogleTtsRequestMock();
-
-    const provider = buildGoogleSpeechProvider();
-    await provider.synthesize({
-      text: "hello",
-      cfg: {
-        models: {
-          providers: {
-            google: {
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-              request: { allowPrivateNetwork: true },
-              models: [],
-            },
-          },
-        },
-      },
-      providerConfig: { apiKey: "google-test-key" },
-      target: "audio-file",
-      timeoutMs: 12_345,
-    });
-
-    const requestConfig = expectRecordFields(
-      requireFirstRecordArg(resolveProviderHttpRequestConfigMock, "Google TTS HTTP config request"),
-      {
-        allowPrivateNetwork: true,
-      },
-    );
-    expectRecordFields(requestConfig.request, { allowPrivateNetwork: true });
-  });
-
-  it("honors configured private-network opt-in for Google telephony TTS", async () => {
-    installGoogleTtsRequestMock();
-
-    const provider = buildGoogleSpeechProvider();
-    await provider.synthesizeTelephony?.({
-      text: "hello",
-      cfg: {
-        models: {
-          providers: {
-            google: {
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-              request: { allowPrivateNetwork: true },
-              models: [],
-            },
-          },
-        },
-      },
-      providerConfig: { apiKey: "google-test-key" },
-      timeoutMs: 12_345,
-    });
-
-    const requestConfig = expectRecordFields(
-      requireFirstRecordArg(resolveProviderHttpRequestConfigMock, "Google TTS HTTP config request"),
-      {
-        allowPrivateNetwork: true,
-      },
-    );
-    expectRecordFields(requestConfig.request, { allowPrivateNetwork: true });
   });
 });

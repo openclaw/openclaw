@@ -639,9 +639,11 @@ export function createPinnedDispatcher(
   }
 
   if (policy.mode === "env-proxy") {
+    const targetTls = withPinnedLookup(lookup, policy.connect);
     return createHttp1EnvHttpProxyAgent(
       {
-        connect: withPinnedLookup(lookup, policy.connect),
+        connect: targetTls,
+        requestTls: targetTls,
         ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
       },
       timeoutMs,

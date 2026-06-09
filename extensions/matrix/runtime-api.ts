@@ -31,16 +31,6 @@ export {
 } from "./src/storage-paths.js";
 export { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./src/matrix/deps.js";
 export {
-  assertHttpUrlTargetsPrivateNetwork,
-  closeDispatcher,
-  createPinnedDispatcher,
-  resolvePinnedHostnameWithPolicy,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-  ssrfPolicyFromAllowPrivateNetwork,
-  type LookupFn,
-  type SsrFPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime";
-export {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
 } from "./src/matrix/thread-bindings-shared.js";

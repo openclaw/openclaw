@@ -21,8 +21,8 @@ vi.mock("./shared.js", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: vi.fn(),
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchWithResponseRelease: vi.fn(),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -68,7 +68,7 @@ vi.mock("./remote-media.js", () => ({
   downloadAndStoreMSTeamsRemoteMedia: vi.fn(),
 }));
 
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { downloadMSTeamsGraphMedia } from "./graph.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import { safeFetchWithPolicy } from "./shared.js";
@@ -110,7 +110,7 @@ function mockGraphMediaFetch(options: {
   valueResponses?: Record<string, Response>;
   fetchCalls?: string[];
 }) {
-  vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: GuardedFetchParams) => {
+  vi.mocked(fetchWithResponseRelease).mockImplementation(async (params: GuardedFetchParams) => {
     options.fetchCalls?.push(params.url);
     const url = params.url;
     if (url.endsWith(`/messages/${options.messageId}`) && !url.includes("hostedContents")) {
@@ -242,7 +242,7 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
       maxBytes: 10 * 1024 * 1024,
     });
 
-    const guardCalls = vi.mocked(fetchWithSsrFGuard).mock.calls;
+    const guardCalls = vi.mocked(fetchWithResponseRelease).mock.calls;
     for (const [call] of guardCalls) {
       const headers = call.init?.headers;
       expect(headers).toBeInstanceOf(Headers);
@@ -370,7 +370,7 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     // Regression test for #51749: empty `catch {}` blocks used to hide the
     // real error, producing misleading `graph media fetch empty` diagnostics
     // without surfacing the underlying cause.
-    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: GuardedFetchParams) => {
+    vi.mocked(fetchWithResponseRelease).mockImplementation(async (params: GuardedFetchParams) => {
       if (params.url.endsWith("/messages/msg-err")) {
         throw new Error("network boom");
       }
@@ -396,7 +396,7 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
   it("logs a debug event when the message fetch returns non-ok", async () => {
     // If the message endpoint returns 403/404, we want that recorded so
     // operators can distinguish auth issues from empty result sets.
-    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: GuardedFetchParams) => {
+    vi.mocked(fetchWithResponseRelease).mockImplementation(async (params: GuardedFetchParams) => {
       const url = params.url;
       if (url.endsWith("/hostedContents")) {
         return guardedFetchResult(params, mockFetchResponse({ value: [] }));
@@ -420,7 +420,7 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
   });
 
   it("logs a debug event when token acquisition fails", async () => {
-    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: GuardedFetchParams) =>
+    vi.mocked(fetchWithResponseRelease).mockImplementation(async (params: GuardedFetchParams) =>
       guardedFetchResult(params, mockFetchResponse({})),
     );
     const logger = { warn: vi.fn() };

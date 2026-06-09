@@ -1,5 +1,6 @@
 // Minimax plugin module implements oauth behavior.
 import { randomBytes, randomUUID } from "node:crypto";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   MAX_DATE_TIMESTAMP_MS,
   asSafeIntegerInRange,
@@ -8,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type MiniMaxRegion = "cn" | "global";
 
@@ -92,7 +92,7 @@ async function requestOAuthCode(params: {
   region: MiniMaxRegion;
 }): Promise<MiniMaxOAuthAuthorization> {
   const endpoints = getOAuthEndpoints(params.region);
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: endpoints.codeEndpoint,
     init: {
       method: "POST",
@@ -110,8 +110,6 @@ async function requestOAuthCode(params: {
         state: params.state,
       }),
     },
-    policy: { allowedHostnames: [endpoints.hostname] },
-    auditContext: "minimax.oauth.code",
   });
   try {
     if (!response.ok) {
@@ -145,7 +143,7 @@ async function pollOAuthToken(params: {
   region: MiniMaxRegion;
 }): Promise<TokenResult> {
   const endpoints = getOAuthEndpoints(params.region);
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: endpoints.tokenEndpoint,
     init: {
       method: "POST",
@@ -160,8 +158,6 @@ async function pollOAuthToken(params: {
         code_verifier: params.verifier,
       }),
     },
-    policy: { allowedHostnames: [endpoints.hostname] },
-    auditContext: "minimax.oauth.token",
   });
   try {
     return await parseMiniMaxOAuthTokenResponse(response);

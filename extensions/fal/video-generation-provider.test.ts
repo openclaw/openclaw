@@ -23,7 +23,6 @@ describe("fal video generation provider", () => {
     });
     vi.spyOn(providerHttp, "resolveProviderHttpRequestConfig").mockReturnValue({
       baseUrl: "https://fal.run",
-      allowPrivateNetwork: false,
       headers: new Headers({
         Authorization: "Key fal-key",
         "Content-Type": "application/json",

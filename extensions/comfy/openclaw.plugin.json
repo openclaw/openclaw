@@ -193,9 +193,6 @@
       "apiKey": {
         "type": ["string", "object"]
       },
-      "allowPrivateNetwork": {
-        "type": "boolean"
-      },
       "workflowPath": {
         "type": "string"
       },

@@ -1,3 +1,4 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Openai plugin module implements tts behavior.
 import {
   assertOkOrThrowProviderError,
@@ -8,10 +9,6 @@ import {
   isDebugProxyGlobalFetchPatchInstalled,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
@@ -151,7 +148,7 @@ export async function openaiTTS(params: {
   });
   const requestUrl = `${baseUrl}/audio/speech`;
   const debugProxyFetchPatchInstalled = isDebugProxyGlobalFetchPatchInstalled();
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: requestUrl,
     init: {
       method: "POST",
@@ -159,10 +156,6 @@ export async function openaiTTS(params: {
       body: requestBody,
     },
     timeoutMs,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
-    capture: false,
-    pinDns: debugProxyFetchPatchInstalled ? false : undefined,
-    auditContext: "openai-tts",
   });
   try {
     if (!debugProxyFetchPatchInstalled) {

@@ -19,8 +19,8 @@ vi.mock("./token.js", () => ({
   resolveCopilotApiToken: resolveCopilotApiTokenMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchWithResponseRelease: fetchWithSsrFGuardMock,
 }));
 
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
@@ -29,7 +29,7 @@ afterAll(() => {
   vi.doUnmock("./auth.js");
   vi.doUnmock("openclaw/plugin-sdk/secret-input-runtime");
   vi.doUnmock("./token.js");
-  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.doUnmock("openclaw/plugin-sdk/fetch-runtime");
   vi.resetModules();
 });
 

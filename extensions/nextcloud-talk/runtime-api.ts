@@ -25,5 +25,5 @@ export { deliverFormattedTextWithAttachments } from "openclaw/plugin-sdk/reply-p
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 export type { SecretInput } from "openclaw/plugin-sdk/secret-input";
-export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+
 export { setNextcloudTalkRuntime } from "./src/runtime.js";

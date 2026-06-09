@@ -63,6 +63,37 @@ describe("compatibility binding repair migrate", () => {
   });
 });
 
+describe("legacy model provider request config migrate", () => {
+  it("removes retired request.allowPrivateNetwork while preserving other request overrides", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          local: {
+            request: {
+              allowPrivateNetwork: true,
+              headers: { "X-Tenant": "acme" },
+            },
+          },
+          bare: {
+            request: {
+              allowPrivateNetwork: false,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.models?.providers?.local?.request).toEqual({
+      headers: { "X-Tenant": "acme" },
+    });
+    expect(res.config.models?.providers?.bare).not.toHaveProperty("request");
+    expect(res.changes).toEqual([
+      "Removed models.providers.local.request.allowPrivateNetwork. Model-provider egress filtering moved to proxy.enabled plus external proxy policy.",
+      "Removed models.providers.bare.request.allowPrivateNetwork. Model-provider egress filtering moved to proxy.enabled plus external proxy policy.",
+    ]);
+  });
+});
+
 describe("legacy memory search config migrate", () => {
   it("moves legacy OpenAI Codex provider config to canonical OpenAI provider config", () => {
     const res = migrateLegacyConfigForTest({

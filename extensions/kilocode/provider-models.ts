@@ -1,11 +1,8 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Kilocode provider module implements model/runtime integration.
 import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
@@ -166,14 +163,12 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
   }
 
   try {
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithResponseRelease({
       url: KILOCODE_MODELS_URL,
       init: {
         headers: { Accept: "application/json" },
       },
       timeoutMs: DISCOVERY_TIMEOUT_MS,
-      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(KILOCODE_BASE_URL),
-      auditContext: "kilocode.model_discovery",
     });
     try {
       if (!response.ok) {

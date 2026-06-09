@@ -220,10 +220,6 @@
       "types": "./dist/src/plugin-sdk/secret-ref-runtime.d.ts",
       "default": "./src/secret-ref-runtime.ts"
     },
-    "./ssrf-runtime": {
-      "types": "./dist/src/plugin-sdk/ssrf-runtime.d.ts",
-      "default": "./src/ssrf-runtime.ts"
-    },
     "./secret-input": {
       "types": "./dist/src/plugin-sdk/secret-input.d.ts",
       "default": "./src/secret-input.ts"

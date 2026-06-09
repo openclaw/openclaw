@@ -6,6 +6,7 @@ import {
   TRUSTED_CLIENT_TOKEN,
   generateSecMsGecToken,
 } from "node-edge-tts/dist/drm.js";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -18,10 +19,6 @@ import type {
   SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech";
 import { asBoolean, asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";
 
@@ -143,13 +140,11 @@ export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
     "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list" +
     `?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}`;
   const headers = buildMicrosoftVoiceHeaders();
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url,
     init: {
       headers,
     },
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname("https://speech.platform.bing.com"),
-    auditContext: "microsoft.speech.voices",
   });
   try {
     if (!isDebugProxyGlobalFetchPatchInstalled()) {

@@ -1,7 +1,7 @@
 // Qa Channel plugin module implements bus client behavior.
 import http from "node:http";
 import https from "node:https";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import type {
   QaBusInboundMessageInput,
   QaBusMessage,
@@ -282,10 +282,8 @@ export async function injectQaBusInboundMessage(params: {
 }
 
 export async function getQaBusState(baseUrl: string): Promise<QaBusStateSnapshot> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: buildQaBusUrl(baseUrl, "/v1/state").toString(),
-    policy: { allowPrivateNetwork: true },
-    auditContext: "qa-channel.bus-state",
   });
   try {
     if (!response.ok) {

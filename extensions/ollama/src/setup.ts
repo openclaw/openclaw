@@ -1,5 +1,6 @@
 // Ollama setup module handles plugin onboarding behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import type {
   OpenClawConfig,
   SecretInput,
@@ -16,7 +17,6 @@ import {
 import { applyAgentDefaultModelPrimary } from "openclaw/plugin-sdk/provider-onboard";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -30,7 +30,6 @@ import {
 } from "./defaults.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
 import {
-  buildOllamaBaseUrlSsrFPolicy,
   buildOllamaProvider,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
@@ -137,14 +136,12 @@ export async function checkOllamaCloudAuth(
 ): Promise<{ signedIn: boolean; signinUrl?: string }> {
   try {
     const apiBase = resolveOllamaApiBase(baseUrl);
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithResponseRelease({
       url: `${apiBase}/api/me`,
       init: {
         method: "POST",
         signal: AbortSignal.timeout(5000),
       },
-      policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
-      auditContext: "ollama-setup.me",
     });
     try {
       if (response.status === 401) {
@@ -227,7 +224,7 @@ async function pullOllamaModelCore(params: {
     OLLAMA_PULL_RESPONSE_TIMEOUT_MS,
   );
   try {
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithResponseRelease({
       url: `${baseUrl}/api/pull`,
       init: {
         method: "POST",
@@ -235,8 +232,6 @@ async function pullOllamaModelCore(params: {
         body: JSON.stringify({ name: modelName }),
       },
       signal: responseController.signal,
-      policy: buildOllamaBaseUrlSsrFPolicy(baseUrl),
-      auditContext: "ollama-setup.pull",
     });
     clearTimeout(responseTimeout);
     try {

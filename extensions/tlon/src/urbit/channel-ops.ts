@@ -1,5 +1,5 @@
 // Tlon plugin module implements channel ops behavior.
-import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-policy";
 import { UrbitHttpError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 
@@ -13,10 +13,7 @@ type UrbitChannelDeps = {
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
-async function putUrbitChannel(
-  deps: UrbitChannelDeps,
-  params: { body: unknown; auditContext: string },
-) {
+async function putUrbitChannel(deps: UrbitChannelDeps, params: { body: unknown }) {
   return await urbitFetch({
     baseUrl: deps.baseUrl,
     path: `/~/channel/${deps.channelId}`,
@@ -32,13 +29,12 @@ async function putUrbitChannel(
     lookupFn: deps.lookupFn,
     fetchImpl: deps.fetchImpl,
     timeoutMs: 30_000,
-    auditContext: params.auditContext,
   });
 }
 
 export async function pokeUrbitChannel(
   deps: UrbitChannelDeps,
-  params: { app: string; mark: string; json: unknown; auditContext: string },
+  params: { app: string; mark: string; json: unknown },
 ): Promise<number> {
   const pokeId = Date.now();
   const pokeData = {
@@ -52,7 +48,6 @@ export async function pokeUrbitChannel(
 
   const { response, release } = await putUrbitChannel(deps, {
     body: [pokeData],
-    auditContext: params.auditContext,
   });
 
   try {
@@ -68,7 +63,7 @@ export async function pokeUrbitChannel(
 
 export async function scryUrbitPath(
   deps: Pick<UrbitChannelDeps, "baseUrl" | "cookie" | "ssrfPolicy" | "lookupFn" | "fetchImpl">,
-  params: { path: string; auditContext: string },
+  params: { path: string },
 ): Promise<unknown> {
   const scryPath = `/~/scry${params.path}`;
   const { response, release } = await urbitFetch({
@@ -82,7 +77,6 @@ export async function scryUrbitPath(
     lookupFn: deps.lookupFn,
     fetchImpl: deps.fetchImpl,
     timeoutMs: 30_000,
-    auditContext: params.auditContext,
   });
 
   try {
@@ -101,7 +95,7 @@ export async function scryUrbitPath(
 
 async function createUrbitChannel(
   deps: UrbitChannelDeps,
-  params: { body: unknown; auditContext: string },
+  params: { body: unknown },
 ): Promise<void> {
   const { response, release } = await putUrbitChannel(deps, params);
 
@@ -126,7 +120,6 @@ async function wakeUrbitChannel(deps: UrbitChannelDeps): Promise<void> {
         json: "Opening API channel",
       },
     ],
-    auditContext: "tlon-urbit-channel-wake",
   });
 
   try {
@@ -140,11 +133,10 @@ async function wakeUrbitChannel(deps: UrbitChannelDeps): Promise<void> {
 
 export async function ensureUrbitChannelOpen(
   deps: UrbitChannelDeps,
-  params: { createBody: unknown; createAuditContext: string },
+  params: { createBody: unknown },
 ): Promise<void> {
   await createUrbitChannel(deps, {
     body: params.createBody,
-    auditContext: params.createAuditContext,
   });
   await wakeUrbitChannel(deps);
 }

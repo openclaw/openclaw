@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -20,17 +21,7 @@ import {
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
-  buildHostnameAllowlistPolicyFromSuffixAllowlist,
-  fetchWithSsrFGuard,
-  isPrivateOrLoopbackHost,
-  mergeSsrFPolicies,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-  type SsrFPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  asBoolean,
   isRecord,
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -52,8 +43,6 @@ type ComfyCapability = "image" | "music" | "video";
 type ComfyOutputKind = "audio" | "gifs" | "images" | "videos";
 type ComfyWorkflow = Record<string, unknown>;
 type ComfyProviderConfig = Record<string, unknown>;
-type ComfyFetchGuardParams = Parameters<typeof fetchWithSsrFGuard>[0];
-type ComfyDispatcherPolicy = ComfyFetchGuardParams["dispatcherPolicy"];
 type ComfyPromptResponse = {
   prompt_id?: string;
 };
@@ -75,9 +64,6 @@ type ComfyStatusResponse = {
   status?: string;
   message?: string;
   error?: string;
-};
-type ComfyNetworkPolicy = {
-  apiPolicy?: SsrFPolicy;
 };
 type ComfyApiKeyResolution =
   | {
@@ -112,10 +98,10 @@ type ComfyWorkflowResult = {
   outputNodeIds: string[];
 };
 
-let comfyFetchGuard = fetchWithSsrFGuard;
+let comfyFetchGuard = fetchWithResponseRelease;
 
-export function setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
-  comfyFetchGuard = impl ?? fetchWithSsrFGuard;
+export function setComfyFetchGuardForTesting(impl: typeof fetchWithResponseRelease | null): void {
+  comfyFetchGuard = impl ?? fetchWithResponseRelease;
 }
 
 function resolveComfyGeneratedOutputMaxBytes(params: {
@@ -129,10 +115,6 @@ function resolveComfyGeneratedOutputMaxBytes(params: {
   return params.capability === "image"
     ? DEFAULT_GENERATED_IMAGE_MAX_BYTES
     : DEFAULT_GENERATED_MEDIA_MAX_BYTES;
-}
-
-function readConfigBoolean(config: ComfyProviderConfig, key: string): boolean | undefined {
-  return asBoolean(config[key]);
 }
 
 function readConfigInteger(config: ComfyProviderConfig, key: string): number | undefined {
@@ -276,45 +258,16 @@ function setWorkflowInput(params: {
   inputs[params.inputName] = params.value;
 }
 
-function resolveComfyNetworkPolicy(params: {
-  baseUrl: string;
-  allowPrivateNetwork: boolean;
-}): ComfyNetworkPolicy {
-  let parsed: URL;
-  try {
-    parsed = new URL(params.baseUrl);
-  } catch {
-    return {};
-  }
-
-  const hostname = normalizeOptionalLowercaseString(parsed.hostname) ?? "";
-  if (!hostname || !params.allowPrivateNetwork || !isPrivateOrLoopbackHost(hostname)) {
-    return {};
-  }
-
-  const hostnamePolicy = buildHostnameAllowlistPolicyFromSuffixAllowlist([hostname]);
-  const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(true);
-  return {
-    apiPolicy: mergeSsrFPolicies(hostnamePolicy, privateNetworkPolicy),
-  };
-}
-
 async function readJsonResponse<T>(params: {
   url: string;
   init?: RequestInit;
   timeoutMs?: number;
-  policy?: SsrFPolicy;
-  dispatcherPolicy?: ComfyDispatcherPolicy;
-  auditContext: string;
   errorPrefix: string;
 }): Promise<T> {
   const { response, release } = await comfyFetchGuard({
     url: params.url,
     init: params.init,
     timeoutMs: params.timeoutMs,
-    policy: params.policy,
-    dispatcherPolicy: params.dispatcherPolicy,
-    auditContext: params.auditContext,
   });
   try {
     await assertOkOrThrowHttpError(response, params.errorPrefix);
@@ -354,8 +307,6 @@ async function uploadInputImage(params: {
   baseUrl: string;
   headers: Headers;
   timeoutMs: number;
-  policy?: SsrFPolicy;
-  dispatcherPolicy?: ComfyDispatcherPolicy;
   image: ComfySourceImage;
   mode: ComfyMode;
   capability: ComfyCapability;
@@ -381,9 +332,6 @@ async function uploadInputImage(params: {
       body: form,
     },
     timeoutMs: params.timeoutMs,
-    policy: params.policy,
-    dispatcherPolicy: params.dispatcherPolicy,
-    auditContext: `comfy-${params.capability}-upload`,
     errorPrefix: "Comfy image upload failed",
   });
 
@@ -416,8 +364,6 @@ async function waitForLocalHistory(params: {
   headers: Headers;
   timeoutMs: number;
   pollIntervalMs: number;
-  policy?: SsrFPolicy;
-  dispatcherPolicy?: ComfyDispatcherPolicy;
 }): Promise<ComfyHistoryEntry> {
   const deadline = Date.now() + params.timeoutMs;
   for (;;) {
@@ -429,9 +375,6 @@ async function waitForLocalHistory(params: {
         headers: params.headers,
       },
       timeoutMs: requestTimeoutMs,
-      policy: params.policy,
-      dispatcherPolicy: params.dispatcherPolicy,
-      auditContext: "comfy-history",
       errorPrefix: "Comfy history lookup failed",
     });
 
@@ -453,8 +396,6 @@ async function waitForCloudCompletion(params: {
   headers: Headers;
   timeoutMs: number;
   pollIntervalMs: number;
-  policy?: SsrFPolicy;
-  dispatcherPolicy?: ComfyDispatcherPolicy;
 }): Promise<void> {
   const deadline = Date.now() + params.timeoutMs;
   for (;;) {
@@ -466,9 +407,6 @@ async function waitForCloudCompletion(params: {
         headers: params.headers,
       },
       timeoutMs: requestTimeoutMs,
-      policy: params.policy,
-      dispatcherPolicy: params.dispatcherPolicy,
-      auditContext: "comfy-status",
       errorPrefix: "Comfy status lookup failed",
     });
 
@@ -535,8 +473,6 @@ async function downloadOutputFile(params: {
   baseUrl: string;
   headers: Headers;
   timeoutMs: number;
-  policy?: SsrFPolicy;
-  dispatcherPolicy?: ComfyDispatcherPolicy;
   file: ComfyOutputFile;
   mode: ComfyMode;
   capability: ComfyCapability;
@@ -554,7 +490,6 @@ async function downloadOutputFile(params: {
     type: normalizeOptionalString(params.file.type) ?? "output",
   });
   const viewPath = params.mode === "cloud" ? "/api/view" : "/view";
-  const auditContext = `comfy-${params.capability}-download`;
 
   const firstResponse = await comfyFetchGuard({
     url: `${params.baseUrl}${viewPath}?${query.toString()}`,
@@ -564,9 +499,6 @@ async function downloadOutputFile(params: {
       ...(params.mode === "cloud" ? { redirect: "manual" } : {}),
     },
     timeoutMs: params.timeoutMs,
-    policy: params.policy,
-    dispatcherPolicy: params.dispatcherPolicy,
-    auditContext,
   });
 
   try {
@@ -584,8 +516,6 @@ async function downloadOutputFile(params: {
           method: "GET",
         },
         timeoutMs: params.timeoutMs,
-        dispatcherPolicy: params.dispatcherPolicy,
-        auditContext,
       });
       try {
         await assertOkOrThrowHttpError(redirected.response, "Comfy output download failed");
@@ -705,7 +635,6 @@ export async function runComfyWorkflow(params: {
         ? {
             apiKey: pluginApiKey.apiKey,
             source: pluginApiKey.source,
-            mode: "api-key" as const,
           }
         : pluginApiKey.status === "configured_unavailable"
           ? null
@@ -720,34 +649,25 @@ export async function runComfyWorkflow(params: {
     throw new Error("Comfy Cloud API key missing");
   }
 
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveProviderHttpRequestConfig({
-      baseUrl: normalizeOptionalString(capabilityConfig.baseUrl),
-      defaultBaseUrl:
-        mode === "cloud" ? DEFAULT_COMFY_CLOUD_BASE_URL : DEFAULT_COMFY_LOCAL_BASE_URL,
-      allowPrivateNetwork:
-        mode === "local" || readConfigBoolean(capabilityConfig, "allowPrivateNetwork") === true,
-      defaultHeaders:
-        mode === "cloud"
-          ? {
-              "X-API-Key": resolvedAuth?.apiKey ?? "",
-              "Content-Type": "application/json",
-            }
-          : {
-              "Content-Type": "application/json",
-            },
-      provider: "comfy",
-      capability: params.capability === "music" ? "audio" : params.capability,
-      transport: "http",
-    });
+  const { baseUrl, headers } = resolveProviderHttpRequestConfig({
+    baseUrl: normalizeOptionalString(capabilityConfig.baseUrl),
+    defaultBaseUrl: mode === "cloud" ? DEFAULT_COMFY_CLOUD_BASE_URL : DEFAULT_COMFY_LOCAL_BASE_URL,
+    defaultHeaders:
+      mode === "cloud"
+        ? {
+            "X-API-Key": resolvedAuth?.apiKey ?? "",
+            "Content-Type": "application/json",
+          }
+        : {
+            "Content-Type": "application/json",
+          },
+    provider: "comfy",
+    capability: params.capability === "music" ? "audio" : params.capability,
+    transport: "http",
+  });
   const normalizedBaseUrl =
     normalizeBaseUrl(baseUrl) ||
     (mode === "cloud" ? DEFAULT_COMFY_CLOUD_BASE_URL : DEFAULT_COMFY_LOCAL_BASE_URL);
-  const networkPolicy = resolveComfyNetworkPolicy({
-    baseUrl: normalizedBaseUrl,
-    allowPrivateNetwork,
-  });
-
   if (params.inputImage) {
     if (!inputImageNodeId) {
       throw new Error(
@@ -758,8 +678,6 @@ export async function runComfyWorkflow(params: {
       baseUrl: normalizedBaseUrl,
       headers: new Headers(headers),
       timeoutMs,
-      policy: networkPolicy.apiPolicy,
-      dispatcherPolicy,
       image: params.inputImage,
       mode,
       capability: params.capability,
@@ -787,9 +705,6 @@ export async function runComfyWorkflow(params: {
       body: JSON.stringify(submitPayload),
     },
     timeoutMs,
-    policy: networkPolicy.apiPolicy,
-    dispatcherPolicy,
-    auditContext: `comfy-${params.capability}-generate`,
     errorPrefix: "Comfy workflow submit failed",
   });
 
@@ -807,8 +722,6 @@ export async function runComfyWorkflow(params: {
             headers: new Headers(headers),
             timeoutMs,
             pollIntervalMs,
-            policy: networkPolicy.apiPolicy,
-            dispatcherPolicy,
           });
           return await readJsonResponse<unknown>({
             url: `${normalizedBaseUrl}/api/history_v2/${promptId}`,
@@ -817,9 +730,6 @@ export async function runComfyWorkflow(params: {
               headers: new Headers(headers),
             },
             timeoutMs,
-            policy: networkPolicy.apiPolicy,
-            dispatcherPolicy,
-            auditContext: "comfy-history",
             errorPrefix: "Comfy history lookup failed",
           });
         })()
@@ -829,8 +739,6 @@ export async function runComfyWorkflow(params: {
           headers: new Headers(headers),
           timeoutMs,
           pollIntervalMs,
-          policy: networkPolicy.apiPolicy,
-          dispatcherPolicy,
         });
 
   const historyEntry = extractHistoryEntry(history, promptId);
@@ -858,8 +766,6 @@ export async function runComfyWorkflow(params: {
       baseUrl: normalizedBaseUrl,
       headers: new Headers(headers),
       timeoutMs,
-      policy: networkPolicy.apiPolicy,
-      dispatcherPolicy,
       file: output.file,
       mode,
       capability: params.capability,

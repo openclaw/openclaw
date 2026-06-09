@@ -1,10 +1,13 @@
 // Discord plugin module implements message media behavior.
 import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
 import { getFileExtension } from "openclaw/plugin-sdk/media-mime";
-import { saveRemoteMedia, type FetchLike } from "openclaw/plugin-sdk/media-runtime";
+import {
+  saveRemoteMedia,
+  type FetchLike,
+  type MediaFetchUrlPolicy,
+} from "openclaw/plugin-sdk/media-runtime";
 import { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -27,10 +30,8 @@ const DISCORD_CDN_HOSTNAMES = [
   "*.discordapp.net",
 ];
 
-// Allow Discord CDN downloads when VPN/proxy DNS resolves to RFC2544 benchmark ranges.
-const DISCORD_MEDIA_SSRF_POLICY: SsrFPolicy = {
+const DISCORD_MEDIA_URL_POLICY: MediaFetchUrlPolicy = {
   hostnameAllowlist: DISCORD_CDN_HOSTNAMES,
-  allowRfc2544BenchmarkRange: true,
 };
 
 const AUDIO_ATTACHMENT_EXTENSIONS = new Set([
@@ -55,7 +56,7 @@ export type DiscordMediaInfo = {
 
 export type DiscordMediaResolveOptions = {
   fetchImpl?: FetchLike;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: MediaFetchUrlPolicy;
   readIdleTimeoutMs?: number;
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
@@ -86,26 +87,23 @@ function mergeHostnameList(...lists: Array<string[] | undefined>): string[] | un
   return uniqueStrings(merged);
 }
 
-function resolveDiscordMediaSsrFPolicy(policy?: SsrFPolicy): SsrFPolicy {
+function resolveDiscordMediaSsrFPolicy(policy?: MediaFetchUrlPolicy): MediaFetchUrlPolicy {
   if (!policy) {
-    return DISCORD_MEDIA_SSRF_POLICY;
+    return DISCORD_MEDIA_URL_POLICY;
   }
   const hostnameAllowlist = mergeHostnameList(
-    DISCORD_MEDIA_SSRF_POLICY.hostnameAllowlist,
+    DISCORD_MEDIA_URL_POLICY.hostnameAllowlist,
     policy.hostnameAllowlist,
   );
   const allowedHostnames = mergeHostnameList(
-    DISCORD_MEDIA_SSRF_POLICY.allowedHostnames,
+    DISCORD_MEDIA_URL_POLICY.allowedHostnames,
     policy.allowedHostnames,
   );
   return {
-    ...DISCORD_MEDIA_SSRF_POLICY,
+    ...DISCORD_MEDIA_URL_POLICY,
     ...policy,
     ...(allowedHostnames ? { allowedHostnames } : {}),
     ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
-    allowRfc2544BenchmarkRange:
-      Boolean(DISCORD_MEDIA_SSRF_POLICY.allowRfc2544BenchmarkRange) ||
-      Boolean(policy.allowRfc2544BenchmarkRange),
   };
 }
 
@@ -246,7 +244,7 @@ async function fetchDiscordMedia(params: {
   filePathHint: string;
   maxBytes: number;
   fetchImpl?: FetchLike;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: MediaFetchUrlPolicy;
   readIdleTimeoutMs?: number;
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
@@ -301,7 +299,7 @@ async function appendResolvedMediaFromAttachments(params: {
   out: DiscordMediaInfo[];
   errorPrefix: string;
   fetchImpl?: FetchLike;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: MediaFetchUrlPolicy;
   readIdleTimeoutMs?: number;
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
@@ -406,7 +404,7 @@ async function appendResolvedMediaFromStickers(params: {
   out: DiscordMediaInfo[];
   errorPrefix: string;
   fetchImpl?: FetchLike;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: MediaFetchUrlPolicy;
   readIdleTimeoutMs?: number;
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;

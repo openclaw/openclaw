@@ -1,6 +1,6 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Telegram plugin module implements delivery.resolve media behavior.
 import { logVerbose, retryAsync, warn } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramApiBase, shouldRetryTelegramTransportFallback } from "../fetch.js";
 import {
   readRemoteMediaBuffer,

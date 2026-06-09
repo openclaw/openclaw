@@ -19,8 +19,8 @@ import {
   resolveOpenAITtsInstructions,
 } from "./tts.js";
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: async ({
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchWithResponseRelease: async ({
     url,
     init,
   }: {

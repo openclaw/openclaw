@@ -15,7 +15,6 @@ const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRe
     postJsonRequestMock: vi.fn(),
     resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
       baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-      allowPrivateNetwork: false,
       headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
       dispatcherPolicy: undefined,
     })),
@@ -114,7 +113,6 @@ describe("openrouter media understanding provider", () => {
       },
       timeoutMs: 12_000,
       fetchFn: fetch,
-      allowPrivateNetwork: false,
       dispatcherPolicy: undefined,
       auditContext: "openrouter stt",
     });

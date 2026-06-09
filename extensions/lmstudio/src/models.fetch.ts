@@ -1,10 +1,16 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Lmstudio plugin module implements models.fetch behavior.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { SELF_HOSTED_DEFAULT_COST } from "openclaw/plugin-sdk/provider-setup";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  isBlockedHostnameOrIp,
+  resolveSsrFPolicyForUrl,
+  SsrFBlockedError,
+  type SsrFPolicy,
+} from "openclaw/plugin-sdk/ssrf-policy";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
@@ -44,27 +50,47 @@ async function fetchLmstudioEndpoint(params: {
   timeoutMs: number;
   fetchImpl?: typeof fetch;
   ssrfPolicy?: SsrFPolicy;
-  auditContext: string;
 }): Promise<{ response: Response; release: () => Promise<void> }> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  if (params.ssrfPolicy) {
-    return await fetchWithSsrFGuard({
-      url: params.url,
-      init: params.init,
-      timeoutMs,
-      fetchImpl: params.fetchImpl,
-      policy: params.ssrfPolicy,
-      auditContext: params.auditContext,
-    });
+  return await fetchWithResponseRelease({
+    url: params.url,
+    init: params.init,
+    timeoutMs,
+    fetchImpl: params.fetchImpl,
+    validateUrl: params.ssrfPolicy
+      ? (url) => assertLmstudioUrlAllowedByPolicy(url, params.ssrfPolicy)
+      : undefined,
+  });
+}
+
+function assertLmstudioUrlAllowedByPolicy(url: URL, policy: SsrFPolicy | undefined): void {
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("LM Studio model requests only support http and https URLs");
   }
-  const fetchFn = params.fetchImpl ?? fetch;
-  return {
-    response: await fetchFn(params.url, {
-      ...params.init,
-      signal: AbortSignal.timeout(timeoutMs),
-    }),
-    release: async () => {},
-  };
+  const urlPolicy = resolveSsrFPolicyForUrl(url, policy);
+  const hostnameAllowlist = [
+    ...(urlPolicy?.allowedHostnames ?? []),
+    ...(urlPolicy?.hostnameAllowlist ?? []),
+  ];
+  if (
+    hostnameAllowlist.length > 0 &&
+    !hostnameAllowlist.some((entry) => isLmstudioHostnameAllowed(url.hostname, entry))
+  ) {
+    throw new SsrFBlockedError("Blocked LM Studio model request target by policy");
+  }
+  if (isBlockedHostnameOrIp(url.hostname, urlPolicy)) {
+    throw new SsrFBlockedError("Blocked LM Studio model request target by policy");
+  }
+}
+
+function isLmstudioHostnameAllowed(hostname: string, allowlistEntry: string): boolean {
+  const normalizedHostname = hostname.toLowerCase().replace(/\.$/, "");
+  const normalizedEntry = allowlistEntry.toLowerCase().replace(/\.$/, "");
+  if (normalizedEntry.startsWith("*.")) {
+    const suffix = normalizedEntry.slice(1);
+    return normalizedHostname.endsWith(suffix);
+  }
+  return normalizedHostname === normalizedEntry;
 }
 
 function asLmstudioModelWire(value: unknown): LmstudioModelWire {
@@ -98,7 +124,6 @@ export async function fetchLmstudioModels(params: {
       timeoutMs,
       fetchImpl: params.fetchImpl,
       ssrfPolicy: params.ssrfPolicy,
-      auditContext: "lmstudio-model-discovery",
     });
     try {
       if (!response.ok) {
@@ -249,7 +274,6 @@ export async function ensureLmstudioModelLoaded(params: {
     timeoutMs,
     fetchImpl: params.fetchImpl,
     ssrfPolicy: params.ssrfPolicy,
-    auditContext: "lmstudio-model-load",
   });
   try {
     if (!response.ok) {

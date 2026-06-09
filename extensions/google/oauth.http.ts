@@ -1,5 +1,6 @@
 // Google plugin module implements oauth.http behavior.
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { DEFAULT_FETCH_TIMEOUT_MS } from "./oauth.shared.js";
 
 export async function fetchWithTimeout(
@@ -7,7 +8,7 @@ export async function fetchWithTimeout(
   init: RequestInit,
   timeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
 ): Promise<Response> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url,
     init,
     timeoutMs,

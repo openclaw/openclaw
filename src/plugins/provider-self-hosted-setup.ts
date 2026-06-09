@@ -18,9 +18,8 @@ import {
 } from "../agents/self-hosted-provider-defaults.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
@@ -59,26 +58,6 @@ function isReasoningModelHeuristic(modelId: string): boolean {
   return /r1|reasoning|think|reason/i.test(modelId);
 }
 
-const SELF_HOSTED_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
-
-function buildSelfHostedBaseUrlSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
-  try {
-    const parsed = new URL(baseUrl.trim());
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    if (SELF_HOSTED_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname.toLowerCase())) {
-      return undefined;
-    }
-    return {
-      hostnameAllowlist: [parsed.hostname],
-      allowPrivateNetwork: true,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
 function readPositiveInteger(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -114,15 +93,18 @@ async function discoverLlamaCppRuntimeContextTokens(params: {
   }
   try {
     const trimmedApiKey = normalizeOptionalString(params.apiKey);
-    const { response, release } = await fetchWithSsrFGuard({
-      url,
-      init: {
-        headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
-      },
-      policy: buildSelfHostedBaseUrlSsrFPolicy(params.baseUrl),
+    const timeout = buildTimeoutAbortSignal({
       timeoutMs: 2500,
+      operation: "llama-cpp-props-discovery",
+      url,
     });
+    let response: Response | undefined;
     try {
+      response = await fetch(url, {
+        headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
+        redirect: "error",
+        ...(timeout.signal ? { signal: timeout.signal } : {}),
+      });
       if (!response.ok) {
         return undefined;
       }
@@ -132,7 +114,8 @@ async function discoverLlamaCppRuntimeContextTokens(params: {
         readPositiveInteger(data.n_ctx)
       );
     } finally {
-      await release();
+      timeout.cleanup();
+      await response?.body?.cancel().catch(() => undefined);
     }
   } catch {
     return undefined;
@@ -157,15 +140,18 @@ export async function discoverOpenAICompatibleLocalModels(params: {
 
   try {
     const trimmedApiKey = normalizeOptionalString(params.apiKey);
-    const { response, release } = await fetchWithSsrFGuard({
-      url,
-      init: {
-        headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
-      },
-      policy: buildSelfHostedBaseUrlSsrFPolicy(trimmedBaseUrl),
+    const timeout = buildTimeoutAbortSignal({
       timeoutMs: 5000,
+      operation: "self-hosted-model-discovery",
+      url,
     });
+    let response: Response | undefined;
     try {
+      response = await fetch(url, {
+        headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
+        redirect: "error",
+        ...(timeout.signal ? { signal: timeout.signal } : {}),
+      });
       if (!response.ok) {
         log.warn(`Failed to discover ${params.label} models: ${response.status}`);
         return [];
@@ -227,7 +213,8 @@ export async function discoverOpenAICompatibleLocalModels(params: {
         return modelConfig;
       });
     } finally {
-      await release();
+      timeout.cleanup();
+      await response?.body?.cancel().catch(() => undefined);
     }
   } catch (error) {
     log.warn(`Failed to discover ${params.label} models: ${String(error)}`);

@@ -5,15 +5,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveNextcloudTalkRoomKind, testing } from "./room-info.js";
 
-const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
+const fetchWithResponseRelease = vi.hoisted(() => vi.fn());
 const tempDirs: string[] = [];
 
-vi.mock("../runtime-api.js", () => {
-  return { fetchWithSsrFGuard };
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => {
+  return { fetchWithResponseRelease };
 });
 
 afterEach(() => {
-  fetchWithSsrFGuard.mockReset();
+  fetchWithResponseRelease.mockReset();
   testing.resetRoomCache();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { force: true, recursive: true });
@@ -21,11 +21,10 @@ afterEach(() => {
 });
 
 function requireFirstFetchParams(): {
-  auditContext?: string;
   init?: { headers?: { Authorization?: string } };
   url?: string;
 } {
-  const [call] = fetchWithSsrFGuard.mock.calls;
+  const [call] = fetchWithResponseRelease.mock.calls;
   if (!call) {
     throw new Error("expected Nextcloud Talk room info fetch call");
   }
@@ -33,13 +32,13 @@ function requireFirstFetchParams(): {
   if (!fetchParams || typeof fetchParams !== "object" || Array.isArray(fetchParams)) {
     throw new Error("expected Nextcloud Talk room info fetch call");
   }
-  return fetchParams as { auditContext?: string; url?: string };
+  return fetchParams as { init?: { headers?: { Authorization?: string } }; url?: string };
 }
 
 describe("nextcloud talk room info", () => {
   it("resolves direct rooms from the room info endpoint", async () => {
     const release = vi.fn(async () => {});
-    fetchWithSsrFGuard.mockResolvedValue({
+    fetchWithResponseRelease.mockResolvedValue({
       response: {
         ok: true,
         json: async () => ({
@@ -70,12 +69,11 @@ describe("nextcloud talk room info", () => {
     expect(fetchParams.url).toBe(
       "https://nc.example.com/ocs/v2.php/apps/spreed/api/v4/room/room-direct",
     );
-    expect(fetchParams.auditContext).toBe("nextcloud-talk.room-info");
     expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("normalizes signed decimal room type strings through the shared parser", async () => {
-    fetchWithSsrFGuard.mockResolvedValue({
+    fetchWithResponseRelease.mockResolvedValue({
       response: {
         ok: true,
         json: async () => ({
@@ -105,7 +103,7 @@ describe("nextcloud talk room info", () => {
   });
 
   it("does not coerce partial room type strings", async () => {
-    fetchWithSsrFGuard.mockResolvedValue({
+    fetchWithResponseRelease.mockResolvedValue({
       response: {
         ok: true,
         json: async () => ({
@@ -135,7 +133,7 @@ describe("nextcloud talk room info", () => {
   });
 
   it("does not classify negative room types as group rooms", async () => {
-    fetchWithSsrFGuard.mockResolvedValue({
+    fetchWithResponseRelease.mockResolvedValue({
       response: {
         ok: true,
         json: async () => ({
@@ -173,7 +171,7 @@ describe("nextcloud talk room info", () => {
     tempDirs.push(tempDir);
     const passwordFile = path.join(tempDir, "secret");
     writeFileSync(passwordFile, "file-secret\n", "utf-8");
-    fetchWithSsrFGuard.mockResolvedValue({
+    fetchWithResponseRelease.mockResolvedValue({
       response: {
         ok: false,
         status: 403,
@@ -208,7 +206,7 @@ describe("nextcloud talk room info", () => {
     const log = vi.fn();
     const error = vi.fn();
     const exit = vi.fn();
-    fetchWithSsrFGuard.mockResolvedValue({
+    fetchWithResponseRelease.mockResolvedValue({
       response: new Response("{ nope", {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -248,6 +246,6 @@ describe("nextcloud talk room info", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expect(fetchWithResponseRelease).not.toHaveBeenCalled();
   });
 });

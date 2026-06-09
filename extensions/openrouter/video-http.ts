@@ -27,7 +27,6 @@ export async function fetchOpenRouterVideoGet(params: {
   baseUrl: string;
   headers: Headers;
   timeoutMs: number;
-  allowPrivateNetwork: boolean;
   dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
   auditContext: string;
 }): Promise<GuardedFetchResult> {
@@ -41,7 +40,6 @@ export async function fetchOpenRouterVideoGet(params: {
     params.timeoutMs,
     fetch,
     {
-      ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
       ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
       auditContext: params.auditContext,
     },

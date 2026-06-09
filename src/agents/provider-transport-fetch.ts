@@ -1,13 +1,8 @@
 /**
  * Guarded provider fetch transport utilities.
  *
- * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
+ * Applies request timeouts, proxy/TLS overrides, local-service leases, retry hints, and SSE normalization.
  */
-import {
-  isCloudMetadataIpAddress,
-  isLinkLocalIpAddress,
-  parseCanonicalIpAddress,
-} from "@openclaw/net-policy/ip";
 import {
   asFiniteNumberInRange,
   clampTimerTimeoutMs,
@@ -15,16 +10,9 @@ import {
   parseStrictNonNegativeInteger,
 } from "@openclaw/normalization-core/number-coercion";
 import {
-  fetchWithSsrFGuard,
-  withTrustedEnvProxyGuardedFetchMode,
-} from "../infra/net/fetch-guard.js";
-import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
-import {
-  mergeSsrFPolicies,
-  ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
-  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
-  type SsrFPolicy,
-} from "../infra/net/ssrf.js";
+  fetchOperatorConfiguredEndpoint,
+  resolveEgressDispatcherPolicy,
+} from "../infra/net/egress-fetch.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
@@ -43,9 +31,9 @@ import {
 } from "./provider-request-config.js";
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
+const PROVIDER_TRANSPORT_MAX_REDIRECTS = 3;
 const OPENAI_SDK_STREAM_CONTENT_SNIFF_BYTES = 2 * 1024;
 const log = createSubsystemLogger("provider-transport-fetch");
-const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 const RETRY_AFTER_HTTP_DATE_RE =
   /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
@@ -620,95 +608,35 @@ function buildModelRequestSignal(
   return AbortSignal.any([baseSignal, timeoutSignal]);
 }
 
-function resolveHttpOrigin(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
-    return parsed.origin.toLowerCase();
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeProviderOriginHostname(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    const normalized = parsed.hostname.trim().toLowerCase().replace(/\.+$/, "");
-    return normalized || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function canImplicitlyTrustConfiguredBaseUrlOrigin(value: unknown): value is string {
-  const hostname = normalizeProviderOriginHostname(value);
-  if (!hostname) {
-    return false;
-  }
-  const labels = hostname.split(".").filter(Boolean);
-  return (
-    !labels.some(
-      (label) =>
-        label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
-    ) &&
-    !isLinkLocalIpAddress(hostname) &&
-    !isCloudMetadataIpAddress(hostname)
-  );
-}
-
-function canApplyFakeIpHostnamePolicy(value: unknown): value is string {
-  const hostname = normalizeProviderOriginHostname(value);
-  if (!hostname) {
-    return false;
-  }
-  const labels = hostname.split(".").filter(Boolean);
-  return (
-    !labels.some(
-      (label) =>
-        label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
-    ) && !parseCanonicalIpAddress(hostname)
-  );
-}
-
-function resolveModelTransportSsrFPolicy(params: {
-  model: Model;
+async function captureProviderTransportHttpExchange(params: {
   url: string;
-  allowPrivateNetwork?: boolean;
-  trustConfiguredBaseUrlOrigin?: boolean;
-}): SsrFPolicy | undefined {
-  const baseUrl = (params.model as { baseUrl?: unknown }).baseUrl;
-  const baseOrigin = resolveHttpOrigin(baseUrl);
-  const requestOrigin = resolveHttpOrigin(params.url);
-  const requestMatchesBaseOrigin =
-    typeof baseUrl === "string" && Boolean(baseOrigin) && requestOrigin === baseOrigin;
-  const baseUrlOriginPolicy =
-    requestMatchesBaseOrigin &&
-    params.trustConfiguredBaseUrlOrigin &&
-    canImplicitlyTrustConfiguredBaseUrlOrigin(baseUrl)
-      ? ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl)
-      : undefined;
-  // Fake-IP trust is hostname-scoped and orthogonal to exact-origin private-IP trust.
-  // It is for DNS hostnames only and does not allow literal private IPs by itself.
-  const fakeIpPolicy =
-    requestMatchesBaseOrigin && canApplyFakeIpHostnamePolicy(baseUrl)
-      ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
-      : undefined;
-  return mergeSsrFPolicies(
-    baseUrlOriginPolicy,
-    fakeIpPolicy,
-    params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+  init?: RequestInit;
+  response: Response;
+  model: Model;
+}): Promise<void> {
+  const settings = resolveDebugProxySettings();
+  if (!settings.enabled) {
+    return;
+  }
+  const { captureHttpExchange } = await import("../proxy-capture/runtime.js");
+  captureHttpExchange(
+    {
+      url: params.url,
+      method: params.init?.method ?? "GET",
+      requestHeaders: params.init?.headers as Headers | Record<string, string> | undefined,
+      requestBody:
+        (params.init as (RequestInit & { body?: BodyInit | Buffer | string | null }) | undefined)
+          ?.body ?? null,
+      response: params.response,
+      transport: "http",
+      meta: {
+        captureOrigin: "provider-transport",
+        provider: params.model.provider,
+        api: params.model.api,
+        model: params.model.id,
+      },
+    },
+    settings,
   );
 }
 
@@ -750,17 +678,6 @@ export function buildGuardedModelFetch(
           : (() => {
               throw new Error("Unsupported fetch input for transport-aware model request");
             })());
-    const policy = resolveModelTransportSsrFPolicy({
-      model,
-      url,
-      allowPrivateNetwork: requestConfig.allowPrivateNetwork,
-      // Only operator-configured custom/local endpoints get exact-origin trust;
-      // known public/native providers keep the default rebinding checks.
-      trustConfiguredBaseUrlOrigin:
-        !requestConfig.privateNetworkExplicitlyDenied &&
-        (requestConfig.policy?.endpointClass === "custom" ||
-          requestConfig.policy?.endpointClass === "local"),
-    });
     const requestInit =
       request &&
       ({
@@ -775,54 +692,60 @@ export function buildGuardedModelFetch(
     const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, baseInit);
     const baseSignal = baseInit?.signal ?? undefined;
     const localServiceSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
-    const guardedFetchOptions = {
-      url,
-      init: baseInit,
-      capture: {
-        meta: {
-          provider: model.provider,
-          api: model.api,
-          model: model.id,
-        },
-      },
-      dispatcherPolicy,
-      timeoutMs: requestTimeoutMs,
-      ...(baseSignal ? { signal: baseSignal } : {}),
-      // Provider transport intentionally keeps the secure default and never
-      // replays unsafe request bodies across cross-origin redirects.
-      allowCrossOriginUnsafeRedirectReplay: false,
-      ...(policy ? { policy } : {}),
-    };
-    let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    let release: (() => Promise<void>) | undefined;
+    let refreshTimeout: (() => void) | undefined;
     const fetchStartedAt = Date.now();
-    const useEnvProxy = !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url);
+    const initialDispatcherPolicy = resolveEgressDispatcherPolicy({
+      dispatcherPolicy,
+      url,
+    });
     emitModelTransportDebug(
       log,
       `[model-fetch] start provider=${model.provider} api=${model.api} model=${model.id} ` +
         `method=${baseInit?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
-        `proxy=${dispatcherPolicy ? "configured" : useEnvProxy ? "env" : "none"} ` +
-        `policy=${policy ? "custom" : "default"}`,
+        `proxy=${initialDispatcherPolicy ? "configured" : "none"} ` +
+        `policy=proxy`,
     );
+    let response: Response;
     try {
       localServiceLease = await ensureModelProviderLocalService(
         model,
         baseInit?.headers,
         localServiceSignal,
       );
-      result = await fetchWithSsrFGuard(
-        useEnvProxy
-          ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
-          : guardedFetchOptions,
-      );
+      const result = await fetchOperatorConfiguredEndpoint({
+        url,
+        init: baseInit,
+        timeoutMs: requestTimeoutMs,
+        signal: baseSignal,
+        dispatcherPolicy,
+        maxRedirects: PROVIDER_TRANSPORT_MAX_REDIRECTS,
+        operation: "provider-transport-fetch",
+        onResponse: async ({
+          url: responseUrl,
+          init: requestWithTransport,
+          response: capturedResponse,
+        }) => {
+          await captureProviderTransportHttpExchange({
+            url: responseUrl,
+            init: requestWithTransport,
+            response: capturedResponse,
+            model,
+          });
+        },
+      });
+      response = result.response;
+      release = result.release;
+      refreshTimeout = result.refreshTimeout;
     } catch (error) {
       log.warn(
         `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +
           `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(error)}`,
       );
+      await release?.().catch(() => undefined);
       localServiceLease?.release();
       throw error;
     }
-    let response = result.response;
     emitModelTransportDebug(
       log,
       `[model-fetch] response provider=${model.provider} api=${model.api} model=${model.id} ` +
@@ -842,14 +765,14 @@ export function buildGuardedModelFetch(
       response = await normalizeOpenAISdkStreamContentType({
         response,
         model,
-        release: result.release,
+        release: release ?? (async () => undefined),
         localServiceLease,
       });
     }
     response = buildManagedResponse(
       response,
-      result.release,
-      result.refreshTimeout,
+      release ?? (async () => undefined),
+      refreshTimeout,
       localServiceLease,
     );
     return options?.sanitizeSse === false || !shouldSanitizeOpenAISdkSseResponse(model)

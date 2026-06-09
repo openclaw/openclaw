@@ -1,7 +1,7 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Msteams plugin module implements oauth.token behavior.
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { createMSTeamsHttpError } from "./http-error.js";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
@@ -76,7 +76,7 @@ async function fetchMSTeamsTokens(params: {
   failureLabel: string;
 }): Promise<MSTeamsTokenResponse> {
   const currentFetch = globalThis.fetch;
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: params.tokenUrl,
     fetchImpl: async (input, guardedInit) => await currentFetch(input, guardedInit),
     init: {
@@ -88,7 +88,6 @@ async function fetchMSTeamsTokens(params: {
       body: params.body,
       signal: AbortSignal.timeout(MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS),
     },
-    auditContext: params.auditContext,
   });
 
   try {

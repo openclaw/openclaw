@@ -84,4 +84,31 @@ describe("legacy web fetch config", () => {
       }),
     ).toEqual(["tools.web.fetch.firecrawl.apiKey", "tools.web.fetch.firecrawl.maxAgeMs"]);
   });
+
+  it("removes retired internal SSRF guard knobs from web fetch config", () => {
+    const res = migrateLegacyWebFetchConfig({
+      tools: {
+        web: {
+          fetch: {
+            enabled: true,
+            timeoutSeconds: 15,
+            useTrustedEnvProxy: true,
+            ssrfPolicy: {
+              allowRfc2544BenchmarkRange: true,
+              allowIpv6UniqueLocalRange: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(res.config.tools?.web?.fetch).toEqual({
+      enabled: true,
+      timeoutSeconds: 15,
+    });
+    expect(res.changes).toEqual([
+      "Removed tools.web.fetch.useTrustedEnvProxy. SSRF/network egress enforcement moved to proxy.enabled plus external proxy policy.",
+      "Removed tools.web.fetch.ssrfPolicy. SSRF/network egress enforcement moved to proxy.enabled plus external proxy policy.",
+    ]);
+  });
 });

@@ -33,7 +33,11 @@ function hasMappedLegacyWebFetchConfig(raw: unknown): boolean {
   if (!fetch) {
     return false;
   }
-  return isRecord(fetch.firecrawl);
+  return (
+    isRecord(fetch.firecrawl) ||
+    hasOwnKey(fetch, "useTrustedEnvProxy") ||
+    hasOwnKey(fetch, "ssrfPolicy")
+  );
 }
 
 function migratePluginWebFetchConfig(params: {
@@ -110,7 +114,11 @@ function normalizeLegacyWebFetchConfigRecord<T extends JsonRecord>(
 
   const nextFetch: JsonRecord = {};
   for (const [key, value] of Object.entries(fetch)) {
-    if (key === "firecrawl" && isRecord(value)) {
+    if (
+      (key === "firecrawl" && isRecord(value)) ||
+      key === "useTrustedEnvProxy" ||
+      key === "ssrfPolicy"
+    ) {
       continue;
     }
     if (DANGEROUS_RECORD_KEYS.has(key)) {
@@ -130,6 +138,16 @@ function normalizeLegacyWebFetchConfigRecord<T extends JsonRecord>(
     });
   } else if (hasOwnKey(fetch, "firecrawl")) {
     changes.push("Removed empty tools.web.fetch.firecrawl.");
+  }
+  if (hasOwnKey(fetch, "useTrustedEnvProxy")) {
+    changes.push(
+      "Removed tools.web.fetch.useTrustedEnvProxy. SSRF/network egress enforcement moved to proxy.enabled plus external proxy policy.",
+    );
+  }
+  if (hasOwnKey(fetch, "ssrfPolicy")) {
+    changes.push(
+      "Removed tools.web.fetch.ssrfPolicy. SSRF/network egress enforcement moved to proxy.enabled plus external proxy policy.",
+    );
   }
 
   return { config: nextRoot, changes };

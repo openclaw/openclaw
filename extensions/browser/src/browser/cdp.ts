@@ -229,8 +229,6 @@ export async function createTargetViaCdp(opts: {
       version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
         appendCdpPath(discoveryUrl, "/json/version"),
         opts.timeouts?.httpTimeoutMs,
-        undefined,
-        opts.ssrfPolicy,
       );
     } catch (err) {
       // Discovery failed for an HTTP/HTTPS URL — propagate immediately.

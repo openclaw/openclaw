@@ -1,12 +1,13 @@
 // Runtime model preflight tests cover provider/model checks before cron execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(),
+const { fetchOperatorConfiguredEndpointMock } = vi.hoisted(() => ({
+  fetchOperatorConfiguredEndpointMock: vi.fn(),
 }));
 
-vi.mock("../../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+vi.mock("../../infra/net/egress-fetch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/net/egress-fetch.js")>()),
+  fetchOperatorConfiguredEndpoint: fetchOperatorConfiguredEndpointMock,
 }));
 
 import {
@@ -15,7 +16,7 @@ import {
 } from "./model-preflight.runtime.js";
 
 function mockReachableResponse(status = 200) {
-  fetchWithSsrFGuardMock.mockResolvedValueOnce({
+  fetchOperatorConfiguredEndpointMock.mockResolvedValueOnce({
     response: { status },
     release: vi.fn(async () => {}),
   });
@@ -24,10 +25,10 @@ function mockReachableResponse(status = 200) {
 function requireFetchPreflightRequest(): {
   url?: string;
   timeoutMs?: number;
-  auditContext?: string;
+  operation?: string;
 } {
-  const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as
-    | { url?: string; timeoutMs?: number; auditContext?: string }
+  const request = fetchOperatorConfiguredEndpointMock.mock.calls[0]?.[0] as
+    | { url?: string; timeoutMs?: number; operation?: string }
     | undefined;
   if (!request) {
     throw new Error("Expected cron model preflight fetch request");
@@ -37,7 +38,7 @@ function requireFetchPreflightRequest(): {
 
 describe("preflightCronModelProvider", () => {
   beforeEach(() => {
-    fetchWithSsrFGuardMock.mockReset();
+    fetchOperatorConfiguredEndpointMock.mockReset();
     resetCronModelProviderPreflightCacheForTest();
   });
 
@@ -59,7 +60,7 @@ describe("preflightCronModelProvider", () => {
     });
 
     expect(result).toEqual({ status: "available" });
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    expect(fetchOperatorConfiguredEndpointMock).not.toHaveBeenCalled();
   });
 
   it("treats any HTTP response from a local OpenAI-compatible endpoint as reachable", async () => {
@@ -88,7 +89,7 @@ describe("preflightCronModelProvider", () => {
   });
 
   it("marks unreachable local Ollama endpoints unavailable and caches the result", async () => {
-    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    fetchOperatorConfiguredEndpointMock.mockRejectedValueOnce(new Error("ECONNREFUSED"));
 
     const cfg = {
       models: {
@@ -130,17 +131,19 @@ describe("preflightCronModelProvider", () => {
     expect(second.model).toBe("llama3.3:70b");
     expect(second.baseUrl).toBe("http://localhost:11434");
     expect(second.retryAfterMs).toBe(300000);
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    expect(fetchOperatorConfiguredEndpointMock).toHaveBeenCalledTimes(1);
     const request = requireFetchPreflightRequest();
     expect(request.url).toBe("http://localhost:11434/api/tags");
-    expect(request.auditContext).toBe("cron-model-provider-preflight");
+    expect(request.operation).toBe("cron-model-provider-preflight");
   });
 
   it("retries an unavailable endpoint after the cache ttl", async () => {
-    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("ECONNREFUSED")).mockResolvedValueOnce({
-      response: { status: 200 },
-      release: vi.fn(async () => {}),
-    });
+    fetchOperatorConfiguredEndpointMock
+      .mockRejectedValueOnce(new Error("ECONNREFUSED"))
+      .mockResolvedValueOnce({
+        response: { status: 200 },
+        release: vi.fn(async () => {}),
+      });
 
     const cfg = {
       models: {
@@ -169,6 +172,6 @@ describe("preflightCronModelProvider", () => {
 
     expect(first.status).toBe("unavailable");
     expect(second).toEqual({ status: "available" });
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+    expect(fetchOperatorConfiguredEndpointMock).toHaveBeenCalledTimes(2);
   });
 });

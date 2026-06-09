@@ -300,6 +300,11 @@ describe("createPinnedDispatcher", () => {
         autoSelectFamilyAttemptTimeout: 300,
         lookup,
       },
+      requestTls: {
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+        lookup,
+      },
       clientFactory: expect.any(Function),
       allowH2: false,
       proxyTls: {

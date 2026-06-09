@@ -109,9 +109,8 @@ function fetchParams(): Record<string, unknown> {
   );
 }
 
-function expectDiscordCdnSsrFPolicy(policy: unknown) {
-  const policyRecord = requireRecord(policy, "ssrf policy");
-  expect(policyRecord.allowRfc2544BenchmarkRange).toBe(true);
+function expectDiscordCdnMediaUrlPolicy(policy: unknown) {
+  const policyRecord = requireRecord(policy, "media URL policy");
   const hostnameAllowlist = requireArray(policyRecord.hostnameAllowlist, "hostname allowlist");
   for (const hostname of DISCORD_CDN_HOSTNAMES) {
     expect(hostnameAllowlist).toContain(hostname);
@@ -131,7 +130,7 @@ function expectSinglePngDownload(params: {
   expect(call.filePathHint).toBe(params.filePathHint);
   expect(call.maxBytes).toBe(512);
   expect(call.fetchImpl).toBeUndefined();
-  expectDiscordCdnSsrFPolicy(call.ssrfPolicy);
+  expectDiscordCdnMediaUrlPolicy(call.ssrfPolicy);
   expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
   expect(Buffer.isBuffer(callArg(saveMediaBuffer, 0, 0, "saved buffer"))).toBe(true);
   expect(callArg(saveMediaBuffer, 0, 1, "saved content type")).toBe("image/png");
@@ -929,7 +928,7 @@ describe("Discord media SSRF policy", () => {
     saveMediaBuffer.mockClear();
   });
 
-  it("passes Discord CDN hostname allowlist with RFC2544 enabled", async () => {
+  it("passes Discord CDN hostname allowlist", async () => {
     readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("img"),
       contentType: "image/png",
@@ -946,10 +945,10 @@ describe("Discord media SSRF policy", () => {
       1024,
     );
 
-    expectDiscordCdnSsrFPolicy(fetchParams().ssrfPolicy);
+    expectDiscordCdnMediaUrlPolicy(fetchParams().ssrfPolicy);
   });
 
-  it("merges provided ssrfPolicy with Discord CDN defaults", async () => {
+  it("merges provided media URL allowlist with Discord CDN defaults", async () => {
     readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("img"),
       contentType: "image/png",
@@ -966,7 +965,6 @@ describe("Discord media SSRF policy", () => {
       1024,
       {
         ssrfPolicy: {
-          allowPrivateNetwork: true,
           hostnameAllowlist: ["assets.example.com"],
           allowedHostnames: ["assets.example.com"],
         },
@@ -974,8 +972,6 @@ describe("Discord media SSRF policy", () => {
     );
 
     const policy = requireRecord(fetchParams().ssrfPolicy, "ssrf policy");
-    expect(policy.allowPrivateNetwork).toBe(true);
-    expect(policy.allowRfc2544BenchmarkRange).toBe(true);
     expect(requireArray(policy.allowedHostnames, "allowed hostnames")).toContain(
       "assets.example.com",
     );

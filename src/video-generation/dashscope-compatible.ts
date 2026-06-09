@@ -232,7 +232,6 @@ export async function runDashscopeVideoGenerationTask(params: {
   baseUrl: string;
   timeoutMs?: number;
   fetchFn: typeof fetch;
-  allowPrivateNetwork?: boolean;
   dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
   defaultTimeoutMs?: number;
 }): Promise<VideoGenerationResult> {
@@ -260,7 +259,6 @@ export async function runDashscopeVideoGenerationTask(params: {
     },
     timeoutMs: resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs }),
     fetchFn: params.fetchFn,
-    allowPrivateNetwork: params.allowPrivateNetwork,
     dispatcherPolicy: params.dispatcherPolicy,
   });
 

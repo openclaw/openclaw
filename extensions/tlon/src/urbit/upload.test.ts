@@ -1,18 +1,18 @@
 // Tlon tests cover upload plugin behavior.
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { uploadFile } from "../tlon-api.js";
 import { uploadImageFromUrl } from "./upload.js";
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: vi.fn(),
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchWithResponseRelease: vi.fn(),
 }));
 
 vi.mock("../tlon-api.js", () => ({
   uploadFile: vi.fn(),
 }));
 
-const mockFetch = vi.mocked(fetchWithSsrFGuard);
+const mockFetch = vi.mocked(fetchWithResponseRelease);
 const mockUploadFile = vi.mocked(uploadFile);
 
 type FetchMock = typeof mockFetch;

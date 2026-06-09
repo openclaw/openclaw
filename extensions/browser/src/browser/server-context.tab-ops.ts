@@ -230,7 +230,7 @@ export function createProfileTabOps({
         webSocketDebuggerUrl?: string;
         type?: string;
       }>
-    >(appendCdpPath(cdpHttpBase, "/json/list"), undefined, undefined, getCdpControlPolicy());
+    >(appendCdpPath(cdpHttpBase, "/json/list"));
     return raw
       .map((t) => ({
         targetId: t.id ?? "",
@@ -271,7 +271,6 @@ export function createProfileTabOps({
         appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`),
         undefined,
         undefined,
-        getCdpControlPolicy(),
       ).catch(() => {
         // best-effort cleanup only
       });
@@ -380,14 +379,12 @@ export function createProfileTabOps({
       {
         method: "PUT",
       },
-      getCdpControlPolicy(),
     ).catch(async (err: unknown) => {
       if (String(err).includes("HTTP 405")) {
         return await fetchJson<CdpTarget>(
           endpoint,
           cdpActionTimeouts?.httpTimeoutMs ?? CDP_JSON_NEW_TIMEOUT_MS,
           undefined,
-          getCdpControlPolicy(),
         );
       }
       throw err;

@@ -22,14 +22,6 @@ const NextcloudTalkRoomSchema = z
   })
   .strict();
 
-const NextcloudTalkNetworkSchema = z
-  .object({
-    /** Dangerous opt-in for self-hosted Nextcloud Talk on trusted private/internal hosts. */
-    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
-  })
-  .strict()
-  .optional();
-
 const NextcloudTalkAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -50,8 +42,6 @@ const NextcloudTalkAccountSchemaBase = z
     groupAllowFrom: z.array(z.string()).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     rooms: z.record(z.string(), NextcloudTalkRoomSchema.optional()).optional(),
-    /** Network policy overrides for self-hosted Nextcloud Talk on trusted private/internal hosts. */
-    network: NextcloudTalkNetworkSchema,
     ...ReplyRuntimeConfigSchemaShape,
   })
   .strict();

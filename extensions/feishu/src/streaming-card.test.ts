@@ -3,8 +3,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchWithResponseRelease: fetchWithSsrFGuardMock,
 }));
 
 import {
@@ -41,7 +41,7 @@ function setStreamingSessionInternals(
 
 describe("FeishuStreamingSession", () => {
   afterAll(() => {
-    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/fetch-runtime");
     vi.resetModules();
   });
 

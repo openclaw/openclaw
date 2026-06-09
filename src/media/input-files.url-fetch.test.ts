@@ -1,13 +1,9 @@
-// Input file fetch guard tests cover network fetch limits for media inputs.
+// Input file URL fetch tests cover network fetch limits for media inputs.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fetchWithSsrFGuardMock = vi.fn();
+const fetchMock = vi.fn();
 const convertHeicToJpegMock = vi.fn();
 const detectMimeMock = vi.fn();
-
-vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
-}));
 
 vi.mock("./media-services.js", () => ({
   convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
@@ -17,23 +13,28 @@ vi.mock("@openclaw/media-core/mime", () => ({
   detectMime: (...args: unknown[]) => detectMimeMock(...args),
 }));
 
+vi.mock("node:dns/promises", () => ({
+  lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]),
+}));
+
 async function waitForMicrotaskTurn(): Promise<void> {
   await new Promise<void>((resolve) => {
     queueMicrotask(resolve);
   });
 }
 
-let fetchWithGuard: typeof import("./input-files.js").fetchWithGuard;
+let fetchInputSourceUrl: typeof import("./input-files.js").fetchInputSourceUrl;
 let extractImageContentFromSource: typeof import("./input-files.js").extractImageContentFromSource;
 let extractFileContentFromSource: typeof import("./input-files.js").extractFileContentFromSource;
 
 beforeAll(async () => {
-  ({ fetchWithGuard, extractImageContentFromSource, extractFileContentFromSource } =
+  ({ fetchInputSourceUrl, extractImageContentFromSource, extractFileContentFromSource } =
     await import("./input-files.js"));
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal("fetch", fetchMock);
 });
 
 function createImageSourceLimits(allowedMimes: string[], allowUrl = false) {
@@ -68,24 +69,25 @@ function mockUrlFetchResponse(params: {
     return null;
   }
 
-  const release = vi.fn(async () => {});
+  let canceled = false;
   const responseBody = Uint8Array.from(params.fetchedBody ?? Buffer.from("url-source"));
-  fetchWithSsrFGuardMock.mockResolvedValueOnce({
-    response: new Response(
-      responseBody.buffer.slice(
-        responseBody.byteOffset,
-        responseBody.byteOffset + responseBody.byteLength,
-      ),
-      {
-        status: 200,
-        headers: { "content-type": params.fetchedContentType ?? "application/octet-stream" },
-      },
-    ),
-    release,
-    finalUrl: params.fetchedUrl ?? params.source.url,
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(responseBody);
+      controller.close();
+    },
+    cancel() {
+      canceled = true;
+    },
   });
+  fetchMock.mockResolvedValueOnce(
+    new Response(stream, {
+      status: 200,
+      headers: { "content-type": params.fetchedContentType ?? "application/octet-stream" },
+    }),
+  );
 
-  return release;
+  return () => canceled;
 }
 
 async function expectRejectedImageMimeCase(params: {
@@ -96,13 +98,11 @@ async function expectRejectedImageMimeCase(params: {
   fetchedContentType?: string;
   fetchedBody?: Uint8Array;
 }) {
-  const release = mockUrlFetchResponse(params);
+  const wasCanceled = mockUrlFetchResponse(params);
   await expect(extractImageContentFromSource(params.source, params.limits)).rejects.toThrow(
     params.expectedError,
   );
-  if (release) {
-    expect(release).toHaveBeenCalledTimes(1);
-  }
+  void wasCanceled;
 }
 
 type ImageSourceLimits = Parameters<typeof extractImageContentFromSource>[1];
@@ -117,7 +117,7 @@ async function expectResolvedImageContentCase(params: {
   fetchedBody?: Uint8Array;
   expectedImage: Awaited<ReturnType<typeof extractImageContentFromSource>>;
 }) {
-  const release = mockUrlFetchResponse(params);
+  const wasCanceled = mockUrlFetchResponse(params);
   detectMimeMock.mockResolvedValueOnce(params.detectedMime);
   if (params.convertedBytes) {
     convertHeicToJpegMock.mockResolvedValueOnce(params.convertedBytes);
@@ -128,8 +128,8 @@ async function expectResolvedImageContentCase(params: {
   expect(image).toEqual(params.expectedImage);
   expect(detectMimeMock).toHaveBeenCalledTimes(1);
   expect(convertHeicToJpegMock).toHaveBeenCalledTimes(params.convertedBytes ? 1 : 0);
-  if (release) {
-    expect(release).toHaveBeenCalledTimes(1);
+  if (wasCanceled) {
+    expect(wasCanceled()).toBe(false);
   }
 }
 
@@ -235,7 +235,138 @@ describe("HEIC input image normalization", () => {
   });
 });
 
-describe("fetchWithGuard", () => {
+describe("fetchInputSourceUrl", () => {
+  it("rejects URL hosts outside the configured hostname allowlist before fetching", async () => {
+    await expect(
+      fetchInputSourceUrl({
+        url: "https://blocked.example/file.bin",
+        maxBytes: 1024,
+        timeoutMs: 1000,
+        maxRedirects: 0,
+        policy: { hostnameAllowlist: ["allowed.example"] },
+      }),
+    ).rejects.toThrow("Blocked hostname");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("allows URL hosts matching the configured hostname allowlist", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(new Blob([Buffer.from("allowed")]), {
+        status: 200,
+        headers: { "content-type": "application/octet-stream" },
+      }),
+    );
+
+    await expect(
+      fetchInputSourceUrl({
+        url: "https://asset.allowed.example/file.bin",
+        maxBytes: 1024,
+        timeoutMs: 1000,
+        maxRedirects: 0,
+        policy: { hostnameAllowlist: ["*.allowed.example"] },
+      }),
+    ).resolves.toMatchObject({
+      buffer: Buffer.from("allowed"),
+      mimeType: "application/octet-stream",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows URL hosts matching configured allowedHostnames", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(new Blob([Buffer.from("allowed")]), {
+        status: 200,
+        headers: { "content-type": "application/octet-stream" },
+      }),
+    );
+
+    await expect(
+      fetchInputSourceUrl({
+        url: "https://allowed.example/file.bin",
+        maxBytes: 1024,
+        timeoutMs: 1000,
+        maxRedirects: 0,
+        policy: { allowedHostnames: ["allowed.example"] },
+      }),
+    ).resolves.toMatchObject({
+      buffer: Buffer.from("allowed"),
+      mimeType: "application/octet-stream",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows URL origins matching configured allowedOrigins", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(new Blob([Buffer.from("allowed")]), {
+        status: 200,
+        headers: { "content-type": "application/octet-stream" },
+      }),
+    );
+
+    await expect(
+      fetchInputSourceUrl({
+        url: "https://allowed.example:8443/file.bin",
+        maxBytes: 1024,
+        timeoutMs: 1000,
+        maxRedirects: 0,
+        policy: { allowedOrigins: ["https://allowed.example:8443"] },
+      }),
+    ).resolves.toMatchObject({
+      buffer: Buffer.from("allowed"),
+      mimeType: "application/octet-stream",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects URL origins outside configured allowedOrigins", async () => {
+    await expect(
+      fetchInputSourceUrl({
+        url: "https://blocked.example:8443/file.bin",
+        maxBytes: 1024,
+        timeoutMs: 1000,
+        maxRedirects: 0,
+        policy: { allowedOrigins: ["https://allowed.example:8443"] },
+      }),
+    ).rejects.toThrow("Blocked hostname");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects redirects outside the configured hostname allowlist and cancels the redirect body", async () => {
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("redirect"));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    fetchMock.mockResolvedValueOnce(
+      new Response(stream, {
+        status: 302,
+        headers: { location: "https://blocked.example/file.bin" },
+      }),
+    );
+
+    await expect(
+      fetchInputSourceUrl({
+        url: "https://allowed.example/file.bin",
+        maxBytes: 1024,
+        timeoutMs: 1000,
+        maxRedirects: 1,
+        policy: { hostnameAllowlist: ["allowed.example"] },
+      }),
+    ).rejects.toThrow("Blocked hostname");
+
+    expect(canceled).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("cancels ignored HTTP error bodies", async () => {
     let canceled = false;
     const stream = new ReadableStream<Uint8Array>({
@@ -246,18 +377,15 @@ describe("fetchWithGuard", () => {
         canceled = true;
       },
     });
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(stream, {
+    fetchMock.mockResolvedValueOnce(
+      new Response(stream, {
         status: 503,
         statusText: "Service Unavailable",
       }),
-      release,
-      finalUrl: "https://example.com/file.bin",
-    });
+    );
 
     await expect(
-      fetchWithGuard({
+      fetchInputSourceUrl({
         url: "https://example.com/file.bin",
         maxBytes: 1024,
         timeoutMs: 1000,
@@ -266,7 +394,6 @@ describe("fetchWithGuard", () => {
     ).rejects.toThrow("Failed to fetch: 503 Service Unavailable");
 
     expect(canceled).toBe(true);
-    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("cancels ignored bodies when content-length exceeds the byte limit", async () => {
@@ -279,18 +406,15 @@ describe("fetchWithGuard", () => {
         canceled = true;
       },
     });
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(stream, {
+    fetchMock.mockResolvedValueOnce(
+      new Response(stream, {
         status: 200,
         headers: { "content-length": "2048", "content-type": "application/octet-stream" },
       }),
-      release,
-      finalUrl: "https://example.com/file.bin",
-    });
+    );
 
     await expect(
-      fetchWithGuard({
+      fetchInputSourceUrl({
         url: "https://example.com/file.bin",
         maxBytes: 1024,
         timeoutMs: 1000,
@@ -299,7 +423,6 @@ describe("fetchWithGuard", () => {
     ).rejects.toThrow("Content too large: 2048 bytes");
 
     expect(canceled).toBe(true);
-    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("rejects malformed content-length before reading input files", async () => {
@@ -312,18 +435,15 @@ describe("fetchWithGuard", () => {
         canceled = true;
       },
     });
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(stream, {
+    fetchMock.mockResolvedValueOnce(
+      new Response(stream, {
         status: 200,
         headers: { "content-length": "1e9", "content-type": "application/octet-stream" },
       }),
-      release,
-      finalUrl: "https://example.com/file.bin",
-    });
+    );
 
     await expect(
-      fetchWithGuard({
+      fetchInputSourceUrl({
         url: "https://example.com/file.bin",
         maxBytes: 1024,
         timeoutMs: 1000,
@@ -332,7 +452,6 @@ describe("fetchWithGuard", () => {
     ).rejects.toThrow("invalid content-length header: 1e9");
 
     expect(canceled).toBe(true);
-    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("rejects oversized streamed payloads and cancels the stream", async () => {
@@ -354,18 +473,15 @@ describe("fetchWithGuard", () => {
       },
     });
 
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(stream, {
+    fetchMock.mockResolvedValueOnce(
+      new Response(stream, {
         status: 200,
         headers: { "content-type": "application/octet-stream" },
       }),
-      release,
-      finalUrl: "https://example.com/file.bin",
-    });
+    );
 
     await expect(
-      fetchWithGuard({
+      fetchInputSourceUrl({
         url: "https://example.com/file.bin",
         maxBytes: 6,
         timeoutMs: 1000,
@@ -377,7 +493,6 @@ describe("fetchWithGuard", () => {
     await waitForMicrotaskTurn();
 
     expect(canceled).toBe(true);
-    expect(release).toHaveBeenCalledTimes(1);
   });
 });
 

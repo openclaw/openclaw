@@ -356,10 +356,9 @@ export function createOpenAiCompatibleSpeechProvider<
       const baseUrl = resolveBaseUrl({ cfg: req.cfg, providerConfig: config });
       const responseFormat = config.responseFormat ?? options.defaultResponseFormat;
       const speed = overrides.speed ?? config.speed;
-      const { allowPrivateNetwork, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+      const { headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
         baseUrl,
         defaultBaseUrl: options.defaultBaseUrl,
-        allowPrivateNetwork: false,
         defaultHeaders: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
@@ -385,7 +384,6 @@ export function createOpenAiCompatibleSpeechProvider<
         },
         timeoutMs: req.timeoutMs,
         fetchFn: fetch,
-        allowPrivateNetwork,
         dispatcherPolicy,
       });
 

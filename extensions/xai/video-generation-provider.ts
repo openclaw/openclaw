@@ -429,19 +429,17 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         timeoutMs: req.timeoutMs,
         label: "xAI video generation",
       });
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveXaiVideoBaseUrl(req),
-          defaultBaseUrl: DEFAULT_XAI_VIDEO_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: "xai",
-          capability: "video",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: resolveXaiVideoBaseUrl(req),
+        defaultBaseUrl: DEFAULT_XAI_VIDEO_BASE_URL,
+        defaultHeaders: {
+          Authorization: `Bearer ${auth.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        provider: "xai",
+        capability: "video",
+        transport: "http",
+      });
       // Per-submit idempotency key prevents accidental double-charging if
       // the request is replayed. Polls intentionally reuse `headers` without it.
       const submitHeaders = new Headers(headers);
@@ -455,7 +453,6 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         }),
         fetchFn,
-        allowPrivateNetwork,
         dispatcherPolicy,
       });
       try {

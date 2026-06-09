@@ -5,15 +5,19 @@ import type { WebhookContext } from "../types.js";
 import { TelnyxProvider } from "./telnyx.js";
 
 const apiMocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(),
+  fetchWithResponseRelease: vi.fn(),
 }));
 
-vi.mock("../../api.js", () => ({
-  fetchWithSsrFGuard: apiMocks.fetchWithSsrFGuard,
-}));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
+  const original = (await vi.importActual("openclaw/plugin-sdk/fetch-runtime")) as Record<
+    string,
+    unknown
+  >;
+  return { ...original, fetchWithResponseRelease: apiMocks.fetchWithResponseRelease };
+});
 
 afterEach(() => {
-  apiMocks.fetchWithSsrFGuard.mockReset();
+  apiMocks.fetchWithResponseRelease.mockReset();
 });
 
 function createCtx(params?: Partial<WebhookContext>): WebhookContext {
@@ -29,18 +33,16 @@ function createCtx(params?: Partial<WebhookContext>): WebhookContext {
 }
 
 function requireFetchRequest() {
-  const [call] = apiMocks.fetchWithSsrFGuard.mock.calls;
+  const [call] = apiMocks.fetchWithResponseRelease.mock.calls;
   if (!call) {
-    throw new Error("expected Telnyx provider to call fetchWithSsrFGuard");
+    throw new Error("expected Telnyx provider to call fetchWithResponseRelease");
   }
   const [request] = call;
   if (!request || typeof request !== "object" || Array.isArray(request)) {
-    throw new Error("expected Telnyx provider to call fetchWithSsrFGuard");
+    throw new Error("expected Telnyx provider to call fetchWithResponseRelease");
   }
   return request as {
     url?: string;
-    auditContext?: string;
-    policy?: unknown;
     init?: {
       method?: string;
       body?: unknown;
@@ -315,7 +317,7 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
 describe("TelnyxProvider answer control", () => {
   it("answers inbound call-control legs with a deterministic command id", async () => {
     const release = vi.fn(async () => {});
-    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+    apiMocks.fetchWithResponseRelease.mockResolvedValue({
       response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
       release,
     });
@@ -330,11 +332,9 @@ describe("TelnyxProvider answer control", () => {
       providerCallId: "call-control-1",
     });
 
-    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchWithResponseRelease).toHaveBeenCalledTimes(1);
     const request = requireFetchRequest();
     expect(request.url).toBe("https://api.telnyx.com/v2/calls/call-control-1/actions/answer");
-    expect(request.auditContext).toBe("voice-call.telnyx.api");
-    expect(request.policy).toEqual({ allowedHostnames: ["api.telnyx.com"] });
     expect(request.init?.method).toBe("POST");
     expect(request.init?.body).toBe(JSON.stringify({ command_id: "openclaw-answer-call-1" }));
     expect(release).toHaveBeenCalledTimes(1);
@@ -344,7 +344,7 @@ describe("TelnyxProvider answer control", () => {
 describe("TelnyxProvider Media Streaming (PCMU)", () => {
   it("embeds streaming fields in the dial payload when streamUrl is provided", async () => {
     const release = vi.fn(async () => {});
-    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+    apiMocks.fetchWithResponseRelease.mockResolvedValue({
       response: new Response(JSON.stringify({ data: { call_control_id: "call-control-1" } }), {
         status: 200,
       }),
@@ -378,7 +378,7 @@ describe("TelnyxProvider Media Streaming (PCMU)", () => {
   });
 
   it("omits streaming fields from the dial payload when streamUrl is absent", async () => {
-    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+    apiMocks.fetchWithResponseRelease.mockResolvedValue({
       response: new Response(JSON.stringify({ data: { call_control_id: "call-control-1" } }), {
         status: 200,
       }),
@@ -405,7 +405,7 @@ describe("TelnyxProvider Media Streaming (PCMU)", () => {
   });
 
   it("embeds streaming fields in the answer action when streamUrl is provided", async () => {
-    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+    apiMocks.fetchWithResponseRelease.mockResolvedValue({
       response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
       release: vi.fn(async () => {}),
     });
@@ -459,7 +459,7 @@ describe("TelnyxProvider Media Streaming (PCMU)", () => {
 describe("TelnyxProvider speak control", () => {
   it("passes custom Telnyx voice ids to the speak action", async () => {
     const release = vi.fn(async () => {});
-    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+    apiMocks.fetchWithResponseRelease.mockResolvedValue({
       response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
       release,
     });
@@ -476,11 +476,9 @@ describe("TelnyxProvider speak control", () => {
       voice: "Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc",
     });
 
-    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchWithResponseRelease).toHaveBeenCalledTimes(1);
     const request = requireFetchRequest();
     expect(request.url).toBe("https://api.telnyx.com/v2/calls/call-control-1/actions/speak");
-    expect(request.auditContext).toBe("voice-call.telnyx.api");
-    expect(request.policy).toEqual({ allowedHostnames: ["api.telnyx.com"] });
     expect(request.init?.method).toBe("POST");
     expect(typeof request.init?.body).toBe("string");
     const body = JSON.parse(request.init?.body as string) as { voice?: string };

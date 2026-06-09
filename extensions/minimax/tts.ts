@@ -1,10 +1,7 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Minimax plugin module implements tts behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const DEFAULT_MINIMAX_TTS_BASE_URL = "https://api.minimax.io";
 
@@ -72,7 +69,7 @@ export async function minimaxTTS(params: {
   const timeout = setTimeout(() => controller.abort(), safeTimeoutMs);
 
   try {
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithResponseRelease({
       url: `${baseUrl}/v1/t2a_v2`,
       init: {
         method: "POST",
@@ -97,8 +94,6 @@ export async function minimaxTTS(params: {
         signal: controller.signal,
       },
       timeoutMs: safeTimeoutMs,
-      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
-      auditContext: "minimax.tts",
     });
     try {
       await assertOkOrThrowProviderError(response, "MiniMax TTS API error");

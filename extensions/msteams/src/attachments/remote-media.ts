@@ -1,6 +1,9 @@
 // Msteams plugin module implements remote media behavior.
-import { saveResponseMedia, type SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
-import type { SsrFPolicy } from "../../runtime-api.js";
+import {
+  saveResponseMedia,
+  type MediaFetchUrlPolicy,
+  type SavedRemoteMedia,
+} from "openclaw/plugin-sdk/media-runtime";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { inferPlaceholder } from "./shared.js";
 import type { MSTeamsInboundMedia } from "./types.js";
@@ -35,7 +38,7 @@ export async function downloadAndStoreMSTeamsRemoteMedia(params: {
   filePathHint: string;
   maxBytes: number;
   fetchImpl?: FetchLike;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: MediaFetchUrlPolicy;
   contentTypeHint?: string;
   placeholder?: string;
   preserveFilenames?: boolean;

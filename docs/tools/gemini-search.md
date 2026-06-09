@@ -74,10 +74,10 @@ URLs.
 
 - Citation URLs from Gemini grounding are automatically resolved from Google
   redirect URLs to direct URLs.
-- Redirect resolution uses the SSRF guard path (HEAD + redirect checks +
-  http/https validation) before returning the final citation URL.
-- Redirect resolution uses strict SSRF defaults, so redirects to
-  private/internal targets are blocked.
+- Redirect resolution uses a short HEAD request and returns the original URL if
+  resolution fails or times out.
+- Private/internal destination filtering for redirect resolution is owned by
+  `proxy.enabled` plus the operator-managed external proxy policy.
 
 ## Supported parameters
 

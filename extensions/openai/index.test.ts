@@ -234,7 +234,6 @@ describe("openai plugin", () => {
     const multipartArgs = firstMockArg(postMultipartRequestSpy);
     expect(multipartArgs.url).toBe("https://api.openai.com/v1/images/edits");
     expect(multipartArgs.body).toBeInstanceOf(FormData);
-    expect(multipartArgs.allowPrivateNetwork).toBe(false);
     expect(multipartArgs.dispatcherPolicy).toBeUndefined();
     expect(multipartArgs.fetchFn).toBe(fetch);
     const editCallArgs = multipartArgs as unknown as {
@@ -266,35 +265,45 @@ describe("openai plugin", () => {
     });
   });
 
-  it("does not allow private-network routing just because a custom base URL is configured", async () => {
+  it("routes configured private-network image endpoints without internal blocking", async () => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "sk-test",
       source: "env",
       mode: "api-key",
     });
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const provider = buildOpenAIImageGenerationProvider();
-    await expect(
-      provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "draw a cat",
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "http://127.0.0.1:8080/v1",
-                models: [],
-              },
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "draw a cat",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://127.0.0.1:8080/v1",
+              models: [],
             },
           },
-        } satisfies OpenClawConfig,
-      }),
-    ).rejects.toThrow("Blocked hostname or private/internal/special-use IP address");
+        },
+      } satisfies OpenClawConfig,
+    });
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/v1/images/generations",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result.images).toHaveLength(1);
   });
 
   it("bootstraps the env proxy dispatcher before refreshing codex oauth credentials", async () => {

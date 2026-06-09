@@ -5,7 +5,11 @@ import { startMatrixQaFaultProxy, type MatrixQaFaultProxy } from "./fault-proxy.
 
 const servers: Array<{ close(): Promise<void> }> = [];
 
-async function startTargetServer(params?: { responseBody?: string }) {
+async function startTargetServer(params?: {
+  headers?: Record<string, string>;
+  responseBody?: string;
+  status?: number;
+}) {
   const requests: Array<{
     authorization?: string;
     body: string;
@@ -24,7 +28,10 @@ async function startTargetServer(params?: { responseBody?: string }) {
         method: req.method ?? "GET",
         url: req.url ?? "/",
       });
-      res.writeHead(200, { "content-type": "application/json" });
+      res.writeHead(params?.status ?? 200, {
+        "content-type": "application/json",
+        ...params?.headers,
+      });
       res.end(params?.responseBody ?? JSON.stringify({ forwarded: true }));
     })();
   });
@@ -169,6 +176,32 @@ describe("Matrix QA fault proxy", () => {
         body: "",
         method: "GET",
         url: "/_matrix/client/v3/sync?timeout=0&org.matrix.msc4222.use_state_after=true",
+      },
+    ]);
+  });
+
+  it("forwards upstream redirects without following them", async () => {
+    const target = await startTargetServer({
+      status: 302,
+      headers: { location: "/_matrix/client/v3/redirected" },
+      responseBody: "",
+    });
+    proxy = await startMatrixQaFaultProxy({
+      targetBaseUrl: target.baseUrl,
+      rules: [],
+    });
+
+    const redirected = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync`, {
+      redirect: "manual",
+    });
+
+    expect(redirected.status).toBe(302);
+    expect(redirected.headers.get("location")).toBe("/_matrix/client/v3/redirected");
+    expect(target.requests).toEqual([
+      {
+        body: "",
+        method: "GET",
+        url: "/_matrix/client/v3/sync",
       },
     ]);
   });

@@ -1,10 +1,7 @@
 // Mattermost plugin module implements probe behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromPrivateNetworkOptIn,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeMattermostBaseUrl, readMattermostError, type MattermostUser } from "./client.js";
 import type { BaseProbeResult } from "./runtime-api.js";
 
@@ -18,7 +15,6 @@ export async function probeMattermost(
   baseUrl: string,
   botToken: string,
   timeoutMs = 2500,
-  allowPrivateNetwork = false,
 ): Promise<MattermostProbe> {
   const normalized = normalizeMattermostBaseUrl(baseUrl);
   if (!normalized) {
@@ -33,14 +29,12 @@ export async function probeMattermost(
     timer = setTimeout(() => controller.abort(), resolvedTimeoutMs);
   }
   try {
-    const { response: res, release } = await fetchWithSsrFGuard({
+    const { response: res, release } = await fetchWithResponseRelease({
       url,
       init: {
         headers: { Authorization: `Bearer ${botToken}` },
         signal: controller?.signal,
       },
-      auditContext: "mattermost-probe",
-      policy: ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork),
     });
     try {
       const elapsedMs = Date.now() - start;

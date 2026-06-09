@@ -52,15 +52,14 @@ async function generateGeminiInlineDataText(params: {
     }
     return normalizeGoogleModelId(trimmed);
   })();
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveGoogleGenerativeAiHttpRequestConfig({
-      apiKey: params.apiKey,
-      baseUrl: params.baseUrl,
-      headers: params.headers,
-      request: params.request,
-      capability: params.defaultMime.startsWith("audio/") ? "audio" : "video",
-      transport: "media-understanding",
-    });
+  const { baseUrl, headers, dispatcherPolicy } = resolveGoogleGenerativeAiHttpRequestConfig({
+    apiKey: params.apiKey,
+    baseUrl: params.baseUrl,
+    headers: params.headers,
+    request: params.request,
+    capability: params.defaultMime.startsWith("audio/") ? "audio" : "video",
+    transport: "media-understanding",
+  });
   const resolvedBaseUrl = baseUrl ?? params.defaultBaseUrl;
   const url = `${resolvedBaseUrl}/models/${model}:generateContent`;
 
@@ -92,7 +91,6 @@ async function generateGeminiInlineDataText(params: {
     body,
     timeoutMs: params.timeoutMs,
     fetchFn,
-    allowPrivateNetwork,
     dispatcherPolicy,
   });
 

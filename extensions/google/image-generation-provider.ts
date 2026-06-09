@@ -180,16 +180,15 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       }
 
       const model = normalizeGoogleImageModel(req.model);
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveGoogleGenerativeAiHttpRequestConfig({
-          apiKey: auth.apiKey,
-          baseUrl: req.cfg?.models?.providers?.google?.baseUrl,
-          request: sanitizeConfiguredModelProviderRequest(
-            req.cfg?.models?.providers?.google?.request,
-          ),
-          capability: "image",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveGoogleGenerativeAiHttpRequestConfig({
+        apiKey: auth.apiKey,
+        baseUrl: req.cfg?.models?.providers?.google?.baseUrl,
+        request: sanitizeConfiguredModelProviderRequest(
+          req.cfg?.models?.providers?.google?.request,
+        ),
+        capability: "image",
+        transport: "http",
+      });
       const imageConfig = mapSizeToImageConfig(req.size);
       const inputParts = (req.inputImages ?? []).map((image) => ({
         inlineData: {
@@ -222,8 +221,6 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         },
         timeoutMs: req.timeoutMs ?? DEFAULT_IMAGE_TIMEOUT_MS,
         fetchFn: fetch,
-        pinDns: false,
-        allowPrivateNetwork,
         ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
       });

@@ -1,10 +1,7 @@
 // Feishu helper module supports monitor.webhook helpers behavior.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import type { monitorFeishuProvider } from "./monitor.js";
@@ -31,11 +28,9 @@ export async function getFreePort(): Promise<number> {
 async function waitUntilServerReady(url: string): Promise<void> {
   for (let i = 0; i < WEBHOOK_READY_MAX_ATTEMPTS; i += 1) {
     try {
-      const { response, release } = await fetchWithSsrFGuard({
+      const { response, release } = await fetchWithResponseRelease({
         url,
         init: { method: "GET" },
-        policy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(true),
-        auditContext: "feishu-webhook-test-ready",
       });
       try {
         if (response.status >= 200 && response.status < 500) {

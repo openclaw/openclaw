@@ -216,19 +216,17 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         timeoutMs: req.timeoutMs,
         label: "Together video generation",
       });
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveTogetherVideoBaseUrl(req),
-          defaultBaseUrl: TOGETHER_VIDEO_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: "together",
-          capability: "video",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: resolveTogetherVideoBaseUrl(req),
+        defaultBaseUrl: TOGETHER_VIDEO_BASE_URL,
+        defaultHeaders: {
+          Authorization: `Bearer ${auth.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        provider: "together",
+        capability: "video",
+        transport: "http",
+      });
       const body: Record<string, unknown> = {
         model: normalizeOptionalString(req.model) ?? DEFAULT_TOGETHER_VIDEO_MODEL,
         prompt: req.prompt,
@@ -272,7 +270,6 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         }),
         fetchFn,
-        allowPrivateNetwork,
         dispatcherPolicy,
       });
       try {

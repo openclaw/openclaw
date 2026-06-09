@@ -1,9 +1,9 @@
 /**
  * Citation redirect resolver for web search results.
  *
- * Follows provider citation redirect URLs through the strict web-tools network guard.
+ * Follows provider citation redirect URLs with a short HEAD request timeout.
  */
-import { withStrictWebToolsEndpoint } from "./web-guarded-fetch.js";
+import { fetchUntrustedUrl } from "../../infra/net/egress-fetch.js";
 
 const REDIRECT_TIMEOUT_MS = 5000;
 
@@ -12,16 +12,20 @@ const REDIRECT_TIMEOUT_MS = 5000;
  * Returns the original URL if resolution fails or times out.
  */
 export async function resolveCitationRedirectUrl(url: string): Promise<string> {
+  let fetched: Awaited<ReturnType<typeof fetchUntrustedUrl>> | undefined;
   try {
-    return await withStrictWebToolsEndpoint(
-      {
-        url,
-        init: { method: "HEAD" },
-        timeoutMs: REDIRECT_TIMEOUT_MS,
+    fetched = await fetchUntrustedUrl({
+      url,
+      timeoutMs: REDIRECT_TIMEOUT_MS,
+      operation: "web-search-citation-redirect",
+      init: {
+        method: "HEAD",
       },
-      async ({ finalUrl }) => finalUrl || url,
-    );
+    });
+    return fetched.finalUrl || url;
   } catch {
     return url;
+  } finally {
+    await fetched?.release().catch(() => undefined);
   }
 }

@@ -1,16 +1,15 @@
 /**
  * MCP HTTP fetch wrappers.
- * Adds SSRF protection, scoped TLS/client-cert dispatchers, response cleanup,
- * and same-origin header handling around the MCP SDK fetch contract.
+ * Adds scoped TLS/client-cert dispatchers, response cleanup, and same-origin
+ * header handling around the MCP SDK fetch contract.
  */
 import fs from "node:fs";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import {
-  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
-  type PinnedDispatcherPolicy,
-} from "../infra/net/ssrf.js";
+import { fetchOperatorConfiguredEndpoint } from "../infra/net/egress-fetch.js";
+import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
+import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import { loadUndiciRuntimeDeps } from "../infra/net/undici-runtime.js";
+import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 
 /** MCP SDK-compatible fetch function type. */
 export type { FetchLike };
@@ -21,11 +20,6 @@ export const fetchWithUndici: FetchLike = async (url, init) =>
     url,
     init as Parameters<ReturnType<typeof loadUndiciRuntimeDeps>["fetch"]>[1],
   )) as unknown as Response;
-
-const fetchWithUndiciGuard = async (
-  input: RequestInfo | URL,
-  init?: RequestInit,
-): Promise<Response> => await fetchWithUndici(input instanceof Request ? input.url : input, init);
 
 const MCP_HTTP_MAX_REDIRECTS = 20;
 const managedMcpResponseCleanupRegistry = new FinalizationRegistry<{
@@ -54,6 +48,35 @@ function resolveFetchRequest(input: RequestInfo | URL, init?: RequestInit) {
     url: input instanceof URL ? input.toString() : input,
     init,
   };
+}
+
+async function captureMcpHttpExchange(params: {
+  url: string;
+  init?: RequestInit;
+  response: Response;
+}): Promise<void> {
+  const settings = resolveDebugProxySettings();
+  if (!settings.enabled) {
+    return;
+  }
+  const { captureHttpExchange } = await import("../proxy-capture/runtime.js");
+  captureHttpExchange(
+    {
+      url: params.url,
+      method: params.init?.method ?? "GET",
+      requestHeaders: params.init?.headers as Headers | Record<string, string> | undefined,
+      requestBody:
+        (params.init as (RequestInit & { body?: BodyInit | Buffer | string | null }) | undefined)
+          ?.body ?? null,
+      response: params.response,
+      transport: "http",
+      meta: {
+        captureOrigin: "mcp-http",
+        auditContext: "mcp-http",
+      },
+    },
+    settings,
+  );
 }
 
 function buildManagedMcpResponse(
@@ -120,42 +143,65 @@ export function buildMcpHttpFetch(params: {
   clientCert?: string;
   clientKey?: string;
   resourceUrl?: string;
+  allowNonResourceOriginRequests?: boolean;
 }): FetchLike {
   const needsCustomDispatcher =
     params.sslVerify === false || Boolean(params.clientCert || params.clientKey);
   const scopedOrigin = params.resourceUrl ? new URL(params.resourceUrl).origin : undefined;
-  const policy = params.resourceUrl
-    ? ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.resourceUrl)
-    : undefined;
+  const allowedOrigins = scopedOrigin ? new Set([scopedOrigin]) : undefined;
 
   let customConnect: Record<string, unknown> | undefined;
-  const resolveCustomDispatcherPolicy = (url: URL): PinnedDispatcherPolicy | undefined => {
-    if (!needsCustomDispatcher || !scopedOrigin || url.origin !== scopedOrigin) {
-      return undefined;
+  const resolveMcpDispatcherPolicy = (url: URL): PinnedDispatcherPolicy | undefined => {
+    if (needsCustomDispatcher && scopedOrigin && url.origin === scopedOrigin) {
+      customConnect ??= {
+        ...(params.sslVerify === false ? { rejectUnauthorized: false } : {}),
+        ...(params.clientCert ? { cert: fs.readFileSync(params.clientCert, "utf-8") } : {}),
+        ...(params.clientKey ? { key: fs.readFileSync(params.clientKey, "utf-8") } : {}),
+      };
+      return shouldUseEnvHttpProxyForUrl(url.toString())
+        ? {
+            mode: "env-proxy",
+            connect: { ...customConnect },
+          }
+        : {
+            mode: "direct",
+            connect: { ...customConnect },
+          };
     }
-    customConnect ??= {
-      ...(params.sslVerify === false ? { rejectUnauthorized: false } : {}),
-      ...(params.clientCert ? { cert: fs.readFileSync(params.clientCert, "utf-8") } : {}),
-      ...(params.clientKey ? { key: fs.readFileSync(params.clientKey, "utf-8") } : {}),
-    };
-    return { mode: "direct", connect: customConnect };
+    return shouldUseEnvHttpProxyForUrl(url.toString())
+      ? {
+          mode: "env-proxy",
+        }
+      : {
+          mode: "direct",
+        };
   };
 
   return async (url, init) => {
     const request = resolveFetchRequest(url, init);
-    const guardedFetchOptions = {
+    const result = await fetchOperatorConfiguredEndpoint({
       url: request.url,
       init: request.init,
-      fetchImpl: fetchWithUndiciGuard,
       maxRedirects: MCP_HTTP_MAX_REDIRECTS,
-      allowCrossOriginUnsafeRedirectReplay: true,
-      auditContext: "mcp-http",
-      useEnvProxyForEligibleUrls: true,
-      ...(policy ? { policy } : {}),
-      ...(needsCustomDispatcher ? { resolveDispatcherPolicy: resolveCustomDispatcherPolicy } : {}),
-    };
-    const guarded = await fetchWithSsrFGuard(guardedFetchOptions);
-    return buildManagedMcpResponse(guarded.response, guarded.release, guarded.refreshTimeout);
+      operation: "mcp-http-fetch",
+      dispatcherPolicy: resolveMcpDispatcherPolicy,
+      validateUrl: (parsed, { previousUrl }) => {
+        if (allowedOrigins && !allowedOrigins.has(parsed.origin)) {
+          const redirectedFromResourceOrigin =
+            previousUrl && allowedOrigins.has(previousUrl.origin);
+          if (params.allowNonResourceOriginRequests === true && !redirectedFromResourceOrigin) {
+            return;
+          }
+          throw new Error(
+            `MCP HTTP fetch blocked outside configured resource origin: ${parsed.origin}`,
+          );
+        }
+      },
+      onResponse: async ({ url: responseUrl, init: requestInit, response }) => {
+        await captureMcpHttpExchange({ url: responseUrl, init: requestInit, response });
+      },
+    });
+    return buildManagedMcpResponse(result.response, result.release, result.refreshTimeout);
   };
 }
 

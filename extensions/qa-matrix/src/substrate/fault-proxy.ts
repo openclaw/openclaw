@@ -5,8 +5,8 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const DEFAULT_FAULT_PROXY_REQUEST_MAX_BYTES = 16 * 1024 * 1024;
 const DEFAULT_FAULT_PROXY_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
@@ -252,11 +252,10 @@ async function forwardMatrixQaFaultProxyRequest(params: {
   if (method !== "GET" && method !== "HEAD") {
     init.body = bufferToArrayBuffer(params.body);
   }
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: params.targetUrl.toString(),
     init,
-    policy: { allowPrivateNetwork: true },
-    auditContext: "qa-matrix-fault-proxy-forward",
+    followRedirects: false,
   });
   try {
     return {

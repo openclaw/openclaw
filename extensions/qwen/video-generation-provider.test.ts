@@ -37,14 +37,12 @@ function expectPostJsonRequest(
     body?: unknown;
     timeoutMs?: unknown;
     fetchFn?: unknown;
-    allowPrivateNetwork?: unknown;
     dispatcherPolicy?: unknown;
   };
   expect(request.url).toBe(expected.url);
   expect(request.body).toEqual(expected.body);
   expect(request.timeoutMs).toBe(120_000);
   expect(request.fetchFn).toBe(globalThis.fetch);
-  expect(request.allowPrivateNetwork).toBe(false);
   expect(request.dispatcherPolicy).toBeUndefined();
   expect(request.headers).toBeInstanceOf(Headers);
   expect(Array.from((request.headers as Headers).entries())).toEqual([

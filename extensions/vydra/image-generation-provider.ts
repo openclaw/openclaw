@@ -50,13 +50,12 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
         throw new Error("Vydra image generation supports at most one image per request.");
       }
 
-      const { fetchFn, baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        await resolveVydraRequestContext({
-          cfg: req.cfg,
-          agentDir: req.agentDir,
-          authStore: req.authStore,
-          capability: "image",
-        });
+      const { fetchFn, baseUrl, headers, dispatcherPolicy } = await resolveVydraRequestContext({
+        cfg: req.cfg,
+        agentDir: req.agentDir,
+        authStore: req.authStore,
+        capability: "image",
+      });
 
       const model = req.model?.trim() || DEFAULT_VYDRA_IMAGE_MODEL;
       const { response, release } = await postJsonRequest({
@@ -68,7 +67,6 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
         },
         timeoutMs: req.timeoutMs,
         fetchFn,
-        allowPrivateNetwork,
         ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
       });

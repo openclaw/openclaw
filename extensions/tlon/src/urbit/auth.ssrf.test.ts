@@ -1,6 +1,6 @@
 // Tlon tests cover auth.ssrf plugin behavior.
-import { SsrFBlockedError } from "openclaw/plugin-sdk/ssrf-runtime";
-import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/ssrf-policy";
+import type { LookupFn } from "openclaw/plugin-sdk/ssrf-policy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./auth.js";
 
@@ -42,5 +42,29 @@ describe("tlon urbit auth ssrf", () => {
     });
     expect(cookie).toContain("urbauth-~zod=123");
     expect(mockFetch).toHaveBeenCalled();
+  });
+
+  it("blocks redirect targets that resolve to private IPs", async () => {
+    const mockFetch = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://metadata.example.test/latest" },
+        }),
+    );
+    const lookupFn = (async (hostname: string) => {
+      if (hostname === "metadata.example.test") {
+        return [{ address: "169.254.169.254", family: 4 }];
+      }
+      return [{ address: "93.184.216.34", family: 4 }];
+    }) as unknown as LookupFn;
+
+    await expect(
+      authenticate("https://public-ship.example.test", "code", {
+        lookupFn,
+        fetchImpl: mockFetch as typeof fetch,
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    expect(mockFetch).toHaveBeenCalledOnce();
   });
 });

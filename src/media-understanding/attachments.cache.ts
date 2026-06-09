@@ -1,5 +1,5 @@
 // Lazy attachment cache resolves local/remote media bytes and temporary files
-// under local-root and SSRF policy.
+// under local-root and remote URL allowlist policy.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -9,12 +9,12 @@ import {
 import { detectMime } from "@openclaw/media-core/mime";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
 import {
-  readRemoteMediaBuffer,
-  type MediaFetchRetryOptions,
   MediaFetchError,
+  type MediaFetchRetryOptions,
+  type MediaFetchUrlPolicy,
+  readRemoteMediaBuffer,
 } from "../media/fetch.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
@@ -78,7 +78,7 @@ function getDefaultLocalPathRoots(): readonly string[] {
 export type MediaAttachmentCacheOptions = {
   localPathRoots?: readonly string[];
   includeDefaultLocalPathRoots?: boolean;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: MediaFetchUrlPolicy;
   workspaceDir?: string;
 };
 
@@ -92,7 +92,7 @@ export class MediaAttachmentCache {
   private readonly entries = new Map<number, AttachmentCacheEntry>();
   private readonly attachments: MediaAttachment[];
   private readonly localPathRoots: readonly string[];
-  private readonly ssrfPolicy: SsrFPolicy | undefined;
+  private readonly ssrfPolicy: MediaFetchUrlPolicy | undefined;
   private readonly workspaceDir?: string;
   private canonicalLocalPathRoots?: Promise<readonly string[]>;
 

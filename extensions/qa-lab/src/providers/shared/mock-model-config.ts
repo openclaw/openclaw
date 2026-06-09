@@ -24,9 +24,6 @@ function createMockOpenAiResponsesProvider(baseUrl: string): ModelProviderConfig
     baseUrl,
     apiKey: "test",
     api: "openai-responses",
-    request: {
-      allowPrivateNetwork: true,
-    },
     models: [
       {
         id: "gpt-5.5",
@@ -67,9 +64,6 @@ function createMockAnthropicMessagesProvider(baseUrl: string): ModelProviderConf
     baseUrl: trimTrailingApiV1(baseUrl),
     apiKey: "test",
     api: "anthropic-messages",
-    request: {
-      allowPrivateNetwork: true,
-    },
     models: [
       {
         id: "claude-opus-4-8",

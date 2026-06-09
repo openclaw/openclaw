@@ -20,7 +20,7 @@ import {
   providerOperationRetryConfig,
   readProviderJsonObjectResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-policy";
 import {
   asOptionalRecord as asRecord,
   normalizeOptionalString,

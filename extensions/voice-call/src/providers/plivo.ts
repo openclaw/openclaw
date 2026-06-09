@@ -59,7 +59,6 @@ export class PlivoProvider implements VoiceCallProvider {
   private readonly authToken: string;
   private readonly baseUrl: string;
   private readonly options: PlivoProviderOptions;
-  private readonly apiHost: string;
 
   // Best-effort mapping between create-call request UUID and call UUID.
   private requestUuidToCallUuid = new Map<string, string>();
@@ -82,7 +81,6 @@ export class PlivoProvider implements VoiceCallProvider {
     this.authId = config.authId;
     this.authToken = config.authToken;
     this.baseUrl = `https://api.plivo.com/v1/Account/${this.authId}`;
-    this.apiHost = new URL(this.baseUrl).hostname;
     this.options = options;
   }
 
@@ -102,8 +100,6 @@ export class PlivoProvider implements VoiceCallProvider {
       },
       body,
       allowNotFound,
-      allowedHostnames: [this.apiHost],
-      auditContext: "voice-call.plivo.api",
       errorPrefix: "Plivo API error",
     });
   }
@@ -467,8 +463,6 @@ export class PlivoProvider implements VoiceCallProvider {
           Authorization: `Basic ${Buffer.from(`${this.authId}:${this.authToken}`).toString("base64")}`,
         },
         allowNotFound: true,
-        allowedHostnames: [this.apiHost],
-        auditContext: "plivo-get-call-status",
         errorPrefix: "Plivo get call status error",
       });
 

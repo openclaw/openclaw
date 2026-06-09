@@ -28,18 +28,6 @@ vi.mock("./token.js", () => ({
   resolveMSTeamsCredentials: resolveMSTeamsCredentialsMock,
 }));
 
-vi.mock("../runtime-api.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../runtime-api.js")>();
-  return {
-    ...original,
-    fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
-      response: await globalThis.fetch(params.url, params.init),
-      finalUrl: params.url,
-      release: async () => undefined,
-    }),
-  };
-});
-
 import { searchGraphUsers } from "./graph-users.js";
 import {
   deleteGraphRequest,

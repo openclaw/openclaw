@@ -1334,7 +1334,6 @@ async function createOpenAIRealtimeBrowserSession(
 
   const clientSecret = await createOpenAIRealtimeClientSecret({
     authToken,
-    auditContext: "openai-realtime-browser-session",
     session,
   });
   const offerHeaders = resolveOpenAIRealtimeBrowserOfferHeaders();

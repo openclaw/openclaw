@@ -1,17 +1,40 @@
+import type { Dispatcher } from "undici";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import { normalizeHostname } from "../infra/net/hostname.js";
+import { getActiveManagedProxyLoopbackMode } from "../infra/net/proxy/active-proxy-state.js";
+import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
+import {
+  fetchWithRuntimeDispatcherOrMockedGlobal,
+  type DispatcherAwareRequestInit,
+} from "../infra/net/runtime-fetch.js";
+import {
+  closeDispatcher,
+  createPinnedLookup,
+  matchesHostnameAllowlist,
+  normalizeHostnameAllowlist,
+  SsrFBlockedError,
+} from "../infra/net/ssrf.js";
+import { createHttp1Agent } from "../infra/net/undici-runtime.js";
+import { resolveDebugProxySettings } from "../proxy-capture/env.js";
+import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import {
   clearLiveCatalogCacheForTests,
   getCachedLiveCatalogValue,
 } from "./provider-catalog-shared.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
-import {
-  fetchWithSsrFGuard,
-  type LookupFn,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-  type SsrFPolicy,
-} from "./ssrf-runtime.js";
+import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "./ssrf-policy.js";
+import type { LookupFn, SsrFPolicy } from "./ssrf-policy.js";
 
-export type LiveModelCatalogFetchGuard = typeof fetchWithSsrFGuard;
+export type LiveModelCatalogFetchGuard = (params: {
+  url: string;
+  init?: RequestInit;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  policy?: SsrFPolicy;
+  lookupFn?: LookupFn;
+  requireHttps?: boolean;
+  auditContext?: string;
+}) => Promise<{ response: Response; release: () => Promise<void> }>;
 
 export type LiveModelCatalogHeaderContext = {
   apiKey?: string;
@@ -127,23 +150,258 @@ function buildHeaders(params: FetchLiveProviderModelIdsParams): Headers {
   return headers;
 }
 
+function isLiveCatalogRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+type LiveCatalogLookupResult =
+  | {
+      address: string;
+      family: number;
+    }
+  | Array<{
+      address: string;
+      family: number;
+    }>;
+
+function normalizeLiveCatalogOrigin(value: string): string | undefined {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+    return parsed.origin.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function assertLiveCatalogPolicyAllowsUrl(providerId: string, url: URL, policy?: SsrFPolicy): void {
+  const hostnameAllowlist = normalizeHostnameAllowlist([
+    ...(policy?.allowedHostnames ?? []),
+    ...(policy?.hostnameAllowlist ?? []),
+  ]);
+  const allowedOrigins = (policy?.allowedOrigins ?? [])
+    .map((origin) => normalizeLiveCatalogOrigin(origin))
+    .filter((origin): origin is string => Boolean(origin));
+  if (hostnameAllowlist.length === 0 && allowedOrigins.length === 0) {
+    return;
+  }
+
+  const normalizedHostname = normalizeHostname(url.hostname);
+  const origin = normalizeLiveCatalogOrigin(url.toString());
+  const hostAllowed =
+    hostnameAllowlist.length > 0 && matchesHostnameAllowlist(normalizedHostname, hostnameAllowlist);
+  const originAllowed = origin ? allowedOrigins.includes(origin) : false;
+  if (!hostAllowed && !originAllowed) {
+    throw new SsrFBlockedError(
+      `${providerId} model discovery URL host is not allowed: ${url.hostname}`,
+    );
+  }
+}
+
+async function captureLiveCatalogExchange(params: {
+  url: string;
+  init?: RequestInit;
+  response: Response;
+  providerId: string;
+  auditContext?: string;
+}): Promise<void> {
+  const settings = resolveDebugProxySettings();
+  if (!settings.enabled) {
+    return;
+  }
+  const { captureHttpExchange } = await import("../proxy-capture/runtime.js");
+  captureHttpExchange(
+    {
+      url: params.url,
+      method: params.init?.method ?? "GET",
+      requestHeaders: params.init?.headers as Headers | Record<string, string> | undefined,
+      requestBody:
+        (params.init as (RequestInit & { body?: BodyInit | Buffer | string | null }) | undefined)
+          ?.body ?? null,
+      response: params.response,
+      transport: "http",
+      meta: {
+        captureOrigin: "live-model-catalog",
+        provider: params.providerId,
+        ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+      },
+    },
+    settings,
+  );
+}
+
+function normalizeLiveCatalogLookupResults(results: LiveCatalogLookupResult): string[] {
+  const entries = Array.isArray(results) ? results : [results];
+  const seen = new Set<string>();
+  const addresses: string[] = [];
+  for (const entry of entries) {
+    if (!entry.address || seen.has(entry.address)) {
+      continue;
+    }
+    seen.add(entry.address);
+    addresses.push(entry.address);
+  }
+  return addresses;
+}
+
+async function createLiveCatalogDispatcher(
+  url: URL,
+  lookupFn: LookupFn | undefined,
+  timeoutMs: number | undefined,
+): Promise<Dispatcher | undefined> {
+  if (!lookupFn || getActiveManagedProxyLoopbackMode() !== undefined) {
+    return undefined;
+  }
+  const hostname = normalizeHostname(url.hostname);
+  const results = (await lookupFn(hostname, { all: true })) as LiveCatalogLookupResult;
+  const addresses = normalizeLiveCatalogLookupResults(results);
+  if (addresses.length === 0) {
+    throw new Error(`Unable to resolve hostname: ${url.hostname}`);
+  }
+  return createHttp1Agent(
+    { connect: { lookup: createPinnedLookup({ hostname, addresses }) } },
+    timeoutMs,
+  );
+}
+
+async function fetchLiveCatalogResponse(params: {
+  endpoint: string;
+  headers: Headers;
+  signal?: AbortSignal;
+  providerId: string;
+  requireHttps?: boolean;
+  policy?: SsrFPolicy;
+  lookupFn?: LookupFn;
+  timeoutMs?: number;
+  auditContext?: string;
+}): Promise<{ response: Response; release: () => Promise<void> }> {
+  let currentUrl = params.endpoint;
+  let currentHeaders = params.headers;
+  let finalResponse: Response | undefined;
+  let finalDispatcher: Dispatcher | undefined;
+  const release = async () => {
+    await finalResponse?.body?.cancel().catch(() => undefined);
+    await closeDispatcher(finalDispatcher);
+  };
+  for (let redirectCount = 0; ; redirectCount += 1) {
+    const parsedUrl = new URL(currentUrl);
+    assertLiveCatalogPolicyAllowsUrl(params.providerId, parsedUrl, params.policy);
+    let dispatcher: Dispatcher | undefined;
+    let response: Response;
+    try {
+      dispatcher = await createLiveCatalogDispatcher(parsedUrl, params.lookupFn, params.timeoutMs);
+      const requestInit: DispatcherAwareRequestInit = {
+        headers: currentHeaders,
+        redirect: "manual",
+        ...(params.signal ? { signal: params.signal } : {}),
+        ...(dispatcher ? { dispatcher } : {}),
+      };
+      response = await fetchWithRuntimeDispatcherOrMockedGlobal(currentUrl, requestInit);
+      await captureLiveCatalogExchange({
+        url: currentUrl,
+        init: requestInit,
+        response,
+        providerId: params.providerId,
+        auditContext: params.auditContext,
+      });
+    } catch (error) {
+      await closeDispatcher(dispatcher);
+      throw error;
+    }
+    if (!isLiveCatalogRedirectStatus(response.status)) {
+      finalResponse = response;
+      finalDispatcher = dispatcher;
+      return { response, release };
+    }
+    const location = response.headers.get("location");
+    await response.body?.cancel().catch(() => undefined);
+    await closeDispatcher(dispatcher);
+    if (!location) {
+      throw new Error(`${params.providerId} model discovery redirect missing location header`);
+    }
+    if (redirectCount >= 3) {
+      throw new Error(`${params.providerId} model discovery exceeded redirect limit`);
+    }
+    const nextUrl = new URL(location, currentUrl);
+    if (params.requireHttps && nextUrl.protocol !== "https:") {
+      throw new Error(`${params.providerId} model discovery requires an https endpoint`);
+    }
+    assertLiveCatalogPolicyAllowsUrl(params.providerId, nextUrl, params.policy);
+    if (nextUrl.origin !== new URL(currentUrl).origin) {
+      currentHeaders = new Headers(retainSafeHeadersForCrossOriginRedirect(currentHeaders));
+    }
+    currentUrl = nextUrl.toString();
+  }
+}
+
 export async function fetchLiveProviderModelRows(
   params: FetchLiveProviderModelRowsParams,
 ): Promise<readonly unknown[]> {
-  const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
-  const { response, release } = await fetchGuard({
-    url: params.endpoint,
-    init: {
-      headers: buildHeaders(params),
-    },
-    signal: params.signal,
-    timeoutMs: params.timeoutMs ?? 5_000,
-    policy: params.policy ?? ssrfPolicyFromHttpBaseUrlAllowedHostname(params.endpoint),
-    ...(params.lookupFn ? { lookupFn: params.lookupFn } : {}),
-    ...(params.requireHttps !== undefined ? { requireHttps: params.requireHttps } : {}),
-    auditContext: params.auditContext ?? `${params.providerId}-model-discovery`,
-  });
+  if (params.requireHttps) {
+    const parsed = new URL(params.endpoint);
+    if (parsed.protocol !== "https:") {
+      throw new Error(`${params.providerId} model discovery requires an https endpoint`);
+    }
+  }
+  const effectivePolicy =
+    params.policy ?? ssrfPolicyFromHttpBaseUrlAllowedHostname(params.endpoint);
+  let response: Response | undefined;
+  let release: () => Promise<void>;
+  if (params.fetchGuard) {
+    const guarded = await params.fetchGuard({
+      url: params.endpoint,
+      init: {
+        headers: buildHeaders(params),
+      },
+      signal: params.signal,
+      timeoutMs: params.timeoutMs ?? 5_000,
+      policy: effectivePolicy,
+      ...(params.lookupFn ? { lookupFn: params.lookupFn } : {}),
+      ...(params.requireHttps !== undefined ? { requireHttps: params.requireHttps } : {}),
+      auditContext: params.auditContext ?? `${params.providerId}-model-discovery`,
+    });
+    response = guarded.response;
+    release = guarded.release;
+  } else {
+    const timeout = buildTimeoutAbortSignal({
+      timeoutMs: params.timeoutMs ?? 5_000,
+      signal: params.signal,
+      operation: "live-model-catalog",
+      url: params.endpoint,
+    });
+    release = async () => {
+      timeout.cleanup();
+      await response?.body?.cancel().catch(() => undefined);
+    };
+    try {
+      const direct = await fetchLiveCatalogResponse({
+        endpoint: params.endpoint,
+        headers: buildHeaders(params),
+        signal: timeout.signal,
+        providerId: params.providerId,
+        requireHttps: params.requireHttps,
+        policy: effectivePolicy,
+        lookupFn: params.lookupFn,
+        timeoutMs: params.timeoutMs ?? 5_000,
+        auditContext: params.auditContext ?? `${params.providerId}-model-discovery`,
+      });
+      response = direct.response;
+      release = async () => {
+        timeout.cleanup();
+        await direct.release();
+      };
+    } catch (error) {
+      await release();
+      throw error;
+    }
+  }
   try {
+    if (!response) {
+      throw new Error(`${params.providerId} model discovery returned no response`);
+    }
     if (!response.ok) {
       throw new LiveModelCatalogHttpError(params.providerId, response.status);
     }

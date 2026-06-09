@@ -36,7 +36,6 @@ const OPENAI_VIDEO_SECONDS = [4, 8, 12] as const;
 const OPENAI_VIDEO_SIZES = ["720x1280", "1280x720", "1024x1792", "1792x1024"] as const;
 
 type OpenAIVideoRequestPolicy = {
-  allowPrivateNetwork: boolean;
   dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
 };
 
@@ -170,7 +169,6 @@ async function pollOpenAIVideo(
     pollIntervalMs: POLL_INTERVAL_MS,
     requestFailedMessage: "OpenAI video status request failed",
     timeoutMessage: `OpenAI video generation task ${params.videoId} did not finish in time`,
-    allowPrivateNetwork: params.allowPrivateNetwork,
     dispatcherPolicy: params.dispatcherPolicy,
     auditContext: "openai-video-status",
     isComplete: (payload) => payload.status === "completed",
@@ -196,7 +194,7 @@ async function fetchOpenAIVideoDownload(
     fetchFn: typeof fetch;
   } & OpenAIVideoRequestPolicy,
 ) {
-  if (!params.allowPrivateNetwork && !params.dispatcherPolicy) {
+  if (!params.dispatcherPolicy) {
     const response = await fetchProviderDownloadResponse({
       url: params.url,
       init: params.init,
@@ -221,7 +219,6 @@ async function fetchOpenAIVideoDownload(
         resolveOpenAIVideoDownloadTimeoutMs(params.timeoutMs),
         params.fetchFn,
         {
-          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
           ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
           auditContext: "openai-video-download",
         },
@@ -260,7 +257,6 @@ async function downloadOpenAIVideo(
     },
     timeoutMs: params.timeoutMs,
     fetchFn: params.fetchFn,
-    allowPrivateNetwork: params.allowPrivateNetwork,
     dispatcherPolicy: params.dispatcherPolicy,
   });
   try {
@@ -332,18 +328,17 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         label: "OpenAI video generation",
       });
       const providerConfig = req.cfg.models?.providers?.openai;
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveConfiguredOpenAIBaseUrl(req.cfg),
-          defaultBaseUrl: DEFAULT_OPENAI_VIDEO_BASE_URL,
-          request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-          },
-          provider: "openai",
-          capability: "video",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: resolveConfiguredOpenAIBaseUrl(req.cfg),
+        defaultBaseUrl: DEFAULT_OPENAI_VIDEO_BASE_URL,
+        request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+        defaultHeaders: {
+          Authorization: `Bearer ${auth.apiKey}`,
+        },
+        provider: "openai",
+        capability: "video",
+        transport: "http",
+      });
 
       const model = normalizeOptionalString(req.model) ?? DEFAULT_OPENAI_VIDEO_MODEL;
       const seconds = resolveDurationSeconds(req.durationSeconds);
@@ -375,7 +370,6 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
                   defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
                 }),
                 fetchFn,
-                allowPrivateNetwork,
                 dispatcherPolicy,
               });
             })()
@@ -395,7 +389,6 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
                   defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
                 }),
                 fetchFn,
-                allowPrivateNetwork,
                 dispatcherPolicy,
               });
             })()
@@ -416,7 +409,6 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
                 defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
               }),
               fetchFn,
-              allowPrivateNetwork,
               dispatcherPolicy,
             });
           })();
@@ -438,7 +430,6 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
           }),
           baseUrl,
           fetchFn,
-          allowPrivateNetwork,
           dispatcherPolicy,
         });
         const video = await downloadOpenAIVideo({
@@ -450,7 +441,6 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
           }),
           baseUrl,
           fetchFn,
-          allowPrivateNetwork,
           dispatcherPolicy,
           maxBytes: resolveGeneratedVideoMaxBytes(req),
         });

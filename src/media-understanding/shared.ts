@@ -1,5 +1,5 @@
 // Shared provider HTTP/audio helpers for media-understanding integrations,
-// including guarded fetches, deadlines, retries, and multipart upload bodies.
+// including fetches, deadlines, retries, and multipart upload bodies.
 import path from "node:path";
 import {
   assertOkOrThrowHttpError,
@@ -26,15 +26,20 @@ import {
   type ModelProviderRequestTransportOverrides,
   type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
-import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
-import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
-import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
-import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import { fetchOperatorConfiguredEndpoint } from "../infra/net/egress-fetch.js";
+import { normalizeHostname } from "../infra/net/hostname.js";
+import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import {
+  matchesHostnameAllowlist,
+  normalizeHostnameAllowlist,
+  SsrFBlockedError,
+} from "../infra/net/ssrf.js";
 import {
   executeProviderOperationWithRetry,
   type ProviderOperationRetryStage,
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
+import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 export { fetchWithTimeout };
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
@@ -43,7 +48,7 @@ export { sanitizeConfiguredModelProviderRequest } from "../agents/provider-reque
 const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
 const MAX_ERROR_CHARS = 300;
 const MAX_ERROR_RESPONSE_BYTES = 4096;
-const MAX_AUDIT_CONTEXT_CHARS = 80;
+const PROVIDER_HTTP_MAX_REDIRECTS = 3;
 
 /** Resolves the multipart upload filename, mapping AAC inputs to provider-friendly `.m4a`. */
 export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?: string): string {
@@ -95,17 +100,16 @@ export type ProviderOperationDeadline = {
 export type ProviderOperationTimeoutMs = number | (() => number);
 
 type GuardedProviderRequestParams = {
-  pinDns?: boolean;
-  allowPrivateNetwork?: boolean;
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   auditContext?: string;
-  /**
-   * Override the guarded-fetch mode. Defaults to an auto-upgrade to
-   * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
-   * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
-   */
-  mode?: GuardedFetchMode;
+};
+
+type ProviderHttpFetchResult = {
+  response: Response;
+  finalUrl: string;
+  release: () => Promise<void>;
+  refreshTimeout?: () => void;
 };
 
 /** Creates a timer-safe absolute operation deadline from an optional total timeout. */
@@ -315,21 +319,9 @@ function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {
   return timeoutMs;
 }
 
-function sanitizeAuditContext(auditContext: string | undefined): string | undefined {
-  const cleaned = auditContext
-    ?.replace(/\p{Cc}+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!cleaned) {
-    return undefined;
-  }
-  return cleaned.slice(0, MAX_AUDIT_CONTEXT_CHARS);
-}
-
 export function resolveProviderHttpRequestConfig(params: {
   baseUrl?: string;
   defaultBaseUrl: string;
-  allowPrivateNetwork?: boolean;
   headers?: HeadersInit;
   defaultHeaders?: Record<string, string>;
   request?: ModelProviderRequestTransportOverrides;
@@ -339,7 +331,6 @@ export function resolveProviderHttpRequestConfig(params: {
   transport?: ProviderRequestTransport;
 }): {
   baseUrl: string;
-  allowPrivateNetwork: boolean;
   headers: Headers;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   requestConfig: ResolvedProviderRequestConfig;
@@ -355,7 +346,6 @@ export function resolveProviderHttpRequestConfig(params: {
       : undefined,
     providerHeaders: params.defaultHeaders,
     precedence: "caller-wins",
-    allowPrivateNetwork: params.allowPrivateNetwork,
     api: params.api,
     request: params.request,
   });
@@ -366,46 +356,76 @@ export function resolveProviderHttpRequestConfig(params: {
 
   return {
     baseUrl: requestConfig.baseUrl,
-    allowPrivateNetwork: requestConfig.allowPrivateNetwork,
     headers,
     dispatcherPolicy: buildProviderRequestDispatcherPolicy(requestConfig),
     requestConfig,
   };
 }
 
-/**
- * Decide whether to auto-upgrade a provider HTTP request into
- * `TRUSTED_ENV_PROXY` mode based on the runtime environment.
- *
- * This is gated conservatively to avoid the SSRF bypasses the initial
- * auto-upgrade path exposed (see openclaw#64974 review threads):
- *
- * 1. If the caller supplied an explicit `dispatcherPolicy` — custom proxy URL,
- *    `proxyTls`, or `connect` options — do NOT override it. Trusted-env mode
- *    builds an `EnvHttpProxyAgent` that would silently drop those overrides,
- *    breaking enterprise proxy/mTLS configs.
- *
- * 2. Only auto-upgrade when `HTTP_PROXY` or `HTTPS_PROXY` (lower- or
- *    upper-case) is configured for the target protocol. `ALL_PROXY` is
- *    explicitly ignored by `EnvHttpProxyAgent`, so counting it would
- *    auto-upgrade requests that then make direct connections while skipping
- *    pinned-DNS/SSRF hostname checks.
- *
- * 3. If `NO_PROXY` would bypass the proxy for this target, do NOT auto-upgrade.
- *    `EnvHttpProxyAgent` makes direct connections for `NO_PROXY` matches, but
- *    in `TRUSTED_ENV_PROXY` mode `fetchWithSsrFGuard` skips
- *    `resolvePinnedHostnameWithPolicy` — so those direct connections would
- *    bypass SSRF protection. Keep strict mode for `NO_PROXY` matches.
- */
-function shouldAutoUpgradeToTrustedEnvProxy(params: {
-  url: string;
-  dispatcherPolicy: PinnedDispatcherPolicy | undefined;
-}): boolean {
-  if (params.dispatcherPolicy) {
-    return false;
+function normalizeProviderHttpPolicyOrigin(value: string): string | undefined {
+  try {
+    return new URL(value).origin.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function assertProviderHttpUrlAllowedByPolicy(url: string, policy?: SsrFPolicy): void {
+  const hostnameAllowlist = normalizeHostnameAllowlist([
+    ...(policy?.hostnameAllowlist ?? []),
+    ...(policy?.allowedHostnames ?? []),
+  ]);
+  const allowedOrigins = (policy?.allowedOrigins ?? [])
+    .map((origin) => normalizeProviderHttpPolicyOrigin(origin))
+    .filter((origin): origin is string => Boolean(origin));
+  if (hostnameAllowlist.length === 0 && allowedOrigins.length === 0) {
+    return;
   }
 
-  return shouldUseEnvHttpProxyForUrl(params.url);
+  const parsed = new URL(url);
+  const normalizedHostname = normalizeHostname(parsed.hostname);
+  const origin = normalizeProviderHttpPolicyOrigin(parsed.toString());
+  const hostAllowed =
+    hostnameAllowlist.length > 0 && matchesHostnameAllowlist(normalizedHostname, hostnameAllowlist);
+  const originAllowed = origin ? allowedOrigins.includes(origin) : false;
+  if (!hostAllowed && !originAllowed) {
+    throw new SsrFBlockedError(`Blocked hostname (not in allowlist): ${parsed.hostname}`);
+  }
+}
+
+async function captureProviderHttpExchange(params: {
+  url: string;
+  init?: RequestInit;
+  response: Response;
+  auditContext?: string;
+  capturedByGlobalFetchPatch?: boolean;
+}): Promise<void> {
+  const settings = resolveDebugProxySettings();
+  if (!settings.enabled) {
+    return;
+  }
+  const { captureHttpExchange, isDebugProxyGlobalFetchPatchInstalled } =
+    await import("../proxy-capture/runtime.js");
+  if (params.capturedByGlobalFetchPatch && isDebugProxyGlobalFetchPatchInstalled()) {
+    return;
+  }
+  captureHttpExchange(
+    {
+      url: params.url,
+      method: params.init?.method ?? "GET",
+      requestHeaders: params.init?.headers as Headers | Record<string, string> | undefined,
+      requestBody:
+        (params.init as (RequestInit & { body?: BodyInit | Buffer | string | null }) | undefined)
+          ?.body ?? null,
+      response: params.response,
+      transport: "http",
+      meta: {
+        captureOrigin: "provider-http",
+        ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+      },
+    },
+    settings,
+  );
 }
 
 export async function fetchWithTimeoutGuarded(
@@ -415,92 +435,51 @@ export async function fetchWithTimeoutGuarded(
   fetchFn: typeof fetch,
   options?: {
     ssrfPolicy?: SsrFPolicy;
-    lookupFn?: LookupFn;
-    pinDns?: boolean;
     dispatcherPolicy?: PinnedDispatcherPolicy;
     auditContext?: string;
-    mode?: GuardedFetchMode;
   },
-): Promise<GuardedFetchResult> {
-  // Provider HTTP helpers (image/music/video generation, transcription, etc.)
-  // call this function from every provider that talks to a remote API. When
-  // the host has HTTP_PROXY/HTTPS_PROXY configured, the lower-level strict
-  // mode would force Node-level `dns.lookup()` on the target hostname before
-  // dialing the proxy — which fails with EAI_AGAIN in proxy-only environments
-  // (containers, restricted sandboxes, corporate networks with DNS-over-proxy,
-  // Clash TUN fake-IP, etc.). Auto-upgrade to trusted env proxy mode in that
-  // case so the request goes through the configured proxy agent instead of
-  // doing a local DNS pre-resolution.
-  //
-  // This does not weaken SSRF protection when the auto-upgrade fires: an HTTP
-  // CONNECT proxy on the egress path performs hostname resolution itself and
-  // client-side DNS pinning cannot meaningfully constrain the target IP. But
-  // the auto-upgrade is gated (see `shouldAutoUpgradeToTrustedEnvProxy`) to
-  // avoid three SSRF-bypass edge cases: caller-provided `dispatcherPolicy`,
-  // `ALL_PROXY`-only envs, and `NO_PROXY` target matches. Callers that
-  // explicitly need strict pinned-DNS can still opt in by passing
-  // `mode: GUARDED_FETCH_MODE.STRICT` here or by using `fetchWithSsrFGuard`
-  // directly.
-  //
-  // See openclaw#52162 for the reported failure mode on memory embeddings,
-  // which shares this code path with image/music/video/audio generation.
-  const resolvedMode =
-    options?.mode ??
-    (shouldAutoUpgradeToTrustedEnvProxy({
-      url,
-      dispatcherPolicy: options?.dispatcherPolicy,
-    })
-      ? GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY
-      : undefined);
-  return await fetchWithSsrFGuard({
+): Promise<ProviderHttpFetchResult> {
+  const resolvedTimeoutMs = resolveGuardedHttpTimeoutMs(timeoutMs);
+  return await fetchOperatorConfiguredEndpoint({
     url,
-    fetchImpl: fetchFn,
     init,
-    timeoutMs: resolveGuardedHttpTimeoutMs(timeoutMs),
-    policy: options?.ssrfPolicy,
-    lookupFn: options?.lookupFn,
-    pinDns: options?.pinDns,
+    timeoutMs: resolvedTimeoutMs,
+    fetchImpl: fetchFn,
     dispatcherPolicy: options?.dispatcherPolicy,
-    auditContext: sanitizeAuditContext(options?.auditContext),
-    ...(resolvedMode ? { mode: resolvedMode } : {}),
+    maxRedirects: PROVIDER_HTTP_MAX_REDIRECTS,
+    operation: "provider-http-fetch",
+    validateUrl: (parsedUrl) => {
+      assertProviderHttpUrlAllowedByPolicy(parsedUrl.toString(), options?.ssrfPolicy);
+    },
+    onResponse: async ({
+      url: responseUrl,
+      init: requestInit,
+      response,
+      capturedByGlobalFetchPatch,
+    }) => {
+      await captureProviderHttpExchange({
+        url: responseUrl,
+        init: requestInit,
+        response,
+        auditContext: options?.auditContext,
+        capturedByGlobalFetchPatch,
+      });
+    },
   });
 }
 
 type GuardedProviderRequestOptions = NonNullable<Parameters<typeof fetchWithTimeoutGuarded>[4]>;
 
-function mergeGuardedRequestSsrfPolicy(params: {
-  ssrfPolicy?: SsrFPolicy;
-  allowPrivateNetwork?: boolean;
-}): SsrFPolicy | undefined {
-  if (!params.ssrfPolicy) {
-    return params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
-  }
-  if (!params.allowPrivateNetwork) {
-    return params.ssrfPolicy;
-  }
-  return { ...params.ssrfPolicy, allowPrivateNetwork: true };
-}
-
 function resolveGuardedRequestOptions(
   params: GuardedProviderRequestParams,
 ): GuardedProviderRequestOptions | undefined {
-  if (
-    !params.allowPrivateNetwork &&
-    !params.ssrfPolicy &&
-    !params.dispatcherPolicy &&
-    params.pinDns === undefined &&
-    !params.auditContext &&
-    params.mode === undefined
-  ) {
+  if (!params.dispatcherPolicy && !params.ssrfPolicy && !params.auditContext) {
     return undefined;
   }
-  const ssrfPolicy = mergeGuardedRequestSsrfPolicy(params);
   return {
-    ...(ssrfPolicy ? { ssrfPolicy } : {}),
-    ...(params.pinDns !== undefined ? { pinDns: params.pinDns } : {}),
     ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+    ...(params.ssrfPolicy ? { ssrfPolicy: params.ssrfPolicy } : {}),
     ...(params.auditContext ? { auditContext: params.auditContext } : {}),
-    ...(params.mode !== undefined ? { mode: params.mode } : {}),
   };
 }
 
@@ -514,7 +493,7 @@ async function fetchGuardedProviderOperationResponse(params: {
   requestFailedMessage?: string;
   retry?: TransientProviderRetryConfig;
   guardedOptions: GuardedProviderRequestOptions;
-}): Promise<GuardedFetchResult> {
+}): Promise<ProviderHttpFetchResult> {
   return await executeProviderOperationWithRetry({
     provider: params.provider ?? "provider-http",
     stage: params.stage,

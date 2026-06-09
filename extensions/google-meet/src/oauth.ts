@@ -1,3 +1,4 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Google Meet plugin module implements oauth behavior.
 import {
   MAX_DATE_TIMESTAMP_MS,
@@ -10,12 +11,10 @@ import {
   parseOAuthCallbackInput,
   waitForLocalOAuthCallback,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const GOOGLE_MEET_REDIRECT_URI = "http://localhost:8085/oauth2callback";
 const GOOGLE_MEET_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_MEET_TOKEN_URL = "https://oauth2.googleapis.com/token";
-const GOOGLE_MEET_TOKEN_HOST = "oauth2.googleapis.com";
 const GOOGLE_MEET_DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 const GOOGLE_MEET_SCOPES = [
   "https://www.googleapis.com/auth/meetings.space.created",
@@ -70,7 +69,7 @@ export function buildGoogleMeetAuthUrl(params: {
 }
 
 async function executeGoogleTokenRequest(body: URLSearchParams): Promise<GoogleMeetOAuthTokens> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: GOOGLE_MEET_TOKEN_URL,
     init: {
       method: "POST",
@@ -80,8 +79,6 @@ async function executeGoogleTokenRequest(body: URLSearchParams): Promise<GoogleM
       },
       body,
     },
-    policy: { allowedHostnames: [GOOGLE_MEET_TOKEN_HOST] },
-    auditContext: "google-meet.oauth.token",
   });
   try {
     if (!response.ok) {

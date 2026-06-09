@@ -5,8 +5,8 @@
  * in-process dispatcher, adding loopback auth and operator-facing diagnostics.
  */
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -250,12 +250,10 @@ async function fetchHttpJson<T>(
   const t = setTimeout(() => ctrl.abort(new Error("timed out")), timeoutMs);
   let release: (() => Promise<void>) | undefined;
   try {
-    const guarded = await fetchWithSsrFGuard({
+    const guarded = await fetchWithResponseRelease({
       url,
       init,
       signal: ctrl.signal,
-      policy: { allowPrivateNetwork: true },
-      auditContext: "browser-control-client",
     });
     release = guarded.release;
     const res = guarded.response;

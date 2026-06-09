@@ -3,10 +3,14 @@ import { asNullableRecord } from "../../packages/normalization-core/src/record-c
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeUniqueStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import {
+  SsrFBlockedError,
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
   mergeSsrFPolicies,
   resolvePinnedHostnameWithPolicy,
+  resolveSsrFPolicyForUrl,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
@@ -16,8 +20,20 @@ import type {
 } from "./channel-contract.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 
-export { isPrivateIpAddress, mergeSsrFPolicies };
-export type { SsrFPolicy };
+export {
+  SsrFBlockedError,
+  isBlockedHostnameOrIp,
+  isPrivateIpAddress,
+  mergeSsrFPolicies,
+  resolveSsrFPolicyForUrl,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+};
+export type { LookupFn, SsrFPolicy };
+
+export function isPrivateOrLoopbackHost(hostname: string): boolean {
+  return isBlockedHostnameOrIp(hostname);
+}
 
 /** Accepted channel config shapes that opt into private-network HTTP targets. */
 export type PrivateNetworkOptInInput =

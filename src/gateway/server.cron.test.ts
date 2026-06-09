@@ -1,14 +1,13 @@
 // Gateway cron integration tests cover stored cron jobs, wakeups, isolated runs,
-// system events, SSRF-guarded delivery, and browser cleanup.
+// system events, webhook delivery, and browser cleanup.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
-import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
-import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import type { GatewayCronState } from "./server-cron.js";
 import {
@@ -21,27 +20,10 @@ import {
   testState,
 } from "./test-helpers.js";
 
-const fetchWithSsrFGuardMock = vi.hoisted(() =>
-  vi.fn(async (params: GuardedFetchOptions) => ({
-    response: new Response("ok", { status: 200 }),
-    finalUrl: params.url,
-    release: async () => {},
-  })),
-);
+const fetchMock = vi.hoisted(() => vi.fn(async () => new Response("ok", { status: 200 })));
 
 const sendFailureNotificationAnnounceMock = vi.hoisted(() => vi.fn(async () => undefined));
 const closeTrackedBrowserTabsForSessionsMock = vi.hoisted(() => vi.fn(async () => 0));
-
-vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: (...args: unknown[]) =>
-    (
-      fetchWithSsrFGuardMock as unknown as (...innerArgs: unknown[]) => Promise<{
-        response: Response;
-        finalUrl: string;
-        release: () => Promise<void>;
-      }>
-    )(...args),
-}));
 
 vi.mock("../cron/delivery.js", async () => {
   const actual = await vi.importActual<typeof import("../cron/delivery.js")>("../cron/delivery.js");
@@ -397,20 +379,17 @@ async function runCronJobAndWaitForFinished(ws: WebSocket, jobId: string) {
 }
 
 function getWebhookCall(index: number) {
-  const [args] = fetchWithSsrFGuardMock.mock.calls[index] as unknown as [
+  const [url, init] = fetchMock.mock.calls[index] as unknown as [
+    string | URL | Request,
     {
-      url?: string;
-      init?: {
-        method?: string;
-        headers?: Record<string, string>;
-        body?: string;
-      };
+      method?: string;
+      headers?: Record<string, string>;
+      body?: string;
     },
   ];
-  const url = args.url ?? "";
-  const init = args.init ?? {};
+  const urlString = url instanceof URL ? url.toString() : typeof url === "string" ? url : url.url;
   const body = JSON.parse(init.body ?? "{}") as Record<string, unknown>;
-  return { url, init, body };
+  return { url: urlString, init, body };
 }
 
 describe("gateway server cron", () => {
@@ -436,6 +415,12 @@ describe("gateway server cron", () => {
     vi.useRealTimers();
     sendFailureNotificationAnnounceMock.mockClear();
     closeTrackedBrowserTabsForSessionsMock.mockClear();
+    fetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   test("handles cron CRUD, normalization, and patch semantics", { timeout: 45_000 }, async () => {
@@ -1443,7 +1428,7 @@ describe("gateway server cron", () => {
       },
     });
 
-    fetchWithSsrFGuardMock.mockClear();
+    fetchMock.mockClear();
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -1488,7 +1473,7 @@ describe("gateway server cron", () => {
       expect(legacyRunRes.ok).toBe(true);
       expectEnqueuedRunPayload(legacyRunRes.payload);
       await legacyFinished;
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
 
       const completionJobId = await addWebhookCronJob({
         ws,
@@ -1531,9 +1516,9 @@ describe("gateway server cron", () => {
       expect(silentRunRes.ok).toBe(true);
       expectEnqueuedRunPayload(silentRunRes.payload);
       await silentFinished;
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
 
-      fetchWithSsrFGuardMock.mockClear();
+      fetchMock.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({ status: "error", summary: "delivery failed" });
       const failureDestJobId = await addWebhookCronJob({
         ws,
@@ -1562,7 +1547,7 @@ describe("gateway server cron", () => {
         'Cron job "failure destination webhook" failed: unknown error',
       );
 
-      fetchWithSsrFGuardMock.mockClear();
+      fetchMock.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({ status: "error", summary: "best-effort failed" });
       const bestEffortFailureDestJobId = await addWebhookCronJob({
         ws,
@@ -1586,7 +1571,7 @@ describe("gateway server cron", () => {
       );
       await runCronJobForce(ws, bestEffortFailureDestJobId);
       await bestEffortFailureDestFinished;
-      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
 
       cronIsolatedRun.mockResolvedValueOnce({ status: "ok", summary: "" });
       const noSummaryJobId = await addWebhookCronJob({
@@ -1601,7 +1586,7 @@ describe("gateway server cron", () => {
       );
       await runCronJobForce(ws, noSummaryJobId);
       await noSummaryFinished;
-      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }

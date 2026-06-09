@@ -59,8 +59,6 @@ export { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-export type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 export { normalizeStringEntries } from "openclaw/plugin-sdk/string-normalization-runtime";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "openclaw/plugin-sdk/webhook-ingress";

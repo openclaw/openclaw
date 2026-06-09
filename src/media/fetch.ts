@@ -8,15 +8,18 @@ import {
   readResponseWithLimit,
 } from "@openclaw/media-core/read-response-with-limit";
 import { formatErrorMessage } from "../infra/errors.js";
+import { fetchUntrustedUrl } from "../infra/net/egress-fetch.js";
+import { normalizeHostname } from "../infra/net/hostname.js";
 import {
-  fetchWithSsrFGuard,
-  withStrictGuardedFetchMode,
-  withTrustedExplicitProxyGuardedFetchMode,
-} from "../infra/net/fetch-guard.js";
-import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+  matchesHostnameAllowlist,
+  normalizeHostnameAllowlist,
+  SsrFBlockedError,
+} from "../infra/net/ssrf.js";
+import type { LookupFn, PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isAbortError, isTransientNetworkError } from "../infra/unhandled-rejections.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
 
@@ -38,7 +41,7 @@ export type SavedRemoteMedia = SavedMedia & {
 /** Closed error classes callers can use for retry and diagnostic policy. */
 export type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
 
-/** Retry policy applied around the complete guarded fetch and body read/save operation. */
+/** Retry policy applied around the complete egress fetch and body read/save operation. */
 export type MediaFetchRetryOptions = RetryOptions;
 
 /** Structured fetch error used for retry decisions and caller-facing diagnostics. */
@@ -58,13 +61,23 @@ export class MediaFetchError extends Error {
   }
 }
 
-/** Fetch-compatible injection point used by tests and guarded network callers. */
+/** Fetch-compatible injection point used by tests and egress-policy callers. */
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
-/** Alternate dispatcher/lookup pair tried inside a single guarded fetch attempt. */
+/** Alternate dispatcher/lookup pair tried inside a single egress fetch attempt. */
 export type FetchDispatcherAttempt = {
   dispatcherPolicy?: PinnedDispatcherPolicy;
   lookupFn?: LookupFn;
+};
+
+export type MediaFetchUrlPolicy = {
+  allowedHostnames?: string[];
+  allowedOrigins?: string[];
+  hostnameAllowlist?: string[];
+  allowPrivateNetwork?: never;
+  dangerouslyAllowPrivateNetwork?: never;
+  allowRfc2544BenchmarkRange?: never;
+  allowIpv6UniqueLocalRange?: never;
 };
 
 type FetchMediaOptions = {
@@ -74,25 +87,20 @@ type FetchMediaOptions = {
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
-  /** Abort the guarded fetch request if it has not completed by this deadline (ms). */
+  /** Abort the egress fetch request if it has not completed by this deadline (ms). */
   timeoutMs?: number;
   /** Abort if the response body stops yielding data for this long (ms). */
   readIdleTimeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: MediaFetchUrlPolicy;
   lookupFn?: LookupFn;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   dispatcherAttempts?: FetchDispatcherAttempt[];
   shouldRetryFetchError?: (error: unknown) => boolean;
   /**
-   * Retries the complete guarded fetch/read-or-save operation. Dispatcher
+   * Retries the complete egress fetch/read-or-save operation. Dispatcher
    * attempts still run inside each retry attempt.
    */
   retry?: MediaFetchRetryOptions;
-  /**
-   * Allow an operator-configured explicit proxy to resolve target DNS after
-   * hostname-policy checks instead of forcing local pinned-DNS first.
-   */
-  trustExplicitProxyDns?: boolean;
 };
 
 /** Options for validating and saving an existing Response body into the media store. */
@@ -119,6 +127,34 @@ type GuardedMediaResponse = {
   release: (() => Promise<void>) | null;
   sourceUrl: string;
 };
+
+async function captureMediaFetchExchange(params: {
+  url: string;
+  init?: RequestInit;
+  response: Response;
+}): Promise<void> {
+  const settings = resolveDebugProxySettings();
+  if (!settings.enabled) {
+    return;
+  }
+  const { captureHttpExchange } = await import("../proxy-capture/runtime.js");
+  captureHttpExchange(
+    {
+      url: params.url,
+      method: params.init?.method ?? "GET",
+      requestHeaders: params.init?.headers as Headers | Record<string, string> | undefined,
+      requestBody:
+        (params.init as (RequestInit & { body?: BodyInit | Buffer | string | null }) | undefined)
+          ?.body ?? null,
+      response: params.response,
+      transport: "http",
+      meta: {
+        captureOrigin: "media-fetch",
+      },
+    },
+    settings,
+  );
+}
 
 function stripQuotes(value: string): string {
   return value.replace(/^["']|["']$/g, "");
@@ -179,50 +215,118 @@ function redactMediaUrl(url: string): string {
   return redactSensitiveText(url);
 }
 
-async function fetchGuardedMediaResponse(
-  options: FetchMediaOptions,
-): Promise<GuardedMediaResponse> {
+function normalizeMediaPolicyOrigin(value: string): string | undefined {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+    return parsed.origin.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+const RETIRED_MEDIA_POLICY_KEYS = [
+  "allowPrivateNetwork",
+  "dangerouslyAllowPrivateNetwork",
+  "allowRfc2544BenchmarkRange",
+  "allowIpv6UniqueLocalRange",
+] as const;
+
+function assertNoRetiredMediaPolicyFlags(policy: unknown): void {
+  if (!policy || typeof policy !== "object") {
+    return;
+  }
+  for (const key of RETIRED_MEDIA_POLICY_KEYS) {
+    if (Object.hasOwn(policy, key)) {
+      throw new Error(
+        `readRemoteMediaBuffer no longer supports ssrfPolicy.${key}; use proxy.enabled plus external proxy policy for private-network or fake-IP media egress.`,
+      );
+    }
+  }
+}
+
+function assertMediaUrlAllowedByPolicy(url: string, policy?: MediaFetchUrlPolicy): void {
+  const hostnameAllowlist = normalizeHostnameAllowlist([
+    ...(policy?.allowedHostnames ?? []),
+    ...(policy?.hostnameAllowlist ?? []),
+  ]);
+  const allowedOrigins = (policy?.allowedOrigins ?? [])
+    .map((origin) => normalizeMediaPolicyOrigin(origin))
+    .filter((origin): origin is string => Boolean(origin));
+  if (hostnameAllowlist.length === 0 && allowedOrigins.length === 0) {
+    return;
+  }
+
+  const parsed = new URL(url);
+  const normalizedHostname = normalizeHostname(parsed.hostname);
+  const origin = normalizeMediaPolicyOrigin(parsed.toString());
+  const hostAllowed =
+    hostnameAllowlist.length > 0 && matchesHostnameAllowlist(normalizedHostname, hostnameAllowlist);
+  const originAllowed = origin ? allowedOrigins.includes(origin) : false;
+  if (!hostAllowed && !originAllowed) {
+    throw new SsrFBlockedError(`Blocked media hostname (not in allowlist): ${parsed.hostname}`);
+  }
+}
+
+async function fetchMediaEgressResponse(options: FetchMediaOptions): Promise<GuardedMediaResponse> {
   const {
     url,
     fetchImpl,
     requestInit,
     maxRedirects,
     timeoutMs,
-    ssrfPolicy,
     lookupFn,
     dispatcherPolicy,
     dispatcherAttempts,
     shouldRetryFetchError,
-    trustExplicitProxyDns,
+    ssrfPolicy,
   } = options;
   const sourceUrl = redactMediaUrl(url);
+  void lookupFn;
+  assertNoRetiredMediaPolicyFlags(ssrfPolicy);
 
-  // Dispatcher attempts are fallback routes inside one logical guarded fetch operation.
+  // Dispatcher attempts are fallback routes inside one logical media fetch operation.
   const attempts =
     dispatcherAttempts && dispatcherAttempts.length > 0
       ? dispatcherAttempts
       : [{ dispatcherPolicy, lookupFn }];
-  const runGuardedFetch = async (attempt: FetchDispatcherAttempt) =>
-    await fetchWithSsrFGuard(
-      (trustExplicitProxyDns && attempt.dispatcherPolicy?.mode === "explicit-proxy"
-        ? withTrustedExplicitProxyGuardedFetchMode
-        : withStrictGuardedFetchMode)({
-        url,
-        fetchImpl,
-        init: requestInit,
-        maxRedirects,
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        policy: ssrfPolicy,
-        lookupFn: attempt.lookupFn ?? lookupFn,
-        dispatcherPolicy: attempt.dispatcherPolicy,
-      }),
-    );
+  const runFetch = async (attempt: FetchDispatcherAttempt): Promise<GuardedMediaResponse> => {
+    const redirectLimit =
+      typeof maxRedirects === "number" && Number.isFinite(maxRedirects)
+        ? Math.max(0, Math.floor(maxRedirects))
+        : 3;
+    const result = await fetchUntrustedUrl({
+      url,
+      fetchImpl,
+      init: requestInit,
+      maxRedirects: redirectLimit,
+      timeoutMs,
+      lookupFn: attempt.lookupFn,
+      dispatcherPolicy: attempt.dispatcherPolicy,
+      operation: "media-fetch",
+      validateUrl: (parsedUrl) => {
+        assertMediaUrlAllowedByPolicy(parsedUrl.toString(), ssrfPolicy);
+      },
+      onResponse: async ({ url: responseUrl, init, response }) => {
+        await captureMediaFetchExchange({ url: responseUrl, init, response });
+      },
+    });
+    return {
+      response: result.response,
+      finalUrl: result.finalUrl,
+      release: result.release,
+      sourceUrl,
+    };
+  };
   try {
-    let result!: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    let result!: GuardedMediaResponse;
     const attemptErrors: unknown[] = [];
     for (let i = 0; i < attempts.length; i += 1) {
       try {
-        result = await runGuardedFetch(attempts[i]);
+        result = await runFetch(attempts[i]);
         break;
       } catch (err) {
         if (
@@ -259,6 +363,9 @@ async function fetchGuardedMediaResponse(
       sourceUrl,
     };
   } catch (err) {
+    if (err instanceof SsrFBlockedError) {
+      throw err;
+    }
     throw new MediaFetchError(
       "fetch_failed",
       `Failed to fetch media from ${sourceUrl}: ${formatErrorMessage(err)}`,
@@ -594,13 +701,13 @@ export async function saveResponseMedia(
   });
 }
 
-/** Fetches media through SSRF guards and saves the body into the media store. */
+/** Fetches media through the canonical egress helper and saves the body into the media store. */
 export async function saveRemoteMedia(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {
   return await withMediaFetchRetry(options, () => saveRemoteMediaOnce(options));
 }
 
 async function saveRemoteMediaOnce(options: SaveRemoteMediaOptions): Promise<SavedRemoteMedia> {
-  const { response: res, finalUrl, release, sourceUrl } = await fetchGuardedMediaResponse(options);
+  const { response: res, finalUrl, release, sourceUrl } = await fetchMediaEgressResponse(options);
   try {
     await assertMediaResponseOk({
       res,
@@ -627,7 +734,7 @@ async function saveRemoteMediaOnce(options: SaveRemoteMediaOptions): Promise<Sav
   }
 }
 
-/** Fetches media through SSRF guards and returns the bounded response body as a buffer. */
+/** Fetches media through the canonical egress helper and returns the bounded response body. */
 export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise<FetchMediaResult> {
   return await withMediaFetchRetry(options, () => readRemoteMediaBufferOnce(options));
 }
@@ -636,7 +743,7 @@ export async function readRemoteMediaBuffer(options: FetchMediaOptions): Promise
 export const fetchRemoteMedia = readRemoteMediaBuffer;
 
 async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<FetchMediaResult> {
-  const { response: res, finalUrl, release, sourceUrl } = await fetchGuardedMediaResponse(options);
+  const { response: res, finalUrl, release, sourceUrl } = await fetchMediaEgressResponse(options);
 
   try {
     await assertMediaResponseOk({

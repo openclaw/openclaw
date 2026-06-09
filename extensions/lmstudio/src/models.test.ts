@@ -4,7 +4,7 @@ import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
   discoverLmstudioModels,
@@ -21,18 +21,18 @@ import {
   resolveLmstudioServerBase,
 } from "./models.js";
 
-const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const fetchWithResponseReleaseMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
   return {
     ...actual,
-    fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+    fetchWithResponseRelease: fetchWithResponseReleaseMock,
   };
 });
 
 afterAll(() => {
-  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.doUnmock("openclaw/plugin-sdk/fetch-runtime");
   vi.resetModules();
 });
 
@@ -90,8 +90,18 @@ describe("lmstudio-models", () => {
     expect(loadBody.context_length).toBe(contextLength);
   };
 
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/fetch-runtime")>(
+      "openclaw/plugin-sdk/fetch-runtime",
+    );
+    fetchWithResponseReleaseMock.mockImplementation(
+      async (params: Parameters<typeof actual.fetchWithResponseRelease>[0]) =>
+        await actual.fetchWithResponseRelease(params),
+    );
+  });
+
   afterEach(() => {
-    fetchWithSsrFGuardMock.mockReset();
+    fetchWithResponseReleaseMock.mockReset();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -107,7 +117,7 @@ describe("lmstudio-models", () => {
     expect(resolveLmstudioInferenceBase("localhost:1234/api/v1")).toBe("http://localhost:1234/v1");
   });
 
-  it("marks configured LM Studio endpoints as trusted private-network model targets", () => {
+  it("canonicalizes configured LM Studio endpoints without writing request policy", () => {
     expect(
       normalizeLmstudioProviderConfig({
         baseUrl: "http://192.168.1.10:1234",
@@ -115,7 +125,6 @@ describe("lmstudio-models", () => {
       }),
     ).toEqual({
       baseUrl: "http://192.168.1.10:1234/v1",
-      request: { allowPrivateNetwork: true },
       models: [],
     });
 
@@ -123,7 +132,6 @@ describe("lmstudio-models", () => {
       normalizeLmstudioProviderConfig({
         baseUrl: "http://gpu-box.local:1234/v1",
         request: {
-          allowPrivateNetwork: false,
           headers: { "X-Proxy-Auth": "token" },
         },
         models: [],
@@ -131,7 +139,6 @@ describe("lmstudio-models", () => {
     ).toEqual({
       baseUrl: "http://gpu-box.local:1234/v1",
       request: {
-        allowPrivateNetwork: false,
         headers: { "X-Proxy-Auth": "token" },
       },
       models: [],
@@ -382,9 +389,7 @@ describe("lmstudio-models", () => {
     }
   });
 
-  it("caps oversized direct fetch timeouts before discovering models", async () => {
-    const timeoutController = new AbortController();
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+  it("passes a capped timeout signal before discovering models", async () => {
     const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => ({
       ok: true,
       status: 200,
@@ -399,12 +404,14 @@ describe("lmstudio-models", () => {
     });
 
     expect(result.reachable).toBe(true);
-    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
-    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(timeoutController.signal);
+    expect(fetchWithResponseReleaseMock.mock.calls[0]?.[0]).toMatchObject({
+      timeoutMs: MAX_TIMER_TIMEOUT_MS,
+    });
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("caps oversized guarded-fetch timeouts before discovering models", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
+    fetchWithResponseReleaseMock.mockResolvedValue({
       response: new Response(JSON.stringify({ models: [] }), { status: 200 }),
       release: vi.fn(async () => undefined),
     });
@@ -416,9 +423,29 @@ describe("lmstudio-models", () => {
     });
 
     expect(result.reachable).toBe(true);
-    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).toMatchObject({
+    expect(fetchWithResponseReleaseMock.mock.calls[0]?.[0]).toMatchObject({
       timeoutMs: MAX_TIMER_TIMEOUT_MS,
     });
+  });
+
+  it("rejects redirected model discovery outside the configured policy", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://other.example/api/v1/models" },
+        }),
+    );
+
+    const result = await fetchLmstudioModels({
+      baseUrl: "https://lmstudio.example/v1",
+      fetchImpl: asFetch(fetchMock),
+      ssrfPolicy: { allowedHostnames: ["lmstudio.example"] },
+    });
+
+    expect(result.reachable).toBe(false);
+    expect((result.error as Error).message).toContain("Blocked LM Studio model request target");
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("skips model load when already loaded", async () => {
@@ -530,6 +557,7 @@ describe("lmstudio-models", () => {
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(stableLoadInit).toEqual({
       method: "POST",
+      redirect: "manual",
       headers: {
         "X-Proxy-Auth": "required",
         Authorization: "Bearer lm-token",

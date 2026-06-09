@@ -12,13 +12,13 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
-    "openclaw/plugin-sdk/ssrf-runtime",
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/fetch-runtime")>(
+    "openclaw/plugin-sdk/fetch-runtime",
   );
   return {
     ...actual,
-    fetchWithSsrFGuard: async (params: {
+    fetchWithResponseRelease: async (params: {
       url: string;
       init?: RequestInit;
       fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -36,7 +36,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.doUnmock("openclaw/plugin-sdk/fetch-runtime");
   vi.resetModules();
 });
 

@@ -1,26 +1,14 @@
-// Link-understanding runner tests cover guarded fetches, command execution, scoping, and template behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Link-understanding runner tests cover bounded fetches, command execution, scoping, and template behavior.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LinkModelConfig } from "../config/types.tools.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { runLinkUnderstanding } from "./runner.js";
 
 const mocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(),
   runCommandWithTimeout: vi.fn(),
 }));
-
-vi.mock("../infra/net/fetch-guard.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
-    "../infra/net/fetch-guard.js",
-  );
-  return {
-    ...actual,
-    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
-  };
-});
 
 vi.mock("../process/exec.js", async () => {
   const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
@@ -45,14 +33,12 @@ function ctx(body: string): MsgContext {
   return { Body: body } as MsgContext;
 }
 
-function mockGuardedFetch(body = "guarded content", finalUrl = "https://example.com/final") {
-  const release = vi.fn(async () => {});
-  mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-    response: new Response(body),
-    finalUrl,
-    release,
+function mockFetchResponse(body = "fetched content", finalUrl = "https://example.com/final") {
+  const response = new Response(body, {
+    headers: { "Content-Type": "text/plain" },
   });
-  return release;
+  Object.defineProperty(response, "url", { value: finalUrl });
+  vi.mocked(globalThis.fetch).mockResolvedValueOnce(response);
 }
 
 function mockCommand(stdout = "summary") {
@@ -68,40 +54,47 @@ function mockCommand(stdout = "summary") {
 
 describe("runLinkUnderstanding", () => {
   beforeEach(() => {
-    mocks.fetchWithSsrFGuard.mockReset();
+    vi.stubGlobal("fetch", vi.fn());
     mocks.runCommandWithTimeout.mockReset();
   });
 
-  it("fetches links through the SSRF guard before passing content to CLI stdin", async () => {
-    const release = mockGuardedFetch("page body", "https://example.com/final");
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("fetches links before passing bounded content to CLI stdin", async () => {
+    mockFetchResponse("page body", "https://example.com/final");
     mockCommand("summarized page");
 
     const result = await runLinkUnderstanding({
       cfg: cfg({ type: "cli", command: "summarize", args: ["--source", "{{LinkUrl}}"] }),
-      ctx: ctx("see https://example.com/page"),
+      ctx: ctx("see https://93.184.216.34/page"),
     });
 
     expect(result.outputs).toEqual(["summarized page"]);
-    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://93.184.216.34/page",
       expect.objectContaining({
-        auditContext: "link-understanding",
-        mode: "strict",
-        url: "https://example.com/page",
+        headers: {
+          Accept: "text/*,application/json,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "User-Agent": "OpenClaw-LinkUnderstanding/1.0",
+        },
+        redirect: "manual",
+        signal: expect.any(AbortSignal),
       }),
     );
     expect(runCommandWithTimeout).toHaveBeenCalledWith(["summarize", "--source"], {
       env: {
         OPENCLAW_LINK_FINAL_URL: "https://example.com/final",
-        OPENCLAW_LINK_URL: "https://example.com/page",
+        OPENCLAW_LINK_URL: "https://93.184.216.34/page",
       },
       input: "page body",
       timeoutMs: 30000,
     });
-    expect(release).toHaveBeenCalledOnce();
   });
 
-  it("does not run configured curl fetchers against attacker-controlled URLs", async () => {
-    mockGuardedFetch("guarded page body");
+  it("returns fetched content directly for configured curl-style fetchers", async () => {
+    mockFetchResponse("fetched page body");
 
     const result = await runLinkUnderstanding({
       cfg: cfg({
@@ -109,32 +102,38 @@ describe("runLinkUnderstanding", () => {
         command: "curl",
         args: ["-s", "-L", "{{LinkUrl}}"],
       }),
-      ctx: ctx("see http://192.168.1.64.nip.io:8888/aws-iam-credentials"),
+      ctx: ctx("see http://93.184.216.34/public-page"),
     });
 
-    expect(result.outputs).toEqual(["guarded page body"]);
-    expect(fetchWithSsrFGuard).toHaveBeenCalledOnce();
+    expect(result.outputs).toEqual(["fetched page body"]);
+    expect(globalThis.fetch).toHaveBeenCalledOnce();
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
-  it("skips links rejected by the guarded fetch DNS policy", async () => {
-    mocks.fetchWithSsrFGuard.mockRejectedValueOnce(
-      new Error("Blocked: resolves to private/internal/special-use IP address"),
-    );
-
+  it("blocks private link targets through the canonical untrusted URL guard", async () => {
     const result = await runLinkUnderstanding({
       cfg: cfg({ type: "cli", command: "summarize" }),
-      ctx: ctx("see http://169.254.169.254.nip.io/latest/meta-data/"),
+      ctx: ctx("see http://127.0.0.1:8080/admin"),
     });
 
     expect(result.outputs).toEqual([]);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
-  it("skips links rejected by the guarded fetch redirect policy", async () => {
-    mocks.fetchWithSsrFGuard.mockRejectedValueOnce(
-      new Error("redirect target resolves to private network"),
-    );
+  it("blocks metadata hostnames through the canonical untrusted URL guard", async () => {
+    const result = await runLinkUnderstanding({
+      cfg: cfg({ type: "cli", command: "summarize" }),
+      ctx: ctx("see http://metadata.google.internal/latest/meta-data/"),
+    });
+
+    expect(result.outputs).toEqual([]);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it("skips links rejected by HTTP status", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response("no", { status: 500 }));
 
     const result = await runLinkUnderstanding({
       cfg: cfg({ type: "cli", command: "summarize" }),

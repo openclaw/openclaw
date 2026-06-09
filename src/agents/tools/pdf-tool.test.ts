@@ -403,7 +403,7 @@ describe("createPdfTool", () => {
     });
   });
 
-  it("passes web_fetch SSRF policy when loading remote PDFs", async () => {
+  it("does not forward retired web_fetch SSRF policy when loading remote PDFs", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       const { loadSpy } = await stubPdfToolInfra(agentDir, {
         provider: "anthropic",
@@ -412,13 +412,6 @@ describe("createPdfTool", () => {
       vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
       const cfg: OpenClawConfig = {
         ...withPdfModel(ANTHROPIC_PDF_MODEL),
-        tools: {
-          web: {
-            fetch: {
-              ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-            },
-          },
-        },
       };
       const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
 
@@ -431,7 +424,7 @@ describe("createPdfTool", () => {
       expect(loadRef).toBe("http://198.18.0.153/doc.pdf");
       expectFields(loadOptions, {
         readIdleTimeoutMs: 120_000,
-        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+        ssrfPolicy: undefined,
       });
     });
   });

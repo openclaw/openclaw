@@ -1,15 +1,17 @@
 // Matrix plugin module implements transport behavior.
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
+import {
+  closeDispatcher,
+  createPinnedDispatcher,
+  resolvePinnedHostnameWithPolicy,
+  type PinnedDispatcherPolicy,
+} from "openclaw/plugin-sdk/ssrf-dispatcher";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-policy";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
 import {
   buildTimeoutAbortSignal,
-  closeDispatcher,
-  createPinnedDispatcher,
   fetchWithRuntimeDispatcherOrMockedGlobal,
-  resolvePinnedHostnameWithPolicy,
-  type SsrFPolicy,
-  type PinnedDispatcherPolicy,
 } from "./transport-runtime-api.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";

@@ -1,10 +1,7 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Mattermost plugin module implements client behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromPrivateNetworkOptIn,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -18,7 +15,7 @@ export type MattermostClient = {
   apiBaseUrl: string;
   token: string;
   request: <T>(path: string, init?: RequestInit) => Promise<T>;
-  /** Guarded fetch implementation; use in place of raw fetch for outbound requests. */
+  /** Fetch implementation used for outbound Mattermost requests. */
   fetchImpl: MattermostFetch;
 };
 
@@ -96,8 +93,6 @@ export function createMattermostClient(params: {
   baseUrl: string;
   botToken: string;
   fetchImpl?: MattermostFetch;
-  /** Allow requests to private/internal IPs (self-hosted/LAN deployments). */
-  allowPrivateNetwork?: boolean;
 }): MattermostClient {
   const baseUrl = normalizeMattermostBaseUrl(params.baseUrl);
   if (!baseUrl) {
@@ -105,12 +100,9 @@ export function createMattermostClient(params: {
   }
   const apiBaseUrl = `${baseUrl}/api/v4`;
   const token = params.botToken.trim();
-  // When no custom fetchImpl is provided (production path), use an SSRF-guarded wrapper
-  // that validates the target URL before making the request (DNS rebinding protection etc.).
-  // A custom fetchImpl is accepted for testing and special cases.
   const externalFetchImpl = params.fetchImpl;
 
-  // Guarded fetch adapter: calls fetchWithSsrFGuard and returns a plain Response.
+  // Runtime fetch adapter: calls fetchWithResponseRelease and returns a plain Response.
   // Body is buffered before releasing the dispatcher so callers get a complete Response.
   // Null-body status codes per Fetch spec — Response constructor rejects a body for these.
   const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
@@ -118,11 +110,9 @@ export function createMattermostClient(params: {
   const guardedFetchImpl: MattermostFetch = async (input, init) => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithResponseRelease({
       url,
       init,
-      auditContext: "mattermost-api",
-      policy: ssrfPolicyFromPrivateNetworkOptIn(params.allowPrivateNetwork),
     });
     try {
       const bodyBytes = NULL_BODY_STATUSES.has(response.status)

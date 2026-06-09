@@ -10,7 +10,7 @@ export {
   withSelfHostedWebToolsEndpoint,
   withStrictWebToolsEndpoint,
   withTrustedWebToolsEndpoint,
-} from "../agents/tools/web-guarded-fetch.js";
+} from "../agents/tools/web-search-provider-common.js";
 export { markdownToText, truncateText } from "../agents/tools/web-fetch-utils.js";
 export {
   DEFAULT_CACHE_TTL_MINUTES,

@@ -7,6 +7,7 @@ import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-conf
 import { normalizeBaseCompatibilityConfigValues } from "./legacy-config-compatibility-base.js";
 import {
   normalizeLegacyCommandsConfig,
+  normalizeLegacyModelProviderRequestConfig,
   normalizeLegacyOpenAICodexModelsAddMetadata,
 } from "./legacy-config-core-normalizers.js";
 
@@ -70,6 +71,7 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     changes.push(...secretRefMarkers.changes);
   }
   next = normalizeLegacyCommandsConfig(next, changes);
+  next = normalizeLegacyModelProviderRequestConfig(next, changes);
   next = normalizeLegacyOpenAICodexModelsAddMetadata(next, changes);
   next = pruneBindingsForMissingAgents(next, changes);
 

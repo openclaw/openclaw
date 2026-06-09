@@ -28,20 +28,19 @@ export async function transcribeXaiAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveProviderHttpRequestConfig({
-      baseUrl: resolveXaiSttBaseUrl(params.baseUrl),
-      defaultBaseUrl: XAI_BASE_URL,
-      headers: params.headers,
-      request: params.request,
-      defaultHeaders: {
-        Authorization: `Bearer ${params.apiKey}`,
-      },
-      provider: "xai",
-      api: "xai-stt",
-      capability: "audio",
-      transport: "media-understanding",
-    });
+  const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+    baseUrl: resolveXaiSttBaseUrl(params.baseUrl),
+    defaultBaseUrl: XAI_BASE_URL,
+    headers: params.headers,
+    request: params.request,
+    defaultHeaders: {
+      Authorization: `Bearer ${params.apiKey}`,
+    },
+    provider: "xai",
+    api: "xai-stt",
+    capability: "audio",
+    transport: "media-understanding",
+  });
 
   const model = normalizeOptionalString(params.model);
   const language = normalizeOptionalString(params.language);
@@ -61,7 +60,6 @@ export async function transcribeXaiAudio(
     body: form,
     timeoutMs: params.timeoutMs,
     fetchFn,
-    allowPrivateNetwork,
     dispatcherPolicy,
     auditContext: "xai stt",
   });

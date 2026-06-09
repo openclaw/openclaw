@@ -3,8 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { fetchOperatorConfiguredEndpoint } from "../../infra/net/egress-fetch.js";
 
 const PREFLIGHT_CACHE_TTL_MS = 5 * 60_000;
 const PREFLIGHT_TIMEOUT_MS = 2_500;
@@ -106,23 +105,6 @@ function buildProbeUrl(api: PreflightApi, baseUrl: string): string {
   return `${baseUrl}/models`;
 }
 
-function buildLocalProviderSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
-  try {
-    const parsed = new URL(baseUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return {
-      // Local-provider probes intentionally allow private hosts, but only the
-      // exact hostname from the configured provider base URL.
-      hostnameAllowlist: [parsed.hostname],
-      allowPrivateNetwork: true,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
 function formatUnavailableReason(params: {
   provider: string;
   model: string;
@@ -161,20 +143,19 @@ async function probeLocalProviderEndpoint(params: {
   api: PreflightApi;
   baseUrl: string;
 }): Promise<void> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const result = await fetchOperatorConfiguredEndpoint({
     url: buildProbeUrl(params.api, params.baseUrl),
     init: { method: "GET" },
-    policy: buildLocalProviderSsrFPolicy(params.baseUrl),
+    operation: "cron-model-provider-preflight",
     timeoutMs: PREFLIGHT_TIMEOUT_MS,
-    auditContext: "cron-model-provider-preflight",
   });
   try {
     // Any HTTP response means the local endpoint is alive. Auth/model errors
     // still belong to the normal model runner where fallback and diagnostics
     // have the full provider context.
-    void response.status;
+    void result.response.status;
   } finally {
-    await release();
+    await result.release();
   }
 }
 

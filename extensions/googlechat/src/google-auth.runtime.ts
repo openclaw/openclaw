@@ -1,13 +1,16 @@
 // Googlechat plugin module implements google auth behavior.
 import fs from "node:fs/promises";
 import type { ConnectionOptions } from "node:tls";
+import {
+  createHttp1Agent,
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+  fetchWithResponseRelease,
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
-import {
-  buildHostnameAllowlistPolicyFromSuffixAllowlist,
-  fetchWithSsrFGuard,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { Dispatcher } from "undici";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
 type ProxyRule = RegExp | URL | string;
@@ -59,11 +62,6 @@ type GoogleChatServiceAccountCredentials = Record<string, unknown> & {
   universe_domain?: string;
 };
 
-const GOOGLE_AUTH_ALLOWED_HOST_SUFFIXES = ["accounts.google.com", "googleapis.com"];
-const GOOGLE_AUTH_POLICY = buildHostnameAllowlistPolicyFromSuffixAllowlist(
-  GOOGLE_AUTH_ALLOWED_HOST_SUFFIXES,
-);
-const GOOGLE_AUTH_AUDIT_CONTEXT = "googlechat.auth.google-auth";
 const GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth";
 const GOOGLE_AUTH_PROVIDER_CERTS_URL = "https://www.googleapis.com/oauth2/v1/certs";
 const GOOGLE_AUTH_TOKEN_URI = "https://oauth2.googleapis.com/token";
@@ -436,19 +434,60 @@ function resolveGoogleAuthDispatcherPolicy(
   return { init: nextInit };
 }
 
+function createGoogleAuthDispatcher(
+  dispatcherPolicy: PinnedDispatcherPolicy | undefined,
+): Dispatcher | undefined {
+  if (!dispatcherPolicy) {
+    return undefined;
+  }
+  if (dispatcherPolicy.mode === "env-proxy") {
+    const requestTls = dispatcherPolicy.connect ?? dispatcherPolicy.proxyTls;
+    return createHttp1EnvHttpProxyAgent({
+      ...(requestTls
+        ? {
+            requestTls: { ...requestTls },
+          }
+        : {}),
+      ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
+    });
+  }
+  if (dispatcherPolicy.mode === "direct") {
+    return dispatcherPolicy.connect
+      ? createHttp1Agent({ connect: { ...dispatcherPolicy.connect } })
+      : undefined;
+  }
+  const proxyUrl = dispatcherPolicy.proxyUrl.trim();
+  if (dispatcherPolicy.proxyTls) {
+    return createHttp1ProxyAgent({ uri: proxyUrl, requestTls: { ...dispatcherPolicy.proxyTls } });
+  }
+  return createHttp1ProxyAgent({ uri: proxyUrl });
+}
+
+async function closeGoogleAuthDispatcher(dispatcher: Dispatcher | undefined): Promise<void> {
+  if (!dispatcher) {
+    return;
+  }
+  try {
+    await dispatcher.close();
+  } catch {
+    // Ignore transport cleanup errors after the response has been buffered.
+  }
+}
+
 export function createGoogleAuthFetch(baseFetch?: FetchLike): FetchLike {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : String(input);
     const guardedOptions = resolveGoogleAuthDispatcherPolicy(input, init);
-    const { response, release } = await fetchWithSsrFGuard({
-      auditContext: GOOGLE_AUTH_AUDIT_CONTEXT,
-      dispatcherPolicy: guardedOptions.dispatcherPolicy,
-      init: guardedOptions.init,
-      policy: GOOGLE_AUTH_POLICY,
-      url,
-      ...(baseFetch ? { fetchImpl: baseFetch } : {}),
-    });
+    const dispatcher = createGoogleAuthDispatcher(guardedOptions.dispatcherPolicy);
+    let release: (() => Promise<void>) | undefined;
     try {
+      const result = await fetchWithResponseRelease({
+        init: dispatcher ? { ...guardedOptions.init, dispatcher } : guardedOptions.init,
+        url,
+        ...(baseFetch ? { fetchImpl: baseFetch } : {}),
+      });
+      release = result.release;
+      const response = result.response;
       const body = await readGoogleAuthResponseBytes(response);
       const bufferedBody = Uint8Array.from(body);
       return new Response(bufferedBody.buffer, {
@@ -457,7 +496,8 @@ export function createGoogleAuthFetch(baseFetch?: FetchLike): FetchLike {
         statusText: response.statusText,
       });
     } finally {
-      await release();
+      await release?.();
+      await closeGoogleAuthDispatcher(dispatcher);
     }
   };
 }

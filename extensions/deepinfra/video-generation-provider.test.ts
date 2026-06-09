@@ -74,7 +74,6 @@ describe("deepinfra video generation provider", () => {
         {
           baseUrl: "https://api.deepinfra.com/v1/inference",
           defaultBaseUrl: "https://api.deepinfra.com/v1/inference",
-          allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: "Bearer provider-key",
             "Content-Type": "application/json",
@@ -106,7 +105,6 @@ describe("deepinfra video generation provider", () => {
       },
       timeoutMs: undefined,
       fetchFn: fetch,
-      allowPrivateNetwork: false,
       dispatcherPolicy: undefined,
     });
     expect(result.videos).toEqual([

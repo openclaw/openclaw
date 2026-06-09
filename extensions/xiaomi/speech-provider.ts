@@ -1,3 +1,4 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Xiaomi provider module implements model/runtime integration.
 import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -10,10 +11,6 @@ import type {
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
 import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 
 const DEFAULT_XIAOMI_TTS_BASE_URL = "https://api.xiaomimimo.com/v1";
 const DEFAULT_XIAOMI_TTS_MODEL = "mimo-v2.5-tts";
@@ -248,7 +245,7 @@ async function xiaomiTTS(params: {
     : style;
 
   try {
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithResponseRelease({
       url: `${baseUrl}/chat/completions`,
       init: {
         method: "POST",
@@ -264,8 +261,6 @@ async function xiaomiTTS(params: {
         signal: controller.signal,
       },
       timeoutMs: requestTimeoutMs,
-      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
-      auditContext: "xiaomi.tts",
     });
     try {
       await assertOkOrThrowProviderError(response, "Xiaomi TTS API error");

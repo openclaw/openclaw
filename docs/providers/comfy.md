@@ -197,12 +197,11 @@ Comfy supports shared top-level connection settings plus per-capability workflow
 
 ### Shared keys
 
-| Key                   | Type                   | Description                                                                           |
-| --------------------- | ---------------------- | ------------------------------------------------------------------------------------- |
-| `mode`                | `"local"` or `"cloud"` | Connection mode.                                                                      |
-| `baseUrl`             | string                 | Defaults to `http://127.0.0.1:8188` for local or `https://cloud.comfy.org` for cloud. |
-| `apiKey`              | string                 | Optional inline key, alternative to `COMFY_API_KEY` / `COMFY_CLOUD_API_KEY` env vars. |
-| `allowPrivateNetwork` | boolean                | Allow a private/LAN `baseUrl` in cloud mode.                                          |
+| Key       | Type                   | Description                                                                           |
+| --------- | ---------------------- | ------------------------------------------------------------------------------------- |
+| `mode`    | `"local"` or `"cloud"` | Connection mode.                                                                      |
+| `baseUrl` | string                 | Defaults to `http://127.0.0.1:8188` for local or `https://cloud.comfy.org` for cloud. |
+| `apiKey`  | string                 | Optional inline key, alternative to `COMFY_API_KEY` / `COMFY_CLOUD_API_KEY` env vars. |
 
 ### Per-capability keys
 

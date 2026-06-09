@@ -19,10 +19,12 @@ import { resolveTelegramMediaPlaceholder } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
+const RETIRED_PRIVATE_NETWORK_MEDIA_MESSAGE =
+  "Telegram media downloads no longer support network.dangerouslyAllowPrivateNetwork; use proxy.enabled plus external proxy policy for private-network media egress.";
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
-function buildTelegramMediaSsrfPolicy(apiRoot?: string, dangerouslyAllowPrivateNetwork?: boolean) {
+function buildTelegramMediaSsrfPolicy(apiRoot?: string) {
   const hostnames = ["api.telegram.org"];
   let allowedHostnames: string[] | undefined;
   if (apiRoot) {
@@ -30,10 +32,8 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string, dangerouslyAllowPrivateN
       const customHost = new URL(apiRoot).hostname;
       if (customHost && !hostnames.includes(customHost)) {
         hostnames.push(customHost);
-        // A configured custom Bot API host is an explicit operator override and
-        // may legitimately live on a private network (for example, self-hosted
-        // Bot API or an internal reverse proxy). Keep that host reachable while
-        // still enforcing resolved-IP checks for the default public host.
+        // Custom Bot API hosts stay hostname-allowlisted, but private-network
+        // reachability now belongs to proxy.enabled plus external proxy policy.
         allowedHostnames = [customHost];
       }
     } catch (err) {
@@ -45,9 +45,13 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string, dangerouslyAllowPrivateN
     // enforcing SSRF checks on the resolved and redirected targets.
     hostnameAllowlist: hostnames,
     ...(allowedHostnames ? { allowedHostnames } : {}),
-    ...(dangerouslyAllowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
-    allowRfc2544BenchmarkRange: true,
   };
+}
+
+function isRetiredPrivateNetworkMediaError(error: unknown): boolean {
+  return (
+    error instanceof MediaFetchError && error.message === RETIRED_PRIVATE_NETWORK_MEDIA_MESSAGE
+  );
 }
 
 /**
@@ -161,14 +165,6 @@ function resolveRequiredTelegramTransport(transport?: TelegramTransport): Telegr
 /** Default idle timeout for Telegram media downloads (30 seconds). */
 const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
-function usesTrustedTelegramExplicitProxy(transport: TelegramTransport): boolean {
-  return (
-    transport.dispatcherAttempts?.some(
-      (attempt) => attempt.dispatcherPolicy?.mode === "explicit-proxy",
-    ) ?? false
-  );
-}
-
 function resolveTrustedLocalTelegramRoot(
   filePath: string,
   trustedLocalFileRoots?: readonly string[],
@@ -237,11 +233,13 @@ async function downloadAndSaveTelegramFile(params: {
   const transport = resolveRequiredTelegramTransport(params.transport);
   const apiBase = resolveTelegramApiBase(params.apiRoot);
   const url = `${apiBase}/file/bot${params.token}/${params.filePath}`;
+  if (params.dangerouslyAllowPrivateNetwork === true) {
+    throw new MediaFetchError("fetch_failed", RETIRED_PRIVATE_NETWORK_MEDIA_MESSAGE);
+  }
   return await saveRemoteMedia({
     url,
     fetchImpl: transport.sourceFetch,
     dispatcherAttempts: transport.dispatcherAttempts,
-    trustExplicitProxyDns: usesTrustedTelegramExplicitProxy(transport),
     shouldRetryFetchError: shouldRetryTelegramTransportFallback,
     retry: {
       attempts: 3,
@@ -255,7 +253,7 @@ async function downloadAndSaveTelegramFile(params: {
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
-    ssrfPolicy: buildTelegramMediaSsrfPolicy(params.apiRoot, params.dangerouslyAllowPrivateNetwork),
+    ssrfPolicy: buildTelegramMediaSsrfPolicy(params.apiRoot),
     fallbackContentType: params.mimeType,
     originalFilename: params.telegramFileName,
   });
@@ -353,6 +351,9 @@ async function resolveStickerMedia(params: {
       },
     };
   } catch (err) {
+    if (isRetiredPrivateNetworkMediaError(err)) {
+      throw err;
+    }
     logVerbose(`telegram: failed to process sticker: ${String(err)}`);
     return null;
   }

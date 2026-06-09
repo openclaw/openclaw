@@ -10,11 +10,11 @@ const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
   return {
     ...actual,
-    fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+    fetchWithResponseRelease: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
   };
 });
 
@@ -65,15 +65,6 @@ describe("cdp.helpers internal", () => {
     }
   });
 
-  function requireGuardedFetchRequest() {
-    const [call] = fetchWithSsrFGuardMock.mock.calls;
-    if (!call) {
-      throw new Error("expected guarded CDP fetch call");
-    }
-    const [request] = call;
-    return request;
-  }
-
   describe("assertCdpEndpointAllowed", () => {
     it("throws on non-http/https/ws/wss protocols under any SSRF policy", async () => {
       await expect(
@@ -106,12 +97,9 @@ describe("cdp.helpers internal", () => {
         response: { ok: false, status: 429 } as unknown as Response,
         release: vi.fn(async () => {}),
       });
-      await expect(
-        fetchCdpChecked("http://127.0.0.1:9222/json/version", 250, undefined, {
-          dangerouslyAllowPrivateNetwork: false,
-          allowedHostnames: ["127.0.0.1"],
-        }),
-      ).rejects.toThrow(/rate[ -]?limit/i);
+      await expect(fetchCdpChecked("http://127.0.0.1:9222/json/version", 250)).rejects.toThrow(
+        /rate[ -]?limit/i,
+      );
     });
 
     it("is idempotent when release() is awaited more than once", async () => {
@@ -123,8 +111,6 @@ describe("cdp.helpers internal", () => {
       const { release: guardedRelease } = await fetchCdpChecked(
         "http://127.0.0.1:9222/json/version",
         250,
-        undefined,
-        { dangerouslyAllowPrivateNetwork: false, allowedHostnames: ["127.0.0.1"] },
       );
       await guardedRelease();
       await guardedRelease();
@@ -143,8 +129,6 @@ describe("cdp.helpers internal", () => {
       const { release: guardedRelease } = await fetchCdpChecked(
         "http://openclaw:secret@127.0.0.1:9222/json/version",
         250,
-        undefined,
-        { dangerouslyAllowPrivateNetwork: false, allowedHostnames: ["127.0.0.1"] },
       );
 
       expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
@@ -157,10 +141,7 @@ describe("cdp.helpers internal", () => {
     it("converts SSRF-blocked errors from the underlying fetch into a browser-scoped error", async () => {
       fetchWithSsrFGuardMock.mockRejectedValueOnce(new SsrFBlockedError("blocked by policy"));
       await expect(
-        fetchCdpChecked("http://127.0.0.1:9222/json/version", 250, undefined, {
-          dangerouslyAllowPrivateNetwork: false,
-          allowedHostnames: ["127.0.0.1"],
-        }),
+        fetchCdpChecked("http://127.0.0.1:9222/json/version", 250),
       ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
     });
 
@@ -169,40 +150,9 @@ describe("cdp.helpers internal", () => {
         response: { ok: false, status: 503 } as unknown as Response,
         release: vi.fn(async () => {}),
       });
-      await expect(
-        fetchJson("http://127.0.0.1:9222/json/version", 250, undefined, {
-          dangerouslyAllowPrivateNetwork: false,
-          allowedHostnames: ["127.0.0.1"],
-        }),
-      ).rejects.toThrow(/HTTP 503/);
-    });
-
-    it("uses the caller-supplied policy for non-loopback hosts", async () => {
-      // Hits the else branch of the isLoopbackHost ternary inside
-      // withNoProxyForCdpUrl plus the left-hand side of the
-      // `ssrfPolicy ?? { allowPrivateNetwork: true }` coalescing.
-      const release = vi.fn(async () => {});
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
-        response: { ok: true, status: 200 } as unknown as Response,
-        release,
-      });
-      await fetchCdpChecked("http://93.184.216.34:9222/json/version", 250, undefined, {
-        allowPrivateNetwork: true,
-      });
-      const request = requireGuardedFetchRequest();
-      expect(request?.policy?.allowPrivateNetwork).toBe(true);
-    });
-
-    it("falls back to a permissive private-network policy when none is supplied on a non-loopback host", async () => {
-      // Hits the right-hand side of the `ssrfPolicy ?? { allowPrivateNetwork: true }` default.
-      const release = vi.fn(async () => {});
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
-        response: { ok: true, status: 200 } as unknown as Response,
-        release,
-      });
-      await fetchCdpChecked("http://93.184.216.34:9222/json/version", 250);
-      const request = requireGuardedFetchRequest();
-      expect(request?.policy).toEqual({ allowPrivateNetwork: true });
+      await expect(fetchJson("http://127.0.0.1:9222/json/version", 250)).rejects.toThrow(
+        /HTTP 503/,
+      );
     });
   });
 

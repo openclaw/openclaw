@@ -27,7 +27,6 @@ import {
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   canonicalizeCodexResponsesBaseUrl,
   isOpenAICodexBaseUrl,
@@ -62,7 +61,6 @@ const MAX_CODEX_IMAGE_SSE_BYTES = 64 * 1024 * 1024;
 const MAX_CODEX_IMAGE_SSE_EVENTS = 512;
 const MAX_CODEX_IMAGE_BASE64_CHARS = 64 * 1024 * 1024;
 const LOG_VALUE_MAX_CHARS = 256;
-const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 const OPENAI_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const OPENAI_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const OPENAI_QUALITIES = ["low", "medium", "high", "auto"] as const;
@@ -279,23 +277,6 @@ function resolveOpenAIImageRequestSize(params: {
       normalizedSize: size,
     },
   };
-}
-
-function shouldAllowPrivateImageEndpoint(req: {
-  provider: string;
-  cfg: OpenClawConfig | undefined;
-}) {
-  if (req.provider === MOCK_OPENAI_PROVIDER_ID) {
-    return true;
-  }
-  if (isPrivateNetworkOptInEnabled(req.cfg?.browser?.ssrfPolicy)) {
-    return true;
-  }
-  const baseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
-  if (!baseUrl.startsWith("http://127.0.0.1:") && !baseUrl.startsWith("http://localhost:")) {
-    return false;
-  }
-  return process.env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER === "1";
 }
 
 function resolveRequestAuthStore(req: {
@@ -707,20 +688,19 @@ async function generateOpenAICodexImage(params: {
   const openAIProviderConfig = req.cfg?.models?.providers?.openai;
   const codexProviderConfig =
     openAIProviderConfig?.api === "openai-chatgpt-responses" ? openAIProviderConfig : undefined;
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveProviderHttpRequestConfig({
-      baseUrl: canonicalizeCodexResponsesBaseUrl(codexProviderConfig?.baseUrl),
-      defaultBaseUrl: DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL,
-      defaultHeaders: {
-        Authorization: `Bearer ${apiKey}`,
-        Accept: "text/event-stream",
-      },
-      request: sanitizeConfiguredModelProviderRequest(codexProviderConfig?.request),
-      provider: "openai",
-      api: "openai-chatgpt-responses",
-      capability: "image",
-      transport: "http",
-    });
+  const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+    baseUrl: canonicalizeCodexResponsesBaseUrl(codexProviderConfig?.baseUrl),
+    defaultBaseUrl: DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL,
+    defaultHeaders: {
+      Authorization: `Bearer ${apiKey}`,
+      Accept: "text/event-stream",
+    },
+    request: sanitizeConfiguredModelProviderRequest(codexProviderConfig?.request),
+    provider: "openai",
+    api: "openai-chatgpt-responses",
+    capability: "image",
+    transport: "http",
+  });
 
   const model = resolveOpenAIImageRequestModel(req, {
     allowTransparentDefaultReroute: true,
@@ -776,7 +756,6 @@ async function generateOpenAICodexImage(params: {
       },
       timeoutMs,
       fetchFn: fetch,
-      allowPrivateNetwork,
       ssrfPolicy: req.ssrfPolicy,
       dispatcherPolicy,
     });
@@ -914,21 +893,19 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       const isAzure = isAzureOpenAIBaseUrl(rawBaseUrl);
       const openAIProviderConfig = req.cfg?.models?.providers?.openai;
 
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: rawBaseUrl,
-          defaultBaseUrl: DEFAULT_OPENAI_IMAGE_BASE_URL,
-          allowPrivateNetwork: shouldAllowPrivateImageEndpoint(req),
-          headers: resolveConfiguredOpenAIImageHeaders(req.cfg),
-          request: sanitizeConfiguredModelProviderRequest(openAIProviderConfig?.request),
-          api: openAIProviderConfig?.api,
-          defaultHeaders: isAzure
-            ? { "api-key": imageAuth.apiKey }
-            : { Authorization: `Bearer ${imageAuth.apiKey}` },
-          provider: "openai",
-          capability: "image",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: rawBaseUrl,
+        defaultBaseUrl: DEFAULT_OPENAI_IMAGE_BASE_URL,
+        headers: resolveConfiguredOpenAIImageHeaders(req.cfg),
+        request: sanitizeConfiguredModelProviderRequest(openAIProviderConfig?.request),
+        api: openAIProviderConfig?.api,
+        defaultHeaders: isAzure
+          ? { "api-key": imageAuth.apiKey }
+          : { Authorization: `Bearer ${imageAuth.apiKey}` },
+        provider: "openai",
+        capability: "image",
+        transport: "http",
+      });
 
       const model = resolveOpenAIImageRequestModel(req, {
         allowTransparentDefaultReroute: publicOpenAIBaseUrl,
@@ -975,7 +952,6 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
               body: form,
               timeoutMs,
               fetchFn: fetch,
-              allowPrivateNetwork,
               ssrfPolicy: req.ssrfPolicy,
               dispatcherPolicy,
             });
@@ -998,7 +974,6 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
               body,
               timeoutMs,
               fetchFn: fetch,
-              allowPrivateNetwork,
               ssrfPolicy: req.ssrfPolicy,
               dispatcherPolicy,
             });

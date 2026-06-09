@@ -20,12 +20,12 @@ function parseJsonBody(call: number): Record<string, unknown> {
   return parseComfyJsonBody(fetchWithSsrFGuardMock, call);
 }
 
-function fetchGuardParams(call: number): { url?: unknown; auditContext?: unknown } {
+function fetchGuardParams(call: number): { url?: unknown } {
   const params = fetchWithSsrFGuardMock.mock.calls[call]?.[0];
   if (!params || typeof params !== "object") {
     throw new Error(`expected Comfy fetch guard call ${call}`);
   }
-  return params as { url?: unknown; auditContext?: unknown };
+  return params as { url?: unknown };
 }
 
 describe("comfy video-generation provider", () => {
@@ -112,7 +112,6 @@ describe("comfy video-generation provider", () => {
     });
 
     expect(fetchGuardParams(0).url).toBe("http://127.0.0.1:8188/prompt");
-    expect(fetchGuardParams(0).auditContext).toBe("comfy-video-generate");
     expect(parseJsonBody(1)).toEqual({
       prompt: {
         "6": { inputs: { text: "animate a lobster" } },
@@ -120,11 +119,9 @@ describe("comfy video-generation provider", () => {
       },
     });
     expect(fetchGuardParams(1).url).toBe("http://127.0.0.1:8188/history/local-video-1");
-    expect(fetchGuardParams(1).auditContext).toBe("comfy-history");
     expect(fetchGuardParams(2).url).toBe(
       "http://127.0.0.1:8188/view?filename=generated.mp4&subfolder=&type=output",
     );
-    expect(fetchGuardParams(2).auditContext).toBe("comfy-video-download");
     expect(result).toEqual({
       videos: [
         {
@@ -235,7 +232,6 @@ describe("comfy video-generation provider", () => {
     });
 
     expect(fetchGuardParams(0).url).toBe("https://cloud.comfy.org/api/prompt");
-    expect(fetchGuardParams(0).auditContext).toBe("comfy-video-generate");
     expect(result.metadata).toEqual({
       promptId: "cloud-video-1",
       outputNodeIds: ["9"],

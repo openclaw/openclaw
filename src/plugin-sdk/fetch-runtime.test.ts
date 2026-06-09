@@ -39,4 +39,11 @@ describe("plugin SDK fetch runtime", () => {
   it("does not replace the undici global dispatcher on import", () => {
     expect(importProbeOutput.trim()).toBe("ok");
   });
+
+  it("does not expose retired SSRF-specific dispatcher helpers", async () => {
+    const module = await import("./fetch-runtime.js");
+    expect(module).not.toHaveProperty("createPinnedLookup");
+    expect(module).not.toHaveProperty("fetchWithSsrFGuard");
+    expect(module).not.toHaveProperty("GUARDED_FETCH_MODE");
+  });
 });

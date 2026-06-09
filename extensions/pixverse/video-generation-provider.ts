@@ -299,7 +299,6 @@ async function pollPixVerseVideo(params: {
   baseUrl: string;
   deadline: ProviderOperationDeadline;
   fetchFn: typeof fetch;
-  allowPrivateNetwork: boolean;
   dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
   headers: Headers;
 }): Promise<PixVerseVideoResultResponse> {
@@ -317,7 +316,6 @@ async function pollPixVerseVideo(params: {
     timeoutMessage: `PixVerse video generation task ${params.videoId} did not finish in time`,
     isComplete: (candidate) => readPixVerseStatus(readResult(candidate)) === 1,
     getFailureMessage: (candidate) => readPixVerseFailureMessage(readResult(candidate)),
-    allowPrivateNetwork: params.allowPrivateNetwork,
     dispatcherPolicy: params.dispatcherPolicy,
   });
   return readResult(payload);
@@ -430,18 +428,17 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
         timeoutMs: req.timeoutMs,
         label: "PixVerse video generation",
       });
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolvePixVerseBaseUrl(req),
-          defaultBaseUrl: DEFAULT_PIXVERSE_BASE_URL,
-          request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
-          defaultHeaders: {
-            "API-KEY": auth.apiKey,
-          },
-          provider: PIXVERSE_PROVIDER_ID,
-          capability: "video",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: resolvePixVerseBaseUrl(req),
+        defaultBaseUrl: DEFAULT_PIXVERSE_BASE_URL,
+        request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+        defaultHeaders: {
+          "API-KEY": auth.apiKey,
+        },
+        provider: PIXVERSE_PROVIDER_ID,
+        capability: "video",
+        transport: "http",
+      });
 
       const image = req.inputImages?.[0];
       let imageId: number | undefined;
@@ -455,7 +452,6 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),
           fetchFn,
-          allowPrivateNetwork,
           dispatcherPolicy,
         });
         try {
@@ -481,7 +477,6 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         }),
         fetchFn,
-        allowPrivateNetwork,
         dispatcherPolicy,
       });
       try {
@@ -497,7 +492,6 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
           baseUrl,
           deadline,
           fetchFn,
-          allowPrivateNetwork,
           dispatcherPolicy,
           headers,
         });

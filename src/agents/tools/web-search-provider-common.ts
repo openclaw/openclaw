@@ -1,12 +1,35 @@
 /**
  * Shared web-search provider helpers.
  *
- * Handles provider config, credential normalization, guarded endpoint calls, caching, and filters.
+ * Handles provider config, credential normalization, endpoint calls, caching, and filters.
  */
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { Dispatcher } from "undici";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import type { FetchWithResponseReleaseResult } from "../../infra/net/egress-fetch.js";
+import { normalizeHostname } from "../../infra/net/hostname.js";
+import { shouldUseEnvHttpProxyForUrl } from "../../infra/net/proxy-env.js";
+import { retainSafeHeadersForCrossOriginRedirect } from "../../infra/net/redirect-headers.js";
+import {
+  fetchWithRuntimeDispatcherOrMockedGlobal,
+  type DispatcherAwareRequestInit,
+} from "../../infra/net/runtime-fetch.js";
+import {
+  closeDispatcher,
+  matchesHostnameAllowlist,
+  normalizeHostnameAllowlist,
+  SsrFBlockedError,
+  type PinnedDispatcherPolicy,
+} from "../../infra/net/ssrf.js";
+import {
+  createHttp1Agent,
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+} from "../../infra/net/undici-runtime.js";
+import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
+import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
@@ -19,27 +42,6 @@ import {
   writeCache,
 } from "./web-shared.js";
 import type { CacheEntry } from "./web-shared.js";
-
-type WebGuardedFetchModule = Pick<
-  typeof import("./web-guarded-fetch.js"),
-  "withSelfHostedWebToolsEndpoint" | "withTrustedWebToolsEndpoint"
->;
-
-const webGuardedFetchLoader = createLazyImportLoader<WebGuardedFetchModule>(
-  () => import("./web-guarded-fetch.js"),
-);
-
-async function loadTrustedWebToolsEndpoint(): Promise<
-  WebGuardedFetchModule["withTrustedWebToolsEndpoint"]
-> {
-  return (await webGuardedFetchLoader.load()).withTrustedWebToolsEndpoint;
-}
-
-async function loadSelfHostedWebToolsEndpoint(): Promise<
-  WebGuardedFetchModule["withSelfHostedWebToolsEndpoint"]
-> {
-  return (await webGuardedFetchLoader.load()).withSelfHostedWebToolsEndpoint;
-}
 
 export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
   ? Web extends { search?: infer Search }
@@ -58,6 +60,44 @@ type UnsupportedWebSearchFilterName =
 export const DEFAULT_SEARCH_COUNT = 5;
 export const MAX_SEARCH_COUNT = 10;
 export const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
+const WEB_TOOLS_ENDPOINT_MAX_REDIRECTS = 3;
+
+type WebToolsEndpointCapture =
+  | false
+  | {
+      flowId?: string;
+      meta?: Record<string, unknown>;
+    };
+
+type WebToolsEndpointPolicy = {
+  hostnameAllowlist?: string[];
+  allowedHostnames?: string[];
+  allowedOrigins?: string[];
+};
+
+type WebToolsEndpointBaseParams = {
+  url: string;
+  init?: RequestInit;
+  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  maxRedirects?: number;
+  allowCrossOriginUnsafeRedirectReplay?: boolean;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  requireHttps?: boolean;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  retainAuthorizationRedirectHostnameAllowlist?: string[];
+  capture?: WebToolsEndpointCapture;
+  auditContext?: string;
+};
+
+type WebToolsNetworkGuardCompatParams = WebToolsEndpointBaseParams & {
+  policy?: WebToolsEndpointPolicy;
+  timeoutSeconds?: number;
+};
+
+type WebToolsEndpointParams = WebToolsEndpointBaseParams & {
+  timeoutSeconds?: number;
+};
 
 export function resolveSearchTimeoutSeconds(searchConfig?: SearchConfigRecord): number {
   return resolveTimeoutSeconds(searchConfig?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
@@ -87,6 +127,488 @@ export function readProviderEnvValue(envVars: string[]): string | undefined {
   return undefined;
 }
 
+function resolveWebToolsEndpointTimeoutMs(params: WebToolsEndpointParams): number {
+  if (
+    typeof params.timeoutMs === "number" &&
+    Number.isFinite(params.timeoutMs) &&
+    params.timeoutMs > 0
+  ) {
+    return Math.floor(params.timeoutMs);
+  }
+  return (
+    finiteSecondsToTimerSafeMilliseconds(
+      resolveTimeoutSeconds(params.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
+      { floorSeconds: true },
+    ) ?? DEFAULT_TIMEOUT_SECONDS * 1000
+  );
+}
+
+function resolveWebToolsEndpointMaxRedirects(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : WEB_TOOLS_ENDPOINT_MAX_REDIRECTS;
+}
+
+function assertWebToolsEndpointUrl(params: { url: string; requireHttps?: boolean }) {
+  if (!params.requireHttps) {
+    return;
+  }
+  const parsed = new URL(params.url);
+  if (parsed.protocol !== "https:") {
+    throw new Error("Web tools endpoint requires an HTTPS URL");
+  }
+}
+
+function createWebToolsEndpointDispatcher(
+  dispatcherPolicy: PinnedDispatcherPolicy | undefined,
+  timeoutMs: number,
+): Dispatcher | undefined {
+  if (!dispatcherPolicy) {
+    return undefined;
+  }
+  if (dispatcherPolicy.mode === "direct") {
+    return createHttp1Agent(
+      dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : undefined,
+      timeoutMs,
+    );
+  }
+  if (dispatcherPolicy.mode === "env-proxy") {
+    return createHttp1EnvHttpProxyAgent(
+      {
+        ...(dispatcherPolicy.connect
+          ? {
+              connect: { ...dispatcherPolicy.connect },
+              requestTls: { ...dispatcherPolicy.connect },
+            }
+          : {}),
+        ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
+      },
+      timeoutMs,
+    );
+  }
+  const proxyUrl = dispatcherPolicy.proxyUrl.trim();
+  if (dispatcherPolicy.proxyTls) {
+    return createHttp1ProxyAgent(
+      { uri: proxyUrl, requestTls: { ...dispatcherPolicy.proxyTls } },
+      timeoutMs,
+    );
+  }
+  return createHttp1ProxyAgent({ uri: proxyUrl }, timeoutMs);
+}
+
+function resolveWebToolsEndpointDispatcherPolicy(
+  params: Pick<WebToolsNetworkGuardCompatParams, "capture" | "dispatcherPolicy" | "url">,
+): PinnedDispatcherPolicy | undefined {
+  if (params.dispatcherPolicy) {
+    return params.dispatcherPolicy;
+  }
+  if (shouldUseEnvHttpProxyForUrl(params.url)) {
+    return { mode: "env-proxy" };
+  }
+  return params.capture === false ? { mode: "direct" } : undefined;
+}
+
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
+  if (!headers) {
+    return headers;
+  }
+  const nextHeaders = new Headers(headers);
+  nextHeaders.delete("content-encoding");
+  nextHeaders.delete("content-language");
+  nextHeaders.delete("content-length");
+  nextHeaders.delete("content-location");
+  nextHeaders.delete("content-type");
+  nextHeaders.delete("transfer-encoding");
+  return nextHeaders;
+}
+
+function rewriteRedirectInitForMethod(params: {
+  init?: RequestInit;
+  status: number;
+}): RequestInit | undefined {
+  const { init, status } = params;
+  if (!init) {
+    return init;
+  }
+  const currentMethod = init.method?.toUpperCase() ?? "GET";
+  const shouldForceGet =
+    status === 303
+      ? currentMethod !== "GET" && currentMethod !== "HEAD"
+      : (status === 301 || status === 302) && currentMethod === "POST";
+  if (!shouldForceGet) {
+    return init;
+  }
+  return {
+    ...init,
+    method: "GET",
+    body: undefined,
+    headers: dropBodyHeaders(init.headers),
+  };
+}
+
+function rewriteRedirectInitForCrossOrigin(params: {
+  init?: RequestInit;
+  allowUnsafeReplay: boolean;
+}): RequestInit | undefined {
+  const { init, allowUnsafeReplay } = params;
+  if (!init) {
+    return init;
+  }
+  const safeHeaders = retainSafeHeadersForCrossOriginRedirect(init.headers);
+  const currentMethod = init.method?.toUpperCase() ?? "GET";
+  if (allowUnsafeReplay || currentMethod === "GET" || currentMethod === "HEAD") {
+    return { ...init, headers: safeHeaders };
+  }
+  return {
+    ...init,
+    body: undefined,
+    headers: dropBodyHeaders(safeHeaders),
+  };
+}
+
+function resolveRetainedAuthorizationForRedirect(params: {
+  init?: RequestInit;
+  nextUrl: URL;
+  hostnameAllowlist?: string[];
+}): string | undefined {
+  if (!params.init?.headers || !params.hostnameAllowlist?.length) {
+    return undefined;
+  }
+  if (params.nextUrl.protocol !== "https:") {
+    return undefined;
+  }
+  const allowlist = normalizeHostnameAllowlist(params.hostnameAllowlist);
+  if (!allowlist.includes("*") && !matchesHostnameAllowlist(params.nextUrl.hostname, allowlist)) {
+    return undefined;
+  }
+  return new Headers(params.init.headers).get("authorization") ?? undefined;
+}
+
+function restoreRedirectAuthorization(params: {
+  init?: RequestInit;
+  authorization?: string;
+}): RequestInit | undefined {
+  if (!params.authorization) {
+    return params.init;
+  }
+  const headers = new Headers(params.init?.headers);
+  headers.set("Authorization", params.authorization);
+  return { ...params.init, headers };
+}
+
+function normalizeWebToolsPolicyOrigin(value: string): string | undefined {
+  try {
+    return new URL(value).origin.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function assertWebToolsEndpointPolicyShape(policy?: WebToolsEndpointPolicy): void {
+  if (!policy) {
+    return;
+  }
+  const supportedKeys = new Set(["hostnameAllowlist", "allowedHostnames", "allowedOrigins"]);
+  for (const key of Object.keys(policy)) {
+    if (!supportedKeys.has(key)) {
+      throw new Error(
+        `Web tools endpoint policy only supports hostname/origin allowlists; unsupported field: ${key}`,
+      );
+    }
+  }
+}
+
+function assertWebToolsEndpointUrlAllowedByPolicy(
+  url: string,
+  policy?: WebToolsEndpointPolicy,
+): void {
+  assertWebToolsEndpointPolicyShape(policy);
+  const hostnameAllowlist = normalizeHostnameAllowlist([
+    ...(policy?.hostnameAllowlist ?? []),
+    ...(policy?.allowedHostnames ?? []),
+  ]);
+  const allowedOrigins = (policy?.allowedOrigins ?? [])
+    .map((origin) => normalizeWebToolsPolicyOrigin(origin))
+    .filter((origin): origin is string => Boolean(origin));
+  if (hostnameAllowlist.length === 0 && allowedOrigins.length === 0) {
+    return;
+  }
+
+  const parsed = new URL(url);
+  const normalizedHostname = normalizeHostname(parsed.hostname);
+  const origin = normalizeWebToolsPolicyOrigin(parsed.toString());
+  const hostAllowed =
+    hostnameAllowlist.length > 0 && matchesHostnameAllowlist(normalizedHostname, hostnameAllowlist);
+  const originAllowed = origin ? allowedOrigins.includes(origin) : false;
+  if (!hostAllowed && !originAllowed) {
+    throw new SsrFBlockedError(`Blocked hostname (not in allowlist): ${parsed.hostname}`);
+  }
+}
+
+async function captureWebToolsEndpointExchange(params: {
+  url: string;
+  init?: RequestInit;
+  response: Response;
+  capture?: WebToolsEndpointCapture;
+  auditContext?: string;
+  capturedByGlobalFetchPatch: boolean;
+}): Promise<void> {
+  if (params.capture === false) {
+    return;
+  }
+  const settings = resolveDebugProxySettings();
+  if (!settings.enabled) {
+    return;
+  }
+  const { captureHttpExchange, isDebugProxyGlobalFetchPatchInstalled } =
+    await import("../../proxy-capture/runtime.js");
+  if (params.capturedByGlobalFetchPatch && isDebugProxyGlobalFetchPatchInstalled()) {
+    return;
+  }
+  captureHttpExchange(
+    {
+      url: params.url,
+      method: params.init?.method ?? "GET",
+      requestHeaders: params.init?.headers as Headers | Record<string, string> | undefined,
+      requestBody:
+        (params.init as (RequestInit & { body?: BodyInit | Buffer | string | null }) | undefined)
+          ?.body ?? null,
+      response: params.response,
+      transport: "http",
+      flowId: params.capture?.flowId,
+      meta: {
+        captureOrigin: "web-tools-endpoint",
+        ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+        ...params.capture?.meta,
+      },
+    },
+    settings,
+  );
+}
+
+async function fetchWebToolsEndpointResponse(params: {
+  url: string;
+  init?: RequestInit;
+  signal?: AbortSignal;
+  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  maxRedirects?: number;
+  requireHttps?: boolean;
+  dispatcher?: Dispatcher;
+  policy?: WebToolsEndpointPolicy;
+  allowCrossOriginUnsafeRedirectReplay?: boolean;
+  retainAuthorizationRedirectHostnameAllowlist?: string[];
+  capture?: WebToolsEndpointCapture;
+  auditContext?: string;
+}): Promise<{ response: Response; finalUrl: string }> {
+  assertWebToolsEndpointUrl(params);
+  assertWebToolsEndpointUrlAllowedByPolicy(params.url, params.policy);
+  const fetchImpl = params.fetchImpl ?? fetch;
+  const maxRedirects = resolveWebToolsEndpointMaxRedirects(params.maxRedirects);
+  let currentUrl = params.url;
+  let currentInit = params.init ? { ...params.init } : undefined;
+  for (let redirectCount = 0; ; redirectCount += 1) {
+    const init: DispatcherAwareRequestInit = {
+      ...(currentInit ? { ...currentInit } : {}),
+      redirect: "manual",
+      ...(params.signal ? { signal: params.signal } : {}),
+      ...(params.dispatcher ? { dispatcher: params.dispatcher } : {}),
+    };
+    const useRuntimeFetch = Boolean(params.dispatcher && fetchImpl === fetch);
+    const response = useRuntimeFetch
+      ? await fetchWithRuntimeDispatcherOrMockedGlobal(currentUrl, init)
+      : await fetchImpl(currentUrl, init);
+    await captureWebToolsEndpointExchange({
+      url: currentUrl,
+      init,
+      response,
+      capture: params.capture,
+      auditContext: params.auditContext,
+      capturedByGlobalFetchPatch: !useRuntimeFetch && fetchImpl === globalThis.fetch,
+    });
+    if (!isRedirectStatus(response.status)) {
+      return { response, finalUrl: response.url || currentUrl };
+    }
+    const location = response.headers.get("location");
+    await response.body?.cancel().catch(() => undefined);
+    if (!location) {
+      throw new Error(`Web tools endpoint redirect missing location header (${response.status})`);
+    }
+    if (redirectCount + 1 > maxRedirects) {
+      throw new Error(`Web tools endpoint exceeded redirect limit (${maxRedirects})`);
+    }
+    const currentParsedUrl = new URL(currentUrl);
+    const nextParsedUrl = new URL(location, currentParsedUrl);
+    if (params.requireHttps && nextParsedUrl.protocol !== "https:") {
+      throw new Error("Web tools endpoint requires an HTTPS URL");
+    }
+    assertWebToolsEndpointUrlAllowedByPolicy(nextParsedUrl.toString(), params.policy);
+    const retainedAuthorization = resolveRetainedAuthorizationForRedirect({
+      init: currentInit,
+      nextUrl: nextParsedUrl,
+      hostnameAllowlist: params.retainAuthorizationRedirectHostnameAllowlist,
+    });
+    currentInit = rewriteRedirectInitForMethod({
+      init: currentInit,
+      status: response.status,
+    });
+    if (nextParsedUrl.origin !== currentParsedUrl.origin) {
+      currentInit = rewriteRedirectInitForCrossOrigin({
+        init: currentInit,
+        allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
+      });
+      currentInit = restoreRedirectAuthorization({
+        init: currentInit,
+        authorization: retainedAuthorization,
+      });
+    }
+    currentUrl = nextParsedUrl.toString();
+  }
+}
+
+export async function withWebToolsEndpoint<T>(
+  params: WebToolsEndpointParams,
+  run: (result: { response: Response; finalUrl: string }) => Promise<T>,
+): Promise<T> {
+  void params.allowCrossOriginUnsafeRedirectReplay;
+  void params.auditContext;
+  void params.retainAuthorizationRedirectHostnameAllowlist;
+  const timeoutMs = resolveWebToolsEndpointTimeoutMs(params);
+  const timeout = buildTimeoutAbortSignal({
+    timeoutMs,
+    signal: params.signal,
+    operation: "web-tools-endpoint",
+    url: params.url,
+  });
+  let response: Response | undefined;
+  let dispatcher: Dispatcher | undefined;
+  try {
+    dispatcher = createWebToolsEndpointDispatcher(
+      resolveWebToolsEndpointDispatcherPolicy(params),
+      timeoutMs,
+    );
+    const result = await fetchWebToolsEndpointResponse({
+      url: params.url,
+      init: params.init,
+      signal: timeout.signal,
+      fetchImpl: params.fetchImpl,
+      maxRedirects: params.maxRedirects,
+      requireHttps: params.requireHttps,
+      dispatcher,
+      allowCrossOriginUnsafeRedirectReplay: params.allowCrossOriginUnsafeRedirectReplay,
+      retainAuthorizationRedirectHostnameAllowlist:
+        params.retainAuthorizationRedirectHostnameAllowlist,
+      capture: params.capture,
+      auditContext: params.auditContext,
+    });
+    response = result.response;
+    return await run({ response, finalUrl: result.finalUrl });
+  } finally {
+    timeout.cleanup();
+    await closeDispatcher(dispatcher);
+    await response?.body?.cancel().catch(() => undefined);
+  }
+}
+
+function assertNoUnsupportedWebToolsNetworkGuardOptions(params: Record<string, unknown>): void {
+  const unsupportedFields = [
+    "lookupFn",
+    "pinDns",
+    "useEnvProxy",
+    "mode",
+    "proxy",
+    "dangerouslyAllowEnvProxyWithoutPinnedDns",
+  ];
+  for (const field of unsupportedFields) {
+    if (field in params && params[field] !== undefined) {
+      throw new Error(
+        `fetchWithWebToolsNetworkGuard no longer supports ${field}; use proxy.enabled plus external proxy policy`,
+      );
+    }
+  }
+  assertWebToolsEndpointPolicyShape(params.policy as WebToolsEndpointPolicy | undefined);
+}
+
+/**
+ * @deprecated Compatibility export for older plugins. Network egress policy is
+ * now owned by `proxy.enabled` plus the operator's external proxy policy.
+ */
+export async function fetchWithWebToolsNetworkGuard(
+  params: WebToolsNetworkGuardCompatParams,
+): Promise<FetchWithResponseReleaseResult> {
+  assertNoUnsupportedWebToolsNetworkGuardOptions(params as Record<string, unknown>);
+  const timeoutMs = resolveWebToolsEndpointTimeoutMs(params);
+  const timeout = buildTimeoutAbortSignal({
+    timeoutMs,
+    signal: params.signal,
+    operation: "web-tools-endpoint",
+    url: params.url,
+  });
+  const fetchImpl = params.fetchImpl ?? fetch;
+  let response: Response | undefined;
+  let dispatcher: Dispatcher | undefined;
+  let released = false;
+  const release = async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    timeout.cleanup();
+    await closeDispatcher(dispatcher);
+    await response?.body?.cancel().catch(() => undefined);
+  };
+  try {
+    dispatcher = createWebToolsEndpointDispatcher(
+      resolveWebToolsEndpointDispatcherPolicy(params),
+      timeoutMs,
+    );
+    const result = await fetchWebToolsEndpointResponse({
+      url: params.url,
+      init: params.init,
+      signal: timeout.signal,
+      fetchImpl,
+      maxRedirects: params.maxRedirects,
+      requireHttps: params.requireHttps,
+      dispatcher,
+      policy: params.policy,
+      allowCrossOriginUnsafeRedirectReplay: params.allowCrossOriginUnsafeRedirectReplay,
+      retainAuthorizationRedirectHostnameAllowlist:
+        params.retainAuthorizationRedirectHostnameAllowlist,
+      capture: params.capture,
+      auditContext: params.auditContext,
+    });
+    response = result.response;
+    return {
+      response,
+      finalUrl: result.finalUrl,
+      release,
+      refreshTimeout: timeout.refresh,
+    };
+  } catch (error) {
+    await release();
+    throw error;
+  }
+}
+
+export const withStrictWebToolsEndpoint = withWebToolsEndpoint;
+
+export async function withTrustedWebToolsEndpoint<T>(
+  params: WebToolsEndpointParams,
+  run: (result: { response: Response; finalUrl: string }) => Promise<T>,
+): Promise<T> {
+  return withWebToolsEndpoint(params, run);
+}
+
+export async function withSelfHostedWebToolsEndpoint<T>(
+  params: WebToolsEndpointParams,
+  run: (result: { response: Response; finalUrl: string }) => Promise<T>,
+): Promise<T> {
+  return withWebToolsEndpoint(params, run);
+}
+
 export async function withTrustedWebSearchEndpoint<T>(
   params: {
     url: string;
@@ -96,8 +618,7 @@ export async function withTrustedWebSearchEndpoint<T>(
   },
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
-  return withTrustedWebToolsEndpoint(
+  return withWebToolsEndpoint(
     {
       url: params.url,
       init: params.init,
@@ -117,8 +638,7 @@ export async function withSelfHostedWebSearchEndpoint<T>(
   },
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const withSelfHostedWebToolsEndpoint = await loadSelfHostedWebToolsEndpoint();
-  return withSelfHostedWebToolsEndpoint(
+  return withWebToolsEndpoint(
     {
       url: params.url,
       init: params.init,
@@ -142,8 +662,7 @@ export async function postTrustedWebToolsJson<T>(
   },
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
-  return withTrustedWebToolsEndpoint(
+  return withWebToolsEndpoint(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,

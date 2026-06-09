@@ -1,5 +1,4 @@
 // Mattermost plugin module implements target resolution behavior.
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -85,7 +84,6 @@ export async function resolveMattermostOpaqueTarget(params: {
   const client = createMattermostClient({
     baseUrl,
     botToken: token,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account?.config),
   });
   try {
     await fetchMattermostUser(client, input);

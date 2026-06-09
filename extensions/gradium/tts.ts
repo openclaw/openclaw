@@ -1,7 +1,7 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Gradium plugin module implements tts behavior.
 import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeGradiumBaseUrl } from "./shared.js";
 
 const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
@@ -26,9 +26,8 @@ export async function gradiumTTS(params: {
   } = params;
   const normalizedBaseUrl = normalizeGradiumBaseUrl(baseUrl);
   const url = `${normalizedBaseUrl}/api/post/speech/tts`;
-  const hostname = new URL(normalizedBaseUrl).hostname;
 
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url,
     init: {
       method: "POST",
@@ -45,8 +44,6 @@ export async function gradiumTTS(params: {
       }),
     },
     timeoutMs,
-    policy: { hostnameAllowlist: [hostname] },
-    auditContext: "gradium.tts",
   });
 
   try {

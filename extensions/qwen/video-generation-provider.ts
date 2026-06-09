@@ -79,19 +79,18 @@ export function buildQwenVideoGenerationProvider(): VideoGenerationProvider {
       }
 
       const requestBaseUrl = resolveQwenVideoBaseUrl(req);
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: requestBaseUrl,
-          defaultBaseUrl: DEFAULT_QWEN_VIDEO_BASE_URL,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-            "X-DashScope-Async": "enable",
-          },
-          provider: "qwen",
-          capability: "video",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: requestBaseUrl,
+        defaultBaseUrl: DEFAULT_QWEN_VIDEO_BASE_URL,
+        defaultHeaders: {
+          Authorization: `Bearer ${auth.apiKey}`,
+          "Content-Type": "application/json",
+          "X-DashScope-Async": "enable",
+        },
+        provider: "qwen",
+        capability: "video",
+        transport: "http",
+      });
 
       const model = req.model?.trim() || DEFAULT_QWEN_VIDEO_MODEL;
       return await runDashscopeVideoGenerationTask({
@@ -103,7 +102,6 @@ export function buildQwenVideoGenerationProvider(): VideoGenerationProvider {
         baseUrl: resolveDashscopeAigcApiBaseUrl(baseUrl),
         timeoutMs: req.timeoutMs,
         fetchFn,
-        allowPrivateNetwork,
         dispatcherPolicy,
         defaultTimeoutMs: DEFAULT_VIDEO_GENERATION_TIMEOUT_MS,
       });

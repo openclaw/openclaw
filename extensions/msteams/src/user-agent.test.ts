@@ -10,18 +10,6 @@ vi.mock("./runtime.js", () => ({
   getMSTeamsRuntime: vi.fn(() => mockRuntime),
 }));
 
-vi.mock("../runtime-api.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../runtime-api.js")>();
-  return {
-    ...original,
-    fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
-      response: await globalThis.fetch(params.url, params.init),
-      finalUrl: params.url,
-      release: async () => undefined,
-    }),
-  };
-});
-
 import { fetchGraphJson } from "./graph.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { buildUserAgent, ensureUserAgentHeader, resetUserAgentCache } from "./user-agent.js";

@@ -33,6 +33,4 @@ export interface FetchMediaResult {
 export interface SsrfPolicyConfig {
   /** Hostnames that are always allowed (supports `*.example.com` wildcards). */
   hostnameAllowlist?: string[];
-  /** Whether to allow RFC 2544 benchmark ranges (198.18.0.0/15). */
-  allowRfc2544BenchmarkRange?: boolean;
 }

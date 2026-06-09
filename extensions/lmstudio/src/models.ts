@@ -329,27 +329,12 @@ export function normalizeLmstudioProviderConfig(
     return provider;
   }
   const normalizedBaseUrl = resolveLmstudioInferenceBase(configuredBaseUrl);
-  const request =
-    provider.request && typeof provider.request === "object" && !Array.isArray(provider.request)
-      ? provider.request
-      : undefined;
-  const requestWithPrivateNetworkDefault =
-    typeof request?.allowPrivateNetwork === "boolean"
-      ? request
-      : {
-          ...request,
-          allowPrivateNetwork: true,
-        };
-  if (
-    normalizedBaseUrl === provider.baseUrl &&
-    requestWithPrivateNetworkDefault === provider.request
-  ) {
+  if (normalizedBaseUrl === provider.baseUrl) {
     return provider;
   }
   return {
     ...provider,
     baseUrl: normalizedBaseUrl,
-    request: requestWithPrivateNetworkDefault,
   };
 }
 

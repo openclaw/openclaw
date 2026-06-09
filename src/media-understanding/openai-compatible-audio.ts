@@ -36,18 +36,17 @@ export async function transcribeOpenAiCompatibleAudio(
       : {
           authorization: `Bearer ${apiKey}`,
         };
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveProviderHttpRequestConfig({
-      baseUrl: params.baseUrl,
-      defaultBaseUrl: params.defaultBaseUrl,
-      headers: params.headers,
-      request: params.request,
-      defaultHeaders,
-      provider: params.provider,
-      api: OPENAI_AUDIO_TRANSCRIPTIONS_API,
-      capability: "audio",
-      transport: "media-understanding",
-    });
+  const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+    baseUrl: params.baseUrl,
+    defaultBaseUrl: params.defaultBaseUrl,
+    headers: params.headers,
+    request: params.request,
+    defaultHeaders,
+    provider: params.provider,
+    api: OPENAI_AUDIO_TRANSCRIPTIONS_API,
+    capability: "audio",
+    transport: "media-understanding",
+  });
   const url = `${baseUrl}/audio/transcriptions`;
 
   const model = resolveModel(params.model, params.defaultModel);
@@ -69,8 +68,6 @@ export async function transcribeOpenAiCompatibleAudio(
     body: form,
     timeoutMs: params.timeoutMs,
     fetchFn,
-    pinDns: false,
-    allowPrivateNetwork,
     dispatcherPolicy,
   });
 

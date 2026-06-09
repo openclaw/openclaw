@@ -1,5 +1,6 @@
 // Ollama provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   isNonSecretApiKeyMarker,
   normalizeOptionalSecretInput,
@@ -17,16 +18,11 @@ import {
   wrapWebContent,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
-import {
-  buildOllamaBaseUrlSsrFPolicy,
-  fetchOllamaModels,
-  resolveOllamaApiBase,
-} from "./provider-models.js";
+import { fetchOllamaModels, resolveOllamaApiBase } from "./provider-models.js";
 import { checkOllamaCloudAuth } from "./setup.js";
 
 const OLLAMA_WEB_SEARCH_SCHEMA = Type.Object(
@@ -189,7 +185,7 @@ export async function runOllamaWebSearch(params: {
     if (attempt.apiKey) {
       headers.Authorization = `Bearer ${attempt.apiKey}`;
     }
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithResponseRelease({
       url: `${attempt.baseUrl}${attempt.path}`,
       init: {
         method: "POST",
@@ -197,8 +193,6 @@ export async function runOllamaWebSearch(params: {
         body,
         signal: AbortSignal.timeout(DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS),
       },
-      policy: buildOllamaBaseUrlSsrFPolicy(attempt.baseUrl),
-      auditContext: "ollama-web-search.search",
     });
 
     try {

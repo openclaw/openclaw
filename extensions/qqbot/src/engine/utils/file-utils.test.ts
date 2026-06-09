@@ -86,7 +86,6 @@ describe("qqbot file-utils downloadFile", () => {
         "*.tencentcos.cn",
         "*.tencentcos.com",
       ],
-      allowRfc2544BenchmarkRange: true,
     });
   });
 

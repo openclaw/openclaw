@@ -125,6 +125,7 @@ export function resolveMcpTransport(
     clientCert: resolved.clientCert,
     clientKey: resolved.clientKey,
     resourceUrl: resolved.url,
+    allowNonResourceOriginRequests: resolved.auth === "oauth",
   });
   const headers =
     resolved.auth === "oauth" ? withoutMcpAuthorizationHeader(resolved.headers) : resolved.headers;

@@ -2,8 +2,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchConfiguredLocalOriginWithSsrFGuardMock } = vi.hoisted(() => ({
-  fetchConfiguredLocalOriginWithSsrFGuardMock: vi.fn(
+const { fetchConfiguredLocalOriginWithEgressPolicyMock } = vi.hoisted(() => ({
+  fetchConfiguredLocalOriginWithEgressPolicyMock: vi.fn(
     async ({ init, url }: { init?: RequestInit; url: string }) => ({
       response: await fetch(url, init),
       release: async () => {},
@@ -11,8 +11,8 @@ const { fetchConfiguredLocalOriginWithSsrFGuardMock } = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: vi.fn(),
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchWithResponseRelease: vi.fn(),
   formatErrorMessage: (error: unknown) => (error instanceof Error ? error.message : String(error)),
   ssrfPolicyFromHttpBaseUrlAllowedOrigin: (baseUrl: string) => {
     const parsed = new URL(baseUrl);
@@ -22,7 +22,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 // Import-resolution gating for this private helper is covered in sdk-alias.test.ts.
 vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
-  fetchConfiguredLocalOriginWithSsrFGuard: fetchConfiguredLocalOriginWithSsrFGuardMock,
+  fetchConfiguredLocalOriginWithEgressPolicy: fetchConfiguredLocalOriginWithEgressPolicyMock,
 }));
 
 let createOllamaEmbeddingProvider: typeof import("./embedding-provider.js").createOllamaEmbeddingProvider;
@@ -34,7 +34,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  fetchConfiguredLocalOriginWithSsrFGuardMock.mockClear();
+  fetchConfiguredLocalOriginWithEgressPolicyMock.mockClear();
 });
 
 afterEach(() => {
@@ -76,7 +76,7 @@ function readFirstEmbeddingInput(fetchMock: ReturnType<typeof mockEmbeddingFetch
 }
 
 function firstGuardedFetchCall(): Record<string, unknown> {
-  const call = fetchConfiguredLocalOriginWithSsrFGuardMock.mock.calls[0]?.[0];
+  const call = fetchConfiguredLocalOriginWithEgressPolicyMock.mock.calls[0]?.[0];
   if (!call || typeof call !== "object") {
     throw new Error("expected guarded fetch call");
   }

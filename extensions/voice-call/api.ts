@@ -2,9 +2,7 @@
 
 export {
   definePluginEntry,
-  fetchWithSsrFGuard,
   type GatewayRequestHandlerOptions,
-  isBlockedHostnameOrIp,
   isRequestBodyLimitError,
   type OpenClawPluginApi,
   readRequestBodyWithLimit,

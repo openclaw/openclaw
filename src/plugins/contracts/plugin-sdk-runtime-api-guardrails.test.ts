@@ -93,7 +93,6 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { readRemoteMediaBuffer, resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";',
     'export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";',
     'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',
-    'export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',
     'export type { GoogleChatAccountConfig, GoogleChatConfig } from "openclaw/plugin-sdk/config-contracts";',
     'export { extractToolSend } from "openclaw/plugin-sdk/tool-send";',
     'export { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";',
@@ -127,8 +126,6 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";',
     'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',
     'export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";',
-    'export type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";',
-    'export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',
     'export { normalizeStringEntries } from "openclaw/plugin-sdk/string-normalization-runtime";',
     'export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";',
     'export { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "openclaw/plugin-sdk/webhook-ingress";',
@@ -144,7 +141,6 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { getMatrixScopedEnvVarNames, listMatrixEnvAccountIds, resolveMatrixEnvAccountToken } from "./src/env-vars.js";',
     'export { hashMatrixAccessToken, resolveMatrixAccountStorageRoot, resolveMatrixCredentialsDir, resolveMatrixCredentialsFilename, resolveMatrixCredentialsPath, resolveMatrixHomeserverKey, resolveMatrixLegacyFlatStoragePaths, resolveMatrixLegacyFlatStoreRoot, sanitizeMatrixPathSegment } from "./src/storage-paths.js";',
     'export { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./src/matrix/deps.js";',
-    'export { assertHttpUrlTargetsPrivateNetwork, closeDispatcher, createPinnedDispatcher, resolvePinnedHostnameWithPolicy, ssrfPolicyFromDangerouslyAllowPrivateNetwork, ssrfPolicyFromAllowPrivateNetwork, type LookupFn, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";',
     'export { setMatrixThreadBindingIdleTimeoutBySessionKey, setMatrixThreadBindingMaxAgeBySessionKey } from "./src/matrix/thread-bindings-shared.js";',
     'export { setMatrixRuntime } from "./src/runtime.js";',
     'export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";',
@@ -173,7 +169,6 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',
     'export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";',
     'export type { SecretInput } from "openclaw/plugin-sdk/secret-input";',
-    'export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',
     'export { setNextcloudTalkRuntime } from "./src/runtime.js";',
   ],
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "nostr", relativePath: "runtime-api.ts" })]: [
@@ -247,7 +242,6 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";',
     'export type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";',
     'export { isRequestBodyLimitError, readRequestBodyWithLimit, requestBodyErrorToText } from "openclaw/plugin-sdk/webhook-request-guards";',
-    'export { fetchWithSsrFGuard, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";',
     'export type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";',
     'export { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema } from "openclaw/plugin-sdk/tts-runtime";',
     'export { sleep } from "openclaw/plugin-sdk/runtime-env";',
@@ -334,6 +328,16 @@ describe("runtime api guardrails", () => {
       expect(readExportStatements(file), `${file} runtime api exports changed`).toEqual(
         RUNTIME_API_EXPORT_GUARDS[file],
       );
+    }
+  });
+
+  it("keeps plugin runtime api barrels from re-exporting SSRF helper surfaces", () => {
+    const forbiddenPattern =
+      /\b(?:SsrFPolicy|SsrFBlockedError|LookupFn|fetchWithSsrFGuard|isBlockedHostnameOrIp|ssrfPolicyFrom|resolvePinnedHostname|createPinnedDispatcher|closeDispatcher|assertHttpUrlTargetsPrivateNetwork)\b|openclaw\/plugin-sdk\/ssrf-runtime(?:['"]|$)|openclaw\/plugin-sdk\/ssrf-policy|openclaw\/plugin-sdk\/ssrf-dispatcher/;
+
+    for (const file of collectRuntimeApiFiles()) {
+      const source = readFileSync(resolve(ROOT_DIR, "..", file), "utf8");
+      expect(source, `${file} should not re-export SSRF helpers`).not.toMatch(forbiddenPattern);
     }
   });
 

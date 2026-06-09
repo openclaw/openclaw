@@ -1,3 +1,4 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Google provider module implements model/runtime integration.
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -7,7 +8,6 @@ import {
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
@@ -237,7 +237,7 @@ async function downloadGeneratedVideoFromUri(params: {
     provider: "google",
     stage: "download",
     operation: async () => {
-      const { response, release } = await fetchWithSsrFGuard({
+      const { response, release } = await fetchWithResponseRelease({
         url: downloadUrl,
         timeoutMs: params.timeoutMs,
       });
@@ -339,7 +339,7 @@ async function requestGoogleVideoJson(params: {
         }),
       );
       try {
-        const { response, release } = await fetchWithSsrFGuard({
+        const { response, release } = await fetchWithResponseRelease({
           url: params.url,
           init: {
             method: params.method,

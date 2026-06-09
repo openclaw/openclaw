@@ -67,7 +67,7 @@ describe("buildQaGatewayConfig", () => {
     expect(getModelFallbacks(cfg.agents?.defaults?.model)).toEqual(["mock-openai/gpt-5.5-alt"]);
     expect(getModelFallbacks(cfg.agents?.list?.[0]?.model)).toEqual(["mock-openai/gpt-5.5-alt"]);
     expect(cfg.models?.providers?.["mock-openai"]?.baseUrl).toBe("http://127.0.0.1:44080/v1");
-    expect(cfg.models?.providers?.["mock-openai"]?.request).toEqual({ allowPrivateNetwork: true });
+    expect(cfg.models?.providers?.["mock-openai"]?.request).toBeUndefined();
     expect(cfg.models?.providers?.["mock-openai"]?.models).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "gpt-5.5", reasoning: true }),
@@ -75,9 +75,9 @@ describe("buildQaGatewayConfig", () => {
       ]),
     );
     expect(cfg.models?.providers?.openai?.baseUrl).toBe("http://127.0.0.1:44080/v1");
-    expect(cfg.models?.providers?.openai?.request).toEqual({ allowPrivateNetwork: true });
+    expect(cfg.models?.providers?.openai?.request).toBeUndefined();
     expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");
-    expect(cfg.models?.providers?.anthropic?.request).toEqual({ allowPrivateNetwork: true });
+    expect(cfg.models?.providers?.anthropic?.request).toBeUndefined();
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-channel"]);
     expect(cfg.plugins?.slots?.memory).toBe("memory-core");
     expect(cfg.plugins?.entries?.acpx).toEqual({
@@ -116,11 +116,11 @@ describe("buildQaGatewayConfig", () => {
     expect(getModelFallbacks(cfg.agents?.defaults?.model)).toEqual(["anthropic/claude-opus-4-8"]);
     expect(getModelFallbacks(cfg.agents?.list?.[0]?.model)).toEqual(["anthropic/claude-opus-4-8"]);
     expect(cfg.models?.providers?.openai?.api).toBe("openai-responses");
-    expect(cfg.models?.providers?.openai?.request).toEqual({ allowPrivateNetwork: true });
+    expect(cfg.models?.providers?.openai?.request).toBeUndefined();
     expect(cfg.models?.providers?.openai?.models.map((model) => model.id)).toContain("gpt-5.5");
     expect(cfg.models?.providers?.anthropic?.api).toBe("anthropic-messages");
     expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");
-    expect(cfg.models?.providers?.anthropic?.request).toEqual({ allowPrivateNetwork: true });
+    expect(cfg.models?.providers?.anthropic?.request).toBeUndefined();
     expect(cfg.models?.providers?.anthropic?.models.map((model) => model.id)).toContain(
       "claude-opus-4-8",
     );

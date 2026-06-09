@@ -67,8 +67,6 @@ function fetchRequest(fetchMock: ReturnType<typeof vi.fn>): {
 }
 
 function postJsonRequestOptions(spy: unknown): {
-  allowPrivateNetwork?: boolean;
-  pinDns?: boolean;
   ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean };
 } {
   const options = (spy as { mock?: { calls?: Array<[unknown]> } }).mock?.calls?.[0]?.[0];
@@ -76,8 +74,6 @@ function postJsonRequestOptions(spy: unknown): {
     throw new Error("Expected postJsonRequest options");
   }
   return options as {
-    allowPrivateNetwork?: boolean;
-    pinDns?: boolean;
     ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean };
   };
 }
@@ -386,48 +382,6 @@ describe("Google image-generation provider", () => {
         },
       },
     });
-  });
-
-  it("disables DNS pinning for Google image generation requests", async () => {
-    mockGoogleApiKeyAuth();
-    installGoogleFetchMock();
-    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
-
-    const provider = buildGoogleImageGenerationProvider();
-    await provider.generateImage({
-      provider: "google",
-      model: "gemini-3.1-flash-image-preview",
-      prompt: "draw a fox",
-      cfg: {},
-    });
-
-    expect(postJsonRequestOptions(postJsonRequestSpy).pinDns).toBe(false);
-  });
-
-  it("honors configured private-network opt-in for Google image generation", async () => {
-    mockGoogleApiKeyAuth();
-    installGoogleFetchMock();
-    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
-
-    const provider = buildGoogleImageGenerationProvider();
-    await provider.generateImage({
-      provider: "google",
-      model: "gemini-3.1-flash-image-preview",
-      prompt: "draw a fox",
-      cfg: {
-        models: {
-          providers: {
-            google: {
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-              request: { allowPrivateNetwork: true },
-              models: [],
-            },
-          },
-        },
-      },
-    });
-
-    expect(postJsonRequestOptions(postJsonRequestSpy).allowPrivateNetwork).toBe(true);
   });
 
   it("normalizes a configured bare Google host to the v1beta API root", async () => {

@@ -273,7 +273,6 @@ describe("agentCommand compaction transcript rotation", () => {
           "tui-pty-mock": {
             baseUrl: "http://127.0.0.1:9/v1",
             apiKey: "test",
-            request: { allowPrivateNetwork: true },
             models: [
               {
                 id: "gpt-5.5",

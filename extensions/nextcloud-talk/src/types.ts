@@ -22,11 +22,6 @@ export type NextcloudTalkRoomConfig = {
   systemPrompt?: string;
 };
 
-type NextcloudTalkNetworkConfig = {
-  /** Dangerous opt-in for self-hosted Nextcloud Talk on trusted private/internal hosts. */
-  dangerouslyAllowPrivateNetwork?: boolean;
-};
-
 export type NextcloudTalkAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -80,8 +75,6 @@ export type NextcloudTalkAccountConfig = {
   responsePrefix?: string;
   /** Media upload max size in MB. */
   mediaMaxMb?: number;
-  /** Network policy overrides for self-hosted Nextcloud Talk on trusted private/internal hosts. */
-  network?: NextcloudTalkNetworkConfig;
 };
 
 type NextcloudTalkConfig = {

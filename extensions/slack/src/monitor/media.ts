@@ -148,7 +148,6 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
 const SLACK_MEDIA_SSRF_POLICY = {
   allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
   hostnameAllowlist: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
-  allowRfc2544BenchmarkRange: true,
 };
 export const SLACK_MEDIA_READ_IDLE_TIMEOUT_MS = 60_000;
 export const SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000;

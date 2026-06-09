@@ -108,23 +108,22 @@ export async function transcribeOpenRouterAudio(
     fileName: params.fileName,
   });
   const fetchFn = params.fetchFn ?? fetch;
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveProviderHttpRequestConfig({
-      baseUrl: params.baseUrl,
-      defaultBaseUrl: OPENROUTER_BASE_URL,
-      headers: params.headers,
-      request: params.request,
-      defaultHeaders: {
-        Authorization: `Bearer ${params.apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://openclaw.ai",
-        "X-OpenRouter-Title": "OpenClaw",
-      },
-      provider: "openrouter",
-      api: "openrouter-stt",
-      capability: "audio",
-      transport: "media-understanding",
-    });
+  const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+    baseUrl: params.baseUrl,
+    defaultBaseUrl: OPENROUTER_BASE_URL,
+    headers: params.headers,
+    request: params.request,
+    defaultHeaders: {
+      Authorization: `Bearer ${params.apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-OpenRouter-Title": "OpenClaw",
+    },
+    provider: "openrouter",
+    api: "openrouter-stt",
+    capability: "audio",
+    transport: "media-understanding",
+  });
   const temperature = asFiniteNumber(params.query?.temperature);
 
   const { response, release } = await postJsonRequest({
@@ -141,7 +140,6 @@ export async function transcribeOpenRouterAudio(
     },
     timeoutMs: params.timeoutMs,
     fetchFn,
-    allowPrivateNetwork,
     dispatcherPolicy,
     auditContext: "openrouter stt",
   });

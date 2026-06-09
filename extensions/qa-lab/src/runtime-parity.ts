@@ -2,8 +2,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber as readFiniteNumber,
   isRecord as isMessageRecord,
@@ -998,10 +998,8 @@ async function loadRuntimeParityMockToolCalls(
     return null;
   }
   try {
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithResponseRelease({
       url: `${normalizedBaseUrl}/debug/requests`,
-      policy: { allowPrivateNetwork: true },
-      auditContext: "qa-lab-runtime-parity-mock-tool-calls",
     });
     let payload: unknown;
     try {

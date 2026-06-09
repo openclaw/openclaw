@@ -1,6 +1,6 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Inworld plugin module implements tts behavior.
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const DEFAULT_INWORLD_BASE_URL = "https://api.inworld.ai";
 export const DEFAULT_INWORLD_VOICE_ID = "Sarah";
@@ -26,18 +26,6 @@ export type InworldAudioEncoding =
 export function normalizeInworldBaseUrl(baseUrl?: string): string {
   const trimmed = baseUrl?.trim();
   return trimmed?.replace(/\/+$/, "") || DEFAULT_INWORLD_BASE_URL;
-}
-
-function ssrfPolicyFromInworldBaseUrl(baseUrl: string): SsrFPolicy | undefined {
-  try {
-    const parsed = new URL(baseUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return { hostnameAllowlist: [parsed.hostname] };
-  } catch {
-    return undefined;
-  }
 }
 
 /**
@@ -69,7 +57,7 @@ export async function inworldTTS(params: {
     ...(params.temperature != null && { temperature: params.temperature }),
   });
 
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url,
     init: {
       method: "POST",
@@ -84,8 +72,6 @@ export async function inworldTTS(params: {
       body: requestBody,
     },
     timeoutMs: params.timeoutMs,
-    policy: ssrfPolicyFromInworldBaseUrl(baseUrl),
-    auditContext: "inworld-tts",
   });
 
   try {
@@ -144,7 +130,7 @@ export async function listInworldVoices(params: {
   const langParam = params.language ? `?languages=${encodeURIComponent(params.language)}` : "";
   const url = `${baseUrl}/voices/v1/voices${langParam}`;
 
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url,
     init: {
       method: "GET",
@@ -153,8 +139,6 @@ export async function listInworldVoices(params: {
       },
     },
     timeoutMs: params.timeoutMs,
-    policy: ssrfPolicyFromInworldBaseUrl(baseUrl),
-    auditContext: "inworld-voices",
   });
 
   try {

@@ -26,20 +26,19 @@ export async function transcribeElevenLabsAudio(
   }
 
   const model = req.model?.trim() || DEFAULT_ELEVENLABS_STT_MODEL;
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveProviderHttpRequestConfig({
-      baseUrl: normalizeElevenLabsBaseUrl(req.baseUrl),
-      defaultBaseUrl: DEFAULT_ELEVENLABS_BASE_URL,
-      headers: req.headers,
-      request: req.request,
-      defaultHeaders: {
-        "xi-api-key": apiKey,
-      },
-      provider: "elevenlabs",
-      api: "elevenlabs-speech-to-text",
-      capability: "audio",
-      transport: "media-understanding",
-    });
+  const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+    baseUrl: normalizeElevenLabsBaseUrl(req.baseUrl),
+    defaultBaseUrl: DEFAULT_ELEVENLABS_BASE_URL,
+    headers: req.headers,
+    request: req.request,
+    defaultHeaders: {
+      "xi-api-key": apiKey,
+    },
+    provider: "elevenlabs",
+    api: "elevenlabs-speech-to-text",
+    capability: "audio",
+    transport: "media-understanding",
+  });
   const form = buildAudioTranscriptionFormData({
     buffer: req.buffer,
     fileName: req.fileName,
@@ -56,7 +55,6 @@ export async function transcribeElevenLabsAudio(
     body: form,
     timeoutMs: req.timeoutMs,
     fetchFn,
-    allowPrivateNetwork,
     dispatcherPolicy,
     auditContext: "elevenlabs speech-to-text",
   });

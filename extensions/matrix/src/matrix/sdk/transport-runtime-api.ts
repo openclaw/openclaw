@@ -5,8 +5,8 @@ import {
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
   type PinnedDispatcherPolicy,
-  type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-dispatcher";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-policy";
 export { buildTimeoutAbortSignal } from "./timeout-abort-signal.js";
 
 export {

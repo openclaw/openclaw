@@ -212,7 +212,6 @@ async function fetchOpenRouterVideoModels(params: {
   baseUrl: string;
   apiKey: string;
   timeoutMs: number;
-  allowPrivateNetwork: boolean;
   dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
 }): Promise<OpenRouterVideoModelsResponse> {
   return await getCachedLiveCatalogValue({
@@ -228,7 +227,6 @@ async function fetchOpenRouterVideoModels(params: {
         baseUrl: params.baseUrl,
         headers,
         timeoutMs: params.timeoutMs,
-        allowPrivateNetwork: params.allowPrivateNetwork,
         dispatcherPolicy: params.dispatcherPolicy,
         auditContext: "openrouter-video-models",
       });
@@ -249,7 +247,7 @@ export async function listOpenRouterVideoModelCatalog(
   if (!apiKey) {
     return null;
   }
-  const { baseUrl, allowPrivateNetwork, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+  const { baseUrl, dispatcherPolicy } = resolveProviderHttpRequestConfig({
     provider: "openrouter",
     capability: "video",
     baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
@@ -259,7 +257,6 @@ export async function listOpenRouterVideoModelCatalog(
     baseUrl,
     apiKey,
     timeoutMs: ctx.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
-    allowPrivateNetwork,
     dispatcherPolicy,
   });
   return projectOpenRouterVideoModelsToCatalogEntries(payload);
@@ -277,7 +274,7 @@ export async function resolveOpenRouterVideoModelCapabilities(
   if (!auth.apiKey) {
     return undefined;
   }
-  const { baseUrl, allowPrivateNetwork, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+  const { baseUrl, dispatcherPolicy } = resolveProviderHttpRequestConfig({
     provider: "openrouter",
     capability: "video",
     baseUrl: ctx.cfg?.models?.providers?.openrouter?.baseUrl,
@@ -287,7 +284,6 @@ export async function resolveOpenRouterVideoModelCapabilities(
     baseUrl,
     apiKey: auth.apiKey,
     timeoutMs: ctx.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
-    allowPrivateNetwork,
     dispatcherPolicy,
   });
   return projectOpenRouterVideoModelsToCatalogEntries(payload).find(

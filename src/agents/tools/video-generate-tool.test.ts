@@ -1543,7 +1543,7 @@ describe("createVideoGenerateTool", () => {
     expect(call.inputImages).toEqual([{ url: "https://example.test/reference.png" }]);
   });
 
-  it("passes web_fetch SSRF policy when loading reference assets", async () => {
+  it("ignores retired web_fetch SSRF policy when loading reference assets", async () => {
     mockVideoPluginProvider({
       imageToVideo: { enabled: true, maxInputImages: 1 },
     });
@@ -1575,7 +1575,7 @@ describe("createVideoGenerateTool", () => {
     const loadCall = firstMockCall(vi.mocked(webMedia.loadWebMedia));
     expect(loadCall?.[0]).toBe("/tmp/reference.png");
     const loadOptions = loadCall?.[1] as { ssrfPolicy?: unknown } | undefined;
-    expect(loadOptions?.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
+    expect(loadOptions?.ssrfPolicy).toBeUndefined();
   });
 
   it("rejects audio data: URLs via the templated rejection branch", async () => {

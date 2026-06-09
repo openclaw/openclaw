@@ -71,7 +71,6 @@ async function createHttpPokeApi(params: {
           body: JSON.stringify([pokeData]),
         },
         ssrfPolicy,
-        auditContext: "tlon-poke",
       });
 
       try {
@@ -223,7 +222,6 @@ export async function probeTlonAccount(account: ConfiguredTlonAccount) {
       },
       ssrfPolicy,
       timeoutMs: 30_000,
-      auditContext: "tlon-probe-account",
     });
     try {
       if (!response.ok) {

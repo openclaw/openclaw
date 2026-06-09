@@ -5,10 +5,10 @@ import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { CONFIG_DIR, extractArchive, resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
@@ -123,13 +123,11 @@ export async function downloadToFile(
   maxBytes = MAX_SIGNAL_CLI_ARCHIVE_BYTES,
 ): Promise<void> {
   let completed = false;
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url,
     maxRedirects,
-    requireHttps: true,
     timeoutMs: SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS,
-    capture: false,
-    auditContext: "signal-cli-install-archive",
+    validateUrl: assertSignalCliDownloadHttpsUrl,
   });
   try {
     if (!response.ok || !response.body) {
@@ -171,6 +169,12 @@ export async function downloadToFile(
     if (!completed) {
       await fs.rm(dest, { force: true }).catch(() => undefined);
     }
+  }
+}
+
+function assertSignalCliDownloadHttpsUrl(url: URL): void {
+  if (url.protocol !== "https:") {
+    throw new Error("signal-cli downloads require HTTPS URLs");
   }
 }
 
@@ -279,13 +283,11 @@ export async function installSignalCliFromRelease(
   runtime: RuntimeEnv,
 ): Promise<SignalInstallResult> {
   const apiUrl = "https://api.github.com/repos/AsamK/signal-cli/releases/latest";
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: apiUrl,
     maxRedirects: 5,
-    requireHttps: true,
     timeoutMs: SIGNAL_CLI_RELEASE_INFO_TIMEOUT_MS,
-    capture: false,
-    auditContext: "signal-cli-release-info",
+    validateUrl: assertSignalCliDownloadHttpsUrl,
     init: {
       headers: {
         "User-Agent": "openclaw",

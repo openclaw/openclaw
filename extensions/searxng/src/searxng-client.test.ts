@@ -1,5 +1,5 @@
 // Searxng tests cover searxng client plugin behavior.
-import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { LookupFn } from "openclaw/plugin-sdk/ssrf-policy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const endpointMockState = vi.hoisted(() => ({

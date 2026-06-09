@@ -301,17 +301,15 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
         preparedBaseUrl: auth.baseUrl,
       });
       const resolvedBaseUrl = `${endpoint}${MAI_IMAGE_BASE_PATH}`;
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolvedBaseUrl,
-          defaultBaseUrl: resolvedBaseUrl,
-          allowPrivateNetwork: false,
-          defaultHeaders: auth.headers,
-          request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
-          provider: PROVIDER_ID,
-          capability: "image",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: resolvedBaseUrl,
+        defaultBaseUrl: resolvedBaseUrl,
+        defaultHeaders: auth.headers,
+        request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+        provider: PROVIDER_ID,
+        capability: "image",
+        transport: "http",
+      });
       const label =
         mode === "edits"
           ? "Microsoft Foundry MAI image edit"
@@ -341,7 +339,6 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
               }),
               timeoutMs,
               fetchFn: fetch,
-              allowPrivateNetwork,
               ssrfPolicy: req.ssrfPolicy,
               dispatcherPolicy,
             })
@@ -359,7 +356,6 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
               },
               timeoutMs,
               fetchFn: fetch,
-              allowPrivateNetwork,
               ssrfPolicy: req.ssrfPolicy,
               dispatcherPolicy,
             });

@@ -4,12 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchWithSsrFGuard } = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(),
+const { fetchWithResponseRelease } = vi.hoisted(() => ({
+  fetchWithResponseRelease: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard,
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchWithResponseRelease,
 }));
 
 import { runMantisDiscordSmoke } from "./discord-smoke.runtime.js";
@@ -26,7 +26,7 @@ function emptyResponse(status = 204) {
 }
 
 function fetchGuardCallsWithMethod(method: string) {
-  return fetchWithSsrFGuard.mock.calls.filter(([request]) => {
+  return fetchWithResponseRelease.mock.calls.filter(([request]) => {
     const init =
       typeof request === "object" && request !== null
         ? (request as { init?: RequestInit }).init
@@ -43,12 +43,12 @@ describe("mantis discord smoke runtime", () => {
     repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mantis-discord-smoke-"));
     tokenFile = path.join(repoRoot, "mantis-token");
     await fs.writeFile(tokenFile, "test-token", "utf8");
-    fetchWithSsrFGuard.mockReset();
+    fetchWithResponseRelease.mockReset();
     const reactionPaths = new Set([
       "/api/v10/channels/1456744319972282449/messages/1500000000000000001/reactions/%F0%9F%91%80/@me",
       "/api/v10/channels/1456744319972282449/messages/1500000000000000001/reactions/👀/@me",
     ]);
-    fetchWithSsrFGuard.mockImplementation(
+    fetchWithResponseRelease.mockImplementation(
       async ({ url, init }: { url: string; init?: RequestInit }) => {
         const pathname = new URL(url).pathname;
         const method = init?.method ?? "GET";
@@ -202,7 +202,7 @@ describe("mantis discord smoke runtime", () => {
   });
 
   it("fails when the channel is not in the configured guild", async () => {
-    fetchWithSsrFGuard.mockImplementation(
+    fetchWithResponseRelease.mockImplementation(
       async ({ url, init }: { url: string; init?: RequestInit }) => {
         const pathname = new URL(url).pathname;
         const method = init?.method ?? "GET";
@@ -256,7 +256,7 @@ describe("mantis discord smoke runtime", () => {
   });
 
   it("redacts response guild ids in mismatch failure artifacts", async () => {
-    fetchWithSsrFGuard.mockImplementation(
+    fetchWithResponseRelease.mockImplementation(
       async ({ url, init }: { url: string; init?: RequestInit }) => {
         const pathname = new URL(url).pathname;
         const method = init?.method ?? "GET";

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 
 export type MantisDiscordSmokeOptions = {
@@ -198,7 +198,7 @@ async function callDiscordApi<T>(params: {
     headers.set("content-type", "application/json");
     body = JSON.stringify(params.body);
   }
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: `${DISCORD_API_BASE_URL}${params.path}`,
     init: {
       method,
@@ -206,8 +206,6 @@ async function callDiscordApi<T>(params: {
       body,
     },
     signal: AbortSignal.timeout(15_000),
-    policy: { hostnameAllowlist: ["discord.com"] },
-    auditContext: "qa-lab-mantis-discord-smoke",
   });
   try {
     const text = await response.text();

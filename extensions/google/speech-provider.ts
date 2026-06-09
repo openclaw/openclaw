@@ -444,14 +444,13 @@ async function synthesizeGoogleTtsPcmOnce(params: {
   speakerName?: string;
   timeoutMs: number;
 }): Promise<Buffer> {
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveGoogleGenerativeAiHttpRequestConfig({
-      apiKey: params.apiKey,
-      baseUrl: params.baseUrl,
-      request: params.request,
-      capability: "audio",
-      transport: "http",
-    });
+  const { baseUrl, headers, dispatcherPolicy } = resolveGoogleGenerativeAiHttpRequestConfig({
+    apiKey: params.apiKey,
+    baseUrl: params.baseUrl,
+    request: params.request,
+    capability: "audio",
+    transport: "http",
+  });
 
   const { response: res, release } = await postJsonRequest({
     url: `${baseUrl}/models/${params.model}:generateContent`,
@@ -484,8 +483,6 @@ async function synthesizeGoogleTtsPcmOnce(params: {
     },
     timeoutMs: params.timeoutMs,
     fetchFn: fetch,
-    pinDns: false,
-    allowPrivateNetwork,
     dispatcherPolicy,
   });
 

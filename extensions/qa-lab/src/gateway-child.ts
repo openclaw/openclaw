@@ -9,9 +9,9 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
   normalizeStringEntries,
@@ -282,7 +282,7 @@ async function fetchLocalGatewayHealth(params: {
   baseUrl: string;
   healthPath: "/readyz" | "/healthz";
 }): Promise<boolean> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: `${params.baseUrl}${params.healthPath}`,
     init: {
       method: "HEAD",
@@ -291,8 +291,6 @@ async function fetchLocalGatewayHealth(params: {
       },
       signal: AbortSignal.timeout(2_000),
     },
-    policy: { allowPrivateNetwork: true },
-    auditContext: "qa-lab-gateway-child-health",
   });
   try {
     return response.ok;

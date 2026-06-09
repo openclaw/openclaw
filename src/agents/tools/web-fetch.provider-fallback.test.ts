@@ -105,6 +105,31 @@ describe("web_fetch provider fallback normalization", () => {
     expect(details.externalContent?.provider).toBe("firecrawl");
   });
 
+  it("does not hand blocked direct-mode URLs to provider fallback", async () => {
+    const fetchSpy = vi.fn();
+    global.fetch = withFetchPreconnect(fetchSpy);
+    const providerExecute = vi.fn(async () => ({ text: "provider fallback" }));
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "firecrawl" },
+      definition: {
+        description: "firecrawl",
+        parameters: {},
+        execute: providerExecute,
+      },
+    });
+
+    const tool = createWebFetchTool({
+      config: {} as OpenClawConfig,
+      sandboxed: false,
+    });
+
+    await expect(
+      tool?.execute?.("call-provider-fallback", { url: "http://127.0.0.1/admin" }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(providerExecute).not.toHaveBeenCalled();
+  });
+
   it("keeps requested url and only accepts safe provider finalUrl values", async () => {
     global.fetch = withFetchPreconnect(
       vi.fn(async () => {

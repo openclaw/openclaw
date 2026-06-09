@@ -6,21 +6,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
 import { createInstallDownloadTestState } from "../test-support/install-download-test-utils.js";
-import {
-  fetchWithSsrFGuardMock,
-  hasBinaryMock,
-  runCommandWithTimeoutMock,
-} from "../test-support/install-test-mocks.js";
+import { hasBinaryMock, runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { installDownloadSpec } from "./install-download.js";
 
 vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
-}));
-
-vi.mock("../../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
 }));
 
 vi.mock("../loading/config.js", () => ({
@@ -85,15 +77,18 @@ async function installDownloadSkill(params: {
 }
 
 function mockArchiveResponse(buffer: Uint8Array): void {
-  fetchWithSsrFGuardMock.mockResolvedValue({
-    response: {
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      body: Readable.from([Buffer.from(buffer)]),
-    },
-    release: async () => undefined,
-  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          body: Readable.from([Buffer.from(buffer)]),
+        }) as unknown as Response,
+    ),
+  );
 }
 
 function createCancelableBody() {
@@ -145,6 +140,7 @@ function mockTarExtractionFlow(params: {
 
 let workspaceDir = "";
 let testState: OpenClawTestState | undefined;
+const PUBLIC_DOWNLOAD_BASE_URL = "https://93.184.216.34";
 beforeAll(async () => {
   testState = await createInstallDownloadTestState();
   workspaceDir = testState.workspaceDir;
@@ -159,14 +155,15 @@ afterAll(async () => {
 beforeEach(() => {
   runCommandWithTimeoutMock.mockReset();
   runCommandWithTimeoutMock.mockResolvedValue(runCommandResult());
-  fetchWithSsrFGuardMock.mockReset();
+  vi.unstubAllGlobals();
   hasBinaryMock.mockReset();
   hasBinaryMock.mockReturnValue(true);
 });
 
 describe("installDownloadSpec extraction safety", () => {
   it("rejects targetDir escapes outside the per-skill tools root", async () => {
-    const beforeFetchCalls = fetchWithSsrFGuardMock.mock.calls.length;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
     const entry = buildEntry("relative-traversal");
     const toolsRoot = resolveSkillToolsRootDir(entry);
     const escapedTargetDir = path.resolve(toolsRoot, "../outside");
@@ -174,7 +171,7 @@ describe("installDownloadSpec extraction safety", () => {
     const result = await installDownloadSpec({
       entry,
       spec: buildDownloadSpec({
-        url: "https://example.invalid/good.zip",
+        url: `${PUBLIC_DOWNLOAD_BASE_URL}/good.zip`,
         archive: "zip",
         targetDir: "../outside",
       }),
@@ -183,7 +180,7 @@ describe("installDownloadSpec extraction safety", () => {
 
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("Refusing to install outside the skill tools directory");
-    expect(fetchWithSsrFGuardMock.mock.calls.length).toBe(beforeFetchCalls);
+    expect(fetchMock).not.toHaveBeenCalled();
     await expect(fileExists(toolsRoot)).resolves.toBe(true);
     await expect(fileExists(escapedTargetDir)).resolves.toBe(false);
   });
@@ -197,7 +194,7 @@ describe("installDownloadSpec extraction safety", () => {
       spec: {
         kind: "download",
         id: "dl",
-        url: "https://example.invalid/payload.bin",
+        url: `${PUBLIC_DOWNLOAD_BASE_URL}/payload.bin`,
         extract: false,
         targetDir: "runtime",
       },
@@ -214,23 +211,25 @@ describe("installDownloadSpec extraction safety", () => {
 
   it("cancels failed download response bodies before returning the error", async () => {
     const { stream, wasCanceled } = createCancelableBody();
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: {
-        ok: false,
-        status: 500,
-        statusText: "Server Error",
-        body: stream,
-      },
-      release,
-    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          ({
+            ok: false,
+            status: 500,
+            statusText: "Server Error",
+            body: stream,
+          }) as Response,
+      ),
+    );
 
     const result = await installDownloadSpec({
       entry: buildEntry("failed-download-body"),
       spec: {
         kind: "download",
         id: "dl",
-        url: "https://example.invalid/broken.bin",
+        url: `${PUBLIC_DOWNLOAD_BASE_URL}/broken.bin`,
         extract: false,
         targetDir: "runtime",
       },
@@ -240,7 +239,75 @@ describe("installDownloadSpec extraction safety", () => {
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("Download failed (500 Server Error)");
     expect(wasCanceled()).toBe(true);
-    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects local download URLs before fetching in stock direct mode", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await installDownloadSpec({
+      entry: buildEntry("local-download"),
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "http://127.0.0.1/payload.bin",
+        extract: false,
+        targetDir: "runtime",
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("Blocked");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-HTTP download URLs before fetching", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await installDownloadSpec({
+      entry: buildEntry("non-http-download"),
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "data:text/plain,hello",
+        extract: false,
+        targetDir: "runtime",
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("Download URL must use http or https");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("cleans download timeouts when fetch rejects before a response", async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    );
+
+    const result = await installDownloadSpec({
+      entry: buildEntry("failed-download-fetch"),
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: `${PUBLIC_DOWNLOAD_BASE_URL}/broken.bin`,
+        extract: false,
+        targetDir: "runtime",
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("network down");
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    clearTimeoutSpy.mockRestore();
   });
 
   it.runIf(process.platform !== "win32")(
@@ -251,29 +318,32 @@ describe("installDownloadSpec extraction safety", () => {
       const outsideRoot = path.join(workspaceDir, "outside-root");
       await fs.mkdir(outsideRoot, { recursive: true });
 
-      fetchWithSsrFGuardMock.mockResolvedValue({
-        response: {
-          ok: true,
-          status: 200,
-          statusText: "OK",
-          body: Readable.from(
-            (async function* () {
-              yield Buffer.from("payload");
-              const reboundRoot = `${safeToolsRoot}-rebound`;
-              await fs.rename(safeToolsRoot, reboundRoot);
-              await fs.symlink(outsideRoot, safeToolsRoot);
-            })(),
-          ),
-        },
-        release: async () => undefined,
-      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            ({
+              ok: true,
+              status: 200,
+              statusText: "OK",
+              body: Readable.from(
+                (async function* () {
+                  yield Buffer.from("payload");
+                  const reboundRoot = `${safeToolsRoot}-rebound`;
+                  await fs.rename(safeToolsRoot, reboundRoot);
+                  await fs.symlink(outsideRoot, safeToolsRoot);
+                })(),
+              ),
+            }) as unknown as Response,
+        ),
+      );
 
       const result = await installDownloadSpec({
         entry,
         spec: {
           kind: "download",
           id: "dl",
-          url: "https://example.invalid/payload.bin",
+          url: `${PUBLIC_DOWNLOAD_BASE_URL}/payload.bin`,
           extract: false,
           targetDir: "runtime",
         },
@@ -292,7 +362,7 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
       {
         label: "rejects archives containing symlinks",
         name: "tbz2-symlink",
-        url: "https://example.invalid/evil.tbz2",
+        url: `${PUBLIC_DOWNLOAD_BASE_URL}/evil.tbz2`,
         listOutput: "link\n",
         verboseListOutput: "lrwxr-xr-x  0 0 0 0 Jan  1 00:00 link -> ../outside\n",
         extract: "reject" as const,
@@ -303,7 +373,7 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
       {
         label: "extracts safe archives with stripComponents",
         name: "tbz2-ok",
-        url: "https://example.invalid/good.tbz2",
+        url: `${PUBLIC_DOWNLOAD_BASE_URL}/good.tbz2`,
         listOutput: "package/hello.txt\n",
         verboseListOutput: "-rw-r--r--  0 0 0 0 Jan  1 00:00 package/hello.txt\n",
         stripComponents: 1,
@@ -372,7 +442,7 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
 
     const result = await installDownloadSkill({
       name: "tbz2-preflight-change",
-      url: "https://example.invalid/change.tbz2",
+      url: `${PUBLIC_DOWNLOAD_BASE_URL}/change.tbz2`,
       archive: "tar.bz2",
       targetDir,
     });
@@ -418,7 +488,7 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
 
     const result = await installDownloadSkill({
       name: "tbz2-targetdir-symlink",
-      url: "https://example.invalid/evil.tbz2",
+      url: `${PUBLIC_DOWNLOAD_BASE_URL}/evil.tbz2`,
       archive: "tar.bz2",
       targetDir,
     });

@@ -152,7 +152,6 @@ async function resolveOpenAIRealtimeTranscriptionAuthorization(
   }
   const clientSecret = await createOpenAIRealtimeTranscriptionClientSecret({
     authToken,
-    auditContext: "openai-realtime-transcription-session",
     session: buildOpenAIRealtimeTranscriptionSessionPayload(config),
   });
   return clientSecret.value;

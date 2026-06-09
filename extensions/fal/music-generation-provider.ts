@@ -146,8 +146,10 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
         throw new Error("fal music generation does not support image reference inputs.");
       }
 
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        await resolveFalHttpRequestConfig({ req, capability: "audio" });
+      const { baseUrl, headers, dispatcherPolicy } = await resolveFalHttpRequestConfig({
+        req,
+        capability: "audio",
+      });
       const model = resolveFalMusicModel(req.model);
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/${model}`,
@@ -155,7 +157,6 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
         body: buildFalMusicRequestBody(req, model),
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetchFn: fetch,
-        allowPrivateNetwork,
         dispatcherPolicy,
       });
 

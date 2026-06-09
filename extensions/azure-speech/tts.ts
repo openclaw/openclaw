@@ -1,3 +1,4 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 /**
  * Azure Speech REST helpers. They normalize endpoints, build SSML, list voices,
  * and synthesize speech with response-size and SSRF guards.
@@ -6,10 +7,6 @@ import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http"
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
 import { trimToUndefined } from "openclaw/plugin-sdk/speech-core";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 
 /** Default Azure Speech neural voice. */
 export const DEFAULT_AZURE_SPEECH_VOICE = "en-US-JennyNeural";
@@ -145,7 +142,7 @@ export async function listAzureSpeechVoices(params: {
   timeoutMs?: number;
 }): Promise<SpeechVoiceOption[]> {
   const url = azureSpeechUrl({ ...params, path: "/cognitiveservices/voices/list" });
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url,
     init: {
       method: "GET",
@@ -154,8 +151,6 @@ export async function listAzureSpeechVoices(params: {
       },
     },
     timeoutMs: params.timeoutMs,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(url),
-    auditContext: "azure-speech.voices",
   });
 
   try {
@@ -197,7 +192,7 @@ export async function azureSpeechTTS(params: {
   const voice = trimToUndefined(params.voice) ?? DEFAULT_AZURE_SPEECH_VOICE;
   const outputFormat = trimToUndefined(params.outputFormat) ?? DEFAULT_AZURE_SPEECH_AUDIO_FORMAT;
   const url = azureSpeechUrl({ ...params, path: "/cognitiveservices/v1" });
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url,
     init: {
       method: "POST",
@@ -214,8 +209,6 @@ export async function azureSpeechTTS(params: {
       }),
     },
     timeoutMs: params.timeoutMs,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(url),
-    auditContext: "azure-speech.tts",
   });
 
   try {

@@ -1,3 +1,4 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Fal provider module implements model/runtime integration.
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -8,11 +9,6 @@ import {
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import {
-  fetchWithSsrFGuard,
-  type SsrFPolicy,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -96,10 +92,12 @@ type FalQueueResponse = {
   };
 };
 
-let falFetchGuard = fetchWithSsrFGuard;
+let falFetchGuard = fetchWithResponseRelease;
 
-export function setFalVideoFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
-  falFetchGuard = impl ?? fetchWithSsrFGuard;
+export function setFalVideoFetchGuardForTesting(
+  impl: typeof fetchWithResponseRelease | null,
+): void {
+  falFetchGuard = impl ?? fetchWithResponseRelease;
 }
 
 function normalizeFalVideoUrl(value: unknown): string | undefined {
@@ -170,10 +168,6 @@ function toDataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
-function buildPolicy(allowPrivateNetwork: boolean): SsrFPolicy | undefined {
-  return allowPrivateNetwork ? ssrfPolicyFromDangerouslyAllowPrivateNetwork(true) : undefined;
-}
-
 function extractFalVideoEntry(payload: FalVideoResponse) {
   if (normalizeOptionalString(payload.video?.url)) {
     return payload.video;
@@ -189,16 +183,10 @@ function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
   return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
-async function downloadFalVideo(
-  url: string,
-  policy: SsrFPolicy | undefined,
-  maxBytes: number,
-): Promise<GeneratedVideoAsset> {
+async function downloadFalVideo(url: string, maxBytes: number): Promise<GeneratedVideoAsset> {
   const { response, release } = await falFetchGuard({
     url,
     timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
-    policy,
-    auditContext: "fal-video-download",
   });
   try {
     await assertOkOrThrowHttpError(response, "fal generated video download failed");
@@ -449,18 +437,12 @@ async function fetchFalJson(params: {
   url: string;
   init?: RequestInit;
   timeoutMs: number;
-  policy: SsrFPolicy | undefined;
-  dispatcherPolicy: Parameters<typeof fetchWithSsrFGuard>[0]["dispatcherPolicy"];
-  auditContext: string;
   errorContext: string;
 }): Promise<unknown> {
   const { response, release } = await falFetchGuard({
     url: params.url,
     init: params.init,
     timeoutMs: params.timeoutMs,
-    policy: params.policy,
-    dispatcherPolicy: params.dispatcherPolicy,
-    auditContext: params.auditContext,
   });
   try {
     await assertOkOrThrowHttpError(response, params.errorContext);
@@ -479,8 +461,6 @@ async function waitForFalQueueResult(params: {
   responseUrl: string;
   headers: Headers;
   deadline: ProviderOperationDeadline;
-  policy: SsrFPolicy | undefined;
-  dispatcherPolicy: Parameters<typeof fetchWithSsrFGuard>[0]["dispatcherPolicy"];
 }): Promise<FalQueueResponse> {
   let lastStatus = "unknown";
   for (;;) {
@@ -497,9 +477,6 @@ async function waitForFalQueueResult(params: {
           headers: params.headers,
         },
         timeoutMs: requestTimeoutMs,
-        policy: params.policy,
-        dispatcherPolicy: params.dispatcherPolicy,
-        auditContext: "fal-video-status",
         errorContext: "fal video status request failed",
       }),
     );
@@ -521,9 +498,6 @@ async function waitForFalQueueResult(params: {
             lastStatus,
             DEFAULT_HTTP_TIMEOUT_MS,
           ),
-          policy: params.policy,
-          dispatcherPolicy: params.dispatcherPolicy,
-          auditContext: "fal-video-result",
           errorContext: "fal video result request failed",
         }),
       );
@@ -631,10 +605,8 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
     async generateVideo(req) {
       const model = normalizeOptionalString(req.model) || DEFAULT_FAL_VIDEO_MODEL;
       validateFalVideoReferenceInputs({ req, model });
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        await resolveFalHttpRequestConfig({ req, capability: "video" });
+      const { baseUrl, headers } = await resolveFalHttpRequestConfig({ req, capability: "video" });
       const requestBody = buildFalVideoRequestBody({ req, model });
-      const policy = buildPolicy(allowPrivateNetwork);
       const queueBaseUrl = resolveFalQueueBaseUrl(baseUrl);
       const submitted = readFalQueueResponse(
         await fetchFalJson({
@@ -645,9 +617,6 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
             body: JSON.stringify(requestBody),
           },
           timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
-          policy,
-          dispatcherPolicy,
-          auditContext: "fal-video-submit",
           errorContext: "fal video generation failed",
         }),
       );
@@ -669,8 +638,6 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         responseUrl,
         headers,
         deadline: operationDeadline,
-        policy,
-        dispatcherPolicy,
       });
       const videoPayload = extractFalVideoPayload(payload);
       const entry = extractFalVideoEntry(videoPayload);
@@ -678,7 +645,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       if (!url) {
         throw new Error("fal video generation response missing output URL");
       }
-      const video = await downloadFalVideo(url, policy, resolveGeneratedVideoMaxBytes(req));
+      const video = await downloadFalVideo(url, resolveGeneratedVideoMaxBytes(req));
       return {
         videos: [video],
         model,

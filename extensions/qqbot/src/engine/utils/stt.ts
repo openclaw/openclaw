@@ -7,8 +7,8 @@
 
 import * as fs from "node:fs";
 import path from "node:path";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeOptionalString,
   asOptionalObjectRecord as asRecord,
@@ -80,9 +80,8 @@ export async function transcribeAudio(
   form.append("file", new Blob([fileBuffer], { type: mime }), fileName);
   form.append("model", sttCfg.model);
 
-  const { response: resp, release } = await fetchWithSsrFGuard({
+  const { response: resp, release } = await fetchWithResponseRelease({
     url: `${sttCfg.baseUrl}/audio/transcriptions`,
-    auditContext: "qqbot-stt",
     init: {
       method: "POST",
       headers: { Authorization: `Bearer ${sttCfg.apiKey}` },

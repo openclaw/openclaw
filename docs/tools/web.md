@@ -163,15 +163,15 @@ If native Codex search is enabled but the current model is not Codex-capable, Op
 
 ## Network safety
 
-Managed `web_search` provider calls use OpenClaw's guarded fetch path. For
-trusted provider API hosts, OpenClaw allows Surge, Clash, and sing-box fake-IP
-DNS answers in `198.18.0.0/15` and `fc00::/7` only for that provider hostname.
-Other private, loopback, link-local, and metadata destinations remain blocked.
+OpenClaw does not expose per-tool SSRF guard knobs for `web_fetch`. In direct
+mode (`proxy.enabled=false`), `web_fetch` still uses OpenClaw's small stock
+guard for untrusted URLs and rejects localhost, loopback, link-local, metadata,
+private-network, and DNS/redirect targets that resolve to those destinations.
 
-This automatic allowance does not apply to arbitrary `web_fetch` URLs. For
-`web_fetch`, enable `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
-`tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` explicitly only when your
-trusted proxy owns those synthetic ranges.
+Deployments that need high-assurance outbound filtering, DNS-rebinding
+protection, fake-IP proxy handling, audit logs, or deployment-specific
+allow/deny policy should enable `proxy.enabled` and enforce that policy in the
+operator-managed proxy. See [Network proxy](/security/network-proxy).
 
 ## Setting up web search
 

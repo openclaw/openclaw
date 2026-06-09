@@ -245,19 +245,17 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
 
       const model = normalizeDeepInfraModelRef(req.model, defaultModel);
       const resolvedBaseUrl = resolveDeepInfraNativeBaseUrl(req);
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolvedBaseUrl,
-          defaultBaseUrl: DEEPINFRA_NATIVE_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: "deepinfra",
-          capability: "video",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: resolvedBaseUrl,
+        defaultBaseUrl: DEEPINFRA_NATIVE_BASE_URL,
+        defaultHeaders: {
+          Authorization: `Bearer ${auth.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        provider: "deepinfra",
+        capability: "video",
+        transport: "http",
+      });
 
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/${encodeDeepInfraModelPath(model)}`,
@@ -265,7 +263,6 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
         body: buildDeepInfraVideoBody(req, model),
         timeoutMs: req.timeoutMs,
         fetchFn: fetch,
-        allowPrivateNetwork,
         dispatcherPolicy,
       });
       try {

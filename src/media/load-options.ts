@@ -18,7 +18,6 @@ export type OutboundMediaLoadParams = {
   proxyUrl?: string;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   requestInit?: RequestInit;
-  trustExplicitProxyDns?: boolean;
   optimizeImages?: boolean;
   /** Agent workspace directory for resolving relative media paths. */
   workspaceDir?: string;
@@ -32,7 +31,6 @@ export type OutboundMediaLoadOptions = {
   proxyUrl?: string;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   requestInit?: RequestInit;
-  trustExplicitProxyDns?: boolean;
   hostReadCapability?: boolean;
   optimizeImages?: boolean;
   /** Agent workspace directory for resolving relative media paths. */
@@ -100,9 +98,6 @@ export function buildOutboundMediaLoadOptions(
       ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
       ...(params.proxyUrl ? { proxyUrl: params.proxyUrl } : {}),
       ...(params.requestInit ? { requestInit: params.requestInit } : {}),
-      ...(params.trustExplicitProxyDns !== undefined
-        ? { trustExplicitProxyDns: params.trustExplicitProxyDns }
-        : {}),
       hostReadCapability: true,
       ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
       ...(workspaceDir ? { workspaceDir } : {}),
@@ -114,9 +109,6 @@ export function buildOutboundMediaLoadOptions(
     ...(params.proxyUrl ? { proxyUrl: params.proxyUrl } : {}),
     ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
     ...(params.requestInit ? { requestInit: params.requestInit } : {}),
-    ...(params.trustExplicitProxyDns !== undefined
-      ? { trustExplicitProxyDns: params.trustExplicitProxyDns }
-      : {}),
     ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
   };

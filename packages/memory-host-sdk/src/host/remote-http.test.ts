@@ -1,51 +1,42 @@
 // Memory Host SDK tests cover remote http behavior.
-import { describe, expect, it } from "vitest";
-import { MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE, withRemoteHttpResponse } from "./remote-http.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { withRemoteHttpResponse } from "./remote-http.js";
 
 describe("package withRemoteHttpResponse", () => {
-  function makeFetchDeps({ useEnvProxy = false }: { useEnvProxy?: boolean } = {}) {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function makeFetchDeps() {
     const calls: unknown[] = [];
     return {
       calls,
-      fetchWithSsrFGuardImpl: async (params: unknown) => {
-        calls.push(params);
-        return {
-          response: new Response("ok", { status: 200 }),
-          finalUrl: "https://memory.example/v1",
-          release: async () => {},
-        };
+      fetchImpl: async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ input, init });
+        return new Response("ok", { status: 200 });
       },
-      shouldUseEnvHttpProxyForUrlImpl: () => useEnvProxy,
     };
   }
 
-  it("uses trusted env proxy mode when the target will use EnvHttpProxyAgent", async () => {
-    const deps = makeFetchDeps({ useEnvProxy: true });
+  it("uses ordinary fetch and releases the response after the callback", async () => {
+    const deps = makeFetchDeps();
+    let body = "";
 
     await withRemoteHttpResponse({
       url: "https://memory.example/v1/embeddings",
-      onResponse: async () => undefined,
+      onResponse: async (response) => {
+        body = await response.text();
+      },
       ...deps,
     });
 
-    expect(deps.calls[0]).toHaveProperty("url", "https://memory.example/v1/embeddings");
-    expect(deps.calls[0]).toHaveProperty("mode", MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE);
-  });
-
-  it("keeps strict guarded fetch mode when proxy env would not proxy the target", async () => {
-    const deps = makeFetchDeps();
-
-    await withRemoteHttpResponse({
-      url: "https://internal.corp.example/v1/embeddings",
-      onResponse: async () => undefined,
-      ...deps,
+    expect(body).toBe("ok");
+    expect(deps.calls[0]).toMatchObject({
+      input: "https://memory.example/v1/embeddings",
     });
-
-    expect(deps.calls).toHaveLength(1);
-    expect(deps.calls[0]).not.toHaveProperty("mode");
   });
 
-  it("passes abort signals to the guarded fetch", async () => {
+  it("passes abort signals to fetch", async () => {
     const deps = makeFetchDeps();
     const controller = new AbortController();
 
@@ -56,6 +47,101 @@ describe("package withRemoteHttpResponse", () => {
       ...deps,
     });
 
-    expect(deps.calls[0]).toHaveProperty("signal", controller.signal);
+    expect(deps.calls[0]).toMatchObject({
+      init: expect.objectContaining({ signal: controller.signal }),
+    });
+  });
+
+  it("passes request init to fetch", async () => {
+    const deps = makeFetchDeps();
+
+    await withRemoteHttpResponse({
+      url: "https://memory.example/v1/embeddings",
+      init: { method: "POST" },
+      onResponse: async () => undefined,
+      ...deps,
+    });
+
+    expect(deps.calls).toHaveLength(1);
+    expect(deps.calls[0]).toMatchObject({
+      init: expect.objectContaining({ method: "POST" }),
+    });
+  });
+
+  it("routes remote memory requests through env proxy dispatchers", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("NO_PROXY", "");
+    const deps = makeFetchDeps();
+
+    await withRemoteHttpResponse({
+      url: "https://memory.example/v1/embeddings",
+      onResponse: async () => undefined,
+      ...deps,
+    });
+
+    const call = deps.calls[0] as { init?: { dispatcher?: unknown } } | undefined;
+    expect(call?.init?.dispatcher).toBeDefined();
+  });
+
+  it("closes env proxy dispatchers when fetch setup fails", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("NO_PROXY", "");
+    const close = vi.fn(async () => undefined);
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const dispatcher = (init as { dispatcher?: { close?: () => Promise<void> } } | undefined)
+        ?.dispatcher;
+      if (!dispatcher) {
+        throw new Error("expected dispatcher");
+      }
+      dispatcher.close = close;
+      throw new Error("proxy setup failed");
+    });
+
+    await expect(
+      withRemoteHttpResponse({
+        url: "https://memory.example/v1/embeddings",
+        fetchImpl,
+        onResponse: async () => undefined,
+      }),
+    ).rejects.toThrow("proxy setup failed");
+
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects URLs outside the configured remote policy before fetching", async () => {
+    const deps = makeFetchDeps();
+
+    await expect(
+      withRemoteHttpResponse({
+        url: "https://other.example/v1/embeddings",
+        ssrfPolicy: { allowedHostnames: ["memory.example"] },
+        onResponse: async () => undefined,
+        ...deps,
+      }),
+    ).rejects.toThrow("Blocked hostname");
+
+    expect(deps.calls).toHaveLength(0);
+  });
+
+  it("rejects redirects outside the configured remote policy", async () => {
+    const calls: unknown[] = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ input, init });
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://other.example/v1/embeddings" },
+      });
+    };
+
+    await expect(
+      withRemoteHttpResponse({
+        url: "https://memory.example/v1/embeddings",
+        ssrfPolicy: { allowedHostnames: ["memory.example"] },
+        fetchImpl,
+        onResponse: async () => undefined,
+      }),
+    ).rejects.toThrow("Blocked hostname");
+
+    expect(calls).toHaveLength(1);
   });
 });

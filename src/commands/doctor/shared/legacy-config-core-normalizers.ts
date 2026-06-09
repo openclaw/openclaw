@@ -39,6 +39,54 @@ export function normalizeLegacyCommandsConfig(
   };
 }
 
+/** Remove retired model-provider request knobs that runtime no longer reads. */
+export function normalizeLegacyModelProviderRequestConfig(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  const rawProviders = cfg.models?.providers;
+  if (!isRecord(rawProviders)) {
+    return cfg;
+  }
+
+  let providersChanged = false;
+  const nextProviders: Record<string, unknown> = { ...rawProviders };
+  for (const [providerId, rawProvider] of Object.entries(rawProviders)) {
+    if (!isRecord(rawProvider) || !isRecord(rawProvider.request)) {
+      continue;
+    }
+    if (!hasOwnKey(rawProvider.request, "allowPrivateNetwork")) {
+      continue;
+    }
+
+    const nextRequest: Record<string, unknown> = { ...rawProvider.request };
+    delete nextRequest.allowPrivateNetwork;
+    const nextProvider: Record<string, unknown> = { ...rawProvider };
+    if (Object.keys(nextRequest).length > 0) {
+      nextProvider.request = nextRequest;
+    } else {
+      delete nextProvider.request;
+    }
+    nextProviders[providerId] = nextProvider;
+    providersChanged = true;
+    changes.push(
+      `Removed models.providers.${providerId}.request.allowPrivateNetwork. Model-provider egress filtering moved to proxy.enabled plus external proxy policy.`,
+    );
+  }
+
+  if (!providersChanged) {
+    return cfg;
+  }
+
+  return {
+    ...cfg,
+    models: {
+      ...cfg.models,
+      providers: nextProviders as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>,
+    },
+  };
+}
+
 /** Migrate legacy browser/Chrome relay config to current browser profile settings. */
 export function normalizeLegacyBrowserConfig(
   cfg: OpenClawConfig,

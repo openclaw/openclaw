@@ -44,45 +44,6 @@ function imageToDataUrl(image: ImageGenerationSourceImage): string {
   return toImageDataUrl({ buffer: image.buffer, mimeType: image.mimeType });
 }
 
-// LiteLLM's default proxy is loopback. Auto-enable private-network access only
-// for loopback-style hosts; LAN/custom private endpoints should use the
-// explicit models.providers.litellm.request.allowPrivateNetwork opt-in.
-function isAutoAllowedLitellmHostname(hostname: string): boolean {
-  if (!hostname) {
-    return false;
-  }
-  // Strip IPv6 brackets if any: "[::1]" -> "::1".
-  const host =
-    hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-  const lowered = host.toLowerCase();
-  if (
-    lowered === "localhost" ||
-    lowered === "host.docker.internal" ||
-    lowered.endsWith(".localhost")
-  ) {
-    return true;
-  }
-  if (lowered === "127.0.0.1" || lowered.startsWith("127.")) {
-    return true;
-  }
-  if (lowered === "::1" || lowered === "0:0:0:0:0:0:0:1") {
-    return true;
-  }
-  return false;
-}
-
-function shouldAutoAllowPrivateLitellmEndpoint(baseUrl: string): boolean {
-  try {
-    const parsed = new URL(baseUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return false;
-    }
-    return isAutoAllowedLitellmHostname(parsed.hostname);
-  } catch {
-    return false;
-  }
-}
-
 export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
   return createOpenAiCompatibleImageGenerationProvider({
     id: "litellm",
@@ -110,8 +71,6 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
     },
     defaultBaseUrl: LITELLM_BASE_URL,
     resolveBaseUrl: ({ req }) => resolveConfiguredLitellmBaseUrl(req.cfg),
-    resolveAllowPrivateNetwork: ({ baseUrl }) =>
-      shouldAutoAllowPrivateLitellmEndpoint(baseUrl) ? true : undefined,
     useConfiguredRequest: true,
     buildGenerateRequest: ({ req, model, count }) => ({
       kind: "json",

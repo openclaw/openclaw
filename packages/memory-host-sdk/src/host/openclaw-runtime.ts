@@ -76,7 +76,7 @@ export { isVerbose, setVerbose } from "../../../../src/globals.js";
 // IO, network, and logging helpers.
 export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
 export { root } from "../../../../src/infra/fs-safe.js";
-export { fetchWithSsrFGuard } from "../../../../src/infra/net/fetch-guard.js";
+
 export { shouldUseEnvHttpProxyForUrl } from "../../../../src/infra/net/proxy-env.js";
 export { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../../../../src/infra/net/ssrf.js";
 export {

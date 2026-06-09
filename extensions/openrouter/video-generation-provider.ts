@@ -279,7 +279,6 @@ async function fetchOpenRouterJson(params: {
   baseUrl: string;
   headers: Headers;
   timeoutMs: number;
-  allowPrivateNetwork: boolean;
   dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
   errorContext: string;
   auditContext: string;
@@ -298,7 +297,6 @@ async function pollOpenRouterVideo(params: {
   baseUrl: string;
   headers: Headers;
   timeoutMs: number;
-  allowPrivateNetwork: boolean;
   dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
 }): Promise<OpenRouterVideoResponse> {
   const deadline = createProviderOperationDeadline({
@@ -315,7 +313,6 @@ async function pollOpenRouterVideo(params: {
         deadline,
         defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
       }),
-      allowPrivateNetwork: params.allowPrivateNetwork,
       dispatcherPolicy: params.dispatcherPolicy,
       errorContext: "OpenRouter video status request failed",
       auditContext: "openrouter-video-status",
@@ -379,7 +376,6 @@ async function downloadOpenRouterVideo(params: {
   baseUrl: string;
   headers: Headers;
   timeoutMs: number;
-  allowPrivateNetwork: boolean;
   dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
   maxBytes: number;
 }): Promise<GeneratedVideoAsset> {
@@ -476,24 +472,22 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
       }
 
       const model = normalizeOptionalString(req.model) ?? DEFAULT_MODEL;
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: req.cfg?.models?.providers?.openrouter?.baseUrl,
-          defaultBaseUrl: OPENROUTER_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://openclaw.ai",
-            "X-OpenRouter-Title": "OpenClaw",
-          },
-          request: sanitizeConfiguredModelProviderRequest(
-            req.cfg?.models?.providers?.openrouter?.request,
-          ),
-          provider: "openrouter",
-          capability: "video",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: req.cfg?.models?.providers?.openrouter?.baseUrl,
+        defaultBaseUrl: OPENROUTER_BASE_URL,
+        defaultHeaders: {
+          Authorization: `Bearer ${auth.apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://openclaw.ai",
+          "X-OpenRouter-Title": "OpenClaw",
+        },
+        request: sanitizeConfiguredModelProviderRequest(
+          req.cfg?.models?.providers?.openrouter?.request,
+        ),
+        provider: "openrouter",
+        capability: "video",
+        transport: "http",
+      });
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs,
         label: "OpenRouter video generation",
@@ -507,7 +501,6 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
           defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
         }),
         fetchFn: fetch,
-        allowPrivateNetwork,
         dispatcherPolicy,
         auditContext: "openrouter-video-submit",
       });
@@ -545,7 +538,6 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
                   deadline,
                   defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
                 }),
-                allowPrivateNetwork,
                 dispatcherPolicy,
               });
         const completedJobId = normalizeOptionalString(completed.id) ?? jobId;
@@ -561,7 +553,6 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
             deadline,
             defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
           }),
-          allowPrivateNetwork,
           dispatcherPolicy,
           maxBytes: resolveGeneratedVideoMaxBytes(req),
         });

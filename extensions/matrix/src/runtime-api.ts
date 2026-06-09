@@ -64,17 +64,6 @@ export {
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-export {
-  assertHttpUrlTargetsPrivateNetwork,
-  closeDispatcher,
-  createPinnedDispatcher,
-  isPrivateOrLoopbackHost,
-  resolvePinnedHostnameWithPolicy,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-  ssrfPolicyFromAllowPrivateNetwork,
-  type LookupFn,
-  type SsrFPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 export { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/channel-inbound";
 export {
   ensureConfiguredAcpBindingReady,

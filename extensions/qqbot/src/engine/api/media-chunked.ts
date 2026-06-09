@@ -36,7 +36,7 @@
 
 import * as crypto from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import type { MediaSource, OpenedLocalFile } from "../messaging/media-source.js";
 import { openLocalFile } from "../messaging/media-source.js";
 import {
@@ -566,9 +566,8 @@ async function putToPresignedUrl(
       ) as ArrayBuffer;
 
       const startTime = Date.now();
-      const { response, release } = await fetchWithSsrFGuard({
+      const { response, release } = await fetchWithResponseRelease({
         url: presignedUrl,
-        auditContext: "qqbot-media-part-upload",
         init: {
           method: "PUT",
           body: new Blob([ab]),

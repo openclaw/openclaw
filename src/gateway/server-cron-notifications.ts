@@ -18,8 +18,6 @@ import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
 import type { CronJob, CronMessageChannel } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
 
@@ -97,7 +95,6 @@ async function postCronWebhook(params: {
   webhookToken?: string;
   payload: unknown;
   logContext: Record<string, unknown>;
-  blockedLog: string;
   failedLog: string;
   logger: CronLogger;
 }): Promise<void> {
@@ -107,36 +104,23 @@ async function postCronWebhook(params: {
   }, CRON_WEBHOOK_TIMEOUT_MS);
 
   try {
-    const result = await fetchWithSsrFGuard({
-      url: params.webhookUrl,
-      init: {
-        method: "POST",
-        headers: buildCronWebhookHeaders(params.webhookToken),
-        body: JSON.stringify(params.payload),
-        signal: abortController.signal,
-      },
+    const response = await fetch(params.webhookUrl, {
+      method: "POST",
+      headers: buildCronWebhookHeaders(params.webhookToken),
+      body: JSON.stringify(params.payload),
+      redirect: "error",
+      signal: abortController.signal,
     });
-    await result.release();
+    await response.body?.cancel().catch(() => undefined);
   } catch (err) {
-    if (err instanceof SsrFBlockedError) {
-      params.logger.warn(
-        {
-          ...params.logContext,
-          reason: formatErrorMessage(err),
-          webhookUrl: redactWebhookUrl(params.webhookUrl),
-        },
-        params.blockedLog,
-      );
-    } else {
-      params.logger.warn(
-        {
-          ...params.logContext,
-          err: formatErrorMessage(err),
-          webhookUrl: redactWebhookUrl(params.webhookUrl),
-        },
-        params.failedLog,
-      );
-    }
+    params.logger.warn(
+      {
+        ...params.logContext,
+        err: formatErrorMessage(err),
+        webhookUrl: redactWebhookUrl(params.webhookUrl),
+      },
+      params.failedLog,
+    );
   } finally {
     clearTimeout(timeout);
   }
@@ -178,7 +162,6 @@ export async function sendGatewayCronFailureAlert(params: {
           message: params.text,
         },
         logContext: { jobId: params.job.id },
-        blockedLog: "cron: failure alert webhook blocked by SSRF guard",
         failedLog: "cron: failure alert webhook failed",
         logger: params.logger,
       });
@@ -269,7 +252,6 @@ export function dispatchGatewayCronFinishedNotifications(params: {
           webhookToken,
           payload: params.evt,
           logContext: { jobId: params.evt.jobId, source: webhookTarget.source },
-          blockedLog: "cron: webhook delivery blocked by SSRF guard",
           failedLog: "cron: webhook delivery failed",
           logger: params.logger,
         });
@@ -328,7 +310,6 @@ function dispatchCronFailureDestinationNotifications(params: {
             webhookToken: params.webhookToken,
             payload: failurePayload,
             logContext: { jobId: params.evt.jobId },
-            blockedLog: "cron: failure destination webhook blocked by SSRF guard",
             failedLog: "cron: failure destination webhook failed",
             logger: params.logger,
           });

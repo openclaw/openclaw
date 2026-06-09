@@ -1,7 +1,7 @@
 /**
  * Provider request configuration resolver.
  *
- * Normalizes operator request overrides into transport-ready auth, proxy, TLS, header, and SSRF policy state.
+ * Normalizes operator request overrides into transport-ready auth, proxy, TLS, and header state.
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelDefinitionConfig } from "../config/types.js";
@@ -72,10 +72,8 @@ export type ProviderRequestTransportOverrides = {
   tls?: ProviderRequestTlsOverride;
 };
 
-/** Model-scoped transport overrides, including private-network policy. */
-export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOverrides & {
-  allowPrivateNetwork?: boolean;
-};
+/** Model-scoped transport overrides used by provider HTTP helper code. */
+export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOverrides;
 
 // Resolved request config separates configured vs default state so transports
 // can decide whether to inject provider defaults or operator-provided headers.
@@ -149,11 +147,9 @@ export type ResolvedProviderRequestConfig = {
 
 type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
 
-// Policy config includes the resolved transport plus attribution/security facts
+// Policy config includes the resolved transport plus attribution facts
 // required before a provider request can be attached to a model call.
 type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig & {
-  allowPrivateNetwork: boolean;
-  privateNetworkExplicitlyDenied: boolean;
   capabilities: ProviderRequestCapabilities;
 };
 
@@ -180,28 +176,8 @@ type ResolveProviderRequestPolicyConfigParams = {
   authHeader?: boolean;
   compat?: unknown;
   modelId?: string | null;
-  allowPrivateNetwork?: boolean;
   request?: ModelProviderRequestTransportOverrides;
 };
-
-function resolvePrivateNetworkAccess(params: ResolveProviderRequestPolicyConfigParams): {
-  allowPrivateNetwork: boolean;
-  explicitlyDenied: boolean;
-} {
-  // Preserve existing precedence: runtime/caller policy overrides model config.
-  const configuredAllowPrivateNetwork =
-    params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork;
-  if (configuredAllowPrivateNetwork !== undefined) {
-    return {
-      allowPrivateNetwork: configuredAllowPrivateNetwork,
-      explicitlyDenied: !configuredAllowPrivateNetwork,
-    };
-  }
-  return {
-    allowPrivateNetwork: false,
-    explicitlyDenied: false,
-  };
-}
 
 function sanitizeConfiguredRequestString(value: unknown, path: string): string | undefined {
   if (typeof value !== "string") {
@@ -344,17 +320,8 @@ export function sanitizeConfiguredProviderRequest(
 /** Sanitizes model-level request overrides after secret resolution. */
 export function sanitizeConfiguredModelProviderRequest(
   request: ConfiguredModelProviderRequest | undefined,
-): ModelProviderRequestTransportOverrides | undefined {
-  const sanitized = sanitizeConfiguredProviderRequest(request);
-  const rawAllow = request?.allowPrivateNetwork;
-  const allowPrivateNetwork = rawAllow === true ? true : rawAllow === false ? false : undefined;
-  if (!sanitized && allowPrivateNetwork === undefined) {
-    return undefined;
-  }
-  return {
-    ...sanitized,
-    ...(allowPrivateNetwork !== undefined ? { allowPrivateNetwork } : {}),
-  };
+): ProviderRequestTransportOverrides | undefined {
+  return sanitizeConfiguredProviderRequest(request);
 }
 
 /** Merges provider request overrides with later entries taking precedence. */
@@ -384,20 +351,11 @@ export function mergeProviderRequestOverrides(
   return hasMerged ? merged : undefined;
 }
 
-/** Merges model request overrides, preserving the latest private-network policy. */
+/** Merges model request transport overrides with later entries taking precedence. */
 export function mergeModelProviderRequestOverrides(
   ...overrides: Array<ModelProviderRequestTransportOverrides | undefined>
 ): ModelProviderRequestTransportOverrides | undefined {
-  let merged: ModelProviderRequestTransportOverrides | undefined = mergeProviderRequestOverrides(
-    ...overrides,
-  );
-  for (const current of overrides) {
-    if (current?.allowPrivateNetwork !== undefined) {
-      merged ??= {};
-      merged.allowPrivateNetwork = current.allowPrivateNetwork;
-    }
-  }
-  return merged;
+  return mergeProviderRequestOverrides(...overrides);
 }
 
 /** Normalizes provider base URLs by trimming trailing slashes. */
@@ -709,8 +667,6 @@ export function resolveProviderRequestPolicyConfig(
     params.precedence === "caller-wins"
       ? mergeProviderRequestHeaders(mergedDefaults, unprotectedCallerHeaders)
       : mergeProviderRequestHeaders(unprotectedCallerHeaders, mergedDefaults);
-  const privateNetworkAccess = resolvePrivateNetworkAccess(params);
-
   return {
     api: params.api,
     baseUrl,
@@ -724,8 +680,6 @@ export function resolveProviderRequestPolicyConfig(
     tls: resolveTlsOverride(params.request?.tls),
     policy,
     capabilities,
-    allowPrivateNetwork: privateNetworkAccess.allowPrivateNetwork,
-    privateNetworkExplicitlyDenied: privateNetworkAccess.explicitlyDenied,
   };
 }
 

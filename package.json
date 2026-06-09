@@ -458,10 +458,6 @@
       "types": "./dist/plugin-sdk/ssrf-policy.d.ts",
       "default": "./dist/plugin-sdk/ssrf-policy.js"
     },
-    "./plugin-sdk/ssrf-runtime": {
-      "types": "./dist/plugin-sdk/ssrf-runtime.d.ts",
-      "default": "./dist/plugin-sdk/ssrf-runtime.js"
-    },
     "./plugin-sdk/media-runtime": {
       "types": "./dist/plugin-sdk/media-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-runtime.js"
@@ -1586,8 +1582,8 @@
     "lint:tmp:channel-agnostic-boundaries": "node scripts/check-channel-agnostic-boundaries.mjs",
     "lint:tmp:dynamic-import-warts": "node scripts/check-dynamic-import-warts.mjs",
     "lint:tmp:no-random-messaging": "node scripts/check-no-random-messaging-tmp.mjs",
-    "lint:tmp:no-raw-channel-fetch": "node scripts/check-no-raw-channel-fetch.mjs",
     "lint:tmp:no-raw-http2-imports": "node scripts/check-no-raw-http2-imports.mjs",
+    "lint:tmp:runtime-http-egress-boundary": "node scripts/check-runtime-http-egress-boundary.mjs",
     "lint:tmp:tsgo-core-boundary": "node scripts/check-tsgo-core-boundary.mjs",
     "lint:ui:no-raw-window-open": "node scripts/check-no-raw-window-open.mjs",
     "lint:web-fetch-provider-boundaries": "node scripts/check-web-fetch-provider-boundaries.mjs",

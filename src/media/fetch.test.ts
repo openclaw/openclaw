@@ -1,18 +1,17 @@
 // Media fetch tests cover remote media download limits and validation.
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
-const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const { captureHttpExchangeMock } = vi.hoisted(() => ({
+  captureHttpExchangeMock: vi.fn(),
+}));
 
-vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
-  withStrictGuardedFetchMode: <T>(params: T) => params,
-  withTrustedExplicitProxyGuardedFetchMode: <T>(params: T) => ({
-    ...params,
-    mode: "trusted_explicit_proxy",
-  }),
+vi.mock("../proxy-capture/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../proxy-capture/runtime.js")>()),
+  captureHttpExchange: captureHttpExchangeMock,
 }));
 
 type FetchModule = typeof import("./fetch.js");
@@ -69,12 +68,30 @@ function makeLookupFn(): LookupFn {
   return vi.fn(async () => ({ address: "149.154.167.220", family: 4 })) as unknown as LookupFn;
 }
 
-function requireFetchGuardRequest(): unknown {
-  const [call] = fetchWithSsrFGuardMock.mock.calls;
-  if (!call) {
-    throw new Error("expected fetchWithSsrFGuard call");
+const proxyEnvKeys = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "NO_PROXY",
+  "no_proxy",
+] as const;
+
+function snapshotProxyEnv(): Map<(typeof proxyEnvKeys)[number], string | undefined> {
+  return new Map(proxyEnvKeys.map((key) => [key, process.env[key]]));
+}
+
+function restoreProxyEnv(snapshot: Map<(typeof proxyEnvKeys)[number], string | undefined>) {
+  for (const key of proxyEnvKeys) {
+    const value = snapshot.get(key);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
   }
-  return call[0];
 }
 
 async function expectRemoteMediaMaxBytesError(params: {
@@ -104,7 +121,6 @@ async function expectRedactedBotTokenFetchError(params: {
     maxBytes: 1024,
     ssrfPolicy: {
       allowedHostnames: ["files.example.test"],
-      allowRfc2544BenchmarkRange: true,
     },
   }).catch((err: unknown) => err as Error);
 
@@ -192,16 +208,6 @@ async function expectBoundedErrorBodyCase(
   expect(result.message).not.toContain("body:");
 }
 
-async function expectPrivateIpFetchBlockedCase() {
-  const fetchImpl = vi.fn();
-  await expectReadRemoteMediaBufferRejected({
-    url: "http://127.0.0.1/secret.jpg",
-    fetchImpl,
-    expectedError: /private|internal|blocked/i,
-  });
-  expect(fetchImpl).not.toHaveBeenCalled();
-}
-
 function createReadRemoteMediaBufferParams(
   params: Omit<Parameters<typeof readRemoteMediaBuffer>[0], "lookupFn"> & { lookupFn?: LookupFn },
 ) {
@@ -227,26 +233,9 @@ describe("readRemoteMediaBuffer", () => {
   });
 
   beforeEach(() => {
+    captureHttpExchangeMock.mockClear();
+    delete process.env.OPENCLAW_DEBUG_PROXY_ENABLED;
     vi.useRealTimers();
-    fetchWithSsrFGuardMock.mockReset().mockImplementation(async (paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        url: string;
-        fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-        init?: RequestInit;
-      };
-      if (params.url.startsWith("http://127.0.0.1/")) {
-        throw new Error("Blocked hostname or private/internal/special-use IP address");
-      }
-      const fetcher = params.fetchImpl ?? globalThis.fetch;
-      if (!fetcher) {
-        throw new Error("fetch is not available");
-      }
-      return {
-        response: await fetcher(params.url, params.init),
-        finalUrl: params.url,
-        release: async () => {},
-      };
-    });
   });
 
   afterAll(async () => {
@@ -285,6 +274,101 @@ describe("readRemoteMediaBuffer", () => {
 
     await expectRemoteMediaMaxBytesError({ fetchImpl, maxBytes: 4 });
 
+    expect(body.wasCanceled()).toBe(true);
+  });
+
+  it("strips sensitive headers when remote media redirects across origins", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://cdn.example.com/file.txt" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(makeStream([new TextEncoder().encode("ok")]), {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        }),
+      );
+
+    await readRemoteMediaBuffer(
+      createReadRemoteMediaBufferParams({
+        url: "https://files.example.com/start",
+        fetchImpl,
+        requestInit: {
+          headers: {
+            Accept: "text/plain",
+            Authorization: "Bearer secret",
+            Cookie: "session=secret",
+            "X-Api-Key": "secret",
+          },
+        },
+      }),
+    );
+
+    const secondInit = fetchImpl.mock.calls[1]?.[1] as RequestInit | undefined;
+    const headers = new Headers(secondInit?.headers);
+    expect(headers.get("accept")).toBe("text/plain");
+    expect(headers.has("authorization")).toBe(false);
+    expect(headers.has("cookie")).toBe(false);
+    expect(headers.has("x-api-key")).toBe(false);
+  });
+
+  it("rejects remote media hosts outside an explicit hostname allowlist before fetching", async () => {
+    const fetchImpl = vi.fn(async () => new Response(makeStream([new TextEncoder().encode("ok")])));
+
+    await expect(
+      readRemoteMediaBuffer(
+        createReadRemoteMediaBufferParams({
+          url: "https://evil.example.test/file.txt",
+          fetchImpl,
+          ssrfPolicy: { allowedHostnames: ["files.example.test"] },
+        }),
+      ),
+    ).rejects.toThrow(SsrFBlockedError);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects remote media outside an explicit origin allowlist before fetching", async () => {
+    const fetchImpl = vi.fn(async () => new Response(makeStream([new TextEncoder().encode("ok")])));
+
+    await expect(
+      readRemoteMediaBuffer(
+        createReadRemoteMediaBufferParams({
+          url: "https://evil.example.test:8443/file.txt",
+          fetchImpl,
+          ssrfPolicy: { allowedOrigins: ["https://files.example.test:8443"] },
+        }),
+      ),
+    ).rejects.toThrow(SsrFBlockedError);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects remote media redirects outside an explicit hostname allowlist", async () => {
+    const body = makeCancelableStream([new TextEncoder().encode("redirect")]);
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(body.stream, {
+          status: 302,
+          headers: { location: "https://evil.example.test/file.txt" },
+        }),
+    );
+
+    await expect(
+      readRemoteMediaBuffer(
+        createReadRemoteMediaBufferParams({
+          url: "https://files.example.test/start",
+          fetchImpl,
+          ssrfPolicy: { allowedHostnames: ["files.example.test"] },
+        }),
+      ),
+    ).rejects.toThrow(SsrFBlockedError);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(body.wasCanceled()).toBe(true);
   });
 
@@ -498,22 +582,6 @@ describe("readRemoteMediaBuffer", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry SSRF guard blocks", async () => {
-    const fetchImpl = vi.fn();
-
-    await expect(
-      readRemoteMediaBuffer({
-        url: "http://127.0.0.1/secret.jpg",
-        fetchImpl,
-        lookupFn: makeLookupFn(),
-        maxBytes: 1024,
-        retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
-      }),
-    ).rejects.toThrow(/private|internal|blocked/i);
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
   it("does not retry maxBytes failures", async () => {
     const fetchImpl = vi
       .fn()
@@ -546,55 +614,14 @@ describe("readRemoteMediaBuffer", () => {
           }),
       ),
     },
-    {
-      name: "blocks private IP literals before fetching",
-      kind: "private-ip-block" as const,
-    },
   ] as const)("$name", async (testCase) => {
-    if (testCase.kind === "private-ip-block") {
-      await expectPrivateIpFetchBlockedCase();
-      return;
-    }
-
     await expectBoundedErrorBodyCase(testCase.fetchImpl);
   });
 
-  it("uses trusted explicit-proxy mode when the caller opts in for proxy-side DNS", async () => {
-    const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
-    const lookupFn = makeLookupFn();
-    const dispatcherPolicy = {
-      mode: "explicit-proxy" as const,
-      proxyUrl: "http://localhost:8888",
-      allowPrivateProxy: true,
-    };
-
-    await readRemoteMediaBuffer({
-      url: "https://files.example.test/file/bot123/photos/test.jpg",
-      fetchImpl,
-      lookupFn,
-      trustExplicitProxyDns: true,
-      dispatcherAttempts: [
-        {
-          dispatcherPolicy,
-        },
-      ],
-    });
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    expect(requireFetchGuardRequest()).toStrictEqual({
-      url: "https://files.example.test/file/bot123/photos/test.jpg",
-      fetchImpl,
-      init: undefined,
-      maxRedirects: undefined,
-      policy: undefined,
-      lookupFn,
-      dispatcherPolicy,
-      mode: "trusted_explicit_proxy",
-    });
-  });
-
-  it("passes request timeout through the guarded fetch path", async () => {
-    const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+  it("passes request timeout through the fetch path", async () => {
+    const fetchImpl = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("ok", { status: 200 }),
+    );
 
     await readRemoteMediaBuffer({
       url: "https://example.com/file.bin",
@@ -604,11 +631,158 @@ describe("readRemoteMediaBuffer", () => {
       timeoutMs: 1234,
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    expect(requireFetchGuardRequest()).toMatchObject({
-      url: "https://example.com/file.bin",
-      timeoutMs: 1234,
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const init = fetchImpl.mock.calls[0]?.[1];
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("records remote media HTTP exchanges for debug proxy capture", async () => {
+    process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response("image", {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+
+    await readRemoteMediaBuffer({
+      url: "https://example.com/file.png",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 1024,
     });
+
+    expect(captureHttpExchangeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://example.com/file.png",
+        method: "GET",
+        response: expect.any(Response),
+        transport: "http",
+        meta: {
+          captureOrigin: "media-fetch",
+        },
+      }),
+      expect.objectContaining({ enabled: true }),
+    );
+  });
+
+  it("passes env-proxy dispatcher media requests through custom fetch implementations", async () => {
+    const originalProxyEnv = snapshotProxyEnv();
+    try {
+      delete process.env.HTTP_PROXY;
+      delete process.env.ALL_PROXY;
+      delete process.env.http_proxy;
+      delete process.env.https_proxy;
+      delete process.env.all_proxy;
+      delete process.env.NO_PROXY;
+      delete process.env.no_proxy;
+      process.env.HTTPS_PROXY = "http://127.0.0.1:18080";
+
+      const fetchImpl = vi.fn(async () => new Response("direct", { status: 200 }));
+      const runtimeFetch = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          new Response("proxied", { status: 200 }),
+      );
+      vi.stubGlobal("fetch", runtimeFetch);
+
+      const result = await readRemoteMediaBuffer({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+        dispatcherPolicy: {
+          mode: "direct",
+          connect: { ca: "test-ca" },
+        },
+      });
+
+      expect(result.buffer.toString()).toBe("direct");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(runtimeFetch).not.toHaveBeenCalled();
+      const init = (fetchImpl.mock.calls[0] as unknown[] | undefined)?.[1] as
+        | { dispatcher?: unknown }
+        | undefined;
+      expect(init?.dispatcher).toBeDefined();
+    } finally {
+      vi.unstubAllGlobals();
+      restoreProxyEnv(originalProxyEnv);
+    }
+  });
+
+  it("preserves explicit media proxy policies when env proxy routing also applies", async () => {
+    const originalProxyEnv = snapshotProxyEnv();
+    try {
+      delete process.env.HTTP_PROXY;
+      delete process.env.ALL_PROXY;
+      delete process.env.http_proxy;
+      delete process.env.https_proxy;
+      delete process.env.all_proxy;
+      delete process.env.NO_PROXY;
+      delete process.env.no_proxy;
+      process.env.HTTPS_PROXY = "http://127.0.0.1:18080";
+
+      const fetchImpl = vi.fn(async () => new Response("direct", { status: 200 }));
+      const runtimeFetch = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          new Response("explicit", { status: 200 }),
+      );
+      vi.stubGlobal("fetch", runtimeFetch);
+
+      const result = await readRemoteMediaBuffer({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://corp-proxy.example:3128",
+          proxyTls: { ca: "proxy-ca" },
+        },
+      });
+
+      expect(result.buffer.toString()).toBe("direct");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(runtimeFetch).not.toHaveBeenCalled();
+      const init = (fetchImpl.mock.calls[0] as unknown[] | undefined)?.[1] as
+        | { dispatcher?: { constructor?: { name?: string } } }
+        | undefined;
+      expect(init?.dispatcher?.constructor?.name).toBe("ProxyAgent");
+    } finally {
+      vi.unstubAllGlobals();
+      restoreProxyEnv(originalProxyEnv);
+    }
+  });
+
+  it("preserves pinned media dispatcher policies for fallback attempts", async () => {
+    const lookupFn = vi.fn(async () => [
+      { address: "149.154.167.220", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => new Response("pinned", { status: 200 }));
+
+    const result = await readRemoteMediaBuffer({
+      url: "https://api.telegram.org/file/botTOKEN/file.jpg",
+      fetchImpl,
+      lookupFn,
+      maxBytes: 1024,
+      dispatcherPolicy: {
+        mode: "direct",
+        pinnedHostname: {
+          hostname: "api.telegram.org",
+          addresses: ["149.154.167.220"],
+        },
+      },
+      ssrfPolicy: {
+        allowedHostnames: ["api.telegram.org"],
+      },
+    });
+
+    expect(result.buffer.toString()).toBe("pinned");
+    expect(lookupFn).toHaveBeenCalledWith("api.telegram.org", { all: true });
+    const init = (fetchImpl.mock.calls[0] as unknown[] | undefined)?.[1] as
+      | { dispatcher?: unknown }
+      | undefined;
+    expect(init?.dispatcher).toBeDefined();
   });
 
   it("streams successful responses directly into the media store", async () => {

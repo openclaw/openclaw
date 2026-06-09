@@ -186,7 +186,11 @@ URL fetch defaults:
 - `files.allowUrl`: `true`
 - `images.allowUrl`: `true`
 - `maxUrlParts`: `8` (total URL-based `input_file` + `input_image` parts per request)
-- Requests are guarded (DNS resolution, private IP blocking, redirect caps, timeouts).
+- Requests have redirect caps, timeouts, byte limits, and optional hostname allowlists.
+  In direct mode, URL inputs are blocked from localhost, link-local, metadata,
+  private-network, and DNS/redirect targets that resolve to those destinations.
+  Comprehensive DNS-rebinding and destination policy belongs in the external
+  proxy policy when `proxy.enabled` is used.
 - Optional hostname allowlists are supported per input type (`files.urlAllowlist`, `images.urlAllowlist`).
   - Exact host: `"cdn.example.com"`
   - Wildcard subdomains: `"*.assets.example.com"` (does not match apex)
@@ -268,8 +272,12 @@ Defaults when omitted:
 Security note:
 
 - URL allowlists are enforced before fetch and on redirect hops.
-- Allowlisting a hostname does not bypass private/internal IP blocking.
-- For internet-exposed gateways, apply network egress controls in addition to app-level guards.
+- In direct mode, URL inputs keep the stock untrusted URL block for local,
+  private, metadata, and link-local destinations.
+- Comprehensive private-network, metadata, and DNS-rebinding controls belong in
+  the external proxy policy when `proxy.enabled` is used.
+- For internet-exposed gateways, enforce network egress controls in addition to
+  app-level host/origin allowlists.
   See [Security](/gateway/security).
 
 ## Streaming (SSE)

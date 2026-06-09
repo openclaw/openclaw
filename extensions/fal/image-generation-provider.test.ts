@@ -17,8 +17,6 @@ function expectFalJsonPost(params: { call: number; url: string; body: Record<str
     throw new Error(`expected fal fetch request #${params.call}`);
   }
   expect(request.url).toBe(params.url);
-  expect(request.auditContext).toBe("fal-image-generate");
-  expect(request.policy).toBeUndefined();
   expect(request.init?.method).toBe("POST");
   const headers = new Headers(request.init?.headers);
   expect(headers.get("authorization")).toBe("Key fal-test-key");
@@ -29,8 +27,6 @@ function expectFalJsonPost(params: { call: number; url: string; body: Record<str
 function expectFalDownload(params: { call: number; url: string }) {
   expect(fetchWithSsrFGuardMock.mock.calls[params.call - 1]?.[0]).toEqual({
     url: params.url,
-    policy: undefined,
-    auditContext: "fal-image-download",
   });
 }
 

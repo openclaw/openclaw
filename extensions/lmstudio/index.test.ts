@@ -48,7 +48,6 @@ describe("lmstudio plugin", () => {
     ).toEqual({
       ...providerConfig,
       baseUrl: "http://localhost:1234/v1",
-      request: { allowPrivateNetwork: true },
     });
   });
 

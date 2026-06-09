@@ -5,12 +5,12 @@
  * It is only intended for CLI use, not browser environments.
  */
 
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   parseOAuthAuthorizationInput,
   resolveOAuthTokenExpiresAt,
   resolveOAuthTokenLifetimeMs,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import {
   createOAuthLoginCancelledError,
@@ -166,7 +166,7 @@ async function postTokenForm(
 ): Promise<Response> {
   const timeoutMs = options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS;
   throwIfOAuthLoginAborted(options.signal);
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: TOKEN_URL,
     init: {
       method: "POST",
@@ -175,7 +175,6 @@ async function postTokenForm(
     },
     timeoutMs,
     signal: options.signal,
-    auditContext: "openai-chatgpt-oauth-token",
   });
   try {
     const responseBody = await response.arrayBuffer();

@@ -1,26 +1,28 @@
 // Voice Call tests cover api plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(),
+const { fetchWithResponseReleaseMock } = vi.hoisted(() => ({
+  fetchWithResponseReleaseMock: vi.fn(),
 }));
 
-vi.mock("../../../api.js", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-}));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
+  const original = (await vi.importActual("openclaw/plugin-sdk/fetch-runtime")) as Record<
+    string,
+    unknown
+  >;
+  return { ...original, fetchWithResponseRelease: fetchWithResponseReleaseMock };
+});
 
 import { TwilioApiError, twilioApiRequest } from "./api.js";
 
 type FetchGuardRequest = {
   url?: string;
   init?: RequestInit;
-  auditContext?: string;
-  policy?: unknown;
   timeoutMs?: number;
 };
 
 function requireFirstFetchGuardRequest(): FetchGuardRequest {
-  const [call] = fetchWithSsrFGuardMock.mock.calls;
+  const [call] = fetchWithResponseReleaseMock.mock.calls;
   if (!call) {
     throw new Error("expected guarded fetch call");
   }
@@ -33,12 +35,12 @@ function requireFirstFetchGuardRequest(): FetchGuardRequest {
 
 describe("twilioApiRequest", () => {
   afterEach(() => {
-    fetchWithSsrFGuardMock.mockReset();
+    fetchWithResponseReleaseMock.mockReset();
   });
 
   it("posts form bodies with basic auth and parses json", async () => {
     const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
+    fetchWithResponseReleaseMock.mockResolvedValue({
       response: new Response(JSON.stringify({ sid: "CA123" }), { status: 200 }),
       release,
     });
@@ -56,10 +58,8 @@ describe("twilioApiRequest", () => {
       }),
     ).resolves.toEqual({ sid: "CA123" });
 
-    const { url, init, auditContext, policy, timeoutMs } = requireFirstFetchGuardRequest();
+    const { url, init, timeoutMs } = requireFirstFetchGuardRequest();
     expect(url).toBe("https://api.twilio.com/Calls.json");
-    expect(auditContext).toBe("voice-call.twilio.api");
-    expect(policy).toEqual({ allowedHostnames: ["api.twilio.com"] });
     expect(timeoutMs).toBe(30_000);
     expect(init?.method).toBe("POST");
     expect(init?.headers).toEqual({
@@ -82,7 +82,7 @@ describe("twilioApiRequest", () => {
       new Response("missing", { status: 404 }),
     ];
     const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockImplementation(async () => ({
+    fetchWithResponseReleaseMock.mockImplementation(async () => ({
       response: responses.shift()!,
       release,
     }));
@@ -112,7 +112,7 @@ describe("twilioApiRequest", () => {
 
   it("throws twilio api errors for non-ok responses", async () => {
     const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
+    fetchWithResponseReleaseMock.mockResolvedValue({
       response: new Response("bad request", { status: 400 }),
       release,
     });
@@ -131,7 +131,7 @@ describe("twilioApiRequest", () => {
 
   it("wraps malformed json success responses with an owned error", async () => {
     const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
+    fetchWithResponseReleaseMock.mockResolvedValue({
       response: new Response("{not json", { status: 200 }),
       release,
     });
@@ -150,7 +150,7 @@ describe("twilioApiRequest", () => {
 
   it("exposes structured Twilio error codes from json error bodies", async () => {
     const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
+    fetchWithResponseReleaseMock.mockResolvedValue({
       response: new Response(
         JSON.stringify({
           code: 21220,

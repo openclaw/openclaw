@@ -262,21 +262,19 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
         throw new Error("OpenRouter API key missing");
       }
 
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: req.cfg?.models?.providers?.openrouter?.baseUrl,
-          defaultBaseUrl: OPENROUTER_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://openclaw.ai",
-            "X-OpenRouter-Title": "OpenClaw",
-          },
-          provider: "openrouter",
-          capability: "audio",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: req.cfg?.models?.providers?.openrouter?.baseUrl,
+        defaultBaseUrl: OPENROUTER_BASE_URL,
+        defaultHeaders: {
+          Authorization: `Bearer ${auth.apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://openclaw.ai",
+          "X-OpenRouter-Title": "OpenClaw",
+        },
+        provider: "openrouter",
+        capability: "audio",
+        transport: "http",
+      });
       const model = resolveOpenRouterMusicModel(req.model);
       const format = req.format ?? "wav";
       const requestedTimeoutMs = resolvePositiveTimerTimeoutMs(req.timeoutMs, DEFAULT_TIMEOUT_MS);
@@ -297,7 +295,6 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
         },
         timeoutMs,
         fetchFn: fetch,
-        allowPrivateNetwork,
         dispatcherPolicy,
       });
 

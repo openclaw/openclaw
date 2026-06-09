@@ -8,12 +8,12 @@ const { mockFetchGuard, mockRelease } = vi.hoisted(() => ({
   mockRelease: vi.fn(async () => {}),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
-  const original = (await vi.importActual("openclaw/plugin-sdk/ssrf-runtime")) as Record<
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
+  const original = (await vi.importActual("openclaw/plugin-sdk/fetch-runtime")) as Record<
     string,
     unknown
   >;
-  return { ...original, fetchWithSsrFGuard: mockFetchGuard };
+  return { ...original, fetchWithResponseRelease: mockFetchGuard };
 });
 
 function requireFirstFetchCall() {
@@ -24,8 +24,6 @@ function requireFirstFetchCall() {
   return call[0] as {
     url?: string;
     init?: { headers?: unknown; signal?: unknown };
-    auditContext?: string;
-    policy?: unknown;
   };
 }
 
@@ -62,8 +60,6 @@ describe("probeMattermost", () => {
     expect(fetchCall?.url).toBe("https://mm.example.com/api/v4/users/me");
     expect(fetchCall?.init?.headers).toStrictEqual({ Authorization: "Bearer bot-token" });
     expect(fetchCall?.init?.signal).toBeInstanceOf(AbortSignal);
-    expect(fetchCall?.auditContext).toBe("mattermost-probe");
-    expect(fetchCall?.policy).toBeUndefined();
     const { elapsedMs, ...stableResult } = result;
     expect(stableResult).toStrictEqual({
       ok: true,
@@ -72,21 +68,6 @@ describe("probeMattermost", () => {
     });
     expect(elapsedMs).toBeGreaterThanOrEqual(0);
     expect(mockRelease).toHaveBeenCalledTimes(1);
-  });
-
-  it("forwards allowPrivateNetwork to the SSRF guard policy", async () => {
-    mockFetchGuard.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ id: "bot-1" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-      release: mockRelease,
-    });
-
-    await probeMattermost("https://mm.example.com", "bot-token", 2500, true);
-
-    const fetchCall = requireFirstFetchCall();
-    expect(fetchCall?.policy).toStrictEqual({ allowPrivateNetwork: true });
   });
 
   it("clamps oversized probe timeouts before scheduling", async () => {

@@ -192,7 +192,6 @@ export async function runMediaUnderstandingFile(
   const providerRegistry = buildProviderRegistry(undefined, cfg);
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
-    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
   });
 
   try {
@@ -294,9 +293,7 @@ async function readImageDescriptionInput(params: {
   const attachments = normalizeMediaAttachments(
     buildFileContext({ ...params, capability: "image" }),
   );
-  const cache = createMediaAttachmentCache(attachments, {
-    ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
-  });
+  const cache = createMediaAttachmentCache(attachments);
   try {
     const media = await cache.getBuffer({
       attachmentIndex: 0,

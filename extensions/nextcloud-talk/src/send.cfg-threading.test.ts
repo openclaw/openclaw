@@ -13,18 +13,15 @@ const hoisted = vi.hoisted(() => ({
   convertMarkdownTables: vi.fn((text: string) => text),
   record: vi.fn(),
   resolveNextcloudTalkAccount: vi.fn(),
-  ssrfPolicyFromPrivateNetworkOptIn: vi.fn(() => undefined),
   generateNextcloudTalkSignature: vi.fn(() => ({
     random: "r",
     signature: "s",
   })),
-  mockFetchGuard: vi.fn(),
 }));
 
 vi.mock("./send.runtime.js", () => {
   return {
     convertMarkdownTables: hoisted.convertMarkdownTables,
-    fetchWithSsrFGuard: hoisted.mockFetchGuard,
     generateNextcloudTalkSignature: hoisted.generateNextcloudTalkSignature,
     getNextcloudTalkRuntime: () => createSendCfgThreadingRuntime(hoisted),
     requireRuntimeConfig: (cfg: unknown, context: string) => {
@@ -35,7 +32,6 @@ vi.mock("./send.runtime.js", () => {
     },
     resolveNextcloudTalkAccount: hoisted.resolveNextcloudTalkAccount,
     resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
-    ssrfPolicyFromPrivateNetworkOptIn: hoisted.ssrfPolicyFromPrivateNetworkOptIn,
   };
 });
 
@@ -80,16 +76,10 @@ describe("nextcloud-talk send cfg threading", () => {
   beforeEach(() => {
     vi.setSystemTime(fixedSentAt);
     vi.stubGlobal("fetch", fetchMock);
-    // Route the SSRF guard mock through the global fetch mock.
-    hoisted.mockFetchGuard.mockImplementation(async (p: { url: string; init?: RequestInit }) => {
-      const response = await globalThis.fetch(p.url, p.init);
-      return { response, release: async () => {}, finalUrl: p.url };
-    });
     hoisted.loadConfig.mockReset();
     hoisted.resolveMarkdownTableMode.mockClear();
     hoisted.convertMarkdownTables.mockClear();
     hoisted.record.mockReset();
-    hoisted.ssrfPolicyFromPrivateNetworkOptIn.mockClear();
     hoisted.generateNextcloudTalkSignature.mockClear();
     hoisted.resolveNextcloudTalkAccount.mockReset();
     hoisted.resolveNextcloudTalkAccount.mockReturnValue(defaultAccount);
@@ -97,7 +87,6 @@ describe("nextcloud-talk send cfg threading", () => {
 
   afterEach(() => {
     fetchMock.mockReset();
-    hoisted.mockFetchGuard.mockReset();
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -335,6 +324,7 @@ describe("nextcloud-talk send cfg threading", () => {
       "https://nextcloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/ops/reaction/m-1",
       {
         method: "POST",
+        redirect: "manual",
         headers: {
           "Content-Type": "application/json",
           "OCS-APIRequest": "true",

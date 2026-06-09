@@ -39,7 +39,7 @@ export {
 } from "openclaw/plugin-sdk/media-runtime";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+
 export type {
   GoogleChatAccountConfig,
   GoogleChatConfig,

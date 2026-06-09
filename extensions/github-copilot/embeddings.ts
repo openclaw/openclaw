@@ -1,3 +1,4 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Github Copilot plugin module implements embeddings behavior.
 import {
   buildRemoteBaseUrlPolicy,
@@ -8,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-policy";
 import { resolveFirstGithubToken } from "./auth.js";
 import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
 
@@ -80,7 +81,7 @@ async function discoverEmbeddingModels(params: {
   ssrfPolicy?: SsrFPolicy;
 }): Promise<string[]> {
   const url = `${params.baseUrl.replace(/\/$/, "")}/models`;
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url,
     init: {
       method: "GET",
@@ -90,8 +91,6 @@ async function discoverEmbeddingModels(params: {
         Authorization: `Bearer ${params.copilotToken}`,
       },
     },
-    policy: params.ssrfPolicy,
-    auditContext: "memory-remote",
   });
   try {
     if (!response.ok) {

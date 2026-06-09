@@ -1109,11 +1109,10 @@ describe("loadWebMedia", () => {
 
     await expectWebMediaIdleTimeout(
       () =>
-        loadWebMediaRaw("https://example.test/stalled.pdf", {
+        loadWebMediaRaw("https://93.184.216.34/stalled.pdf", {
           maxBytes: 1024 * 1024,
           fetchImpl,
           readIdleTimeoutMs,
-          ssrfPolicy: { allowedHostnames: ["example.test"] },
         }),
       readIdleTimeoutMs,
     );
@@ -1128,11 +1127,10 @@ describe("loadWebMedia", () => {
         }),
     );
 
-    const result = await loadWebMediaRaw("https://example.test/ok.pdf", {
+    const result = await loadWebMediaRaw("https://93.184.216.34/ok.pdf", {
       maxBytes: 1024 * 1024,
       fetchImpl,
       readIdleTimeoutMs: 20,
-      ssrfPolicy: { allowedHostnames: ["example.test"] },
     });
 
     expect(result.kind).toBe("document");

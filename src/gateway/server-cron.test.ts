@@ -1,18 +1,17 @@
 // Gateway cron tests cover isolated agent turns, heartbeat wakeups, completion
-// delivery, lifecycle cleanup, hook emission, and SSRF-guarded webhooks.
+// delivery, lifecycle cleanup, hook emission, and webhook delivery.
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 
 const {
   enqueueSystemEventMock,
   requestHeartbeatMock,
   runHeartbeatOnceMock,
   loadConfigMock,
-  fetchWithSsrFGuardMock,
+  fetchMock,
   runCronIsolatedAgentTurnMock,
   cleanupBrowserSessionsForLifecycleEndMock,
   getGlobalHookRunnerMock,
@@ -26,7 +25,7 @@ const {
     (...args: unknown[]) => Promise<{ status: "ran"; durationMs: number }>
   >(async () => ({ status: "ran", durationMs: 1 })),
   loadConfigMock: vi.fn(),
-  fetchWithSsrFGuardMock: vi.fn(),
+  fetchMock: vi.fn(async () => new Response("ok", { status: 200 })),
   runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
   cleanupBrowserSessionsForLifecycleEndMock: vi.fn(async () => {}),
   runCronChangedMock: vi.fn(async () => {}),
@@ -87,10 +86,6 @@ vi.mock("../config/io.js", async () => {
     getRuntimeConfig: () => loadConfigMock(),
   };
 });
-
-vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-}));
 
 vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
@@ -207,7 +202,8 @@ describe("buildGatewayCronService", () => {
     requestHeartbeatMock.mockClear();
     runHeartbeatOnceMock.mockClear();
     loadConfigMock.mockClear();
-    fetchWithSsrFGuardMock.mockClear();
+    fetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
     runCronIsolatedAgentTurnMock.mockClear();
     cleanupBrowserSessionsForLifecycleEndMock.mockClear();
     runCronChangedMock.mockClear();
@@ -218,6 +214,10 @@ describe("buildGatewayCronService", () => {
       hasHooks: (hookName: string) => hookName === "cron_changed",
       runCronChanged: runCronChangedMock,
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("emits cron_changed hooks with computed next run state", async () => {
@@ -471,7 +471,7 @@ describe("buildGatewayCronService", () => {
       await state.cron.run(job.id, "force");
 
       expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
-      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
     }
@@ -1073,12 +1073,9 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("blocks private webhook URLs via SSRF-guarded fetch", async () => {
-    const cfg = createCronConfig("server-cron-ssrf");
+  it("posts webhook URLs via direct fetch", async () => {
+    const cfg = createCronConfig("server-cron-webhook");
     loadConfigMock.mockReturnValue(cfg);
-    fetchWithSsrFGuardMock.mockRejectedValue(
-      new SsrFBlockedError("Blocked: resolves to private/internal/special-use IP address"),
-    );
 
     const state = buildGatewayCronService({
       cfg,
@@ -1101,16 +1098,13 @@ describe("buildGatewayCronService", () => {
 
       await state.cron.run(job.id, "force");
 
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-      const request = requireRecord(
-        callArg(fetchWithSsrFGuardMock, 0, 0, "fetch request"),
-        "fetch request",
-      );
-      expect(request.url).toBe("http://127.0.0.1:8080/cron-finished");
-      const init = requireRecord(request.init, "fetch init");
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(callArg(fetchMock, 0, 0, "fetch url")).toBe("http://127.0.0.1:8080/cron-finished");
+      const init = requireRecord(callArg(fetchMock, 0, 1, "fetch init"), "fetch init");
       expect(init.method).toBe("POST");
       expect(init.headers).toEqual({ "Content-Type": "application/json" });
       expect(String(init.body)).toContain('"action":"finished"');
+      expect(init.redirect).toBe("error");
       expect(init.signal).toBeInstanceOf(AbortSignal);
     } finally {
       state.cron.stop();

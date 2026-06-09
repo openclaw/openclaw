@@ -68,7 +68,6 @@ export class TelnyxProvider implements VoiceCallProvider {
   private readonly publicKey: string | undefined;
   private readonly options: TelnyxProviderOptions;
   private readonly baseUrl = "https://api.telnyx.com/v2";
-  private readonly apiHost = "api.telnyx.com";
 
   constructor(config: TelnyxConfig, options: TelnyxProviderOptions = {}) {
     if (!config.apiKey) {
@@ -101,8 +100,6 @@ export class TelnyxProvider implements VoiceCallProvider {
       },
       body,
       allowNotFound: options?.allowNotFound,
-      allowedHostnames: [this.apiHost],
-      auditContext: "voice-call.telnyx.api",
       errorPrefix: "Telnyx API error",
     });
   }
@@ -347,8 +344,6 @@ export class TelnyxProvider implements VoiceCallProvider {
           "Content-Type": "application/json",
         },
         allowNotFound: true,
-        allowedHostnames: [this.apiHost],
-        auditContext: "telnyx-get-call-status",
         errorPrefix: "Telnyx get call status error",
       });
 

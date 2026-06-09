@@ -5,13 +5,13 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   renderQaMarkdownReport,
   type QaReportCheck,
   type QaReportScenario,
 } from "openclaw/plugin-sdk/qa-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
   QaLabLatestReport,
@@ -172,10 +172,8 @@ async function waitForQaLabReady(baseUrl: string, timeoutMs = 10_000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const { response, release } = await fetchWithSsrFGuard({
+      const { response, release } = await fetchWithResponseRelease({
         url: `${baseUrl}/readyz`,
-        policy: { allowPrivateNetwork: true },
-        auditContext: "qa-lab-suite-wait-for-lab-ready",
       });
       try {
         if (response.ok) {

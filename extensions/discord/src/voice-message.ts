@@ -14,6 +14,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   parseFfprobeCodecAndSampleRate,
   runFfmpeg,
@@ -24,7 +25,6 @@ import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { DiscordError, RateLimitError, type RequestClient } from "./internal/discord.js";
@@ -34,10 +34,6 @@ const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 const WAVEFORM_SAMPLES = 256;
 const DISCORD_OPUS_SAMPLE_RATE_HZ = 48_000;
-const DISCORD_VOICE_UPLOAD_SSRF_POLICY: SsrFPolicy = {
-  allowRfc2544BenchmarkRange: true,
-  allowIpv6UniqueLocalRange: true,
-};
 
 async function runFfmpegToOutput(params: {
   outputPath: string;
@@ -337,11 +333,9 @@ async function requestVoiceUploadUrl(params: {
       files: [{ filename: params.filename, file_size: params.fileSize, id: "0" }],
     }),
   };
-  const { response: res, release } = await fetchWithSsrFGuard({
+  const { response: res, release } = await fetchWithResponseRelease({
     url,
     init: uploadUrlInit,
-    policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
-    auditContext: "discord.voice.upload-url",
   });
   try {
     if (!res.ok) {
@@ -357,7 +351,7 @@ async function uploadVoiceAttachment(params: {
   uploadUrl: string;
   audioBuffer: Buffer;
 }): Promise<void> {
-  const { response: uploadResponse, release } = await fetchWithSsrFGuard({
+  const { response: uploadResponse, release } = await fetchWithResponseRelease({
     url: params.uploadUrl,
     init: {
       method: "PUT",
@@ -366,8 +360,6 @@ async function uploadVoiceAttachment(params: {
       },
       body: new Uint8Array(params.audioBuffer),
     },
-    policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
-    auditContext: "discord.voice.attachment-upload",
   });
 
   try {

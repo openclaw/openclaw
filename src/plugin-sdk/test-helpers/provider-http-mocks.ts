@@ -26,7 +26,6 @@ type SanitizeConfiguredModelProviderRequestParams = Parameters<
 
 type ResolveProviderHttpRequestConfigResult = {
   baseUrl: string;
-  allowPrivateNetwork: boolean;
   headers: Headers;
   dispatcherPolicy: undefined;
 };
@@ -70,8 +69,6 @@ const providerHttpMocks = vi.hoisted(() => ({
   ),
   resolveProviderHttpRequestConfigMock: vi.fn((params: ResolveProviderHttpRequestConfigParams) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork:
-      (params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork) === true,
     headers: new Headers(params.defaultHeaders),
     dispatcherPolicy: undefined,
   })),

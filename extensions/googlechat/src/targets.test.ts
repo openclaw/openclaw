@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   buildHostnameAllowlistPolicyFromSuffixAllowlist: vi.fn((hosts: string[]) => ({
     hostnameAllowlist: hosts,
   })),
-  fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
+  fetchWithResponseRelease: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
     response: await fetch(params.url, params.init),
     release: async () => {},
   })),
@@ -30,11 +30,11 @@ const mocks = vi.hoisted(() => ({
   getGoogleChatAccessToken: vi.fn().mockResolvedValue("token"),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => {
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => {
   return {
     buildHostnameAllowlistPolicyFromSuffixAllowlist:
       mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist,
-    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+    fetchWithResponseRelease: mocks.fetchWithResponseRelease,
   };
 });
 
@@ -85,7 +85,7 @@ const authActual = await vi.importActual<typeof import("./auth.js")>("./auth.js"
 const { testing: authTesting, getGoogleChatAccessToken, verifyGoogleChatRequest } = authActual;
 
 afterAll(() => {
-  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.doUnmock("openclaw/plugin-sdk/fetch-runtime");
   vi.doUnmock("gaxios");
   vi.doUnmock("google-auth-library");
   vi.doUnmock("./auth.js");
@@ -177,7 +177,7 @@ describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
     clearGoogleChatApprovalCardBindingsForTest();
     authTesting.resetGoogleChatAuthForTests();
-    mocks.fetchWithSsrFGuard.mockClear();
+    mocks.fetchWithResponseRelease.mockClear();
     vi.unstubAllGlobals();
   });
 
@@ -234,7 +234,7 @@ describe("downloadGoogleChatMedia", () => {
 describe("sendGoogleChatMessage", () => {
   afterEach(() => {
     authTesting.resetGoogleChatAuthForTests();
-    mocks.fetchWithSsrFGuard.mockClear();
+    mocks.fetchWithResponseRelease.mockClear();
     vi.unstubAllGlobals();
   });
 
@@ -319,7 +319,7 @@ describe("sendGoogleChatMessage", () => {
     });
 
     expect(result).toBeNull();
-    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expect(mocks.fetchWithResponseRelease).not.toHaveBeenCalled();
   });
 
   it("reports malformed send JSON with a stable API error", async () => {
@@ -346,7 +346,7 @@ describe("sendGoogleChatMessage", () => {
 describe("updateGoogleChatMessage", () => {
   afterEach(() => {
     authTesting.resetGoogleChatAuthForTests();
-    mocks.fetchWithSsrFGuard.mockClear();
+    mocks.fetchWithResponseRelease.mockClear();
     vi.unstubAllGlobals();
   });
 
@@ -506,10 +506,10 @@ describe("verifyGoogleChatRequest", () => {
     });
   });
 
-  it("fetches Chat certs through the guarded fetch for project-number tokens", async () => {
+  it("fetches Chat certs through the response-release helper for project-number tokens", async () => {
     const release = vi.fn();
-    mocks.fetchWithSsrFGuard.mockClear();
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    mocks.fetchWithResponseRelease.mockClear();
+    mocks.fetchWithResponseRelease.mockResolvedValueOnce({
       response: new Response(JSON.stringify({ "kid-1": "cert-body" }), { status: 200 }),
       release,
     });
@@ -523,9 +523,8 @@ describe("verifyGoogleChatRequest", () => {
       }),
     ).resolves.toEqual({ ok: true });
 
-    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
+    expect(mocks.fetchWithResponseRelease).toHaveBeenCalledWith({
       url: "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com",
-      auditContext: "googlechat.auth.certs",
     });
     expect(mocks.verifySignedJwtWithCertsAsync).toHaveBeenCalledWith(
       "token",
@@ -539,7 +538,7 @@ describe("verifyGoogleChatRequest", () => {
   it("reports malformed Chat cert JSON with a stable auth error", async () => {
     authTesting.resetGoogleChatAuthForTests();
     const release = vi.fn(async () => {});
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    mocks.fetchWithResponseRelease.mockResolvedValueOnce({
       response: new Response("{ nope", {
         status: 200,
         headers: { "content-type": "application/json" },

@@ -42,7 +42,8 @@ Truncate output to this many characters.
 <Steps>
   <Step title="Fetch">
     Sends an HTTP GET with a Chrome-like User-Agent and `Accept-Language`
-    header. Blocks private/internal hostnames and re-checks redirects.
+    header. Only HTTP and HTTPS URLs are accepted, and redirects are re-checked
+    for the same scheme requirement.
   </Step>
   <Step title="Extract">
     Runs Readability (main-content extraction) on the HTML response.
@@ -87,13 +88,8 @@ content.
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
         maxRedirects: 3,
-        useTrustedEnvProxy: false, // let a trusted HTTP(S) env proxy resolve DNS
         readability: true, // use Readability extraction
         userAgent: "Mozilla/5.0 ...", // override User-Agent
-        ssrfPolicy: {
-          allowRfc2544BenchmarkRange: true, // opt-in for trusted fake-IP proxies using 198.18.0.0/15
-          allowIpv6UniqueLocalRange: true, // opt-in for trusted fake-IP proxies using fc00::/7
-        },
       },
     },
   },
@@ -158,36 +154,30 @@ Current runtime behavior:
 - If Readability is disabled, `web_fetch` skips straight to the selected
   provider fallback. If no provider is available, it fails closed.
 
-## Trusted env proxy
+## Network proxy
 
-If your deployment requires `web_fetch` to go through a trusted outbound
-HTTP(S) proxy, set `tools.web.fetch.useTrustedEnvProxy: true`.
+`web_fetch` no longer exposes per-tool SSRF guard knobs. When
+`proxy.enabled=false`, OpenClaw's stock direct-mode guard blocks untrusted
+`web_fetch` URLs that target localhost, loopback, link-local, known metadata
+hosts, private networks, or DNS results and redirects to those destinations.
 
-In this mode, OpenClaw still applies hostname-based SSRF checks before sending
-the request, but it lets the proxy resolve DNS instead of doing local DNS
-pinning. Enable this only when the proxy is operator-controlled and enforces
-outbound policy after DNS resolution.
+For high-assurance outbound filtering, DNS-rebinding protection, audit logs, or
+deployment-specific allow/deny policy, enable `proxy.enabled` and enforce that
+policy in the operator-managed proxy. See [Network proxy](/security/network-proxy).
 
-<Note>
-  If no HTTP(S) proxy env var is configured, or the target host is excluded by
-  `NO_PROXY`, `web_fetch` falls back to the normal strict path with local DNS
-  pinning.
-</Note>
+Legacy `tools.web.fetch.useTrustedEnvProxy` and
+`tools.web.fetch.ssrfPolicy.*` config is removed by `openclaw doctor --fix`.
 
 ## Limits and safety
 
 - `maxChars` is clamped to `tools.web.fetch.maxCharsCap`
 - Response body is capped at `maxResponseBytes` before parsing; oversized
   responses are truncated with a warning
-- Private/internal hostnames are blocked
-- `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
-  `tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` are narrow opt-ins
-  for trusted fake-IP proxy stacks; leave them unset unless your proxy owns
-  those synthetic ranges and enforces its own destination policy
 - Redirects are checked and limited by `maxRedirects`
-- `useTrustedEnvProxy` is an explicit opt-in and should only be enabled for
-  operator-controlled proxies that still enforce outbound policy after DNS
-  resolution
+- In direct mode, untrusted URLs to local/private/metadata/link-local
+  destinations are blocked by the stock guard
+- Comprehensive private/internal destination policy is the responsibility of
+  the external proxy when `proxy.enabled` is used
 - `web_fetch` is best-effort -- some sites need the [Web Browser](/tools/browser)
 
 ## Tool profiles

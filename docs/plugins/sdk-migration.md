@@ -39,16 +39,27 @@ but new plugins must not use them, and existing plugins should migrate before
 the next major release removes them. The embedded-runner-only extension factory
 registration API has been removed; use tool-result middleware instead.
 
-OpenClaw does not remove or reinterpret documented plugin behavior in the same
-change that introduces a replacement. Breaking contract changes must first go
-through a compatibility adapter, diagnostics, docs, and a deprecation window.
-That applies to SDK imports, manifest fields, setup APIs, hooks, and runtime
-registration behavior.
+OpenClaw normally does not remove or reinterpret documented plugin behavior in
+the same change that introduces a replacement. Breaking contract changes should
+go through a compatibility adapter, diagnostics, docs, and a deprecation window
+unless maintainers explicitly accept the blast radius. That applies to SDK
+imports, manifest fields, setup APIs, hooks, and runtime registration behavior.
 
 <Warning>
   The backwards-compatibility layer will be removed in a future major release.
   Plugins that still import from these surfaces will break when that happens.
   Legacy embedded extension factory registrations already no longer load.
+</Warning>
+
+<Warning>
+  `openclaw/plugin-sdk/ssrf-runtime` has been removed from the public plugin
+  SDK. Plugins that imported `fetchWithSsrFGuard` or SSRF policy helpers from
+  that subpath should use ordinary `fetch` for HTTP requests and rely on
+  `proxy.enabled` plus an operator-managed external proxy for destination
+  policy. OpenClaw's remaining stock direct-mode guard is internal to
+  OpenClaw-owned untrusted URL surfaces and is not a plugin SDK contract. Move
+  non-fetch helpers to their supported narrow SDK homes when those helpers are
+  still needed.
 </Warning>
 
 ## Why this changed
@@ -441,7 +452,7 @@ releases.
     | In-memory dedupe caches | `openclaw/plugin-sdk/dedupe-runtime` |
     | Safe local-file/media path helpers | `openclaw/plugin-sdk/file-access-runtime` |
     | Dispatcher-aware fetch | `openclaw/plugin-sdk/runtime-fetch` |
-    | Proxy and guarded fetch helpers | `openclaw/plugin-sdk/fetch-runtime` |
+    | Proxy and fetch helpers | `openclaw/plugin-sdk/fetch-runtime` |
     | SSRF dispatcher policy types | `openclaw/plugin-sdk/ssrf-dispatcher` |
     | Approval request/resolution types | `openclaw/plugin-sdk/approval-runtime` |
     | Approval reply payload and command helpers | `openclaw/plugin-sdk/approval-reply-runtime` |
@@ -560,7 +571,6 @@ releases.
   | `plugin-sdk/channel-runtime-context` | Channel runtime-context helpers | Generic channel runtime-context register/get/watch helpers |
   | `plugin-sdk/security-runtime` | Security helpers | Shared trust, DM gating, root-bounded file/path helpers, external-content, and secret-collection helpers |
   | `plugin-sdk/ssrf-policy` | SSRF policy helpers | Host allowlist and private-network policy helpers |
-  | `plugin-sdk/ssrf-runtime` | SSRF runtime helpers | Pinned-dispatcher, guarded fetch, SSRF policy helpers |
   | `plugin-sdk/system-event-runtime` | System event helpers | `enqueueSystemEvent`, `peekSystemEventEntries` |
   | `plugin-sdk/heartbeat-runtime` | Heartbeat helpers | Heartbeat wake, event, and visibility helpers |
   | `plugin-sdk/delivery-queue-runtime` | Delivery queue helpers | `drainPendingDeliveries` |
@@ -619,7 +629,7 @@ releases.
   | `plugin-sdk/provider-tools` | Provider tool/schema compat helpers | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, and DeepSeek/Gemini/OpenAI schema cleanup + diagnostics |
   | `plugin-sdk/provider-usage` | Provider usage helpers | `fetchClaudeUsage`, `fetchGeminiUsage`, `fetchGithubCopilotUsage`, and other provider usage helpers |
   | `plugin-sdk/provider-stream` | Provider stream wrapper helpers | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, and shared Anthropic/Bedrock/DeepSeek V4/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
-  | `plugin-sdk/provider-transport-runtime` | Provider transport helpers | Native provider transport helpers such as guarded fetch, transport message transforms, and writable transport event streams |
+  | `plugin-sdk/provider-transport-runtime` | Provider transport helpers | Native provider transport helpers such as fetch transport, transport message transforms, and writable transport event streams |
   | `plugin-sdk/keyed-async-queue` | Ordered async queue | `KeyedAsyncQueue` |
   | `plugin-sdk/media-runtime` | Shared media helpers | Media fetch/transform/store helpers, ffprobe-backed video dimension probing, and media payload builders |
   | `plugin-sdk/media-generation-runtime` | Shared media-generation helpers | Shared failover helpers, candidate selection, and missing-model messaging for image/video/music generation |

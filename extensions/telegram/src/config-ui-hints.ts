@@ -136,7 +136,7 @@ export const telegramChannelConfigUiHints = {
   },
   "network.dangerouslyAllowPrivateNetwork": {
     label: "Telegram Dangerously Allow Private Network",
-    help: "Dangerous opt-in for trusted fake-IP or transparent-proxy environments where Telegram media downloads resolve api.telegram.org to private/internal/special-use addresses.",
+    help: "Legacy Telegram transport opt-in. Remote media downloads no longer use this setting; use proxy.enabled plus external proxy policy for private-network or fake-IP media egress.",
   },
   timeoutSeconds: {
     label: "Telegram API Timeout (seconds)",

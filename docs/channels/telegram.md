@@ -1026,31 +1026,20 @@ channels:
       autoSelectFamily: false
 ```
 
-    - RFC 2544 benchmark-range answers (`198.18.0.0/15`) are already allowed
-      for Telegram media downloads by default. If a trusted fake-IP or
-      transparent proxy rewrites `api.telegram.org` to some other
-      private/internal/special-use address during media downloads, you can opt
-      in to the Telegram-only bypass:
-
-```yaml
-channels:
-  telegram:
-    network:
-      dangerouslyAllowPrivateNetwork: true
-```
-
-    - The same opt-in is available per account at
-      `channels.telegram.accounts.<accountId>.network.dangerouslyAllowPrivateNetwork`.
-    - If your proxy resolves Telegram media hosts into `198.18.x.x`, leave the
-      dangerous flag off first. Telegram media already allows the RFC 2544
-      benchmark range by default.
+    - Telegram remote media downloads use OpenClaw's stock untrusted URL guard
+      when `proxy.enabled=false`. Local, private, link-local, metadata, and
+      fake-IP/special-use destinations are blocked in direct mode.
+    - If your Telegram media path depends on a private Bot API host, fake-IP DNS,
+      or a transparent proxy, enable `proxy.enabled` and allowlist those
+      destinations in the external proxy policy. The old Telegram media
+      `network.dangerouslyAllowPrivateNetwork` opt-in no longer applies to media
+      downloads.
 
     <Warning>
-      `channels.telegram.network.dangerouslyAllowPrivateNetwork` weakens Telegram
-      media SSRF protections. Use it only for trusted operator-controlled proxy
-      environments such as Clash, Mihomo, or Surge fake-IP routing when they
-      synthesize private or special-use answers outside the RFC 2544 benchmark
-      range. Leave it off for normal public internet Telegram access.
+      Setting `channels.telegram.network.dangerouslyAllowPrivateNetwork` or the
+      per-account equivalent does not allow private-network Telegram media
+      downloads. Remote media egress for those environments must go through
+      `proxy.enabled` plus the operator-managed proxy policy.
     </Warning>
 
     - Environment overrides (temporary):
@@ -1083,7 +1072,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - threading/replies: `replyToMode`
 - streaming: `streaming` (preview), `streaming.preview.toolProgress`, `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
-- media/network: `mediaMaxMb`, `mediaGroupFlushMs`, `timeoutSeconds`, `pollingStallThresholdMs`, `retry`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
+- media/network: `mediaMaxMb`, `mediaGroupFlushMs`, `timeoutSeconds`, `pollingStallThresholdMs`, `retry`, `network.autoSelectFamily`, `proxy`
 - custom API root: `apiRoot` (Bot API root only; do not include `/bot<TOKEN>`)
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`

@@ -46,7 +46,6 @@ function firstPollRequest() {
   }
   return call[0] as {
     url?: string;
-    allowPrivateNetwork?: boolean;
     dispatcherPolicy?: unknown;
   };
 }
@@ -458,7 +457,6 @@ describe("pixverse video generation provider", () => {
     const dispatcherPolicy = { mode: "direct" };
     resolveProviderHttpRequestConfigMock.mockReturnValueOnce({
       baseUrl: "https://proxy.example/openapi/v2",
-      allowPrivateNetwork: true,
       headers: new Headers({ "API-KEY": "provider-key", "X-Proxy": "enabled" }),
       dispatcherPolicy,
     } as never);
@@ -493,7 +491,6 @@ describe("pixverse video generation provider", () => {
     expect(firstPostJsonRequest().headers?.get("X-Proxy")).toBe("enabled");
     expect(firstPollRequest()).toMatchObject({
       url: "https://proxy.example/openapi/v2/video/result/123",
-      allowPrivateNetwork: true,
       dispatcherPolicy,
     });
     const pollHeaders = pollFetchHeaders(0);
@@ -502,7 +499,6 @@ describe("pixverse video generation provider", () => {
 
   it("passes configured provider request overrides into the HTTP resolver", async () => {
     const request = {
-      allowPrivateNetwork: true,
       headers: { "X-Proxy": "enabled" },
     };
     postJsonRequestMock.mockResolvedValue({

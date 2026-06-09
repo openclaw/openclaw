@@ -348,18 +348,16 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
         timeoutMs: operationTimeoutMs,
         label: "MiniMax music generation",
       });
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveMinimaxMusicBaseUrl(req.cfg, providerId),
-          defaultBaseUrl: DEFAULT_MINIMAX_MUSIC_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-          },
-          provider: providerId,
-          capability: "audio",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: resolveMinimaxMusicBaseUrl(req.cfg, providerId),
+        defaultBaseUrl: DEFAULT_MINIMAX_MUSIC_BASE_URL,
+        defaultHeaders: {
+          Authorization: `Bearer ${auth.apiKey}`,
+        },
+        provider: providerId,
+        capability: "audio",
+        transport: "http",
+      });
       const jsonHeaders = new Headers(headers);
       jsonHeaders.set("Content-Type", "application/json");
 
@@ -392,8 +390,6 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
           defaultTimeoutMs: operationTimeoutMs,
         }),
         fetchFn,
-        pinDns: false,
-        allowPrivateNetwork,
         dispatcherPolicy,
       });
 

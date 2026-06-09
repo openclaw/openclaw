@@ -29,7 +29,7 @@ describe("Urbit channel operations", () => {
           baseUrl: "https://example.com",
           cookie: "urbauth-~zod=123",
         },
-        { path: "/chat/inbox.json", auditContext: "test" },
+        { path: "/chat/inbox.json" },
       ),
     ).rejects.toThrow("Urbit scry response was malformed JSON for path /chat/inbox.json");
     expect(release).toHaveBeenCalledTimes(1);

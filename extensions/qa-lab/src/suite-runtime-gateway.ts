@@ -1,7 +1,7 @@
 // Qa Lab plugin module implements suite runtime gateway behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
@@ -14,10 +14,8 @@ type QaGatewayMutationEnv = Pick<
 >;
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url,
-    policy: { allowPrivateNetwork: true },
-    auditContext: "qa-lab-suite-fetch-json",
   });
   try {
     if (!response.ok) {
@@ -33,10 +31,8 @@ async function waitForGatewayHealthy(env: Pick<QaSuiteRuntimeEnv, "gateway">, ti
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const { response, release } = await fetchWithSsrFGuard({
+      const { response, release } = await fetchWithResponseRelease({
         url: `${env.gateway.baseUrl}/readyz`,
-        policy: { allowPrivateNetwork: true },
-        auditContext: "qa-lab-suite-wait-for-gateway-healthy",
       });
       try {
         if (response.ok) {

@@ -13,11 +13,11 @@ import { assertBrowserNavigationAllowed } from "./navigation-guard.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
   return {
     ...actual,
-    fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+    fetchWithResponseRelease: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
   };
 });
 
@@ -52,12 +52,9 @@ describe("cdp helpers", () => {
       release,
     });
 
-    await expect(
-      fetchJson("http://127.0.0.1:9222/json/version", 250, undefined, {
-        dangerouslyAllowPrivateNetwork: false,
-        allowedHostnames: ["127.0.0.1"],
-      }),
-    ).resolves.toEqual({ ok: true });
+    await expect(fetchJson("http://127.0.0.1:9222/json/version", 250)).resolves.toEqual({
+      ok: true,
+    });
 
     expect(json).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledTimes(1);
@@ -91,37 +88,9 @@ describe("cdp helpers", () => {
     });
 
     await expect(
-      fetchOk("http://127.0.0.1:9222/json/close/TARGET_1", 250, undefined, {
-        dangerouslyAllowPrivateNetwork: false,
-        allowedHostnames: ["127.0.0.1"],
-      }),
+      fetchOk("http://127.0.0.1:9222/json/close/TARGET_1", 250),
     ).resolves.toBeUndefined();
 
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses an exact loopback allowlist for guarded loopback CDP fetches", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: {
-        ok: true,
-        status: 200,
-      },
-      release,
-    });
-
-    await expect(
-      fetchOk("http://127.0.0.1:9222/json/version", 250, undefined, {
-        dangerouslyAllowPrivateNetwork: false,
-      }),
-    ).resolves.toBeUndefined();
-
-    const request = requireGuardedFetchRequest();
-    expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
-    expect(request?.policy).toEqual({
-      dangerouslyAllowPrivateNetwork: false,
-      allowedHostnames: ["127.0.0.1"],
-    });
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -143,33 +112,6 @@ describe("cdp helpers", () => {
     expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
     expect(request?.init?.headers).toEqual({
       Authorization: "Basic b3BlbmNsYXc6cmVsYXktdG9rZW4=",
-    });
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves hostname allowlist while allowing exact loopback CDP fetches", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: {
-        ok: true,
-        status: 200,
-      },
-      release,
-    });
-
-    await expect(
-      fetchOk("http://127.0.0.1:9222/json/version", 250, undefined, {
-        dangerouslyAllowPrivateNetwork: false,
-        hostnameAllowlist: ["*.corp.example"],
-      }),
-    ).resolves.toBeUndefined();
-
-    const request = requireGuardedFetchRequest();
-    expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
-    expect(request?.policy).toEqual({
-      dangerouslyAllowPrivateNetwork: false,
-      hostnameAllowlist: ["*.corp.example"],
-      allowedHostnames: ["127.0.0.1"],
     });
     expect(release).toHaveBeenCalledTimes(1);
   });

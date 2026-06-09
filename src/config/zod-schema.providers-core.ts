@@ -305,7 +305,7 @@ export const TelegramAccountSchemaBase = z
           .boolean()
           .optional()
           .describe(
-            "Dangerous opt-in for trusted Telegram fake-IP or transparent-proxy environments where api.telegram.org resolves to private/internal/special-use addresses during media downloads.",
+            "Legacy Telegram transport opt-in. Remote media downloads no longer use this setting; use proxy.enabled plus external proxy policy for private-network or fake-IP media egress.",
           ),
       })
       .strict()

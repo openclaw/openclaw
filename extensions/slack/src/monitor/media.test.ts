@@ -942,7 +942,7 @@ describe("Slack media SSRF policy", () => {
     vi.restoreAllMocks();
   });
 
-  it("passes ssrfPolicy with Slack CDN allowedHostnames and allowRfc2544BenchmarkRange to file downloads", async () => {
+  it("passes media URL policy with Slack CDN allowedHostnames to file downloads", async () => {
     vi.spyOn(mediaRuntime, "saveMediaBuffer").mockResolvedValue(
       createSavedMedia("/tmp/test.jpg", "image/jpeg"),
     );
@@ -965,14 +965,13 @@ describe("Slack media SSRF policy", () => {
       ).ssrfPolicy,
       "ssrfPolicy",
     );
-    expect(policy.allowRfc2544BenchmarkRange).toBe(true);
     const allowedHostnames = policy.allowedHostnames as string[] | undefined;
     expect(allowedHostnames).toContain("*.slack.com");
     expect(allowedHostnames).toContain("*.slack-edge.com");
     expect(allowedHostnames).toContain("*.slack-files.com");
   });
 
-  it("passes ssrfPolicy to forwarded attachment image downloads", async () => {
+  it("passes media URL policy to forwarded attachment image downloads", async () => {
     vi.spyOn(mediaRuntime, "saveMediaBuffer").mockResolvedValue(
       createSavedMedia("/tmp/fwd.jpg", "image/jpeg"),
     );
@@ -995,7 +994,7 @@ describe("Slack media SSRF policy", () => {
       ).ssrfPolicy,
       "ssrfPolicy",
     );
-    expect(policy.allowRfc2544BenchmarkRange).toBe(true);
+    expect(policy.allowedHostnames).toContain("*.slack.com");
   });
 });
 

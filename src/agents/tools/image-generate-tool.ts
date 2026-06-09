@@ -30,6 +30,7 @@ import {
   resolveConfiguredMediaMaxBytes,
   resolveGeneratedMediaMaxBytes,
 } from "../../media/configured-max-bytes.js";
+import type { MediaFetchUrlPolicy } from "../../media/fetch.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -546,7 +547,7 @@ async function loadReferenceImages(params: {
   maxBytes?: number;
   workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: MediaFetchUrlPolicy;
 }): Promise<
   Array<{
     sourceImage: ImageGenerationSourceImage;

@@ -21,7 +21,6 @@ const {
   ),
   resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.deepinfra.com/v1/openai",
-    allowPrivateNetwork: false,
     headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
     dispatcherPolicy: undefined,
   })),
@@ -118,7 +117,6 @@ describe("deepinfra image generation provider", () => {
         {
           baseUrl: "https://api.deepinfra.com/v1/openai",
           defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
-          allowPrivateNetwork: false,
           request: undefined,
           defaultHeaders: {
             Authorization: "Bearer deepinfra-key",
@@ -149,7 +147,6 @@ describe("deepinfra image generation provider", () => {
         response_format: "b64_json",
       },
       fetchFn: fetch,
-      allowPrivateNetwork: false,
       dispatcherPolicy: undefined,
     });
     expect(result.images).toHaveLength(1);
@@ -208,7 +205,6 @@ describe("deepinfra image generation provider", () => {
       body: form,
       timeoutMs: undefined,
       fetchFn: fetch,
-      allowPrivateNetwork: false,
       dispatcherPolicy: undefined,
     });
     expect(form.get("model")).toBe("black-forest-labs/FLUX-1-schnell");

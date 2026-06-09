@@ -1958,10 +1958,10 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("passes web_fetch SSRF policy to remote image references", async () => {
+  it("loads remote image references without web_fetch SSRF policy config", async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      if (url.startsWith("http://198.18.0.153/")) {
+      if (url.startsWith("https://93.184.216.34/")) {
         return new Response(Buffer.from(ONE_PIXEL_PNG_B64, "base64"), {
           headers: { "content-type": "image/png" },
         });
@@ -1974,15 +1974,12 @@ describe("image tool implicit imageModel config", () => {
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
 
     await withTempAgentDir(async (agentDir) => {
-      const cfg: OpenClawConfig = {
-        ...createMinimaxImageConfig(),
-        tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
-      };
+      const cfg: OpenClawConfig = createMinimaxImageConfig();
       const tool = createRequiredImageTool({ config: cfg, agentDir });
 
-      await expectImageToolExecOk(tool, "http://198.18.0.153/reference.png");
+      await expectImageToolExecOk(tool, "https://93.184.216.34/reference.png");
       const [input, init] = fetchCallAt(fetch, 0);
-      expect(input).toBe("http://198.18.0.153/reference.png");
+      expect(input).toBe("https://93.184.216.34/reference.png");
       expect(typeof init).toBe("object");
     });
   });

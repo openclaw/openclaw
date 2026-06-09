@@ -2,7 +2,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedSmsAccount, SmsInboundMessage, SmsSendResult } from "./types.js";
 
@@ -302,12 +302,9 @@ async function requestTwilioApi(params: {
     };
   }
 
-  const guarded = await fetchWithSsrFGuard({
+  const guarded = await fetchWithResponseRelease({
     url: params.url,
     init,
-    auditContext: "sms-twilio-api",
-    policy: { allowedHostnames: [params.allowedHostname] },
-    requireHttps: true,
     timeoutMs: params.timeoutMs ?? TWILIO_API_TIMEOUT_MS,
   });
   try {

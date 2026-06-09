@@ -22,7 +22,12 @@ export * from "../agents/provider-auth-aliases.js";
 export * from "../agents/sandbox-paths.js";
 export * from "../agents/schema/typebox.js";
 export * from "../agents/tools/common.js";
-export * from "../agents/tools/web-guarded-fetch.js";
+export {
+  fetchWithWebToolsNetworkGuard,
+  withSelfHostedWebToolsEndpoint,
+  withStrictWebToolsEndpoint,
+  withTrustedWebToolsEndpoint,
+} from "../agents/tools/web-search-provider-common.js";
 export * from "../agents/tools/web-shared.js";
 export * from "../agents/tools/web-fetch-utils.js";
 export * from "../tools/index.js";

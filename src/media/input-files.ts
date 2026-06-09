@@ -8,8 +8,9 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { fetchUntrustedUrl } from "../infra/net/egress-fetch.js";
+import { normalizeHostname } from "../infra/net/hostname.js";
+import { matchesHostnameAllowlist, normalizeHostnameAllowlist } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
 import { convertHeicToJpeg } from "./media-services.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
@@ -68,7 +69,7 @@ export type InputImageLimits = {
   timeoutMs: number;
 };
 
-/** Supported input_image source variants before base64 decoding or guarded URL fetch. */
+/** Supported input_image source variants before base64 decoding or URL fetch. */
 export type InputImageSource =
   | {
       type: "base64";
@@ -96,11 +97,18 @@ export type InputFileSource =
       filename?: string;
     };
 
-/** Guarded URL fetch result before final MIME allowlist validation. */
+/** URL fetch result before final MIME allowlist validation. */
 export type InputFetchResult = {
   buffer: Buffer;
   mimeType: string;
   contentType?: string;
+};
+
+/** Optional allowlist policy for OpenResponses input URL fetches. */
+export type InputUrlFetchPolicy = {
+  allowedHostnames?: readonly string[];
+  hostnameAllowlist?: readonly string[];
+  allowedOrigins?: readonly string[];
 };
 
 /** Default MIME allowlist for input_image sources. */
@@ -127,9 +135,9 @@ export const DEFAULT_INPUT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export const DEFAULT_INPUT_FILE_MAX_BYTES = 5 * 1024 * 1024;
 /** Default maximum model-visible characters emitted from input_file text. */
 export const DEFAULT_INPUT_FILE_MAX_CHARS = 60_000;
-/** Default redirect cap for guarded input source URL fetches. */
+/** Default redirect cap for input source URL fetches. */
 export const DEFAULT_INPUT_MAX_REDIRECTS = 3;
-/** Default timeout for guarded input source URL fetches. */
+/** Default timeout for input source URL fetches. */
 export const DEFAULT_INPUT_TIMEOUT_MS = 10_000;
 /** Default PDF page cap for input_file extraction. */
 export const DEFAULT_INPUT_PDF_MAX_PAGES = 4;
@@ -198,24 +206,31 @@ export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFil
   };
 }
 
-/** Fetches an input source URL through SSRF, redirect, timeout, and byte-limit guards. */
-export async function fetchWithGuard(params: {
+/**
+ * Fetches an input source URL with allowlist, redirect, timeout, and byte limits.
+ * Direct-mode destination/IP stock safety is centralized in the egress helper.
+ */
+export async function fetchInputSourceUrl(params: {
   url: string;
   maxBytes: number;
   timeoutMs: number;
   maxRedirects: number;
-  policy?: SsrFPolicy;
-  auditContext?: string;
+  policy?: InputUrlFetchPolicy;
 }): Promise<InputFetchResult> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const urlPolicy = buildInputUrlPolicy(params.policy);
+  const result = await fetchUntrustedUrl({
     url: params.url,
-    maxRedirects: params.maxRedirects,
     timeoutMs: params.timeoutMs,
-    policy: params.policy,
-    auditContext: params.auditContext,
-    init: { headers: { "User-Agent": "OpenClaw-Gateway/1.0" } },
+    maxRedirects: params.maxRedirects,
+    operation: "input-file-fetch",
+    init: {
+      headers: { "User-Agent": "OpenClaw-Gateway/1.0" },
+    },
+    validateUrl: (url) => {
+      assertInputUrlAllowedByPolicy(url.toString(), urlPolicy);
+    },
   });
-
+  const { response, release } = result;
   try {
     if (!response.ok) {
       await discardIgnoredResponseBody(response);
@@ -244,6 +259,53 @@ export async function fetchWithGuard(params: {
     return { buffer, mimeType, contentType };
   } finally {
     await release();
+  }
+}
+
+function normalizeInputPolicyOrigin(value: string): string | undefined {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+    return parsed.origin.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function buildInputUrlPolicy(policy?: InputUrlFetchPolicy): {
+  hostnameAllowlist: string[];
+  allowedOrigins: string[];
+} {
+  return {
+    hostnameAllowlist: normalizeHostnameAllowlist([
+      ...(policy?.allowedHostnames ?? []),
+      ...(policy?.hostnameAllowlist ?? []),
+    ]),
+    allowedOrigins: (policy?.allowedOrigins ?? [])
+      .map((origin) => normalizeInputPolicyOrigin(origin))
+      .filter((origin): origin is string => Boolean(origin)),
+  };
+}
+
+function assertInputUrlAllowedByPolicy(
+  url: string,
+  policy: { hostnameAllowlist: string[]; allowedOrigins: string[] },
+): void {
+  if (policy.hostnameAllowlist.length === 0 && policy.allowedOrigins.length === 0) {
+    return;
+  }
+  const parsed = new URL(url);
+  const hostname = normalizeHostname(parsed.hostname);
+  const origin = normalizeInputPolicyOrigin(parsed.toString());
+  const hostAllowed =
+    policy.hostnameAllowlist.length > 0 &&
+    matchesHostnameAllowlist(hostname, policy.hostnameAllowlist);
+  const originAllowed = origin ? policy.allowedOrigins.includes(origin) : false;
+  if (!hostAllowed && !originAllowed) {
+    throw new Error(`Blocked hostname (not in allowlist): ${parsed.hostname}`);
   }
 }
 
@@ -360,16 +422,14 @@ export async function extractImageContentFromSource(
     if (!limits.allowUrl) {
       throw new Error("input_image URL sources are disabled by config");
     }
-    const result = await fetchWithGuard({
+    const result = await fetchInputSourceUrl({
       url: source.url,
       maxBytes: limits.maxBytes,
       timeoutMs: limits.timeoutMs,
       maxRedirects: limits.maxRedirects,
       policy: {
-        allowPrivateNetwork: false,
         hostnameAllowlist: limits.urlAllowlist,
       },
-      auditContext: "openresponses.input_image",
     });
     return await normalizeInputImage({
       buffer: result.buffer,
@@ -408,16 +468,14 @@ export async function extractFileContentFromSource(params: {
     if (!limits.allowUrl) {
       throw new Error("input_file URL sources are disabled by config");
     }
-    const result = await fetchWithGuard({
+    const result = await fetchInputSourceUrl({
       url: source.url,
       maxBytes: limits.maxBytes,
       timeoutMs: limits.timeoutMs,
       maxRedirects: limits.maxRedirects,
       policy: {
-        allowPrivateNetwork: false,
         hostnameAllowlist: limits.urlAllowlist,
       },
-      auditContext: "openresponses.input_file",
     });
     const parsed = parseContentType(result.contentType);
     mimeType = parsed.mimeType ?? normalizeMimeType(result.mimeType);

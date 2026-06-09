@@ -785,12 +785,6 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(source).not.toContain("GuardedFetchConfiguredLocalOriginOptions");
   });
 
-  it("keeps configured local-origin fetch helpers out of the public SSRF runtime", async () => {
-    const ssrfRuntime = await import("../../plugin-sdk/ssrf-runtime.js");
-
-    expect(ssrfRuntime).not.toHaveProperty("fetchConfiguredLocalOriginWithSsrFGuard");
-  });
-
   it("keeps bundled plugin SDK compatibility subpaths explicitly classified", () => {
     const entrypoints = new Set(pluginSdkEntrypoints);
     const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);

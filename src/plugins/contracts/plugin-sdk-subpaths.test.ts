@@ -1188,17 +1188,6 @@ describe("plugin-sdk subpath exports", () => {
       "unregisterSessionBindingAdapter",
       "SessionBindingAdapter",
     ]);
-    expectSourceMentions("ssrf-runtime", [
-      "closeDispatcher",
-      "createPinnedDispatcher",
-      "resolvePinnedHostnameWithPolicy",
-      "formatErrorMessage",
-      "isPrivateIpAddress",
-      "assertHttpUrlTargetsPrivateNetwork",
-      "ssrfPolicyFromDangerouslyAllowPrivateNetwork",
-      "ssrfPolicyFromAllowPrivateNetwork",
-    ]);
-
     expectSourceContract("provider-setup", {
       mentions: [
         "applyProviderDefaultModel",

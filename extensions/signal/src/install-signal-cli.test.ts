@@ -8,12 +8,12 @@ import * as tar from "tar";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReleaseAsset } from "./install-signal-cli.js";
 
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(),
+const { fetchWithResponseReleaseMock } = vi.hoisted(() => ({
+  fetchWithResponseReleaseMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchWithResponseRelease: fetchWithResponseReleaseMock,
 }));
 
 const {
@@ -73,7 +73,7 @@ async function withTempFile(run: (filePath: string) => Promise<void>) {
 }
 
 beforeEach(() => {
-  fetchWithSsrFGuardMock.mockReset();
+  fetchWithResponseReleaseMock.mockReset();
 });
 
 function requireAsset(asset: ReleaseAsset | undefined, label: string): ReleaseAsset {
@@ -182,9 +182,9 @@ describe("pickAsset", () => {
 });
 
 describe("downloadToFile", () => {
-  it("downloads through the SSRF guard with an explicit timeout", async () => {
+  it("downloads through the egress helper with an explicit timeout", async () => {
     const fetchResult = okDownloadResponse("archive");
-    fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
+    fetchWithResponseReleaseMock.mockResolvedValue(fetchResult);
 
     await withTempFile(async (filePath) => {
       await downloadToFile("https://example.com/signal-cli.tgz", filePath);
@@ -192,13 +192,11 @@ describe("downloadToFile", () => {
       await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("archive");
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+    expect(fetchWithResponseReleaseMock).toHaveBeenCalledWith({
       url: "https://example.com/signal-cli.tgz",
       maxRedirects: 5,
-      requireHttps: true,
       timeoutMs: 5 * 60_000,
-      capture: false,
-      auditContext: "signal-cli-install-archive",
+      validateUrl: expect.any(Function),
     });
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
   });
@@ -207,7 +205,7 @@ describe("downloadToFile", () => {
     const fetchResult = okDownloadResponse("archive", {
       headers: { "content-length": "12" },
     });
-    fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
+    fetchWithResponseReleaseMock.mockResolvedValue(fetchResult);
 
     await withTempFile(async (filePath) => {
       await expect(
@@ -226,7 +224,7 @@ describe("downloadToFile", () => {
       const fetchResult = okDownloadResponse("archive", {
         headers: { "content-length": contentLength },
       });
-      fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
+      fetchWithResponseReleaseMock.mockResolvedValue(fetchResult);
 
       await withTempFile(async (filePath) => {
         await downloadToFile("https://example.com/signal-cli.tgz", filePath, 5, 8);
@@ -247,7 +245,7 @@ describe("downloadToFile", () => {
       },
     });
     const fetchResult = okDownloadResponse(body);
-    fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
+    fetchWithResponseReleaseMock.mockResolvedValue(fetchResult);
 
     await withTempFile(async (filePath) => {
       await expect(
@@ -266,7 +264,7 @@ describe("installSignalCliFromRelease", () => {
     const fetchResult = okDownloadResponse("{not json", {
       headers: { "content-type": "application/json" },
     });
-    fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
+    fetchWithResponseReleaseMock.mockResolvedValue(fetchResult);
 
     const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
 
@@ -281,19 +279,17 @@ describe("installSignalCliFromRelease", () => {
     const fetchResult = okDownloadResponse(JSON.stringify({ tag_name: "v0.14.3", assets: [] }), {
       headers: { "content-type": "application/json" },
     });
-    fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
+    fetchWithResponseReleaseMock.mockResolvedValue(fetchResult);
 
     const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
     expect(result.ok).toBe(false);
     expect(result.error).toBe("No compatible release asset found for this platform.");
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+    expect(fetchWithResponseReleaseMock).toHaveBeenCalledWith({
       url: "https://api.github.com/repos/AsamK/signal-cli/releases/latest",
       maxRedirects: 5,
-      requireHttps: true,
       timeoutMs: 30_000,
-      capture: false,
-      auditContext: "signal-cli-release-info",
+      validateUrl: expect.any(Function),
       init: {
         headers: {
           "User-Agent": "openclaw",

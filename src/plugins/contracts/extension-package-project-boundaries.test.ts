@@ -262,9 +262,6 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./secret-ref-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/secret-ref-runtime.d.ts",
     );
-    expect(packageJson.exports?.["./ssrf-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/ssrf-runtime.d.ts",
-    );
     expect(packageJson.exports?.["./config-contracts"]?.types).toBe(
       "./dist/src/plugin-sdk/config-contracts.d.ts",
     );

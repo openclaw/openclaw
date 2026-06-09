@@ -1,10 +1,7 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Huggingface plugin module implements models behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isHuggingfaceModelDiscoveryTestEnvironment } from "./model-discovery-env.js";
 
@@ -147,7 +144,7 @@ export async function discoverHuggingfaceModels(
 
   try {
     const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithResponseRelease({
       url: `${HUGGINGFACE_BASE_URL}/models`,
       init: {
         signal: AbortSignal.timeout(requestTimeoutMs),
@@ -157,8 +154,6 @@ export async function discoverHuggingfaceModels(
         },
       },
       timeoutMs: requestTimeoutMs,
-      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(HUGGINGFACE_BASE_URL),
-      auditContext: "huggingface-model-discovery",
     });
     try {
       if (!response.ok) {

@@ -116,13 +116,11 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
       const baseUrl = resolveMinimaxImageBaseUrl(req.cfg, providerId);
       const {
         baseUrl: resolvedBaseUrl,
-        allowPrivateNetwork,
         headers,
         dispatcherPolicy,
       } = resolveProviderHttpRequestConfig({
         baseUrl,
         defaultBaseUrl: DEFAULT_MINIMAX_IMAGE_BASE_URL,
-        allowPrivateNetwork: false,
         defaultHeaders: {
           Authorization: `Bearer ${auth.apiKey}`,
           "Content-Type": "application/json",
@@ -156,7 +154,6 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         body,
         timeoutMs: req.timeoutMs,
         fetchFn: fetch,
-        allowPrivateNetwork,
         ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
       });

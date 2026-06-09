@@ -1,5 +1,4 @@
-// Feishu plugin module implements app registration behavior.
-import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 /**
  * Feishu app registration via OAuth device-code flow.
  *
@@ -7,7 +6,8 @@ import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number
  * Replaces axios with native fetch, removes inquirer/ora/chalk in favor of
  * the openclaw WizardPrompter surface.
  */
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+// Feishu plugin module implements app registration behavior.
+import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import { renderQrTerminal } from "./qr-terminal.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -101,11 +101,9 @@ async function fetchFeishuJson<T>(params: {
   init: RequestInit;
   auditContext: string;
 }): Promise<T> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: params.url,
     init: params.init,
-    policy: { allowedHostnames: [new URL(params.url).hostname] },
-    auditContext: params.auditContext,
   });
   try {
     // Registration poll returns 4xx for pending/error states with a JSON body.

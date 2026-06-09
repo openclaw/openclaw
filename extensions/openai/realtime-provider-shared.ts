@@ -1,3 +1,4 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Openai provider module implements model/runtime integration.
 import { resolveExpiresAtMsFromEpochSeconds } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -5,7 +6,6 @@ import {
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
 import { captureWsEvent } from "openclaw/plugin-sdk/proxy-capture";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber,
   asOptionalRecord as asObjectRecord,
@@ -66,7 +66,6 @@ export type OpenAIRealtimeClientSecretResult = {
 
 type OpenAIRealtimeSecretRequest = {
   authToken: string;
-  auditContext: string;
   url: string;
   body: unknown;
   errorMessage: string;
@@ -84,7 +83,7 @@ function readStringField(value: unknown, key: string): string | undefined {
 async function createOpenAIRealtimeSecret(
   params: OpenAIRealtimeSecretRequest,
 ): Promise<OpenAIRealtimeClientSecretResult> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: params.url,
     init: {
       method: "POST",
@@ -103,7 +102,6 @@ async function createOpenAIRealtimeSecret(
       },
       body: JSON.stringify(params.body),
     },
-    auditContext: params.auditContext,
   });
   const payload = await (async () => {
     try {
@@ -136,7 +134,6 @@ async function createOpenAIRealtimeSecret(
 
 export async function createOpenAIRealtimeClientSecret(params: {
   authToken: string;
-  auditContext: string;
   session: Record<string, unknown>;
 }): Promise<OpenAIRealtimeClientSecretResult> {
   const url = "https://api.openai.com/v1/realtime/client_secrets";
@@ -151,7 +148,6 @@ export async function createOpenAIRealtimeClientSecret(params: {
 
 export async function createOpenAIRealtimeTranscriptionClientSecret(params: {
   authToken: string;
-  auditContext: string;
   session: Record<string, unknown>;
 }): Promise<OpenAIRealtimeClientSecretResult> {
   const url = "https://api.openai.com/v1/realtime/transcription_sessions";

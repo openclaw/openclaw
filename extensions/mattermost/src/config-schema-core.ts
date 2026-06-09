@@ -71,14 +71,6 @@ const MattermostSlashCommandsSchema = z
   .strict()
   .optional();
 
-const MattermostNetworkSchema = z
-  .object({
-    /** Dangerous opt-in for self-hosted Mattermost on trusted private/internal hosts. */
-    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
-  })
-  .strict()
-  .optional();
-
 const MattermostStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
 const MattermostStreamingProgressSchema = z
   .object({
@@ -153,7 +145,6 @@ const MattermostAccountSchemaBase = z
     /** Per-group configuration (keyed by Mattermost channel ID or "*" for default). */
     groups: z.record(z.string(), MattermostGroupSchema.optional()).optional(),
     /** Network policy overrides for self-hosted Mattermost on trusted private/internal hosts. */
-    network: MattermostNetworkSchema,
     /** Retry configuration for DM channel creation */
     dmChannelRetry: DmChannelRetrySchema,
   })

@@ -97,18 +97,14 @@ function failureDiagnostic(params: {
 export async function readChromeVersion(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
-  ssrfPolicy?: SsrFPolicy,
 ): Promise<ChromeVersion> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const versionUrl = appendCdpPath(cdpUrl, "/json/version");
-    const { response, release } = await fetchCdpChecked(
-      versionUrl,
-      timeoutMs,
-      { signal: ctrl.signal },
-      ssrfPolicy,
-    );
+    const { response, release } = await fetchCdpChecked(versionUrl, timeoutMs, {
+      signal: ctrl.signal,
+    });
     try {
       const data = (await response.json()) as ChromeVersion;
       if (!data || typeof data !== "object") {
@@ -344,7 +340,7 @@ export async function diagnoseChromeCdp(
     : cdpUrl;
   let version: ChromeVersion;
   try {
-    version = await readChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
+    version = await readChromeVersion(discoveryUrl, timeoutMs);
   } catch (err) {
     if (isWebSocketUrl(cdpUrl)) {
       return await diagnoseCdpWebSocketEndpoint({

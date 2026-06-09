@@ -9,14 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { clearNvidiaFeaturedModelCacheForTests } from "./provider-catalog.js";
 
-const ssrfRuntimeMocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(),
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: vi.fn((baseUrl: string) => ({
-    allowedHostnames: [new URL(baseUrl).hostname],
-  })),
-}));
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ssrfRuntimeMocks);
+const featuredCatalogFetchMock = vi.hoisted(() => vi.fn());
 
 type NvidiaManifest = {
   providerAuthChoices?: Array<Record<string, unknown>>;
@@ -36,16 +29,17 @@ async function registerNvidiaProvider() {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   clearNvidiaFeaturedModelCacheForTests();
-  ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
-  ssrfRuntimeMocks.ssrfPolicyFromHttpBaseUrlAllowedHostname.mockClear();
+  featuredCatalogFetchMock.mockReset();
 });
 
 function mockFeaturedCatalogResponse(payload: unknown, status = 200) {
-  ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-    response: Response.json(payload, { status }),
-    release: vi.fn(),
-  });
+  vi.stubGlobal("fetch", featuredCatalogFetchMock);
+  vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+  vi.stubEnv("OPENCLAW_PROXY_LOOPBACK_MODE", "gateway-only");
+  featuredCatalogFetchMock.mockResolvedValueOnce(Response.json(payload, { status }));
 }
 
 function registerNvidiaPluginApi() {
@@ -211,7 +205,7 @@ describe("nvidia provider hooks", () => {
       "z-ai/glm5",
     ]);
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expect(featuredCatalogFetchMock).not.toHaveBeenCalled();
   });
 
   it("surfaces the bundled NVIDIA models when authenticated featured catalog fetch fails", async () => {
@@ -230,7 +224,7 @@ describe("nvidia provider hooks", () => {
       "z-ai/glm5",
     ]);
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    expect(featuredCatalogFetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces live featured NVIDIA models via augmentModelCatalog", async () => {

@@ -1,14 +1,9 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Thread Ownership plugin entrypoint registers its OpenClaw integration.
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import {
-  definePluginEntry,
-  fetchWithSsrFGuard,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-  type OpenClawConfig,
-  type OpenClawPluginApi,
-} from "./api.js";
+import { definePluginEntry, type OpenClawConfig, type OpenClawPluginApi } from "./api.js";
 
 type ThreadOwnershipConfig = {
   forwarderUrl?: string;
@@ -172,7 +167,7 @@ export default definePluginEntry({
       try {
         // The forwarder is an internal service (e.g. a Docker container); allow private-network
         // access but pin DNS so DNS-rebinding attacks cannot pivot to a different internal host.
-        const { response: resp, release } = await fetchWithSsrFGuard({
+        const { response: resp, release } = await fetchWithResponseRelease({
           url: `${forwarderUrl}/api/v1/ownership/${channelId}/${threadTs}`,
           init: {
             method: "POST",
@@ -180,8 +175,6 @@ export default definePluginEntry({
             body: JSON.stringify({ agent_id: agent.id }),
           },
           timeoutMs: 3000,
-          policy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(true),
-          auditContext: "thread-ownership",
         });
 
         try {

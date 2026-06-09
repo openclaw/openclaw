@@ -2,8 +2,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../infra/net/ssrf.js";
 import type {
   EmbeddingInput,
   EmbeddingProvider,
@@ -20,7 +18,6 @@ const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-resp
 export type OpenAICompatibleEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
   model: string;
   dimensions?: number;
   inputType?: string;
@@ -303,16 +300,12 @@ async function postEmbeddingRequest(params: {
     ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
     ...(inputType ? { input_type: inputType } : {}),
   };
-  const { response, release } = await fetchWithSsrFGuard({
-    url: `${client.baseUrl}/embeddings`,
-    init: {
-      method: "POST",
-      headers: client.headers,
-      body: JSON.stringify(body),
-    },
+  const response = await fetch(`${client.baseUrl}/embeddings`, {
+    method: "POST",
+    headers: client.headers,
+    body: JSON.stringify(body),
+    redirect: "error",
     signal: params.signal,
-    policy: client.ssrfPolicy,
-    auditContext: "embedding-provider:openai-compatible",
   });
   try {
     if (!response.ok) {
@@ -325,7 +318,7 @@ async function postEmbeddingRequest(params: {
       input.length,
     );
   } finally {
-    await release();
+    await response.body?.cancel().catch(() => undefined);
   }
 }
 
@@ -355,7 +348,6 @@ export async function createOpenAICompatibleEmbeddingClient(
         ...options.remote?.headers,
       },
     }),
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
     model,
     ...(options.dimensions !== undefined
       ? { dimensions: normalizeDimensions(options.dimensions) }

@@ -102,7 +102,6 @@ export async function resolveVydraRequestContext(params: {
 }): Promise<{
   fetchFn: typeof fetch;
   baseUrl: string;
-  allowPrivateNetwork: boolean;
   headers: Headers;
   dispatcherPolicy: ReturnType<typeof resolveProviderHttpRequestConfig>["dispatcherPolicy"];
 }> {
@@ -116,23 +115,20 @@ export async function resolveVydraRequestContext(params: {
     throw new Error("Vydra API key missing");
   }
   const fetchFn = fetch;
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveProviderHttpRequestConfig({
-      baseUrl: resolveVydraBaseUrlFromConfig(params.cfg),
-      defaultBaseUrl: DEFAULT_VYDRA_BASE_URL,
-      allowPrivateNetwork: false,
-      defaultHeaders: {
-        Authorization: `Bearer ${auth.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      provider: "vydra",
-      capability: params.capability,
-      transport: "http",
-    });
+  const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+    baseUrl: resolveVydraBaseUrlFromConfig(params.cfg),
+    defaultBaseUrl: DEFAULT_VYDRA_BASE_URL,
+    defaultHeaders: {
+      Authorization: `Bearer ${auth.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    provider: "vydra",
+    capability: params.capability,
+    transport: "http",
+  });
   return {
     fetchFn,
     baseUrl,
-    allowPrivateNetwork,
     headers,
     dispatcherPolicy,
   };

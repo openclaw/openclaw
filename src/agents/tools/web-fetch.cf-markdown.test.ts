@@ -67,6 +67,18 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     expect(init.headers.Accept).toBe("text/markdown, text/html;q=0.9, */*;q=0.1");
   });
 
+  it("blocks local untrusted URLs before fetching in direct mode", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Local"));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createWebFetchTool(baseToolConfig);
+
+    await expect(tool?.execute?.("call", { url: "http://127.0.0.1/admin" })).rejects.toThrow(
+      "Blocked",
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("uses cf-markdown extractor for text/markdown responses", async () => {
     const md = "# CF Markdown\n\nThis is server-rendered markdown.";
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse(md));
@@ -113,7 +125,6 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     global.fetch = withFetchPreconnect(fetchSpy);
 
     const tool = createWebFetchTool({
-      lookupFn: lookupMock as unknown as LookupFn,
       config: {
         plugins: {
           entries: {

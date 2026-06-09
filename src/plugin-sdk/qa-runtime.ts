@@ -8,7 +8,6 @@ import { formatErrorMessage } from "./error-runtime.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
 import { runExec } from "./process-runtime.js";
-import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
 type QaRuntimeSurface = {
@@ -499,18 +498,14 @@ export function createQaDockerRuntime(params: {
       : params.commandTimeoutMs;
 
   const fetchHealthUrl = async (url: string): Promise<{ ok: boolean }> => {
-    const { response, release } = await fetchWithSsrFGuard({
-      url,
-      init: {
-        signal: AbortSignal.timeout(2_000),
-      },
-      policy: { allowPrivateNetwork: true },
-      auditContext: params.auditContext,
+    void params.auditContext;
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(2_000),
     });
     try {
       return { ok: response.ok };
     } finally {
-      await release();
+      await response.body?.cancel().catch(() => undefined);
     }
   };
 

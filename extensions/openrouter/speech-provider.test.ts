@@ -15,7 +15,6 @@ const {
   }),
   resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-    allowPrivateNetwork: false,
     headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
     dispatcherPolicy: undefined,
   })),
@@ -144,7 +143,6 @@ describe("openrouter speech provider", () => {
     expect(requireOpenRouterConfigRequest()).toEqual({
       baseUrl: "https://openrouter.ai/api/v1",
       defaultBaseUrl: "https://openrouter.ai/api/v1",
-      allowPrivateNetwork: false,
       defaultHeaders: {
         Authorization: "Bearer sk-openrouter",
         "Content-Type": "application/json",
@@ -176,7 +174,6 @@ describe("openrouter speech provider", () => {
       },
       timeoutMs: 12_345,
       fetchFn: fetch,
-      allowPrivateNetwork: false,
       dispatcherPolicy: undefined,
     });
     expect(result.audioBuffer).toEqual(Buffer.from([1, 2, 3]));

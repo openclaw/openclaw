@@ -292,20 +292,18 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
 
       const model = normalizeOptionalString(req.model) ?? DEFAULT_MODEL;
       const imageConfig = buildImageConfig(req, model);
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: req.cfg?.models?.providers?.openrouter?.baseUrl,
-          defaultBaseUrl: OPENROUTER_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "HTTP-Referer": "https://openclaw.ai",
-            "X-OpenRouter-Title": "OpenClaw",
-          },
-          provider: "openrouter",
-          capability: "image",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: req.cfg?.models?.providers?.openrouter?.baseUrl,
+        defaultBaseUrl: OPENROUTER_BASE_URL,
+        defaultHeaders: {
+          Authorization: `Bearer ${auth.apiKey}`,
+          "HTTP-Referer": "https://openclaw.ai",
+          "X-OpenRouter-Title": "OpenClaw",
+        },
+        provider: "openrouter",
+        capability: "image",
+        transport: "http",
+      });
 
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/chat/completions`,
@@ -319,7 +317,6 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
         },
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetchFn: fetch,
-        allowPrivateNetwork,
         ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
       });

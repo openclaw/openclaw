@@ -22,8 +22,6 @@ export type OutboundMediaLoadOptions = {
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   /** Extra fetch options merged into remote media requests. */
   requestInit?: RequestInit;
-  /** Allows explicit proxy DNS behavior to be trusted by the media fetch guard. */
-  trustExplicitProxyDns?: boolean;
 };
 
 /** Load outbound media from a remote URL or approved local path using the shared web-media policy. */
@@ -42,7 +40,6 @@ export async function loadOutboundMediaFromUrl(
       proxyUrl: options.proxyUrl,
       fetchImpl: options.fetchImpl,
       requestInit: options.requestInit,
-      trustExplicitProxyDns: options.trustExplicitProxyDns,
     }),
   );
 }

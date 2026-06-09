@@ -141,10 +141,9 @@ model under `agents.defaults.imageGenerationModel`:
 }
 ```
 
-Loopback LiteLLM URLs such as `http://localhost:4000` work without a global
-private-network override. For a LAN-hosted proxy, set
-`models.providers.litellm.request.allowPrivateNetwork: true` because the API key
-will be sent to the configured proxy host.
+Loopback and LAN LiteLLM URLs work as normal provider `baseUrl` values. When
+managed proxy mode is enabled, allowlist the LiteLLM destination in the external
+proxy policy because the API key will be sent to the configured proxy host.
 
 <AccordionGroup>
   <Accordion title="Virtual keys">

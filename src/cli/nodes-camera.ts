@@ -1,7 +1,6 @@
 // Camera payload validation and artifact writers for node media commands.
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { resolveCliName } from "./cli-name.js";
@@ -15,6 +14,7 @@ import {
 
 const MAX_CAMERA_URL_DOWNLOAD_BYTES = 250 * 1024 * 1024;
 const MAX_CAMERA_BASE64_BYTES = MAX_CAMERA_URL_DOWNLOAD_BYTES;
+const MAX_CAMERA_URL_REDIRECTS = 3;
 
 /** Camera orientation accepted by node camera commands. */
 export type CameraFacing = "front" | "back";
@@ -103,32 +103,38 @@ export async function writeUrlToFile(
     );
   }
 
-  // The node host is allowed even when private because the RPC response supplied its remote IP.
-  const policy = {
-    allowPrivateNetwork: true,
-    allowedHostnames: [expectedHost],
-    hostnameAllowlist: [expectedHost],
-  };
-
-  let release: () => Promise<void> = async () => {};
   let bytes = 0;
+  let currentUrl = url;
+  let response: Response | undefined;
   try {
-    const guarded = await fetchWithSsrFGuard({
-      url,
-      auditContext: "writeUrlToFile",
-      policy,
-    });
-    release = guarded.release;
-    const finalUrl = new URL(guarded.finalUrl);
-    if (finalUrl.protocol !== "https:") {
-      throw new Error(`writeUrlToFile: redirect resolved to non-https URL ${guarded.finalUrl}`);
+    for (let redirectCount = 0; redirectCount <= MAX_CAMERA_URL_REDIRECTS; redirectCount += 1) {
+      response = await fetch(currentUrl, { redirect: "manual" });
+      if (response.status < 300 || response.status >= 400) {
+        break;
+      }
+      const location = response.headers.get("location");
+      await response.body?.cancel().catch(() => undefined);
+      if (!location) {
+        break;
+      }
+      if (redirectCount === MAX_CAMERA_URL_REDIRECTS) {
+        throw new Error(`writeUrlToFile: too many redirects for ${url}`);
+      }
+      const redirectedUrl = new URL(location, currentUrl);
+      if (redirectedUrl.protocol !== "https:") {
+        throw new Error(`writeUrlToFile: redirect resolved to non-https URL ${redirectedUrl}`);
+      }
+      if (normalizeHostname(redirectedUrl.hostname) !== expectedHost) {
+        throw new Error(
+          `writeUrlToFile: redirect host ${redirectedUrl.hostname} must match node host ${opts.expectedHost}`,
+        );
+      }
+      currentUrl = redirectedUrl.toString();
     }
-    if (normalizeHostname(finalUrl.hostname) !== expectedHost) {
-      throw new Error(
-        `writeUrlToFile: redirect host ${finalUrl.hostname} must match node host ${opts.expectedHost}`,
-      );
+    const res = response;
+    if (!res) {
+      throw new Error(`failed to download ${url}: no response`);
     }
-    const res = guarded.response;
     if (!res.ok) {
       throw new Error(`failed to download ${url}: ${res.status} ${res.statusText}`);
     }
@@ -181,7 +187,7 @@ export async function writeUrlToFile(
       throw toLintErrorObject(thrown, "Non-Error thrown");
     }
   } finally {
-    await release();
+    await response?.body?.cancel().catch(() => undefined);
   }
 
   return { path: filePath, bytes };

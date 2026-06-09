@@ -179,19 +179,39 @@ describe("safeFetch", () => {
     expect(fetchInitAt(fetchMock, 0)).toHaveProperty("redirect", "manual");
   });
 
-  it("pins the validated DNS result into the request dispatcher", async () => {
+  it("rejects an initial URL that resolves to a private address before fetching", async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
       return new Response("ok", { status: 200 });
     });
 
-    await expectSafeFetchStatus({
-      fetchMock,
+    await expect(
+      safeFetch({
+        url: "https://teams.sharepoint.com/file.pdf",
+        allowHosts: ["sharepoint.com"],
+        fetchFn: fetchMock as unknown as typeof fetch,
+        resolveFn: privateResolve("10.0.0.1"),
+      }),
+    ).rejects.toThrow("private/reserved IP");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves a caller-provided dispatcher in the request init", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+      return new Response("ok", { status: 200 });
+    });
+    const dispatcher = {};
+
+    const res = await safeFetch({
       url: "https://teams.sharepoint.com/file.pdf",
       allowHosts: ["sharepoint.com"],
-      expectedStatus: 200,
+      fetchFn: fetchMock as unknown as typeof fetch,
+      requestInit: { dispatcher } as RequestInit,
+      resolveFn: publicResolve,
     });
+    expect(res.status).toBe(200);
+    await res.body?.cancel();
 
-    expect(fetchInitAt(fetchMock, 0)).toHaveProperty("dispatcher");
+    expect(fetchInitAt(fetchMock, 0)).toHaveProperty("dispatcher", dispatcher);
   });
 
   it("follows a redirect to an allowlisted host with public IP", async () => {
@@ -207,25 +227,44 @@ describe("safeFetch", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("fails explicitly for custom fetch functions that cannot receive the pinned dispatcher", async () => {
+  it("rejects a redirect target that resolves to a private address before fetching it", async () => {
+    const fetchMock = mockFetchWithRedirect({
+      "https://teams.sharepoint.com/file.pdf": "https://cdn.sharepoint.com/storage/file.pdf",
+    });
+    const resolveFn = async (hostname: string) => ({
+      address: hostname === "cdn.sharepoint.com" ? "169.254.169.254" : "13.107.136.10",
+    });
+
+    await expect(
+      safeFetch({
+        url: "https://teams.sharepoint.com/file.pdf",
+        allowHosts: ["sharepoint.com"],
+        fetchFn: fetchMock as unknown as typeof fetch,
+        resolveFn,
+      }),
+    ).rejects.toThrow("private/reserved IP");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("accepts custom fetch functions", async () => {
     let called = false;
     const customFetch = async () => {
       called = true;
       return new Response("ok", { status: 200 });
     };
 
-    await expect(
-      safeFetch({
-        url: "https://teams.sharepoint.com/file.pdf",
-        allowHosts: ["sharepoint.com"],
-        fetchFn: customFetch as typeof fetch,
-        resolveFn: publicResolve,
-      }),
-    ).rejects.toThrow("fetchFnSupportsDispatcher");
-    expect(called).toBe(false);
+    const res = await safeFetch({
+      url: "https://teams.sharepoint.com/file.pdf",
+      allowHosts: ["sharepoint.com"],
+      fetchFn: customFetch as typeof fetch,
+      resolveFn: publicResolve,
+    });
+    expect(res.status).toBe(200);
+    await res.body?.cancel();
+    expect(called).toBe(true);
   });
 
-  it("returns the redirect response when dispatcher is provided by an outer guard", async () => {
+  it("follows redirects when dispatcher is provided by the caller", async () => {
     const redirectedTo = "https://cdn.sharepoint.com/storage/file.pdf";
     const fetchMock = mockFetchWithRedirect({
       "https://teams.sharepoint.com/file.pdf": redirectedTo,
@@ -237,12 +276,12 @@ describe("safeFetch", () => {
       requestInit: { dispatcher: {} } as RequestInit,
       resolveFn: publicResolve,
     });
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe(redirectedTo);
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(res.status).toBe(200);
+    await res.body?.cancel();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("still enforces allowlist checks before returning dispatcher-mode redirects", async () => {
+  it("still enforces allowlist checks before following dispatcher-mode redirects", async () => {
     const fetchMock = mockFetchWithRedirect({
       "https://teams.sharepoint.com/file.pdf": "https://evil.example.com/steal",
     });
@@ -272,70 +311,6 @@ describe("safeFetch", () => {
     ).rejects.toThrow("allowlist");
     // Should not have fetched the evil URL
     expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("blocks a redirect to an allowlisted host that resolves to a private IP (DNS rebinding)", async () => {
-    let callCount = 0;
-    const rebindingResolve = async () => {
-      callCount++;
-      // First call (initial URL) resolves to public IP
-      if (callCount === 1) {
-        return { address: "13.107.136.10" };
-      }
-      // Second call (redirect target) resolves to private IP
-      return { address: "169.254.169.254" };
-    };
-
-    const fetchMock = mockFetchWithRedirect({
-      "https://teams.sharepoint.com/file.pdf": "https://evil.trafficmanager.net/metadata",
-    });
-    await expect(
-      safeFetch({
-        url: "https://teams.sharepoint.com/file.pdf",
-        allowHosts: ["sharepoint.com", "trafficmanager.net"],
-        fetchFn: fetchMock as unknown as typeof fetch,
-        resolveFn: rebindingResolve,
-      }),
-    ).rejects.toThrow("private/internal");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("blocks when the initial URL resolves to a private IP", async () => {
-    const fetchMock = vi.fn();
-    await expect(
-      safeFetch({
-        url: "https://evil.sharepoint.com/file.pdf",
-        allowHosts: ["sharepoint.com"],
-        fetchFn: fetchMock as unknown as typeof fetch,
-        resolveFn: privateResolve("10.0.0.1"),
-      }),
-    ).rejects.toThrow("private/internal");
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("blocks private hosts with the default resolver", async () => {
-    const fetchMock = vi.fn();
-    await expect(
-      safeFetch({
-        url: "https://localhost/file.pdf",
-        allowHosts: ["localhost"],
-        fetchFn: fetchMock as unknown as typeof fetch,
-      }),
-    ).rejects.toThrow("private/internal");
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("blocks when initial URL DNS resolution fails", async () => {
-    const fetchMock = vi.fn();
-    await expect(
-      safeFetch({
-        url: "https://nonexistent.sharepoint.com/file.pdf",
-        allowHosts: ["sharepoint.com"],
-        fetchFn: fetchMock as unknown as typeof fetch,
-        resolveFn: failingResolve,
-      }),
-    ).rejects.toThrow("DNS failure");
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("follows multiple redirects when all are valid", async () => {
@@ -400,7 +375,7 @@ describe("safeFetch", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
         resolveFn: publicResolve,
       }),
-    ).rejects.toThrow("https");
+    ).rejects.toThrow("blocked by allowlist");
   });
 
   it("strips authorization across redirects outside auth allowlist", async () => {

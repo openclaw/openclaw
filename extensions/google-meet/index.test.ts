@@ -76,7 +76,7 @@ const voiceCallMocks = vi.hoisted(() => ({
 }));
 
 const fetchGuardMocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(
+  fetchWithResponseRelease: vi.fn(
     async (params: {
       url: string;
       init?: RequestInit;
@@ -90,11 +90,11 @@ const fetchGuardMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
   return {
     ...actual,
-    fetchWithSsrFGuard: fetchGuardMocks.fetchWithSsrFGuard,
+    fetchWithResponseRelease: fetchGuardMocks.fetchWithResponseRelease,
   };
 });
 
@@ -231,12 +231,12 @@ function requireSetupCheck(checks: unknown[] | undefined, id: string): Record<st
   return check;
 }
 
-function requireFetchGuardCall(auditContext: string): Record<string, unknown> {
+function requireFetchRuntimeCall(url: string): Record<string, unknown> {
   const call = (
-    fetchGuardMocks.fetchWithSsrFGuard.mock.calls as Array<[Record<string, unknown>]>
-  ).find(([params]) => params.auditContext === auditContext);
+    fetchGuardMocks.fetchWithResponseRelease.mock.calls as Array<[Record<string, unknown>]>
+  ).find(([params]) => params.url === url);
   if (!call) {
-    throw new Error(`Expected fetchWithSsrFGuard call for ${auditContext}`);
+    throw new Error(`Expected fetchWithResponseRelease call for ${url}`);
   }
   return call[0];
 }
@@ -472,7 +472,7 @@ describe("google-meet plugin", () => {
   });
 
   afterAll(() => {
-    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/fetch-runtime");
     vi.doUnmock("./src/voice-call-gateway.js");
     vi.resetModules();
   });
@@ -1033,8 +1033,7 @@ describe("google-meet plugin", () => {
     const url = requestUrl(calendarCall[0]);
     expect(url.searchParams.get("singleEvents")).toBe("true");
     expect(url.searchParams.get("orderBy")).toBe("startTime");
-    const guardCall = requireFetchGuardCall("google-meet.calendar.events.list");
-    expect(guardCall.policy).toEqual({ allowedHostnames: ["www.googleapis.com"] });
+    requireFetchRuntimeCall(url.toString());
   });
 
   it("adds a reauth hint for missing Calendar scopes", async () => {
@@ -1079,13 +1078,12 @@ describe("google-meet plugin", () => {
     expect(space.name).toBe("spaces/abc-defg-hij");
     expect(space.meetingCode).toBe("abc-defg-hij");
     expect(space.meetingUri).toBe("https://meet.google.com/abc-defg-hij");
-    const guardCall = requireFetchGuardCall("google-meet.spaces.get");
+    const guardCall = requireFetchRuntimeCall("https://meet.googleapis.com/v2/spaces/abc-defg-hij");
     expect(guardCall.url).toBe("https://meet.googleapis.com/v2/spaces/abc-defg-hij");
     expect(requireRecord(guardCall.init, "spaces.get init").headers).toEqual({
       Authorization: "Bearer token",
       Accept: "application/json",
     });
-    expect(guardCall.policy).toEqual({ allowedHostnames: ["meet.googleapis.com"] });
     expect(fetchMock).toHaveBeenCalledWith("https://meet.googleapis.com/v2/spaces/abc-defg-hij", {
       headers: {
         Authorization: "Bearer token",
@@ -1112,7 +1110,7 @@ describe("google-meet plugin", () => {
     expect(result.space.name).toBe("spaces/new-space");
     expect(result.space.meetingCode).toBe("new-abcd-xyz");
     expect(result.space.meetingUri).toBe("https://meet.google.com/new-abcd-xyz");
-    const guardCall = requireFetchGuardCall("google-meet.spaces.create");
+    const guardCall = requireFetchRuntimeCall("https://meet.googleapis.com/v2/spaces");
     expect(guardCall.url).toBe("https://meet.googleapis.com/v2/spaces");
     expect(guardCall.init).toEqual({
       method: "POST",
@@ -1123,7 +1121,6 @@ describe("google-meet plugin", () => {
       },
       body: "{}",
     });
-    expect(guardCall.policy).toEqual({ allowedHostnames: ["meet.googleapis.com"] });
   });
 
   it("lists Meet artifact metadata for the latest conference record by default", async () => {
@@ -1179,11 +1176,15 @@ describe("google-meet plugin", () => {
     const listUrl = requestUrl(listCall[0]);
     expect(listUrl.searchParams.get("filter")).toBe('space.name = "spaces/abc-defg-hij"');
     expect(listUrl.searchParams.get("pageSize")).toBe("1");
-    expect(requireFetchGuardCall("google-meet.conferenceRecords.smartNotes.list").url).toBe(
-      "https://meet.googleapis.com/v2/conferenceRecords/rec-1/smartNotes?pageSize=2",
-    );
     expect(
-      requireFetchGuardCall("google-meet.conferenceRecords.transcripts.entries.list").url,
+      requireFetchRuntimeCall(
+        "https://meet.googleapis.com/v2/conferenceRecords/rec-1/smartNotes?pageSize=2",
+      ).url,
+    ).toBe("https://meet.googleapis.com/v2/conferenceRecords/rec-1/smartNotes?pageSize=2");
+    expect(
+      requireFetchRuntimeCall(
+        "https://meet.googleapis.com/v2/conferenceRecords/rec-1/transcripts/t1/entries?pageSize=2",
+      ).url,
     ).toBe(
       "https://meet.googleapis.com/v2/conferenceRecords/rec-1/transcripts/t1/entries?pageSize=2",
     );

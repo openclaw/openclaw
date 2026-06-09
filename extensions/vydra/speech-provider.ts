@@ -100,19 +100,17 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
       }
 
       const fetchFn = fetch;
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: config.baseUrl,
-          defaultBaseUrl: DEFAULT_VYDRA_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: "vydra",
-          capability: "audio",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: config.baseUrl,
+        defaultBaseUrl: DEFAULT_VYDRA_BASE_URL,
+        defaultHeaders: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        provider: "vydra",
+        capability: "audio",
+        transport: "http",
+      });
 
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/models/${overrides.model ?? config.model}`,
@@ -123,7 +121,6 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
         },
         timeoutMs: req.timeoutMs,
         fetchFn,
-        allowPrivateNetwork,
         dispatcherPolicy,
       });
 

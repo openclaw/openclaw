@@ -1,6 +1,6 @@
 // Volcengine plugin module implements tts behavior.
 import * as crypto from "node:crypto";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 
 export type VolcengineTtsEncoding = "ogg_opus" | "mp3" | "pcm" | "wav";
 
@@ -102,10 +102,6 @@ function parseSeedTtsFrames(text: string): VolcengineTtsResponse[] {
   return frames;
 }
 
-function hostnameAllowlist(url: string): string[] {
-  return [new URL(url).hostname];
-}
-
 function seedAudioFormat(encoding: VolcengineTtsEncoding): "ogg_opus" | "mp3" | "pcm" {
   return encoding === "wav" ? "pcm" : encoding;
 }
@@ -139,7 +135,7 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
     },
   });
 
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: baseUrl,
     init: {
       method: "POST",
@@ -153,8 +149,6 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
       body: payload,
     },
     timeoutMs,
-    policy: { hostnameAllowlist: hostnameAllowlist(baseUrl) },
-    auditContext: "volcengine.tts",
   });
 
   try {
@@ -224,7 +218,7 @@ async function legacyVolcengineTTS(
     },
   });
 
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: baseUrl,
     init: {
       method: "POST",
@@ -235,8 +229,6 @@ async function legacyVolcengineTTS(
       body: payload,
     },
     timeoutMs,
-    policy: { hostnameAllowlist: hostnameAllowlist(baseUrl) },
-    auditContext: "volcengine.tts",
   });
 
   try {

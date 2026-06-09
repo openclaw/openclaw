@@ -13,7 +13,7 @@ function getMattermostCompatibilityNormalizer(): NonNullable<
 }
 
 describe("mattermost doctor", () => {
-  it("normalizes legacy private-network aliases", () => {
+  it("removes retired private-network config", () => {
     const normalize = getMattermostCompatibilityNormalizer();
 
     const result = normalize({
@@ -21,9 +21,15 @@ describe("mattermost doctor", () => {
         channels: {
           mattermost: {
             allowPrivateNetwork: true,
+            network: {
+              dangerouslyAllowPrivateNetwork: true,
+            },
             accounts: {
               work: {
                 allowPrivateNetwork: false,
+                network: {
+                  dangerouslyAllowPrivateNetwork: false,
+                },
               },
             },
           },
@@ -35,17 +41,19 @@ describe("mattermost doctor", () => {
     if (!mattermostConfig) {
       throw new Error("expected normalized Mattermost config");
     }
-    expect(mattermostConfig.network).toEqual({
-      dangerouslyAllowPrivateNetwork: true,
-    });
+    expect(mattermostConfig.network).toBeUndefined();
     const workAccount = mattermostConfig.accounts?.work as
       | { network?: Record<string, unknown> }
       | undefined;
     if (!workAccount) {
       throw new Error("expected Mattermost work account config");
     }
-    expect(workAccount.network).toEqual({
-      dangerouslyAllowPrivateNetwork: false,
-    });
+    expect(workAccount.network).toBeUndefined();
+    const removalReason =
+      "Mattermost private-network fetch enforcement moved to proxy.enabled plus external proxy policy.";
+    expect(result.changes).toEqual([
+      `Removed channels.mattermost private-network config. ${removalReason}`,
+      `Removed channels.mattermost.accounts.work private-network config. ${removalReason}`,
+    ]);
   });
 });

@@ -1,9 +1,9 @@
 // Google Meet plugin module implements calendar behavior.
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { googleApiError } from "./google-api-errors.js";
 
 const GOOGLE_CALENDAR_API_BASE_URL = "https://www.googleapis.com/calendar/v3";
-const GOOGLE_CALENDAR_API_HOST = "www.googleapis.com";
 const GOOGLE_MEET_URL_HOST = "meet.google.com";
 const GOOGLE_CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
 
@@ -167,7 +167,7 @@ async function fetchGoogleCalendarEvents(params: {
   const now = params.now ?? new Date();
   const defaultTimeMax = new Date(now);
   defaultTimeMax.setDate(defaultTimeMax.getDate() + 7);
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: appendQuery(
       `${GOOGLE_CALENDAR_API_BASE_URL}/calendars/${encodeURIComponent(calendarId)}/events`,
       {
@@ -186,8 +186,6 @@ async function fetchGoogleCalendarEvents(params: {
         Accept: "application/json",
       },
     },
-    policy: { allowedHostnames: [GOOGLE_CALENDAR_API_HOST] },
-    auditContext: "google-meet.calendar.events.list",
   });
   try {
     if (!response.ok) {

@@ -12,8 +12,9 @@
  */
 
 import * as fs from "node:fs";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { fetchWithSsrFGuard, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-policy";
 import {
   MediaFileType,
   type ChatScope,
@@ -78,7 +79,7 @@ async function fetchDirectUploadDownload(url: string) {
     }, DIRECT_UPLOAD_DOWNLOAD_TIMEOUT_MS);
     unrefTimer(timeout);
   });
-  const guardedFetch = fetchWithSsrFGuard({
+  const guardedFetch = fetchWithResponseRelease({
     url,
     maxRedirects: 0,
     signal: controller.signal,

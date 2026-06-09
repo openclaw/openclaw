@@ -1,7 +1,7 @@
 // Microsoft Foundry setup module handles plugin onboarding behavior.
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -538,7 +538,7 @@ export async function testFoundryConnection(params: {
       modelNameHint: params.modelNameHint,
       api: params.api,
     });
-    const { response: res, release } = await fetchWithSsrFGuard({
+    const { response: res, release } = await fetchWithResponseRelease({
       url: testRequest.url,
       init: {
         method: "POST",

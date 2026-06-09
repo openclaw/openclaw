@@ -15,7 +15,6 @@ const {
   }),
   resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.deepinfra.com/v1/openai",
-    allowPrivateNetwork: false,
     headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
     dispatcherPolicy: undefined,
   })),
@@ -114,7 +113,6 @@ describe("deepinfra speech provider", () => {
         {
           baseUrl: "https://api.deepinfra.com/v1/openai",
           defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
-          allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: "Bearer sk-deepinfra",
             "Content-Type": "application/json",
@@ -145,7 +143,6 @@ describe("deepinfra speech provider", () => {
         speed: 1.2,
       },
       fetchFn: fetch,
-      allowPrivateNetwork: false,
       dispatcherPolicy: undefined,
     });
     expect(result.audioBuffer).toEqual(Buffer.from([1, 2, 3]));

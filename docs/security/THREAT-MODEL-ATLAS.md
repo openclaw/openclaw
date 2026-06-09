@@ -101,7 +101,7 @@ Nothing is explicitly out of scope for this threat model.
 │  │                  EXECUTION SANDBOX                        │   │
 │  │  • Docker sandbox OR Host (exec-approvals)                │   │
 │  │  • Node remote execution                                  │   │
-│  │  • SSRF protection (DNS pinning + IP blocking)            │   │
+│  │  • Proxy egress control + narrow untrusted URL guard      │   │
 │  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
                               │

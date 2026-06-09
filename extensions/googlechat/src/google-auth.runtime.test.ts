@@ -8,7 +8,10 @@ const mocks = vi.hoisted(() => ({
   buildHostnameAllowlistPolicyFromSuffixAllowlist: vi.fn((hosts: string[]) => ({
     hostnameAllowlist: hosts,
   })),
-  fetchWithSsrFGuard: vi.fn(),
+  createHttp1Agent: vi.fn(() => ({ close: vi.fn() })),
+  createHttp1EnvHttpProxyAgent: vi.fn(() => ({ close: vi.fn() })),
+  createHttp1ProxyAgent: vi.fn(() => ({ close: vi.fn() })),
+  fetchWithResponseRelease: vi.fn(),
   gaxiosCtor: vi.fn(
     function MockGaxios(
       this: {
@@ -29,10 +32,13 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
   buildHostnameAllowlistPolicyFromSuffixAllowlist:
     mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist,
-  fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+  createHttp1Agent: mocks.createHttp1Agent,
+  createHttp1EnvHttpProxyAgent: mocks.createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent: mocks.createHttp1ProxyAgent,
+  fetchWithResponseRelease: mocks.fetchWithResponseRelease,
 }));
 
 vi.mock("gaxios", () => ({
@@ -56,7 +62,10 @@ beforeAll(async () => {
 beforeEach(() => {
   testing.resetGoogleAuthRuntimeForTests();
   mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist.mockClear();
-  mocks.fetchWithSsrFGuard.mockReset();
+  mocks.createHttp1Agent.mockClear();
+  mocks.createHttp1EnvHttpProxyAgent.mockClear();
+  mocks.createHttp1ProxyAgent.mockClear();
+  mocks.fetchWithResponseRelease.mockReset();
   mocks.gaxiosCtor.mockClear();
 });
 
@@ -67,7 +76,7 @@ afterEach(() => {
 });
 
 afterAll(() => {
-  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.doUnmock("openclaw/plugin-sdk/fetch-runtime");
   vi.doUnmock("gaxios");
   vi.resetModules();
 });
@@ -81,10 +90,10 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
 }
 
 describe("googlechat google auth runtime", () => {
-  it("routes Google auth fetches through the SSRF guard and preserves explicit proxy mTLS", async () => {
+  it("routes Google auth fetches through the response-release helper", async () => {
     const release = vi.fn();
     const injectedFetch = vi.fn(globalThis.fetch);
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    mocks.fetchWithResponseRelease.mockResolvedValueOnce({
       response: new Response("ok", { status: 200 }),
       release,
     });
@@ -99,34 +108,46 @@ describe("googlechat google auth runtime", () => {
       proxy: "http://proxy.example:8080",
     } as RequestInit);
 
-    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
-      auditContext: "googlechat.auth.google-auth",
-      dispatcherPolicy: {
-        allowPrivateProxy: true,
-        mode: "explicit-proxy",
-        proxyTls: {
-          cert: "CLIENT_CERT",
-          key: "CLIENT_KEY",
-        },
-        proxyUrl: "http://proxy.example:8080",
-      },
+    expect(mocks.fetchWithResponseRelease).toHaveBeenCalledWith({
       fetchImpl: injectedFetch,
       init: {
+        dispatcher: mocks.createHttp1ProxyAgent.mock.results[0]?.value,
         headers: { "content-type": "application/json" },
         method: "POST",
       },
-      policy: {
-        hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
-      },
       url: "https://oauth2.googleapis.com/token",
+    });
+    expect(mocks.createHttp1ProxyAgent).toHaveBeenCalledWith({
+      requestTls: {
+        cert: "CLIENT_CERT",
+        key: "CLIENT_KEY",
+      },
+      uri: "http://proxy.example:8080",
     });
     await expect(response.text()).resolves.toBe("ok");
     expect(release).toHaveBeenCalledOnce();
+    expect(mocks.createHttp1ProxyAgent.mock.results[0]?.value.close).toHaveBeenCalledOnce();
   });
 
-  it("lets the guard resolve the ambient runtime fetch when no override is injected", async () => {
+  it("closes auth dispatchers when the response-release helper rejects before returning", async () => {
+    const injectedFetch = vi.fn(globalThis.fetch);
+    mocks.fetchWithResponseRelease.mockRejectedValueOnce(new Error("connect failed"));
+
+    const guardedFetch = createGoogleAuthFetch(injectedFetch);
+    await expect(
+      guardedFetch("https://oauth2.googleapis.com/token", {
+        agent: { proxy: new URL("http://proxy.example:8080") },
+        method: "POST",
+        proxy: "http://proxy.example:8080",
+      } as RequestInit),
+    ).rejects.toThrow("connect failed");
+
+    expect(mocks.createHttp1ProxyAgent.mock.results[0]?.value.close).toHaveBeenCalledOnce();
+  });
+
+  it("lets the helper resolve the ambient runtime fetch when no override is injected", async () => {
     const release = vi.fn();
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    mocks.fetchWithResponseRelease.mockResolvedValueOnce({
       response: new Response("ok", { status: 200 }),
       release,
     });
@@ -136,14 +157,14 @@ describe("googlechat google auth runtime", () => {
       method: "POST",
     } as RequestInit);
 
-    expect(mockCallArg(mocks.fetchWithSsrFGuard)).not.toHaveProperty("fetchImpl");
+    expect(mockCallArg(mocks.fetchWithResponseRelease)).not.toHaveProperty("fetchImpl");
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("keeps using the guard-selected runtime fetch even if global fetch changes later", async () => {
+  it("keeps using the helper-selected runtime fetch even if global fetch changes later", async () => {
     const release = vi.fn();
     const originalFetch = globalThis.fetch;
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    mocks.fetchWithResponseRelease.mockResolvedValueOnce({
       response: new Response("ok", { status: 200 }),
       release,
     });
@@ -159,13 +180,13 @@ describe("googlechat google auth runtime", () => {
       (globalThis as Record<string, unknown>).fetch = originalFetch;
     }
 
-    expect(mockCallArg(mocks.fetchWithSsrFGuard)).not.toHaveProperty("fetchImpl");
+    expect(mockCallArg(mocks.fetchWithResponseRelease)).not.toHaveProperty("fetchImpl");
     expect(release).toHaveBeenCalledOnce();
   });
 
   it("bypasses explicit proxy when noProxy excludes the Google auth host", async () => {
     const release = vi.fn();
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    mocks.fetchWithResponseRelease.mockResolvedValueOnce({
       response: new Response("ok", { status: 200 }),
       release,
     });
@@ -179,30 +200,27 @@ describe("googlechat google auth runtime", () => {
       proxy: "http://proxy.example:8080",
     } as RequestInit);
 
-    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
-      auditContext: "googlechat.auth.google-auth",
-      dispatcherPolicy: {
-        connect: {
-          cert: "CLIENT_CERT",
-          key: "CLIENT_KEY",
-        },
-        mode: "direct",
-      },
+    expect(mocks.fetchWithResponseRelease).toHaveBeenCalledWith({
       init: {
+        dispatcher: mocks.createHttp1Agent.mock.results[0]?.value,
         method: "POST",
-      },
-      policy: {
-        hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
       url: "https://oauth2.googleapis.com/token",
     });
+    expect(mocks.createHttp1Agent).toHaveBeenCalledWith({
+      connect: {
+        cert: "CLIENT_CERT",
+        key: "CLIENT_KEY",
+      },
+    });
     await expect(response.text()).resolves.toBe("ok");
     expect(release).toHaveBeenCalledOnce();
+    expect(mocks.createHttp1Agent.mock.results[0]?.value.close).toHaveBeenCalledOnce();
   });
 
   it("preserves env-proxy transport when HTTPS proxy is configured", async () => {
     const release = vi.fn();
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    mocks.fetchWithResponseRelease.mockResolvedValueOnce({
       response: new Response("ok", { status: 200 }),
       release,
     });
@@ -216,25 +234,26 @@ describe("googlechat google auth runtime", () => {
       method: "POST",
     } as RequestInit);
 
-    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
-      auditContext: "googlechat.auth.google-auth",
-      dispatcherPolicy: {
-        mode: "env-proxy",
-        proxyTls: {
-          cert: "CLIENT_CERT",
-          key: "CLIENT_KEY",
-        },
-      },
+    expect(mocks.fetchWithResponseRelease).toHaveBeenCalledWith({
       init: {
+        dispatcher: mocks.createHttp1EnvHttpProxyAgent.mock.results[0]?.value,
         method: "POST",
-      },
-      policy: {
-        hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
       url: "https://oauth2.googleapis.com/token",
     });
+    expect(mocks.createHttp1EnvHttpProxyAgent).toHaveBeenCalledWith({
+      proxyTls: {
+        cert: "CLIENT_CERT",
+        key: "CLIENT_KEY",
+      },
+      requestTls: {
+        cert: "CLIENT_CERT",
+        key: "CLIENT_KEY",
+      },
+    });
     await expect(response.text()).resolves.toBe("ok");
     expect(release).toHaveBeenCalledOnce();
+    expect(mocks.createHttp1EnvHttpProxyAgent.mock.results[0]?.value.close).toHaveBeenCalledOnce();
   });
 
   it("matches gaxios proxy env precedence for Google auth requests", () => {
@@ -253,7 +272,7 @@ describe("googlechat google auth runtime", () => {
 
   it("releases guarded auth fetch resources even when callers do not consume the body", async () => {
     const release = vi.fn();
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    mocks.fetchWithResponseRelease.mockResolvedValueOnce({
       response: new Response("ok", { status: 200 }),
       release,
     });
@@ -280,7 +299,7 @@ describe("googlechat google auth runtime", () => {
         controller.close();
       },
     });
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    mocks.fetchWithResponseRelease.mockResolvedValueOnce({
       response: new Response(body, { status: 200 }),
       release,
     });
@@ -298,7 +317,7 @@ describe("googlechat google auth runtime", () => {
   it("rejects non-stream guarded auth responses instead of buffering them unbounded", async () => {
     const release = vi.fn();
     const arrayBuffer = vi.fn(async () => new ArrayBuffer(16));
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    mocks.fetchWithResponseRelease.mockResolvedValueOnce({
       response: {
         arrayBuffer,
         body: null,
@@ -325,7 +344,7 @@ describe("googlechat google auth runtime", () => {
   it("rejects oversized auth responses from content-length before reading the body", async () => {
     const release = vi.fn();
     const arrayBuffer = vi.fn(async () => new ArrayBuffer(16));
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    mocks.fetchWithResponseRelease.mockResolvedValueOnce({
       response: {
         arrayBuffer,
         body: null,
@@ -352,7 +371,7 @@ describe("googlechat google auth runtime", () => {
   it("rejects malformed auth content-length before reading the body", async () => {
     const release = vi.fn();
     const arrayBuffer = vi.fn(async () => new ArrayBuffer(16));
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    mocks.fetchWithResponseRelease.mockResolvedValueOnce({
       response: {
         arrayBuffer,
         body: null,

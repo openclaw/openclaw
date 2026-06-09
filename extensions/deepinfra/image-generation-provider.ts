@@ -55,7 +55,6 @@ export function buildDeepInfraImageGenerationProvider(options?: {
     normalizeModel: normalizeDeepInfraModelRef,
     resolveBaseUrl: ({ providerConfig }) =>
       normalizeDeepInfraBaseUrl(providerConfig?.baseUrl, DEEPINFRA_BASE_URL),
-    resolveAllowPrivateNetwork: () => false,
     useConfiguredRequest: true,
     resolveCount: ({ req, mode }) => (mode === "edit" ? 1 : (req.count ?? 1)),
     buildGenerateRequest: ({ req, model, count }) => ({

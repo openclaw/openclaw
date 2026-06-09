@@ -10,7 +10,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { tryReadJson } from "../infra/json-files.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { fetchUntrustedUrl } from "../infra/net/egress-fetch.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
@@ -861,14 +861,17 @@ async function downloadUrlToTempFile(
 > {
   let sourceFileName = "plugin.tgz";
   let tmpDir: string | undefined;
+  let fetched: Awaited<ReturnType<typeof fetchUntrustedUrl>> | undefined;
   try {
     sourceFileName = resolveSafeMarketplaceDownloadFileName(url, sourceFileName);
     const downloadTimeoutMs = resolveMarketplaceDownloadTimeoutMs(timeoutMs);
-    const { response, finalUrl, release } = await fetchWithSsrFGuard({
+    fetched = await fetchUntrustedUrl({
       url,
       timeoutMs: downloadTimeoutMs,
-      auditContext: "marketplace-plugin-download",
+      operation: "marketplace-plugin-download",
     });
+    const { response } = fetched;
+    const finalUrl = fetched.finalUrl || url;
     try {
       if (!response.ok) {
         return {
@@ -923,7 +926,8 @@ async function downloadUrlToTempFile(
         },
       };
     } finally {
-      await release().catch(() => undefined);
+      await fetched.release();
+      fetched = undefined;
     }
   } catch (error) {
     if (tmpDir) {
@@ -933,6 +937,8 @@ async function downloadUrlToTempFile(
       ok: false,
       error: formatMarketplaceDownloadError(url, formatErrorMessage(error)),
     };
+  } finally {
+    await fetched?.release().catch(() => undefined);
   }
 }
 

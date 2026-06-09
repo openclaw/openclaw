@@ -1,9 +1,8 @@
 // Tlon plugin module implements fetch behavior.
-import {
-  fetchWithSsrFGuard,
-  type LookupFn,
-  type SsrFPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
+import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
+import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-policy";
 import { validateUrbitBaseUrl } from "./base-url.js";
 import { UrbitUrlError } from "./errors.js";
 
@@ -17,8 +16,6 @@ type UrbitFetchOptions = {
   timeoutMs?: number;
   maxRedirects?: number;
   signal?: AbortSignal;
-  auditContext?: string;
-  pinDns?: boolean;
 };
 
 export async function urbitFetch(params: UrbitFetchOptions) {
@@ -28,16 +25,19 @@ export async function urbitFetch(params: UrbitFetchOptions) {
   }
 
   const url = new URL(params.path, validated.baseUrl).toString();
-  return await fetchWithSsrFGuard({
+  const validateUrl = async (nextUrl: URL) => {
+    await resolvePinnedHostnameWithPolicy(nextUrl.hostname, {
+      lookupFn: params.lookupFn,
+      policy: params.ssrfPolicy,
+    });
+  };
+  return await fetchWithResponseRelease({
     url,
     fetchImpl: params.fetchImpl,
     init: params.init,
-    timeoutMs: params.timeoutMs,
     maxRedirects: params.maxRedirects,
+    timeoutMs: params.timeoutMs,
     signal: params.signal,
-    policy: params.ssrfPolicy,
-    lookupFn: params.lookupFn,
-    auditContext: params.auditContext,
-    pinDns: params.pinDns,
+    validateUrl,
   });
 }

@@ -402,19 +402,18 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
       });
       const requestBody = buildCreateBody(req);
       const endpoint = resolveEndpoint(req);
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveRunwayBaseUrl(req),
-          defaultBaseUrl: DEFAULT_RUNWAY_BASE_URL,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-            "X-Runway-Version": RUNWAY_API_VERSION,
-          },
-          provider: "runway",
-          capability: "video",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: resolveRunwayBaseUrl(req),
+        defaultBaseUrl: DEFAULT_RUNWAY_BASE_URL,
+        defaultHeaders: {
+          Authorization: `Bearer ${auth.apiKey}`,
+          "Content-Type": "application/json",
+          "X-Runway-Version": RUNWAY_API_VERSION,
+        },
+        provider: "runway",
+        capability: "video",
+        transport: "http",
+      });
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}${endpoint}`,
         headers,
@@ -424,7 +423,6 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         }),
         fetchFn,
-        allowPrivateNetwork,
         dispatcherPolicy,
       });
       try {

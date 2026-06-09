@@ -289,7 +289,6 @@ async function expectTransientGetFileRetrySuccess() {
     url: `https://api.telegram.org/file/bot${BOT_TOKEN}/voice/file_0.oga`,
   });
   expectFetchSsrfPolicyFields({
-    allowRfc2544BenchmarkRange: true,
     hostnameAllowlist: ["api.telegram.org"],
   });
   return result;
@@ -472,12 +471,10 @@ describe("resolveMedia getFile retry", () => {
     expectRecordFields(params, {
       fetchImpl: callerFetch,
       dispatcherAttempts,
-      trustExplicitProxyDns: true,
       readIdleTimeoutMs: 30_000,
     });
     expect(typeof params.shouldRetryFetchError).toBe("function");
     expectFetchSsrfPolicyFields({
-      allowRfc2544BenchmarkRange: true,
       hostnameAllowlist: ["api.telegram.org"],
     });
   });
@@ -518,7 +515,6 @@ describe("resolveMedia getFile retry", () => {
 
     await resolveMediaWithDefaults(makeCtx("document", getFile), {
       apiRoot: "https://telegram.internal:8443/custom/",
-      dangerouslyAllowPrivateNetwork: true,
     });
 
     expectReadRemoteMediaBufferFields({
@@ -527,8 +523,6 @@ describe("resolveMedia getFile retry", () => {
     expectFetchSsrfPolicyFields({
       hostnameAllowlist: ["api.telegram.org", "telegram.internal"],
       allowedHostnames: ["telegram.internal"],
-      allowPrivateNetwork: true,
-      allowRfc2544BenchmarkRange: true,
     });
   });
 
@@ -820,24 +814,34 @@ describe("resolveMedia original filename preservation", () => {
     expectFetchSsrfPolicyFields({
       hostnameAllowlist: ["api.telegram.org", "192.168.1.50"],
       allowedHostnames: ["192.168.1.50"],
-      allowRfc2544BenchmarkRange: true,
     });
     requireResolvedMedia(result, "custom apiRoot allowlist");
   });
 
-  it("opts into private-network Telegram media downloads only when explicitly configured", async () => {
+  it("rejects retired private-network Telegram media download opt-ins", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
-    mockPdfFetchAndSave("file_42.pdf");
 
     const ctx = makeCtx("document", getFile);
-    const result = await resolveMediaWithDefaults(ctx, { dangerouslyAllowPrivateNetwork: true });
 
-    expectFetchSsrfPolicyFields({
-      hostnameAllowlist: ["api.telegram.org"],
-      allowPrivateNetwork: true,
-      allowRfc2544BenchmarkRange: true,
-    });
-    requireResolvedMedia(result, "private network opt-in");
+    await expect(
+      resolveMediaWithDefaults(ctx, { dangerouslyAllowPrivateNetwork: true }),
+    ).rejects.toThrow(
+      "Telegram media downloads no longer support network.dangerouslyAllowPrivateNetwork",
+    );
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+  });
+
+  it("rejects retired private-network Telegram sticker media opt-ins", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "stickers/file_0.webp" });
+
+    await expect(
+      resolveMediaWithDefaults(makeCtx("sticker", getFile), {
+        dangerouslyAllowPrivateNetwork: true,
+      }),
+    ).rejects.toThrow(
+      "Telegram media downloads no longer support network.dangerouslyAllowPrivateNetwork",
+    );
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
   });
 
   it("constructs correct download URL with custom apiRoot for documents", async () => {

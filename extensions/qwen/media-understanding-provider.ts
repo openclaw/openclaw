@@ -27,21 +27,20 @@ export async function describeQwenVideo(
   const model = resolveMediaUnderstandingString(params.model, DEFAULT_QWEN_VIDEO_MODEL);
   const mime = resolveMediaUnderstandingString(params.mime, "video/mp4");
   const prompt = resolveMediaUnderstandingString(params.prompt, DEFAULT_QWEN_VIDEO_PROMPT);
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveProviderHttpRequestConfig({
-      baseUrl: params.baseUrl,
-      defaultBaseUrl: QWEN_STANDARD_GLOBAL_BASE_URL,
-      headers: params.headers,
-      request: params.request,
-      defaultHeaders: {
-        "content-type": "application/json",
-        authorization: `Bearer ${params.apiKey}`,
-      },
-      provider: "qwen",
-      api: "openai-completions",
-      capability: "video",
-      transport: "media-understanding",
-    });
+  const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+    baseUrl: params.baseUrl,
+    defaultBaseUrl: QWEN_STANDARD_GLOBAL_BASE_URL,
+    headers: params.headers,
+    request: params.request,
+    defaultHeaders: {
+      "content-type": "application/json",
+      authorization: `Bearer ${params.apiKey}`,
+    },
+    provider: "qwen",
+    api: "openai-completions",
+    capability: "video",
+    transport: "media-understanding",
+  });
 
   const { response: res, release } = await postJsonRequest({
     url: `${baseUrl}/chat/completions`,
@@ -54,7 +53,6 @@ export async function describeQwenVideo(
     }),
     timeoutMs: params.timeoutMs,
     fetchFn,
-    allowPrivateNetwork,
     dispatcherPolicy,
   });
 

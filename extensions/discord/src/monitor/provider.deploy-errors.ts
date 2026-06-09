@@ -1,11 +1,11 @@
 // Discord provider module implements model/runtime integration.
 import { inspect } from "node:util";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
 import { formatDurationSeconds } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { RateLimitError } from "../internal/discord.js";
 
 const DISCORD_DEPLOY_REJECTED_ENTRY_LIMIT = 3;

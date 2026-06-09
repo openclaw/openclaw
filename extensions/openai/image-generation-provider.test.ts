@@ -39,9 +39,6 @@ const {
     new Headers(params.headers).forEach((value, key) => headers.set(key, value));
     return {
       baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-      allowPrivateNetwork: Boolean(
-        params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork,
-      ),
       headers,
       dispatcherPolicy: undefined,
     };
@@ -242,7 +239,6 @@ type MockWithCalls = {
 };
 
 type HttpConfigCall = {
-  allowPrivateNetwork?: boolean;
   api?: string;
   baseUrl?: string;
   capability?: string;
@@ -253,7 +249,6 @@ type HttpConfigCall = {
 };
 
 type RequestCall = {
-  allowPrivateNetwork?: boolean;
   body?: unknown;
   dispatcherPolicy?: unknown;
   fetchFn?: typeof fetch;
@@ -525,11 +520,10 @@ describe("openai image generation provider", () => {
 
     expect(httpConfigCall().baseUrl).toBe("http://127.0.0.1:44080/v1");
     expect(jsonRequestCall().url).toBe("http://127.0.0.1:44080/v1/images/generations");
-    expect(jsonRequestCall().allowPrivateNetwork).toBe(false);
     expect(result.images).toHaveLength(1);
   });
 
-  it("allows OpenAI-compatible private image endpoints when browser SSRF policy opts in", async () => {
+  it("routes configured OpenAI-compatible private image endpoints", async () => {
     mockGeneratedPngResponse();
 
     const provider = buildOpenAIImageGenerationProvider();
@@ -556,9 +550,7 @@ describe("openai image generation provider", () => {
     });
 
     expect(httpConfigCall().baseUrl).toBe("http://192.168.1.15:8082/v1");
-    expect(httpConfigCall().allowPrivateNetwork).toBe(true);
     expect(jsonRequestCall().url).toBe("http://192.168.1.15:8082/v1/images/generations");
-    expect(jsonRequestCall().allowPrivateNetwork).toBe(true);
     expect(result.images).toHaveLength(1);
   });
 
@@ -807,15 +799,13 @@ describe("openai image generation provider", () => {
       },
     });
 
-    expect(httpConfigCall().allowPrivateNetwork).toBe(true);
+    expect(httpConfigCall().baseUrl).toBe("http://127.0.0.1:44080/v1");
     expect(jsonRequestCall().url).toBe("http://127.0.0.1:44080/v1/images/generations");
-    expect(jsonRequestCall().allowPrivateNetwork).toBe(true);
     expect(result.images).toHaveLength(1);
   });
 
-  it("allows loopback image requests for openai only inside the QA harness envelope", async () => {
+  it("routes configured loopback image requests for openai", async () => {
     mockGeneratedPngResponse();
-    vi.stubEnv("OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER", "1");
 
     const provider = buildOpenAIImageGenerationProvider();
     const result = await provider.generateImage({
@@ -834,8 +824,8 @@ describe("openai image generation provider", () => {
       },
     });
 
-    expect(httpConfigCall().allowPrivateNetwork).toBe(true);
-    expect(jsonRequestCall().allowPrivateNetwork).toBe(true);
+    expect(httpConfigCall().baseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(jsonRequestCall().url).toBe("http://127.0.0.1:44080/v1/images/generations");
     expect(result.images).toHaveLength(1);
   });
 
@@ -869,7 +859,6 @@ describe("openai image generation provider", () => {
     };
     expect(editCallArgs.url).toBe("https://api.openai.com/v1/images/edits");
     expect(editCallArgs.body).toBeInstanceOf(FormData);
-    expect(editCallArgs.allowPrivateNetwork).toBe(false);
     expect(editCallArgs.dispatcherPolicy).toBeUndefined();
     expect(editCallArgs.fetchFn).toBe(fetch);
     expect(editCallArgs.headers.has("Content-Type")).toBe(false);
@@ -1440,7 +1429,6 @@ describe("openai image generation provider", () => {
             openai: {
               baseUrl: "http://127.0.0.1:44220/backend-api/codex",
               api: "openai-chatgpt-responses",
-              request: { allowPrivateNetwork: true },
               models: [],
             },
           },
@@ -1450,13 +1438,10 @@ describe("openai image generation provider", () => {
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
 
-    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith({
-      allowPrivateNetwork: true,
-    });
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(undefined);
     expect(httpConfigCall().baseUrl).toBe("http://127.0.0.1:44220/backend-api/codex");
-    expect(httpConfigCall().request).toEqual({ allowPrivateNetwork: true });
+    expect(httpConfigCall().request).toBeUndefined();
     expect(jsonRequestCall().url).toBe("http://127.0.0.1:44220/backend-api/codex/responses");
-    expect(jsonRequestCall().allowPrivateNetwork).toBe(true);
     expect(jsonRequestCall().ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
     expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-image"));
   });
@@ -1558,7 +1543,6 @@ describe("openai image generation provider", () => {
               baseUrl: "https://api.openai.com/v1",
               api: "openai-responses",
               headers: { "X-Test-OpenAI": "direct" },
-              request: { allowPrivateNetwork: true },
               models: [],
             },
           },
@@ -1570,7 +1554,7 @@ describe("openai image generation provider", () => {
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledTimes(1);
     expect(authResolutionCall().provider).toBe("openai");
     expect(httpConfigCall().api).toBe("openai-responses");
-    expect(httpConfigCall().request).toEqual({ allowPrivateNetwork: true });
+    expect(httpConfigCall().request).toBeUndefined();
     expect(jsonRequestCall().url).toBe("https://api.openai.com/v1/images/generations");
     expect(jsonRequestCall().headers?.get("X-Test-OpenAI")).toBe("direct");
     expectNoJsonRequestUrl("https://chatgpt.com/backend-api/codex/responses");
@@ -1735,7 +1719,6 @@ describe("openai image generation provider", () => {
     });
 
     expect(multipartRequestCall().url).toBe("http://127.0.0.1:44080/v1/images/edits");
-    expect(multipartRequestCall().allowPrivateNetwork).toBe(false);
     expect(multipartRequestCall().dispatcherPolicy).toBeUndefined();
     expect(multipartRequestCall().fetchFn).toBe(fetch);
     expectNoJsonRequestUrl("http://127.0.0.1:44080/v1/images/edits");

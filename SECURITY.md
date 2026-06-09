@@ -113,11 +113,21 @@ These are frequently reported but are typically closed with no code change:
 - Claims that Microsoft Teams `fileConsent/invoke` `uploadInfo.uploadUrl` is attacker-controlled without demonstrating one of: auth boundary bypass, a real authenticated Teams/Bot Framework event carrying attacker-chosen URL, or compromise of the Microsoft/Bot trust path.
 - Scanner-only claims against stale/nonexistent paths, or claims without a working repro.
 - Reports that restate an already-fixed issue against later released versions without showing the vulnerable path still exists in the shipped tag or published artifact for that later version.
-- SSRF reports against the operator-managed HTTP/WebSocket proxy-routing feature whose only claim is that ordinary process-local HTTP clients (`fetch`, `node:http`, `node:https`, WebSocket clients, axios/got/node-fetch-style clients) can reach an internal, metadata, private, or otherwise sensitive destination when proxy routing is disabled, missing, or the operator-managed proxy policy allows it. For this feature, OpenClaw provides fail-closed proxy routing when enabled; the external proxy's destination policy is operator infrastructure, not an OpenClaw-controlled security boundary. See [Network proxy](https://docs.openclaw.ai/security/network-proxy).
+- SSRF reports whose only claim describes behavior expected under the documented [HTTP Egress and SSRF Boundary](#http-egress-and-ssrf-boundary) below. Reports are security-relevant when they show an OpenClaw-owned arbitrary untrusted URL fetch bypassing the stock direct-mode guard, or supported `proxy.enabled=true` runtime HTTP/WebSocket egress bypassing configured proxy routing. Reports are usually not vulnerabilities when they only show operator-configured endpoints, allowed destinations under the operator proxy policy, unsupported transport classes, or a missing/disabled/misconfigured external proxy.
 
 ### Maintainer GHSA Updates via CLI
 
 When patching a GHSA via `gh api`, include `X-GitHub-Api-Version: 2022-11-28` (or newer). Without it, some fields (notably CVSS) may not persist even if the request returns 200.
+
+### HTTP Egress and SSRF Boundary
+
+OpenClaw's high-assurance SSRF and egress-control boundary is `proxy.enabled=true` with an operator-managed filtering forward proxy. In that mode, supported process-local HTTP and WebSocket egress is routed through the configured proxy, and startup fails closed if proxy routing is enabled but no valid proxy URL is configured. The proxy's destination policy, DNS-rebinding resistance, audit logging, and allow/deny rules are operator infrastructure, not an OpenClaw-internal policy matrix. See [Network proxy](https://docs.openclaw.ai/security/network-proxy).
+
+When `proxy.enabled=false`, OpenClaw still keeps a narrow in-process stock guard for OpenClaw-owned arbitrary untrusted URL fetches. Examples include web fetches and user/model/content-supplied URL downloads that go through OpenClaw's canonical egress helper. That guard rejects localhost, loopback, link-local, metadata, private-network, DNS results resolving to those ranges, and redirect targets resolving to those ranges. This is a best-effort default safety check, not a complete SSRF defense and not a replacement for an external filtering proxy in high-assurance deployments.
+
+Operator-configured endpoints are treated as operator intent. Provider base URLs, remote MCP base URLs, configured self-hosted model endpoints, vendor APIs, and similar operator-owned destinations do not inherit the old per-call SSRF policy matrix. If a deployment needs to allow specific local or private services while blocking other destinations, configure that policy in the external proxy and enable `proxy.enabled`.
+
+The HTTP egress model does not claim coverage for browser/CDP navigation, subprocesses, sandbox executors, Docker/SSH boundaries, MCP stdio children, native addons, raw TCP/TLS transports, non-Node transport libraries, or other egress that does not use supported OpenClaw runtime HTTP/WebSocket paths. Those surfaces are assessed under their own trust boundaries.
 
 ### Operator Trust Model
 
@@ -177,7 +187,7 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 - Exposed secrets that are third-party/user-controlled credentials (not OpenClaw-owned and not granting access to OpenClaw-operated infrastructure/services) without demonstrated OpenClaw impact
 - Reports whose only claim is host-side exec when sandbox runtime is disabled/unavailable (documented default behavior in the trusted-operator model), without a boundary bypass.
 - Reports whose only claim is that a platform-provided upload destination URL is untrusted (for example Microsoft Teams `fileConsent/invoke` `uploadInfo.uploadUrl`) without proving attacker control in an authenticated production flow.
-- SSRF reports limited to the operator-managed HTTP/WebSocket proxy-routing feature where the demonstrated mitigation is to enable/configure `proxy.enabled` with a filtering `proxy.proxyUrl`/`OPENCLAW_PROXY_URL`, or where impact depends on a permissive/misconfigured operator proxy. This only covers normal process-local HTTP(S)/WebSocket egress (`fetch`, Node HTTP(S), and similar JavaScript clients); non-HTTP egress and other features are assessed separately. See [Network proxy](https://docs.openclaw.ai/security/network-proxy).
+- SSRF reports where the demonstrated behavior is expected under the [HTTP Egress and SSRF Boundary](#http-egress-and-ssrf-boundary): operator-configured endpoints reaching operator-chosen private/local services; destinations allowed by the configured external proxy; missing/disabled/misconfigured `proxy.enabled` in a deployment that requires high-assurance egress control; or unsupported egress classes such as raw TCP/TLS, native addons, subprocesses, sandbox executors, browser/CDP, Docker/SSH, MCP stdio, and non-Node transports. Reports that show a bypass of the stock direct-mode guard for OpenClaw-owned arbitrary untrusted URL fetches, or a bypass of configured proxy routing for supported runtime HTTP/WebSocket egress, are not covered by this out-of-scope rule.
 
 ### Deployment Assumptions
 

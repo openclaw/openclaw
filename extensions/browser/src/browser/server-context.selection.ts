@@ -129,7 +129,6 @@ export function createProfileSelectionOps({
       appendCdpPath(cdpHttpBase, `/json/activate/${resolvedTargetId}`),
       undefined,
       undefined,
-      getCdpControlPolicy(),
     );
     const profileState = getProfileState();
     profileState.lastTargetId = resolvedTargetId;
@@ -163,7 +162,6 @@ export function createProfileSelectionOps({
       appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
       undefined,
       undefined,
-      getCdpControlPolicy(),
     );
   };
 

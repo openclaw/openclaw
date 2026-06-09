@@ -24,20 +24,20 @@ import {
 
 const mocks = vi.hoisted(() => ({
   githubCopilotLoginCommand: vi.fn(),
-  fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
+  fetchWithResponseRelease: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
     response: await fetch(params.url, params.init),
     release: vi.fn(async () => {}),
   })),
   resolveCopilotApiToken: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
-    "openclaw/plugin-sdk/ssrf-runtime",
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/fetch-runtime")>(
+    "openclaw/plugin-sdk/fetch-runtime",
   );
   return {
     ...actual,
-    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+    fetchWithResponseRelease: mocks.fetchWithResponseRelease,
   };
 });
 

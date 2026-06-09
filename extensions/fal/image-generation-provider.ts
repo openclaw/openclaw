@@ -1,3 +1,4 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Fal provider module implements model/runtime integration.
 import type {
   GeneratedImageAsset,
@@ -14,13 +15,6 @@ import {
   assertOkOrThrowProviderError,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import {
-  buildHostnameAllowlistPolicyFromSuffixAllowlist,
-  fetchWithSsrFGuard,
-  mergeSsrFPolicies,
-  type SsrFPolicy,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -106,22 +100,10 @@ type FalImageModelSchema = {
   supportsOutputFormat: boolean;
   defaultBody?: Record<string, unknown>;
 };
-type FalNetworkPolicy = {
-  apiPolicy?: SsrFPolicy;
-  trustedDownloadHostSuffix?: string;
-  trustedDownloadPolicy?: SsrFPolicy;
-};
+let falFetchGuard = fetchWithResponseRelease;
 
-let falFetchGuard = fetchWithSsrFGuard;
-
-export function setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
-  falFetchGuard = impl ?? fetchWithSsrFGuard;
-}
-
-function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): boolean {
-  const normalizedHost = normalizeLowercaseStringOrEmpty(hostname);
-  const normalizedSuffix = normalizeLowercaseStringOrEmpty(trustedSuffix);
-  return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);
+export function setFalFetchGuardForTesting(impl: typeof fetchWithResponseRelease | null): void {
+  falFetchGuard = impl ?? fetchWithResponseRelease;
 }
 
 function parseFalImageGenerationResponse(payload: unknown): {
@@ -146,32 +128,6 @@ function parseFalImageGenerationResponse(payload: unknown): {
     images.push(entry);
   }
   return { images, prompt: normalizeOptionalString(payload.prompt) };
-}
-
-function resolveFalNetworkPolicy(params: {
-  baseUrl: string;
-  allowPrivateNetwork: boolean;
-}): FalNetworkPolicy {
-  let parsedBaseUrl: URL;
-  try {
-    parsedBaseUrl = new URL(params.baseUrl);
-  } catch {
-    return {};
-  }
-
-  const hostSuffix = normalizeLowercaseStringOrEmpty(parsedBaseUrl.hostname);
-  if (!hostSuffix || !params.allowPrivateNetwork) {
-    return {};
-  }
-
-  const hostPolicy = buildHostnameAllowlistPolicyFromSuffixAllowlist([hostSuffix]);
-  const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(true);
-  const trustedHostPolicy = mergeSsrFPolicies(hostPolicy, privateNetworkPolicy);
-  return {
-    apiPolicy: trustedHostPolicy,
-    trustedDownloadHostSuffix: hostSuffix,
-    trustedDownloadPolicy: trustedHostPolicy,
-  };
 }
 
 function ensureFalModelPath(model: string | undefined, hasInputImages: boolean): string {
@@ -487,26 +443,10 @@ function resolveGeneratedImageMaxBytes(req: {
 
 async function fetchImageBuffer(
   url: string,
-  networkPolicy?: FalNetworkPolicy,
   maxBytes = DEFAULT_GENERATED_IMAGE_MAX_BYTES,
 ): Promise<{ buffer: Buffer; mimeType: string }> {
-  const downloadPolicy = (() => {
-    const trustedSuffix = networkPolicy?.trustedDownloadHostSuffix;
-    const trustedPolicy = networkPolicy?.trustedDownloadPolicy;
-    if (!trustedSuffix || !trustedPolicy) {
-      return undefined;
-    }
-    try {
-      const parsed = new URL(url);
-      return matchesTrustedHostSuffix(parsed.hostname, trustedSuffix) ? trustedPolicy : undefined;
-    } catch {
-      return undefined;
-    }
-  })();
   const { response, release } = await falFetchGuard({
     url,
-    policy: downloadPolicy,
-    auditContext: "fal-image-download",
   });
   try {
     await assertOkOrThrowProviderError(response, "fal image download failed");
@@ -596,9 +536,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       if (!schema.supportsOutputFormat && req.outputFormat) {
         throw new Error(`fal ${requestedModel} does not support outputFormat overrides`);
       }
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        await resolveFalHttpRequestConfig({ req, capability: "image" });
-      const networkPolicy = resolveFalNetworkPolicy({ baseUrl, allowPrivateNetwork });
+      const { baseUrl, headers } = await resolveFalHttpRequestConfig({ req, capability: "image" });
       const maxImageBytes = resolveGeneratedImageMaxBytes(req);
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
@@ -638,9 +576,6 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           body: JSON.stringify(requestBody),
         },
         timeoutMs: req.timeoutMs,
-        policy: networkPolicy.apiPolicy,
-        dispatcherPolicy,
-        auditContext: "fal-image-generate",
       });
       try {
         await assertOkOrThrowHttpError(response, "fal image generation failed");
@@ -653,7 +588,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           if (!url) {
             throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
           }
-          const downloaded = await fetchImageBuffer(url, networkPolicy, maxImageBytes);
+          const downloaded = await fetchImageBuffer(url, maxImageBytes);
           imageIndex += 1;
           images.push({
             buffer: downloaded.buffer,

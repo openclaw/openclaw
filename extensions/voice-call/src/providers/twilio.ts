@@ -834,8 +834,6 @@ export class TwilioProvider implements VoiceCallProvider {
           Authorization: `Basic ${Buffer.from(`${this.accountSid}:${this.authToken}`).toString("base64")}`,
         },
         allowNotFound: true,
-        allowedHostnames: ["api.twilio.com"],
-        auditContext: "twilio-get-call-status",
         errorPrefix: "Twilio get call status error",
       });
 

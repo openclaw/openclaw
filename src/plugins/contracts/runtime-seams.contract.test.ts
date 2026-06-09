@@ -2,12 +2,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "../../infra/net/undici-runtime.js";
 import * as activationCheck from "../../plugin-sdk/facade-activation-check.runtime.js";
 import * as facadeRuntime from "../../plugin-sdk/facade-runtime.js";
@@ -141,7 +141,7 @@ describe("shared runtime seam contracts", () => {
     expect(facadeRuntime.listImportedBundledPluginFacadeIds()).toEqual([pluginId]);
   });
 
-  it("keeps guarded fetch on mocked global fetches even when a dispatcher is attached", async () => {
+  it("keeps fetchWithResponseRelease on plain mocked global fetches", async () => {
     class MockAgent {
       constructor(readonly options: unknown) {}
     }
@@ -155,7 +155,7 @@ describe("shared runtime seam contracts", () => {
     const runtimeFetch = vi.fn(async () => new Response("runtime", { status: 200 }));
     const globalFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(requestInit.dispatcher).toBeInstanceOf(MockAgent);
+      expect(requestInit.dispatcher).toBeUndefined();
       return new Response("mock", { status: 200 });
     });
 
@@ -167,18 +167,71 @@ describe("shared runtime seam contracts", () => {
       fetch: runtimeFetch,
     };
 
-    const lookupFn = vi.fn(
-      async () => ({ address: "93.184.216.34", family: 4 }) as const,
-    ) as unknown as NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]>;
-
-    const result = await fetchWithSsrFGuard({
+    const result = await fetchWithResponseRelease({
       url: "https://public.example/resource",
-      lookupFn,
     });
 
     expect(globalFetch).toHaveBeenCalledTimes(1);
     expect(runtimeFetch).not.toHaveBeenCalled();
     expect(await result.response.text()).toBe("mock");
+    await result.release();
+  });
+
+  it("strips custom secret headers on fetchWithResponseRelease cross-origin redirects", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 307,
+          headers: { location: "https://other.example/final" },
+        }),
+      )
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    const result = await fetchWithResponseRelease({
+      url: "https://api.example/start",
+      fetchImpl,
+      init: {
+        method: "POST",
+        body: "secret-body",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "x-api-key": "secret",
+        },
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const redirectedInit = fetchImpl.mock.calls[1]?.[1];
+    expect(redirectedInit?.method).toBe("POST");
+    expect(redirectedInit?.body).toBeUndefined();
+    const redirectedHeaders = new Headers(redirectedInit?.headers);
+    expect(redirectedHeaders.get("accept")).toBe("application/json");
+    expect(redirectedHeaders.get("x-api-key")).toBeNull();
+    expect(redirectedHeaders.get("content-type")).toBeNull();
+    expect(result.finalUrl).toBe("https://other.example/final");
+    await result.release();
+  });
+
+  it("can leave redirects for callers with manual redirect policy", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(null, {
+        status: 302,
+        headers: { location: "https://other.example/final" },
+      }),
+    );
+
+    const result = await fetchWithResponseRelease({
+      url: "https://api.example/start",
+      fetchImpl,
+      followRedirects: false,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(result.response.status).toBe(302);
+    expect(result.response.headers.get("location")).toBe("https://other.example/final");
+    expect(result.finalUrl).toBe("https://api.example/start");
     await result.release();
   });
 });

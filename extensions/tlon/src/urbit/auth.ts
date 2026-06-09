@@ -1,5 +1,5 @@
 // Tlon plugin module implements auth behavior.
-import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-policy";
 import { UrbitAuthError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 
@@ -28,7 +28,6 @@ export async function authenticate(
     fetchImpl: options.fetchImpl,
     timeoutMs: options.timeoutMs ?? 15_000,
     maxRedirects: 3,
-    auditContext: "tlon-urbit-login",
   });
 
   try {

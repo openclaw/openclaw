@@ -353,33 +353,24 @@ describe("provider request config", () => {
     });
   });
 
-  it("preserves request.allowPrivateNetwork for operator-trusted LAN/overlay model bases", () => {
-    expect(sanitizeConfiguredModelProviderRequest({ allowPrivateNetwork: true })).toEqual({
-      allowPrivateNetwork: true,
-    });
-    expect(sanitizeConfiguredModelProviderRequest({ allowPrivateNetwork: false })).toEqual({
-      allowPrivateNetwork: false,
-    });
+  it("does not preserve retired config request.allowPrivateNetwork for model-provider config", () => {
     expect(
-      sanitizeConfiguredProviderRequest({
+      sanitizeConfiguredModelProviderRequest({
         allowPrivateNetwork: true,
-      } as ConfiguredProviderRequest),
+      } as unknown as ConfiguredProviderRequest),
     ).toBeUndefined();
   });
 
-  it("merges allowPrivateNetwork with later override winning", () => {
+  it("merges model provider request overrides with later entries winning", () => {
     expect(
       mergeModelProviderRequestOverrides(
-        { allowPrivateNetwork: true },
-        { allowPrivateNetwork: false },
+        { headers: { "X-Provider": "1", "X-Shared": "old" } },
+        { headers: { "X-Shared": "new" }, proxy: { mode: "env-proxy" } },
       ),
-    ).toEqual({ allowPrivateNetwork: false });
-    expect(
-      mergeModelProviderRequestOverrides(
-        { allowPrivateNetwork: false },
-        { allowPrivateNetwork: true },
-      ),
-    ).toEqual({ allowPrivateNetwork: true });
+    ).toEqual({
+      headers: { "X-Provider": "1", "X-Shared": "new" },
+      proxy: { mode: "env-proxy" },
+    });
   });
 
   it("merges configured request overrides with later entries winning", () => {
@@ -562,8 +553,6 @@ describe("provider request config", () => {
     });
 
     expect(resolved.baseUrl).toBe("https://api.openai.com/v1");
-    expect(resolved.allowPrivateNetwork).toBe(false);
-    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
     expect(resolved.policy.endpointClass).toBe("openai-public");
     expect(resolved.capabilities.allowsResponsesStore).toBe(true);
     expect(resolved.headers?.authorization).toBe("Bearer test-key");
@@ -573,7 +562,7 @@ describe("provider request config", () => {
     expect(resolved.headers?.["X-Custom"]).toBe("1");
   });
 
-  it("does not convert implicit loopback model requests into broad private-network trust", () => {
+  it("classifies implicit loopback model requests without private-network result fields", () => {
     const resolved = resolveProviderRequestPolicyConfig({
       provider: "local-agent-proxy",
       api: "openai-completions",
@@ -582,22 +571,7 @@ describe("provider request config", () => {
       transport: "stream",
     });
 
-    expect(resolved.allowPrivateNetwork).toBe(false);
-    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
-  });
-
-  it("keeps explicit private-network denial for loopback model requests", () => {
-    const resolved = resolveProviderRequestPolicyConfig({
-      provider: "local-agent-proxy",
-      api: "openai-completions",
-      baseUrl: "http://127.0.0.1:3000/v1",
-      capability: "llm",
-      transport: "stream",
-      request: { allowPrivateNetwork: false },
-    });
-
-    expect(resolved.allowPrivateNetwork).toBe(false);
-    expect(resolved.privateNetworkExplicitlyDenied).toBe(true);
+    expect(resolved.policy.endpointClass).toBe("local");
   });
 
   it("does not auto-allow non-loopback private model-provider hosts", () => {
@@ -609,8 +583,7 @@ describe("provider request config", () => {
       transport: "stream",
     });
 
-    expect(resolved.allowPrivateNetwork).toBe(false);
-    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
+    expect(resolved.policy.endpointClass).toBe("custom");
   });
 
   it.each([
@@ -645,6 +618,5 @@ describe("provider request config", () => {
     });
 
     expect(resolved.policy.endpointClass).toBe(entry.expectedEndpointClass);
-    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
   });
 });

@@ -232,7 +232,6 @@ describe("google generative ai helpers", () => {
       transport: "media-understanding",
     });
     expect(oauthConfig.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
-    expect(oauthConfig.allowPrivateNetwork).toBe(false);
     expect(Object.fromEntries(new Headers(oauthConfig.headers).entries())).toEqual({
       authorization: "Bearer oauth-token",
       "content-type": "application/json",
@@ -244,7 +243,6 @@ describe("google generative ai helpers", () => {
       transport: "http",
     });
     expect(apiKeyConfig.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
-    expect(apiKeyConfig.allowPrivateNetwork).toBe(false);
     expect(Object.fromEntries(new Headers(apiKeyConfig.headers).entries())).toEqual({
       "content-type": "application/json",
       "x-goog-api-key": "api-key-123",
@@ -270,7 +268,7 @@ describe("google generative ai helpers", () => {
     expect(normalized).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
   });
 
-  it("rejects non-Google Gemini base URLs and honors explicit private-network opt-in", () => {
+  it("rejects non-Google Gemini base URLs", () => {
     expect(() =>
       resolveGoogleGenerativeAiHttpRequestConfig({
         apiKey: "api-key-123",
@@ -288,14 +286,5 @@ describe("google generative ai helpers", () => {
         transport: "http",
       }),
     ).toThrow("Google Generative AI baseUrl must use https://generativelanguage.googleapis.com");
-
-    const config = resolveGoogleGenerativeAiHttpRequestConfig({
-      apiKey: "api-key-123",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      capability: "image",
-      transport: "http",
-      request: { allowPrivateNetwork: true },
-    });
-    expect(config.allowPrivateNetwork).toBe(true);
   });
 });

@@ -6,11 +6,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
@@ -811,7 +811,7 @@ async function callTelegramApi<T>(
   timeoutMs = 15_000,
 ): Promise<T> {
   const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 15_000);
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: `https://api.telegram.org/bot${token}/${method}`,
     init: {
       method: "POST",
@@ -821,8 +821,6 @@ async function callTelegramApi<T>(
       body: JSON.stringify(body ?? {}),
     },
     timeoutMs: requestTimeoutMs,
-    policy: { hostnameAllowlist: ["api.telegram.org"] },
-    auditContext: "qa-lab-telegram-live",
   });
   try {
     const payload = (await response.json()) as TelegramApiEnvelope<T>;

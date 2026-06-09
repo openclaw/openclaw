@@ -18,8 +18,8 @@ const qaTempPathState = vi.hoisted(() => ({
   preferredTmpDir: process.env.TMPDIR || "/tmp",
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchWithResponseRelease: fetchWithSsrFGuardMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/temp-path", () => ({
@@ -71,11 +71,9 @@ type AuthProfileStore = {
   profiles: Record<string, AuthProfileRecord>;
 };
 
-type SsrFetchCall = {
+type ResponseReleaseFetchCall = {
   url: string;
   init?: RequestInit;
-  policy?: unknown;
-  auditContext?: string;
 };
 
 function parseAuthProfileStore(raw: string): AuthProfileStore {
@@ -93,12 +91,12 @@ function requireAuthProfile(
   return profile;
 }
 
-function requireSsrFetchCall(index = 0): SsrFetchCall {
+function requireResponseReleaseFetchCall(index = 0): ResponseReleaseFetchCall {
   const call = fetchWithSsrFGuardMock.mock.calls[index];
   if (!call) {
-    throw new Error(`expected SSRF fetch call ${index}`);
+    throw new Error(`expected response-release fetch call ${index}`);
   }
-  return call[0] as SsrFetchCall;
+  return call[0] as ResponseReleaseFetchCall;
 }
 
 async function expectPathMissing(filePath: string): Promise<void> {
@@ -918,7 +916,7 @@ describe("buildQaRuntimeEnv", () => {
     ).rejects.toThrow(/ENOENT/);
   });
 
-  it("allows loopback gateway health probes through the SSRF guard", async () => {
+  it("allows loopback gateway health probes through the response-release fetch helper", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: { ok: true },
@@ -932,10 +930,8 @@ describe("buildQaRuntimeEnv", () => {
       }),
     ).resolves.toBe(true);
 
-    const request = requireSsrFetchCall();
+    const request = requireResponseReleaseFetchCall();
     expect(request.url).toBe("http://127.0.0.1:18789/readyz");
-    expect(request.policy).toEqual({ allowPrivateNetwork: true });
-    expect(request.auditContext).toBe("qa-lab-gateway-child-health");
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -1001,7 +997,7 @@ describe("buildQaRuntimeEnv", () => {
     expect(testing.isRetryableRpcStartupError("permission denied")).toBe(false);
   });
 
-  it("probes gateway health with a one-shot HEAD request through the SSRF guard", async () => {
+  it("probes gateway health with a one-shot HEAD request", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: { ok: true },
@@ -1015,13 +1011,11 @@ describe("buildQaRuntimeEnv", () => {
       }),
     ).resolves.toBe(true);
 
-    const request = requireSsrFetchCall();
+    const request = requireResponseReleaseFetchCall();
     expect(request.url).toBe("http://127.0.0.1:43124/readyz");
     expect(request.init?.method).toBe("HEAD");
     expect(request.init?.headers).toEqual({ connection: "close" });
     expect(request.init?.signal).toBeInstanceOf(AbortSignal);
-    expect(request.policy).toEqual({ allowPrivateNetwork: true });
-    expect(request.auditContext).toBe("qa-lab-gateway-child-health");
     expect(release).toHaveBeenCalledTimes(1);
   });
 

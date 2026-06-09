@@ -14,7 +14,6 @@ type FetchProviderDownloadResponseParams = Parameters<typeof fetchProviderDownlo
 
 type ResolveProviderHttpRequestConfigResult = {
   baseUrl: string;
-  allowPrivateNetwork: boolean;
   headers: Headers;
   dispatcherPolicy: undefined;
 };
@@ -42,7 +41,6 @@ const minimaxProviderHttpMocks = vi.hoisted(() => ({
   assertOkOrThrowHttpErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
   resolveProviderHttpRequestConfigMock: vi.fn((params: ResolveProviderHttpRequestConfigParams) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: false,
     headers: new Headers(params.defaultHeaders),
     dispatcherPolicy: undefined,
   })),

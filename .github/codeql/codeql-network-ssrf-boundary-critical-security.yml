@@ -16,7 +16,6 @@ query-filters:
 paths:
   - src/infra/net
   - src/agents/tools/web-fetch.ts
-  - src/agents/tools/web-guarded-fetch.ts
   - src/agents/tools/web-shared.ts
   - src/plugin-sdk/ssrf-policy.ts
   - src/web-fetch

@@ -780,8 +780,8 @@ describe("config schema", () => {
     });
   });
 
-  it("accepts web fetch ssrfPolicy in the runtime zod schema", () => {
-    const parsed = ToolsSchema.parse({
+  it("rejects retired web fetch ssrfPolicy in the runtime zod schema", () => {
+    const result = ToolsSchema.safeParse({
       web: {
         fetch: {
           ssrfPolicy: {
@@ -792,14 +792,11 @@ describe("config schema", () => {
       },
     });
 
-    expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-    });
+    expect(result.success).toBe(false);
   });
 
-  it("accepts web fetch trusted env proxy opt-in in the runtime zod schema", () => {
-    const parsed = ToolsSchema.parse({
+  it("rejects retired web fetch trusted env proxy opt-in in the runtime zod schema", () => {
+    const result = ToolsSchema.safeParse({
       web: {
         fetch: {
           useTrustedEnvProxy: true,
@@ -807,7 +804,7 @@ describe("config schema", () => {
       },
     });
 
-    expect(parsed?.web?.fetch?.useTrustedEnvProxy).toBe(true);
+    expect(result.success).toBe(false);
   });
 
   it("rejects allowPrivateNetwork on media-understanding request config", () => {

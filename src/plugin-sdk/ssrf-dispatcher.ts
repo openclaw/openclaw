@@ -2,8 +2,11 @@
 
 export {
   closeDispatcher,
+  createPinnedLookup,
   createPinnedDispatcher,
+  resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,
+  type LookupFn,
   type PinnedDispatcherPolicy,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";

@@ -37,7 +37,6 @@ export async function resolveFalHttpRequestConfig(params: {
   return resolveProviderHttpRequestConfig({
     baseUrl: params.baseUrl ?? resolveFalConfiguredBaseUrl(params.req.cfg),
     defaultBaseUrl: DEFAULT_FAL_BASE_URL,
-    allowPrivateNetwork: false,
     defaultHeaders: {
       Authorization: `Key ${auth.apiKey}`,
       "Content-Type": "application/json",

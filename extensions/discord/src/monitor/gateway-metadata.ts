@@ -1,17 +1,16 @@
 // Discord plugin module implements gateway metadata behavior.
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createHttp1ProxyAgent, fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { captureHttpExchange } from "openclaw/plugin-sdk/proxy-capture";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { Type } from "typebox";
 import { Check, Errors } from "typebox/value";
 import { isDiscordRateLimitResponseBody, summarizeDiscordResponseBody } from "../error-body.js";
 import { withAbortTimeout } from "./timeouts.js";
 
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
-const DISCORD_API_HOST = "discord.com";
 const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
 const DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 30_000;
 const MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 120_000;
@@ -275,28 +274,22 @@ export async function fetchDiscordGatewayMetadataGuarded(
   init?: DiscordGatewayFetchInit,
   options?: DiscordGatewayMetadataFetchOptions,
 ): Promise<Response> {
-  const guarded = await fetchWithSsrFGuard({
+  const dispatcher = options?.proxyUrl
+    ? createHttp1ProxyAgent({ uri: options.proxyUrl })
+    : undefined;
+  const guarded = await fetchWithResponseRelease({
     url: resolveFetchInputUrl(input),
-    init: init as RequestInit,
-    policy: { allowedHostnames: [DISCORD_API_HOST] },
-    capture: false,
-    auditContext: "discord.gateway.metadata",
-    ...(options?.proxyUrl
-      ? {
-          mode: "trusted_explicit_proxy" as const,
-          dispatcherPolicy: {
-            mode: "explicit-proxy" as const,
-            proxyUrl: options.proxyUrl,
-            allowPrivateProxy: true,
-          },
-        }
-      : {}),
+    init: {
+      ...(init as RequestInit),
+      ...(dispatcher ? { dispatcher } : {}),
+    },
   });
   let response: Response;
   try {
     response = await materializeGuardedResponse(guarded.response);
   } finally {
     await guarded.release();
+    await dispatcher?.close().catch(() => undefined);
   }
   if (options?.capture) {
     captureHttpExchange({

@@ -54,7 +54,7 @@ const { FakeWebSocket, providerAuthMocks, ssrfMocks } = vi.hoisted(() => {
       resolveProviderAuthProfileApiKey: vi.fn(),
     },
     ssrfMocks: {
-      fetchWithSsrFGuard: vi.fn(),
+      fetchWithResponseRelease: vi.fn(),
     },
   };
 });
@@ -68,8 +68,8 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   resolveProviderAuthProfileApiKey: providerAuthMocks.resolveProviderAuthProfileApiKey,
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: ssrfMocks.fetchWithSsrFGuard,
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchWithResponseRelease: ssrfMocks.fetchWithResponseRelease,
 }));
 
 type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
@@ -110,7 +110,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     FakeWebSocket.instances = [];
     providerAuthMocks.isProviderAuthProfileConfigured.mockReset();
     providerAuthMocks.resolveProviderAuthProfileApiKey.mockReset();
-    ssrfMocks.fetchWithSsrFGuard.mockReset();
+    ssrfMocks.fetchWithResponseRelease.mockReset();
     vi.stubEnv("OPENAI_API_KEY", "");
   });
 
@@ -219,7 +219,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     const provider = buildOpenAIRealtimeTranscriptionProvider();
     const release = vi.fn();
     providerAuthMocks.resolveProviderAuthProfileApiKey.mockResolvedValue("oauth-token");
-    ssrfMocks.fetchWithSsrFGuard.mockResolvedValue({
+    ssrfMocks.fetchWithResponseRelease.mockResolvedValue({
       response: new Response(JSON.stringify({ value: "ek-test" }), { status: 200 }),
       release,
     });
@@ -237,8 +237,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
       provider: "openai",
       cfg,
     });
-    const request = mockCallArg(ssrfMocks.fetchWithSsrFGuard);
-    expect(request.auditContext).toBe("openai-realtime-transcription-session");
+    const request = mockCallArg(ssrfMocks.fetchWithResponseRelease);
     expect(request.url).toBe("https://api.openai.com/v1/realtime/transcription_sessions");
     const init = request.init as {
       method?: string;

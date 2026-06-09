@@ -354,19 +354,17 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
         timeoutMs: req.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
         label: "MiniMax video generation",
       });
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveMinimaxVideoBaseUrl(req.cfg, providerId),
-          defaultBaseUrl: DEFAULT_MINIMAX_VIDEO_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: providerId,
-          capability: "video",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: resolveMinimaxVideoBaseUrl(req.cfg, providerId),
+        defaultBaseUrl: DEFAULT_MINIMAX_VIDEO_BASE_URL,
+        defaultHeaders: {
+          Authorization: `Bearer ${auth.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        provider: providerId,
+        capability: "video",
+        transport: "http",
+      });
       const model = normalizeOptionalString(req.model) ?? DEFAULT_MINIMAX_VIDEO_MODEL;
       const body: Record<string, unknown> = {
         model,
@@ -399,7 +397,6 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         }),
         fetchFn,
-        allowPrivateNetwork,
         dispatcherPolicy,
       });
       try {

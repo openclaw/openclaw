@@ -317,13 +317,7 @@ const ConfiguredProviderRequestSchema = z
   .strict()
   .optional();
 
-const ConfiguredModelProviderRequestSchema = z
-  .object({
-    ...ConfiguredProviderRequestFields,
-    allowPrivateNetwork: z.boolean().optional(),
-  })
-  .strict()
-  .optional();
+const ConfiguredModelProviderRequestSchema = ConfiguredProviderRequestSchema;
 
 const ModelAgentRuntimePolicySchema = z
   .object({

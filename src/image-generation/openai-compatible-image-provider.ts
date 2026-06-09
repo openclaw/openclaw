@@ -54,11 +54,6 @@ export type OpenAiCompatibleImageProviderOptions = {
     providerConfig?: ModelProviderConfig;
     defaultBaseUrl: string;
   }) => string;
-  resolveAllowPrivateNetwork?: (params: {
-    baseUrl: string;
-    req: ImageGenerationRequest;
-    providerConfig?: ModelProviderConfig;
-  }) => boolean | undefined;
   useConfiguredRequest?: boolean;
   defaultTimeoutMs?: number;
   resolveCount?: (params: {
@@ -195,20 +190,9 @@ export function createOpenAiCompatibleImageGenerationProvider(
         }) ??
         normalizeOptionalString(providerConfig?.baseUrl) ??
         options.defaultBaseUrl;
-      const allowPrivateNetwork = options.resolveAllowPrivateNetwork?.({
-        baseUrl: resolvedBaseUrl,
-        req,
-        providerConfig,
-      });
-      const {
-        baseUrl,
-        allowPrivateNetwork: resolvedAllowPrivateNetwork,
-        headers,
-        dispatcherPolicy,
-      } = resolveProviderHttpRequestConfig({
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
         baseUrl: resolvedBaseUrl,
         defaultBaseUrl: options.defaultBaseUrl,
-        allowPrivateNetwork,
         request: options.useConfiguredRequest
           ? sanitizeConfiguredModelProviderRequest(providerConfig?.request)
           : undefined,
@@ -242,7 +226,6 @@ export function createOpenAiCompatibleImageGenerationProvider(
               body: requestBody.form,
               timeoutMs,
               fetchFn: fetch,
-              allowPrivateNetwork: resolvedAllowPrivateNetwork,
               ssrfPolicy: req.ssrfPolicy,
               dispatcherPolicy,
             })
@@ -256,7 +239,6 @@ export function createOpenAiCompatibleImageGenerationProvider(
               body: requestBody.body,
               timeoutMs,
               fetchFn: fetch,
-              allowPrivateNetwork: resolvedAllowPrivateNetwork,
               ssrfPolicy: req.ssrfPolicy,
               dispatcherPolicy,
             });

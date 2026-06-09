@@ -8,29 +8,21 @@ import {
   NVIDIA_FEATURED_MODELS_URL,
 } from "./provider-catalog.js";
 
-const ssrfRuntimeMocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(),
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: vi.fn((baseUrl: string) => ({
-    allowedHostnames: [new URL(baseUrl).hostname],
-  })),
-}));
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ssrfRuntimeMocks);
+const featuredCatalogFetchMock = vi.hoisted(() => vi.fn());
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   clearNvidiaFeaturedModelCacheForTests();
-  ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
-  ssrfRuntimeMocks.ssrfPolicyFromHttpBaseUrlAllowedHostname.mockClear();
+  featuredCatalogFetchMock.mockReset();
 });
 
-function mockFeaturedCatalogResponse(payload: unknown, status = 200) {
-  const release = vi.fn();
-  ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-    response: Response.json(payload, { status }),
-    release,
-  });
-  return release;
+function mockFeaturedCatalogResponse(payload: unknown, status = 200): void {
+  vi.stubGlobal("fetch", featuredCatalogFetchMock);
+  vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+  vi.stubEnv("OPENCLAW_PROXY_LOOPBACK_MODE", "gateway-only");
+  featuredCatalogFetchMock.mockResolvedValueOnce(Response.json(payload, { status }));
 }
 
 describe("nvidia provider catalog", () => {
@@ -65,7 +57,7 @@ describe("nvidia provider catalog", () => {
   });
 
   it("promotes ranked models from NVIDIA's featured catalog", async () => {
-    const release = mockFeaturedCatalogResponse({
+    mockFeaturedCatalogResponse({
       "featured-models": [
         {
           model: "z-ai/glm-5.1",
@@ -94,17 +86,14 @@ describe("nvidia provider catalog", () => {
       maxTokens: 8192,
       compat: { requiresStringContent: true },
     });
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
-      auditContext: "nvidia-featured-model-catalog",
-      init: { headers: expect.any(Headers) },
-      lookupFn: expect.any(Function),
-      policy: { allowedHostnames: ["assets.ngc.nvidia.com"] },
-      signal: undefined,
-      timeoutMs: 10_000,
-      url: NVIDIA_FEATURED_MODELS_URL,
-      requireHttps: true,
-    });
-    expect(release).toHaveBeenCalledOnce();
+    expect(featuredCatalogFetchMock).toHaveBeenCalledWith(
+      NVIDIA_FEATURED_MODELS_URL,
+      expect.objectContaining({
+        headers: expect.any(Headers),
+        redirect: "manual",
+        signal: expect.any(AbortSignal),
+      }),
+    );
   });
 
   it("falls back to the bundled catalog when the featured catalog is unavailable", async () => {
@@ -209,7 +198,7 @@ describe("nvidia provider catalog", () => {
     await buildLiveNvidiaProvider();
     await buildLiveNvidiaProvider();
 
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
+    expect(featuredCatalogFetchMock).toHaveBeenCalledOnce();
   });
 
   it("skips featured catalog cache when ttl expiry overflows", async () => {
@@ -240,7 +229,7 @@ describe("nvidia provider catalog", () => {
 
     expect(first.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m2.7"]);
     expect(second.models.map((model) => model.id)).toEqual(["z-ai/glm-5.1"]);
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+    expect(featuredCatalogFetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not cache successful featured catalog responses with no usable rows", async () => {
@@ -278,7 +267,7 @@ describe("nvidia provider catalog", () => {
       "z-ai/glm5",
     ]);
     expect(second.models.map((model) => model.id)).toEqual(["z-ai/glm-5.1"]);
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+    expect(featuredCatalogFetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("applies bundled Ultra defaults when featured catalog returns Ultra", async () => {

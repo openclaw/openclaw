@@ -20,7 +20,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
-import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { APP_NAME, getBinDir } from "../config.js";
 
 const TOOLS_DIR = getBinDir();
@@ -125,17 +125,20 @@ export function getToolPath(tool: "fd" | "rg"): string | null {
 
 // Fetch latest release version from GitHub
 async function getLatestVersion(repo: string): Promise<string> {
-  const guarded = await fetchWithSsrFGuard({
-    url: `https://api.github.com/repos/${repo}/releases/latest`,
+  const url = `https://api.github.com/repos/${repo}/releases/latest`;
+  const timeout = buildTimeoutAbortSignal({
     timeoutMs: NETWORK_TIMEOUT_MS,
-    auditContext: "tools-manager-release-check",
-    init: {
-      headers: { "User-Agent": `${APP_NAME}-coding-agent` },
-    },
+    operation: "tool-release-check",
+    url,
   });
-  const { response } = guarded;
+  let response: Response | undefined;
 
   try {
+    response = await fetch(url, {
+      headers: { "User-Agent": `${APP_NAME}-coding-agent` },
+      ...(timeout.signal ? { signal: timeout.signal } : {}),
+    });
+
     if (!response.ok) {
       throw new Error(`GitHub API error: ${response.status}`);
     }
@@ -143,20 +146,22 @@ async function getLatestVersion(repo: string): Promise<string> {
     const data = (await response.json()) as { tag_name: string };
     return data.tag_name.replace(/^v/, "");
   } finally {
-    await guarded.release();
+    timeout.cleanup();
+    await response?.body?.cancel().catch(() => undefined);
   }
 }
 
 // Download a file from URL
 async function downloadFile(url: string, dest: string): Promise<void> {
-  const guarded = await fetchWithSsrFGuard({
-    url,
+  const timeout = buildTimeoutAbortSignal({
     timeoutMs: DOWNLOAD_TIMEOUT_MS,
-    auditContext: "tools-manager-download",
+    operation: "tool-binary-download",
+    url,
   });
-  const { response } = guarded;
+  let response: Response | undefined;
 
   try {
+    response = await fetch(url, timeout.signal ? { signal: timeout.signal } : {});
     if (!response.ok) {
       throw new Error(`Failed to download: ${response.status}`);
     }
@@ -168,7 +173,8 @@ async function downloadFile(url: string, dest: string): Promise<void> {
     const fileStream = createWriteStream(dest);
     await pipeline(Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>), fileStream);
   } finally {
-    await guarded.release();
+    timeout.cleanup();
+    await response?.body?.cancel().catch(() => undefined);
   }
 }
 

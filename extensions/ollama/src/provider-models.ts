@@ -1,7 +1,7 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Ollama provider module implements model/runtime integration.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
@@ -126,7 +126,7 @@ export async function queryOllamaModelShowInfo(
     if (opts?.apiKey) {
       headers.Authorization = `Bearer ${opts.apiKey}`;
     }
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithResponseRelease({
       url: `${normalizedApiBase}/api/show`,
       init: {
         method: "POST",
@@ -134,8 +134,6 @@ export async function queryOllamaModelShowInfo(
         body: JSON.stringify({ name: modelName }),
         signal: AbortSignal.timeout(3000),
       },
-      policy: buildOllamaBaseUrlSsrFPolicy(normalizedApiBase),
-      auditContext: "ollama-provider-models.show",
     });
     try {
       if (!response.ok) {
@@ -283,13 +281,11 @@ export async function fetchOllamaModels(
 ): Promise<{ reachable: boolean; models: OllamaTagModel[] }> {
   try {
     const apiBase = resolveOllamaApiBase(baseUrl);
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithResponseRelease({
       url: `${apiBase}/api/tags`,
       init: {
         signal: AbortSignal.timeout(5000),
       },
-      policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
-      auditContext: "ollama-provider-models.tags",
     });
     try {
       if (!response.ok) {

@@ -294,19 +294,17 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         timeoutMs: req.timeoutMs,
         label: "BytePlus video generation",
       });
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveBytePlusVideoBaseUrl(req),
-          defaultBaseUrl: BYTEPLUS_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: "byteplus",
-          capability: "video",
-          transport: "http",
-        });
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+        baseUrl: resolveBytePlusVideoBaseUrl(req),
+        defaultBaseUrl: BYTEPLUS_BASE_URL,
+        defaultHeaders: {
+          Authorization: `Bearer ${auth.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        provider: "byteplus",
+        capability: "video",
+        transport: "http",
+      });
       // Seedance 1.0 has separate T2V and I2V model IDs (e.g. seedance-1-0-lite-t2v-250428 vs
       // seedance-1-0-lite-i2v-250428). When input images are provided with a T2V model, auto-
       // switch to the corresponding I2V variant so the API does not reject with task_type mismatch.
@@ -378,7 +376,6 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         }),
         fetchFn,
-        allowPrivateNetwork,
         dispatcherPolicy,
       });
       try {

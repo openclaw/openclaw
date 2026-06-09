@@ -448,30 +448,6 @@ export function scanPolicyNetwork(cfg: Record<string, unknown>): readonly Policy
       ["browser", "ssrfPolicy", "allowPrivateNetwork"],
       "oc://openclaw.config/browser/ssrfPolicy/allowPrivateNetwork",
     ),
-    networkBooleanEvidence(
-      cfg,
-      "web-fetch-private-network",
-      ["tools", "web", "fetch", "ssrfPolicy", "dangerouslyAllowPrivateNetwork"],
-      "oc://openclaw.config/tools/web/fetch/ssrfPolicy/dangerouslyAllowPrivateNetwork",
-    ),
-    networkBooleanEvidence(
-      cfg,
-      "web-fetch-private-network-legacy",
-      ["tools", "web", "fetch", "ssrfPolicy", "allowPrivateNetwork"],
-      "oc://openclaw.config/tools/web/fetch/ssrfPolicy/allowPrivateNetwork",
-    ),
-    networkBooleanEvidence(
-      cfg,
-      "web-fetch-rfc2544-benchmark-range",
-      ["tools", "web", "fetch", "ssrfPolicy", "allowRfc2544BenchmarkRange"],
-      "oc://openclaw.config/tools/web/fetch/ssrfPolicy/allowRfc2544BenchmarkRange",
-    ),
-    networkBooleanEvidence(
-      cfg,
-      "web-fetch-ipv6-unique-local-range",
-      ["tools", "web", "fetch", "ssrfPolicy", "allowIpv6UniqueLocalRange"],
-      "oc://openclaw.config/tools/web/fetch/ssrfPolicy/allowIpv6UniqueLocalRange",
-    ),
   ].filter((entry): entry is PolicyNetworkEvidence => entry !== undefined);
 }
 

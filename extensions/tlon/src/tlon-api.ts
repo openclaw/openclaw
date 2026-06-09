@@ -2,8 +2,8 @@
 import crypto from "node:crypto";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { authenticate } from "./urbit/auth.js";
 import { scryUrbitPath } from "./urbit/channel-ops.js";
 import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "./urbit/context.js";
@@ -173,7 +173,7 @@ async function scryJson<T>(config: ClientConfig, cookie: string, path: string): 
         config.dangerouslyAllowPrivateNetwork,
       ),
     },
-    { path, auditContext: "tlon-storage-scry" },
+    { path },
   )) as T;
 }
 
@@ -231,7 +231,7 @@ async function getMemexUploadUrl(params: {
   const endpoint = `${MEMEX_BASE_URL}/v1/${params.config.shipName}/upload`;
   let release: (() => Promise<void>) | undefined;
   try {
-    const guarded = await fetchWithSsrFGuard({
+    const guarded = await fetchWithResponseRelease({
       url: endpoint,
       init: {
         method: "PUT",
@@ -243,9 +243,6 @@ async function getMemexUploadUrl(params: {
           fileName: params.fileName,
         }),
       },
-      auditContext: "tlon-memex-upload-url",
-      capture: false,
-      maxRedirects: 0,
     });
     release = guarded.release;
     if (!guarded.response.ok) {
@@ -266,9 +263,6 @@ async function getMemexUploadUrl(params: {
 export async function uploadFile(params: UploadFileParams): Promise<UploadResult> {
   const config = requireClientConfig();
   const cookie = await getAuthCookie(config);
-  const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
-    config.dangerouslyAllowPrivateNetwork,
-  );
 
   const [storageConfig, credentials] = await Promise.all([
     getStorageConfiguration(config, cookie),
@@ -296,7 +290,7 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
 
     let release: (() => Promise<void>) | undefined;
     try {
-      const guarded = await fetchWithSsrFGuard({
+      const guarded = await fetchWithResponseRelease({
         url: trustedUploadUrl,
         init: {
           method: "PUT",
@@ -306,9 +300,6 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
             "Content-Type": contentType,
           },
         },
-        auditContext: "tlon-memex-upload",
-        capture: false,
-        maxRedirects: 0,
       });
       release = guarded.release;
       assertTrustedMemexUploadUrl(guarded.finalUrl, "Memex final upload URL");
@@ -362,17 +353,13 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
 
   let release: (() => Promise<void>) | undefined;
   try {
-    const guarded = await fetchWithSsrFGuard({
+    const guarded = await fetchWithResponseRelease({
       url: signedUrl,
       init: {
         method: "PUT",
         body: params.blob,
         headers: signedUrl.includes("digitaloceanspaces.com") ? headers : undefined,
       },
-      auditContext: "tlon-custom-s3-upload",
-      capture: false,
-      maxRedirects: 0,
-      policy: privateNetworkPolicy,
     });
     release = guarded.release;
     if (!guarded.response.ok) {

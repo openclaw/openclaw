@@ -1815,7 +1815,7 @@ describe("createImageGenerateTool", () => {
     }
   });
 
-  it("passes web_fetch SSRF policy to remote reference images", async () => {
+  it("does not forward retired web_fetch SSRF policy to remote reference images", async () => {
     stubImageGenerationProviders();
     const generateImage = stubEditedImageFlow({ width: 1024, height: 1024 });
     const defaultTool = requireImageGenerateTool(
@@ -1847,7 +1847,6 @@ describe("createImageGenerateTool", () => {
           agents: {
             defaults: { imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" } },
           },
-          tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
         },
         workspaceDir: process.cwd(),
       }),
@@ -1861,15 +1860,11 @@ describe("createImageGenerateTool", () => {
     const configuredLoadUrl = mockCallArg(webMedia.loadWebMedia, 1, "loadWebMedia", 0);
     const configuredLoadOptions = mockCallArg(webMedia.loadWebMedia, 1, "loadWebMedia", 1);
     expect(configuredLoadUrl).toBe("http://198.18.0.153/reference.png");
-    expect(requireRecord(configuredLoadOptions, "loadWebMedia options").ssrfPolicy).toEqual({
-      allowRfc2544BenchmarkRange: true,
-    });
+    expect(requireRecord(configuredLoadOptions, "loadWebMedia options").ssrfPolicy).toBeUndefined();
     expect(requireRecord(configuredLoadOptions, "loadWebMedia options").readIdleTimeoutMs).toBe(
       120_000,
     );
-    expect(mockCallArg(generateImage, 1, "generateImage").ssrfPolicy).toEqual({
-      allowRfc2544BenchmarkRange: true,
-    });
+    expect(mockCallArg(generateImage, 1, "generateImage").ssrfPolicy).toBeUndefined();
   });
 
   it("ignores non-finite mediaMaxMb when loading reference images", async () => {

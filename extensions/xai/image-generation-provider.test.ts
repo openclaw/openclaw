@@ -29,7 +29,6 @@ const {
     }
     return {
       baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.x.ai/v1",
-      allowPrivateNetwork: false,
       headers,
       dispatcherPolicy: undefined,
     };

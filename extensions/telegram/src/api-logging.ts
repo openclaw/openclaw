@@ -1,7 +1,7 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Telegram plugin module implements api logging behavior.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 
 type TelegramApiLogger = (message: string) => void;
 

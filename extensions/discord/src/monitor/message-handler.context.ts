@@ -401,7 +401,6 @@ export async function buildDiscordMessageProcessContext(params: {
                   mediaMaxBytes,
                   {
                     fetchImpl: discordRestFetch,
-                    ssrfPolicy: cfg.browser?.ssrfPolicy,
                     readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
                     totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
                     abortSignal,

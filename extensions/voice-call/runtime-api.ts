@@ -9,7 +9,7 @@ export {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-request-guards";
-export { fetchWithSsrFGuard, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+
 export type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 export {
   TtsAutoSchema,

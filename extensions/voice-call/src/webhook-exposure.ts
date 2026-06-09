@@ -1,5 +1,5 @@
 // Voice Call plugin module implements webhook exposure behavior.
-import { isBlockedHostnameOrIp } from "../api.js";
+import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-policy";
 
 // Webhook exposure checks for providers that must reach local voice-call webhooks.
 

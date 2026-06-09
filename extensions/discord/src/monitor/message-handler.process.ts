@@ -214,10 +214,8 @@ async function processDiscordMessageInner(
     }
   }
 
-  const ssrfPolicy = cfg.browser?.ssrfPolicy;
   const mediaResolveOptions = {
     fetchImpl: discordRestFetch,
-    ssrfPolicy,
     readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
     totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
     abortSignal,

@@ -191,7 +191,6 @@ function buildLocalModeConfig(params: { workspaceDir: string; providerBaseUrl: s
           baseUrl: `${params.providerBaseUrl}/v1`,
           apiKey: "test",
           api: "openai-responses",
-          request: { allowPrivateNetwork: true },
           models: [
             {
               id: "gpt-5.5",

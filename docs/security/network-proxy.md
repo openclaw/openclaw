@@ -6,7 +6,7 @@ read_when:
   - Configuring an external forward proxy for OpenClaw runtime traffic
 ---
 
-OpenClaw can route runtime HTTP and WebSocket traffic through an operator-managed forward proxy. This is optional defense in depth for deployments that want central egress control, stronger SSRF protection, and better network auditability.
+OpenClaw can route runtime HTTP and WebSocket traffic through an operator-managed forward proxy. This is the recommended high-assurance SSRF and egress-control boundary for deployments that want central policy, DNS-rebinding resistance, and better network auditability.
 
 OpenClaw does not ship, download, start, configure, or certify a proxy. You run the proxy technology that fits your environment, and OpenClaw routes normal process-local HTTP and WebSocket clients through it.
 
@@ -22,6 +22,15 @@ A proxy gives operators one network control point for outbound HTTP and WebSocke
 - Operational control: enforce destination rules, network segmentation, rate limits, or outbound allowlists without rebuilding OpenClaw.
 
 Proxy routing is a process-level guardrail for normal HTTP and WebSocket egress. It gives operators a fail-closed path for routing supported JavaScript HTTP clients through their own filtering proxy, but it is not an OS-level network sandbox and does not make OpenClaw certify the proxy's destination policy.
+
+When `proxy.enabled=false`, OpenClaw still applies a small in-process stock
+guard to untrusted arbitrary URL surfaces such as `web_fetch` and user/model
+supplied media URLs. That guard rejects loopback, link-local, metadata,
+private-network, and DNS results that resolve to those ranges, including
+redirect targets. It is intentionally not a complete SSRF defense. It does not
+replace an operator-managed proxy, and it is not applied to operator-configured
+endpoints such as provider base URLs, remote MCP base URLs, or configured
+self-hosted services.
 
 ## How OpenClaw routes traffic
 
@@ -56,7 +65,7 @@ On shutdown, OpenClaw restores the previous proxy environment and resets cached 
 - `proxy.enabled` / `proxy.proxyUrl`: outbound forward-proxy routing for OpenClaw runtime egress. This page documents that feature.
 - `gateway.auth.mode: "trusted-proxy"`: inbound identity-aware reverse-proxy authentication for Gateway access. See [Trusted proxy auth](/gateway/trusted-proxy-auth).
 - `openclaw proxy`: local debug proxy and capture inspector for development and support. See [openclaw proxy](/cli/proxy).
-- `tools.web.fetch.useTrustedEnvProxy`: opt-in for `web_fetch` to let an operator-controlled HTTP(S) env proxy resolve DNS while keeping default strict DNS pinning and hostname policy. See [Web fetch](/tools/web-fetch#trusted-env-proxy).
+- Retired `tools.web.fetch.useTrustedEnvProxy` / `tools.web.fetch.ssrfPolicy.*`: old per-tool guard knobs. Run `openclaw doctor --fix` to remove them and use `proxy.enabled` plus external proxy policy for egress control. Direct mode keeps only the small stock guard for untrusted arbitrary URLs.
 - Channel or provider-specific proxy settings: owner-specific overrides for a particular transport. Prefer the managed network proxy when the goal is central egress control across the runtime.
 
 ## Configuration
@@ -134,7 +143,7 @@ Configure the proxy to:
 
 Use this denylist as the starting point for any forward proxy, firewall, or egress policy.
 
-OpenClaw application-level classifier logic lives in `src/infra/net/ssrf.ts` and `packages/net-policy/src/ip.ts`. The relevant parity hooks are `BLOCKED_HOSTNAMES`, `BLOCKED_IPV4_SPECIAL_USE_RANGES`, `BLOCKED_IPV6_SPECIAL_USE_RANGES`, `RFC2544_BENCHMARK_PREFIX`, and the embedded IPv4 sentinel handling for NAT64, 6to4, Teredo, ISATAP, and IPv4-mapped forms. Those files are useful references when maintaining an external proxy policy, but OpenClaw does not automatically export or enforce those rules in your proxy.
+OpenClaw application-level classifier logic lives in `src/infra/net/ssrf.ts` and `packages/net-policy/src/ip.ts`. The small direct-mode guard for untrusted arbitrary URL fetches uses this classifier, but the comprehensive policy still belongs in your proxy. The relevant parity hooks are `BLOCKED_HOSTNAMES`, `BLOCKED_IPV4_SPECIAL_USE_RANGES`, `BLOCKED_IPV6_SPECIAL_USE_RANGES`, `RFC2544_BENCHMARK_PREFIX`, and the embedded IPv4 sentinel handling for NAT64, 6to4, Teredo, ISATAP, and IPv4-mapped forms. Those files are useful references when maintaining an external proxy policy, but OpenClaw does not automatically export or enforce those rules in your proxy.
 
 | Range or host                                                                        | Why to block                                         |
 | ------------------------------------------------------------------------------------ | ---------------------------------------------------- |

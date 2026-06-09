@@ -5,15 +5,15 @@ import * as path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ssrfRuntimeMocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(),
+  fetchWithResponseRelease: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: ssrfRuntimeMocks.fetchWithSsrFGuard,
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchWithResponseRelease: ssrfRuntimeMocks.fetchWithResponseRelease,
 }));
 
 afterAll(() => {
-  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.doUnmock("openclaw/plugin-sdk/fetch-runtime");
   vi.resetModules();
 });
 
@@ -21,24 +21,22 @@ import { resolveSTTConfig, transcribeAudio } from "./stt.js";
 
 function requireFirstSsrfRequest(): {
   url?: unknown;
-  auditContext?: unknown;
   init?: RequestInit;
 } {
-  const [call] = ssrfRuntimeMocks.fetchWithSsrFGuard.mock.calls;
+  const [call] = ssrfRuntimeMocks.fetchWithResponseRelease.mock.calls;
   if (!call) {
     throw new Error("expected QQBot STT fetch call");
   }
   return call[0] as {
     url?: unknown;
-    auditContext?: unknown;
     init?: RequestInit;
   };
 }
 
 describe("engine/utils/stt", () => {
   beforeEach(() => {
-    ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
-    ssrfRuntimeMocks.fetchWithSsrFGuard.mockImplementation(
+    ssrfRuntimeMocks.fetchWithResponseRelease.mockReset();
+    ssrfRuntimeMocks.fetchWithResponseRelease.mockImplementation(
       async ({ url, init }: { url: string; init?: RequestInit }) => ({
         response: await fetch(url, init),
         release: vi.fn(async () => {}),
@@ -47,7 +45,7 @@ describe("engine/utils/stt", () => {
   });
 
   afterEach(() => {
-    ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
+    ssrfRuntimeMocks.fetchWithResponseRelease.mockReset();
     vi.unstubAllGlobals();
   });
 
@@ -115,7 +113,7 @@ describe("engine/utils/stt", () => {
     fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
 
     const release = vi.fn(async () => {});
-    ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    ssrfRuntimeMocks.fetchWithResponseRelease.mockResolvedValueOnce({
       response: Response.json({
         text: "hello from audio",
       }),
@@ -135,10 +133,9 @@ describe("engine/utils/stt", () => {
     });
 
     expect(transcript).toBe("hello from audio");
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    expect(ssrfRuntimeMocks.fetchWithResponseRelease).toHaveBeenCalledTimes(1);
     const request = requireFirstSsrfRequest();
     expect(request.url).toBe("https://api.example.test/v1/audio/transcriptions");
-    expect(request.auditContext).toBe("qqbot-stt");
     expect(request.init?.method).toBe("POST");
     expect(request.init?.headers).toEqual({ Authorization: "Bearer secret" });
     expect(request.init?.body).toBeInstanceOf(FormData);

@@ -1,5 +1,6 @@
 // Google Meet plugin module implements meet behavior.
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { exportGoogleDriveDocumentText, extractGoogleDriveDocumentId } from "./drive.js";
 import { googleApiError } from "./google-api-errors.js";
@@ -7,7 +8,6 @@ import { googleApiError } from "./google-api-errors.js";
 const GOOGLE_MEET_API_ORIGIN = "https://meet.googleapis.com";
 const GOOGLE_MEET_API_BASE_URL = `${GOOGLE_MEET_API_ORIGIN}/v2`;
 const GOOGLE_MEET_URL_HOST = "meet.google.com";
-const GOOGLE_MEET_API_HOST = "meet.googleapis.com";
 const GOOGLE_MEET_MEDIA_SCOPE =
   "https://www.googleapis.com/auth/meetings.conference.media.readonly";
 const GOOGLE_MEET_SPACE_SCOPE = "https://www.googleapis.com/auth/meetings.space.readonly";
@@ -267,10 +267,9 @@ async function fetchGoogleMeetJson<T>(params: {
   accessToken: string;
   path: string;
   query?: Record<string, string | number | boolean | undefined>;
-  auditContext: string;
   errorPrefix: string;
 }): Promise<T> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: appendQuery(`${GOOGLE_MEET_API_BASE_URL}/${params.path}`, params.query),
     init: {
       headers: {
@@ -278,8 +277,6 @@ async function fetchGoogleMeetJson<T>(params: {
         Accept: "application/json",
       },
     },
-    policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
-    auditContext: params.auditContext,
   });
   try {
     if (!response.ok) {
@@ -303,7 +300,6 @@ async function listGoogleMeetCollection<T extends { name?: string }>(params: {
   collectionKey: string;
   query?: Record<string, string | number | boolean | undefined>;
   maxItems?: number;
-  auditContext: string;
   errorPrefix: string;
 }): Promise<T[]> {
   const items: T[] = [];
@@ -313,7 +309,6 @@ async function listGoogleMeetCollection<T extends { name?: string }>(params: {
       accessToken: params.accessToken,
       path: params.path,
       query: { ...params.query, pageToken },
-      auditContext: params.auditContext,
       errorPrefix: params.errorPrefix,
     });
     const pageItems = assertResourceArray<T>(
@@ -337,7 +332,7 @@ export async function fetchGoogleMeetSpace(params: {
   meeting: string;
 }): Promise<GoogleMeetSpace> {
   const name = normalizeGoogleMeetSpaceName(params.meeting);
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: `${GOOGLE_MEET_API_BASE_URL}/${encodeSpaceNameForPath(name)}`,
     init: {
       headers: {
@@ -345,8 +340,6 @@ export async function fetchGoogleMeetSpace(params: {
         Accept: "application/json",
       },
     },
-    policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
-    auditContext: "google-meet.spaces.get",
   });
   try {
     if (!response.ok) {
@@ -376,7 +369,7 @@ export async function createGoogleMeetSpace(params: {
     params.config && Object.keys(params.config).length > 0
       ? JSON.stringify({ config: params.config })
       : "{}";
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: `${GOOGLE_MEET_API_BASE_URL}/spaces`,
     init: {
       method: "POST",
@@ -387,8 +380,6 @@ export async function createGoogleMeetSpace(params: {
       },
       body,
     },
-    policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
-    auditContext: "google-meet.spaces.create",
   });
   try {
     if (!response.ok) {
@@ -426,7 +417,7 @@ export async function endGoogleMeetActiveConference(params: {
     meeting: params.meeting,
   });
   const space = resolved.name;
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: `${GOOGLE_MEET_API_BASE_URL}/${encodeSpaceNameForPath(space)}:endActiveConference`,
     init: {
       method: "POST",
@@ -437,8 +428,6 @@ export async function endGoogleMeetActiveConference(params: {
       },
       body: "{}",
     },
-    policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
-    auditContext: "google-meet.spaces.endActiveConference",
   });
   try {
     if (!response.ok) {
@@ -464,7 +453,6 @@ async function fetchGoogleMeetConferenceRecord(params: {
   const payload = await fetchGoogleMeetJson<GoogleMeetConferenceRecord>({
     accessToken: params.accessToken,
     path: encodeResourceNameForPath(name),
-    auditContext: "google-meet.conferenceRecords.get",
     errorPrefix: "Google Meet conferenceRecords.get",
   });
   if (!payload.name?.trim()) {
@@ -491,7 +479,6 @@ async function listGoogleMeetConferenceRecords(params: {
       filter,
     },
     maxItems: params.maxItems,
-    auditContext: "google-meet.conferenceRecords.list",
     errorPrefix: "Google Meet conferenceRecords.list",
   });
 }
@@ -528,7 +515,6 @@ async function listGoogleMeetParticipants(params: {
     path: `${encodeResourceNameForPath(parent)}/participants`,
     collectionKey: "participants",
     query: { pageSize: params.pageSize },
-    auditContext: "google-meet.conferenceRecords.participants.list",
     errorPrefix: "Google Meet conferenceRecords.participants.list",
   });
 }
@@ -543,7 +529,6 @@ async function listGoogleMeetParticipantSessions(params: {
     path: `${encodeResourceNameForPath(params.participant)}/participantSessions`,
     collectionKey: "participantSessions",
     query: { pageSize: params.pageSize },
-    auditContext: "google-meet.conferenceRecords.participants.participantSessions.list",
     errorPrefix: "Google Meet conferenceRecords.participants.participantSessions.list",
   });
 }
@@ -559,7 +544,6 @@ async function listGoogleMeetRecordings(params: {
     path: `${encodeResourceNameForPath(parent)}/recordings`,
     collectionKey: "recordings",
     query: { pageSize: params.pageSize },
-    auditContext: "google-meet.conferenceRecords.recordings.list",
     errorPrefix: "Google Meet conferenceRecords.recordings.list",
   });
 }
@@ -575,7 +559,6 @@ async function listGoogleMeetTranscripts(params: {
     path: `${encodeResourceNameForPath(parent)}/transcripts`,
     collectionKey: "transcripts",
     query: { pageSize: params.pageSize },
-    auditContext: "google-meet.conferenceRecords.transcripts.list",
     errorPrefix: "Google Meet conferenceRecords.transcripts.list",
   });
 }
@@ -590,7 +573,6 @@ async function listGoogleMeetTranscriptEntries(params: {
     path: `${encodeResourceNameForPath(params.transcript)}/entries`,
     collectionKey: "transcriptEntries",
     query: { pageSize: params.pageSize },
-    auditContext: "google-meet.conferenceRecords.transcripts.entries.list",
     errorPrefix: "Google Meet conferenceRecords.transcripts.entries.list",
   });
 }
@@ -606,7 +588,6 @@ async function listGoogleMeetSmartNotes(params: {
     path: `${encodeResourceNameForPath(parent)}/smartNotes`,
     collectionKey: "smartNotes",
     query: { pageSize: params.pageSize },
-    auditContext: "google-meet.conferenceRecords.smartNotes.list",
     errorPrefix: "Google Meet conferenceRecords.smartNotes.list",
   });
 }

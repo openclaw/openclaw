@@ -19,7 +19,6 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
 
 type FetchGuardRequest = {
   url?: unknown;
-  auditContext?: unknown;
   timeoutMs?: unknown;
   init?: {
     method?: unknown;
@@ -79,7 +78,7 @@ describe("comfy image-generation provider", () => {
     ).toBe(true);
   });
 
-  it("treats cloud comfy workflows as configured with a plugin config API key", () => {
+  it("treats cloud comfy workflows as configured with a literal plugin config API key", () => {
     const provider = buildComfyImageGenerationProvider();
     expect(
       provider.isConfigured?.({
@@ -97,14 +96,31 @@ describe("comfy image-generation provider", () => {
     ).toBe(true);
   });
 
-  it("treats cloud comfy workflows as configured with a plugin config env SecretRef", () => {
-    vi.stubEnv("COMFY_TEST_API_KEY", "comfy-secret-ref-key");
+  it("treats unresolved Comfy SecretRef API keys as configured unavailable", () => {
     const provider = buildComfyImageGenerationProvider();
     expect(
       provider.isConfigured?.({
         cfg: buildComfyConfig({
           mode: "cloud",
-          apiKey: { source: "env", provider: "default", id: "COMFY_TEST_API_KEY" },
+          apiKey: { source: "env", provider: "default", id: "COMFY_API_KEY" },
+          image: {
+            workflow: {
+              "6": { inputs: { text: "" } },
+            },
+            promptNodeId: "6",
+          },
+        }),
+      }),
+    ).toBe(false);
+  });
+
+  it("treats cloud comfy workflows as configured with a non-empty secret marker string", () => {
+    const provider = buildComfyImageGenerationProvider();
+    expect(
+      provider.isConfigured?.({
+        cfg: buildComfyConfig({
+          mode: "cloud",
+          apiKey: "comfy-secret-ref-key",
           image: {
             workflow: {
               "6": { inputs: { text: "" } },
@@ -169,7 +185,6 @@ describe("comfy image-generation provider", () => {
 
     const submitRequest = fetchRequest(1);
     expect(submitRequest.url).toBe("http://127.0.0.1:8188/prompt");
-    expect(submitRequest.auditContext).toBe("comfy-image-generate");
     expect(parseJsonBody(1)).toEqual({
       prompt: {
         "6": { inputs: { text: "draw a lobster" } },
@@ -178,12 +193,10 @@ describe("comfy image-generation provider", () => {
     });
     const historyRequest = fetchRequest(2);
     expect(historyRequest.url).toBe("http://127.0.0.1:8188/history/local-prompt-1");
-    expect(historyRequest.auditContext).toBe("comfy-history");
     const downloadRequest = fetchRequest(3);
     expect(downloadRequest.url).toBe(
       "http://127.0.0.1:8188/view?filename=generated.png&subfolder=&type=output",
     );
-    expect(downloadRequest.auditContext).toBe("comfy-image-download");
     expect(result).toEqual({
       images: [
         {
@@ -409,7 +422,6 @@ describe("comfy image-generation provider", () => {
 
     const uploadRequest = fetchRequest(1);
     expect(uploadRequest?.url).toBe("http://127.0.0.1:8188/upload/image");
-    expect(uploadRequest?.auditContext).toBe("comfy-image-upload");
     expect(uploadRequest?.init?.method).toBe("POST");
     const uploadForm = uploadRequest?.init?.body;
     if (!(uploadForm instanceof FormData)) {
@@ -457,7 +469,6 @@ describe("comfy image-generation provider", () => {
 
     const submitRequest = fetchRequest(1);
     expect(submitRequest?.url).toBe("https://cloud.comfy.org/api/prompt");
-    expect(submitRequest?.auditContext).toBe("comfy-image-generate");
     const submitHeaders = new Headers(submitRequest?.init?.headers);
     expect(submitHeaders.get("x-api-key")).toBe("comfy-test-key");
     expect(parseJsonBody(1)).toEqual({
@@ -472,26 +483,21 @@ describe("comfy image-generation provider", () => {
 
     const statusRequest = fetchRequest(2);
     expect(statusRequest.url).toBe("https://cloud.comfy.org/api/job/cloud-job-1/status");
-    expect(statusRequest.auditContext).toBe("comfy-status");
     const historyRequest = fetchRequest(3);
     expect(historyRequest.url).toBe("https://cloud.comfy.org/api/history_v2/cloud-job-1");
-    expect(historyRequest.auditContext).toBe("comfy-history");
     const viewRequest = fetchRequest(4);
     expect(viewRequest.url).toBe(
       "https://cloud.comfy.org/api/view?filename=cloud.png&subfolder=&type=output",
     );
-    expect(viewRequest.auditContext).toBe("comfy-image-download");
     const cdnRequest = fetchRequest(5);
     expect(cdnRequest.url).toBe("https://cdn.example.com/cloud.png");
-    expect(cdnRequest.auditContext).toBe("comfy-image-download");
     expect(result.metadata).toEqual({
       promptId: "cloud-job-1",
       outputNodeIds: ["9"],
     });
   });
 
-  it("uses plugin config env SecretRef auth for cloud workflows", async () => {
-    vi.stubEnv("COMFY_TEST_API_KEY", "comfy-secret-ref-key");
+  it("uses plugin config auth for cloud workflows", async () => {
     setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
       body: Buffer.from("cloud-data"),
@@ -509,7 +515,7 @@ describe("comfy image-generation provider", () => {
       prompt: "cloud workflow prompt",
       cfg: buildComfyConfig({
         mode: "cloud",
-        apiKey: { source: "env", provider: "default", id: "COMFY_TEST_API_KEY" },
+        apiKey: "comfy-secret-ref-key",
         workflow: {
           "6": { inputs: { text: "" } },
           "9": { inputs: {} },

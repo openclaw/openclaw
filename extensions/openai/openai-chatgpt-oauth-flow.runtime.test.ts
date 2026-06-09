@@ -2,11 +2,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const ssrfMocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(),
+  fetchWithResponseRelease: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: ssrfMocks.fetchWithSsrFGuard,
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  fetchWithResponseRelease: ssrfMocks.fetchWithResponseRelease,
 }));
 
 import { openaiCodexOAuthProvider, testing } from "./openai-chatgpt-oauth-flow.runtime.js";
@@ -20,7 +20,7 @@ function mockTokenResponse(body: unknown, status = 200): void {
 }
 
 function mockTokenResponseText(body: string, status = 200): void {
-  ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+  ssrfMocks.fetchWithResponseRelease.mockResolvedValueOnce({
     response: new Response(body, {
       status,
       headers: { "Content-Type": "application/json" },
@@ -30,7 +30,7 @@ function mockTokenResponseText(body: string, status = 200): void {
 }
 
 afterEach(() => {
-  ssrfMocks.fetchWithSsrFGuard.mockReset();
+  ssrfMocks.fetchWithResponseRelease.mockReset();
 });
 
 describe("OpenAI Codex OAuth flow", () => {
@@ -86,7 +86,7 @@ describe("OpenAI Codex OAuth flow", () => {
   });
 
   it("times out token exchange requests", async () => {
-    ssrfMocks.fetchWithSsrFGuard.mockRejectedValueOnce(timeoutError());
+    ssrfMocks.fetchWithResponseRelease.mockRejectedValueOnce(timeoutError());
 
     const result = await testing.exchangeAuthorizationCode(
       "code",
@@ -95,7 +95,7 @@ describe("OpenAI Codex OAuth flow", () => {
       { timeoutMs: 5 },
     );
 
-    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+    expect(ssrfMocks.fetchWithResponseRelease).toHaveBeenCalledWith(
       expect.objectContaining({
         auditContext: "openai-chatgpt-oauth-token",
         timeoutMs: 5,
@@ -118,7 +118,7 @@ describe("OpenAI Codex OAuth flow", () => {
       { signal: controller.signal, timeoutMs: 5 },
     );
 
-    expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expect(ssrfMocks.fetchWithResponseRelease).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       type: "failed",
       message: "Login cancelled",
@@ -144,11 +144,11 @@ describe("OpenAI Codex OAuth flow", () => {
   });
 
   it("times out token refresh requests", async () => {
-    ssrfMocks.fetchWithSsrFGuard.mockRejectedValueOnce(timeoutError());
+    ssrfMocks.fetchWithResponseRelease.mockRejectedValueOnce(timeoutError());
 
     const result = await testing.refreshAccessToken("old-refresh-token", { timeoutMs: 5 });
 
-    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+    expect(ssrfMocks.fetchWithResponseRelease).toHaveBeenCalledWith(
       expect.objectContaining({
         auditContext: "openai-chatgpt-oauth-token",
         timeoutMs: 5,

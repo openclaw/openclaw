@@ -1,3 +1,4 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Elevenlabs plugin module implements tts behavior.
 import {
   assertOkOrThrowProviderError,
@@ -10,10 +11,6 @@ import {
   normalizeSeed,
   requireInRange,
 } from "openclaw/plugin-sdk/speech";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
 
 function assertElevenLabsVoiceSettings(settings: {
@@ -130,12 +127,12 @@ function prepareElevenLabsTtsRequest(params: ElevenLabsTtsRequestParams & { stre
 
 export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise<Buffer> {
   const { apiKey, timeoutMs } = params;
-  const { url, normalizedBaseUrl, acceptHeader, body } = prepareElevenLabsTtsRequest({
+  const { url, acceptHeader, body } = prepareElevenLabsTtsRequest({
     ...params,
     stream: false,
   });
 
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: url.toString(),
     init: {
       method: "POST",
@@ -147,8 +144,6 @@ export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise
       body,
     },
     timeoutMs,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
-    auditContext: "elevenlabs.tts",
   });
   try {
     await assertOkOrThrowProviderError(response, "ElevenLabs API error");
@@ -164,12 +159,12 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
   release: () => Promise<void>;
 }> {
   const { apiKey, timeoutMs } = params;
-  const { url, normalizedBaseUrl, acceptHeader, body } = prepareElevenLabsTtsRequest({
+  const { url, acceptHeader, body } = prepareElevenLabsTtsRequest({
     ...params,
     stream: true,
   });
 
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: url.toString(),
     init: {
       method: "POST",
@@ -181,8 +176,6 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
       body,
     },
     timeoutMs,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
-    auditContext: "elevenlabs.tts.stream",
   });
   let handedOff = false;
   try {

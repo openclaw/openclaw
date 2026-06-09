@@ -5,7 +5,7 @@ import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
+import { fetchUntrustedUrl } from "../infra/net/egress-fetch.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "../media-understanding/defaults.js";
 import { resolveTimeoutMs } from "../media-understanding/resolve.js";
 import {
@@ -73,11 +73,10 @@ async function fetchLinkContent(params: {
   timeoutMs: number;
   url: string;
 }): Promise<{ content: string; finalUrl: string } | null> {
-  const { response, finalUrl, release } = await fetchWithSsrFGuard({
+  const fetched = await fetchUntrustedUrl({
     url: params.url,
     timeoutMs: params.timeoutMs,
-    mode: GUARDED_FETCH_MODE.STRICT,
-    auditContext: "link-understanding",
+    operation: "link-understanding",
     init: {
       headers: {
         Accept: "text/*,application/json,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -86,6 +85,7 @@ async function fetchLinkContent(params: {
     },
   });
   try {
+    const { response } = fetched;
     if (!response.ok) {
       throw new Error(`Link fetch failed with HTTP ${response.status}`);
     }
@@ -94,9 +94,9 @@ async function fetchLinkContent(params: {
     if (!content) {
       return null;
     }
-    return { content, finalUrl };
+    return { content, finalUrl: fetched.finalUrl || params.url };
   } finally {
-    await release();
+    await fetched.release();
   }
 }
 
@@ -118,7 +118,7 @@ async function runCliEntry(params: {
   const args = params.entry.args ?? [];
   const timeoutMs = resolveTimeoutMsFromConfig({ config: params.config, entry: params.entry });
   if (isUrlFetcherCommand(command) && args.some(isLinkUrlTemplate)) {
-    // curl/wget URL templates mark the entry as a fetcher; guarded fetch already supplied content.
+    // curl/wget URL templates mark the entry as a fetcher; egress fetch already supplied content.
     return params.content;
   }
 
@@ -187,7 +187,7 @@ async function runLinkEntries(params: {
 }
 
 /**
- * Fetches detected links through the SSRF guard and runs configured CLI processors.
+ * Fetches detected links through the canonical untrusted URL egress helper.
  * Returns detected URLs even when processors are absent so callers can report discovery.
  */
 export async function runLinkUnderstanding(params: {

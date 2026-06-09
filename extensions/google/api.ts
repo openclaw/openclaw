@@ -44,10 +44,6 @@ export {
 export { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 export { buildGoogleProvider } from "./provider-registration.js";
 
-type GoogleGenerativeAiRequestOverrides = ProviderRequestTransportOverrides & {
-  allowPrivateNetwork?: boolean;
-};
-
 function resolveTrustedGoogleGenerativeAiBaseUrl(baseUrl?: string): string {
   const normalized =
     normalizeGoogleGenerativeAiBaseUrl(baseUrl ?? DEFAULT_GOOGLE_API_BASE_URL) ??
@@ -75,14 +71,13 @@ export function resolveGoogleGenerativeAiHttpRequestConfig(params: {
   apiKey: string;
   baseUrl?: string;
   headers?: Record<string, string>;
-  request?: GoogleGenerativeAiRequestOverrides;
+  request?: ProviderRequestTransportOverrides;
   capability: "image" | "audio" | "video";
   transport: "http" | "media-understanding";
 }) {
   return resolveProviderHttpRequestConfig({
     baseUrl: resolveTrustedGoogleGenerativeAiBaseUrl(params.baseUrl),
     defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
-    allowPrivateNetwork: params.request?.allowPrivateNetwork,
     headers: params.headers,
     request: params.request,
     defaultHeaders: parseGeminiAuth(params.apiKey).headers,

@@ -66,7 +66,6 @@ const QQBOT_MEDIA_HOSTNAME_ALLOWLIST = [
 
 export const QQBOT_MEDIA_SSRF_POLICY: SsrfPolicyConfig = {
   hostnameAllowlist: QQBOT_MEDIA_HOSTNAME_ALLOWLIST,
-  allowRfc2544BenchmarkRange: true,
 };
 
 /** Result of local file-size validation. */

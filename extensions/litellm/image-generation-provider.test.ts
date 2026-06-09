@@ -19,7 +19,6 @@ const {
   createProviderOperationDeadlineMock: vi.fn((params: Record<string, unknown>) => params),
   resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: Boolean(params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork),
     headers: new Headers(params.defaultHeaders),
     dispatcherPolicy: undefined as unknown,
   })),
@@ -101,7 +100,7 @@ describe("litellm image generation provider", () => {
     expect(provider.capabilities.edit?.enabled).toBe(true);
   });
 
-  it("defaults to the loopback proxy and allows private network for localhost", async () => {
+  it("defaults to the loopback proxy base URL", async () => {
     mockGeneratedPngResponse();
 
     const provider = buildLitellmImageGenerationProvider();
@@ -114,11 +113,9 @@ describe("litellm image generation provider", () => {
 
     expectFields(mockObjectArg(resolveProviderHttpRequestConfigMock), {
       baseUrl: "http://localhost:4000",
-      allowPrivateNetwork: true,
     });
     expectFields(mockObjectArg(postJsonRequestMock), {
       url: "http://localhost:4000/images/generations",
-      allowPrivateNetwork: true,
     });
   });
 
@@ -144,11 +141,9 @@ describe("litellm image generation provider", () => {
 
     expectFields(mockObjectArg(resolveProviderHttpRequestConfigMock), {
       baseUrl: "https://proxy.example.com/v1",
-      allowPrivateNetwork: undefined,
     });
     expectFields(mockObjectArg(postJsonRequestMock), {
       url: "https://proxy.example.com/v1/images/generations",
-      allowPrivateNetwork: false,
     });
   });
 
@@ -216,7 +211,6 @@ describe("litellm image generation provider", () => {
     const dispatcherPolicy = { proxyUrl: "http://corp-proxy:3128" } as unknown;
     resolveProviderHttpRequestConfigMock.mockReturnValueOnce({
       baseUrl: "https://proxy.example.com/v1",
-      allowPrivateNetwork: false,
       headers: new Headers({ Authorization: "Bearer litellm-key" }),
       dispatcherPolicy,
     });
@@ -237,113 +231,5 @@ describe("litellm image generation provider", () => {
     });
 
     expect(mockObjectArg(postJsonRequestMock).dispatcherPolicy).toBe(dispatcherPolicy);
-  });
-
-  it("auto-allows private network for loopback-style baseUrls", async () => {
-    const cases = [
-      "http://localhost:4000",
-      "http://127.0.0.1:4000",
-      "http://[::1]:4000",
-      "http://host.docker.internal:4000",
-      "https://localhost:4000",
-    ] as const;
-    for (const baseUrl of cases) {
-      resolveProviderHttpRequestConfigMock.mockClear();
-      mockGeneratedPngResponse();
-      const provider = buildLitellmImageGenerationProvider();
-      await provider.generateImage({
-        provider: "litellm",
-        model: "gpt-image-2",
-        prompt: "x",
-        cfg: { models: { providers: { litellm: { baseUrl, models: [] } } } },
-      });
-      expect(
-        mockObjectArg(resolveProviderHttpRequestConfigMock),
-        `expected allowPrivateNetwork=true for ${baseUrl}`,
-      ).toHaveProperty("allowPrivateNetwork", true);
-    }
-  });
-
-  it("requires explicit private-network opt-in for LAN and internal baseUrls", async () => {
-    const cases = [
-      "http://10.0.0.42:4000",
-      "http://192.168.5.10:4000",
-      "http://172.16.0.5:4000",
-      "https://192.168.5.10:4000",
-      "http://printer.local:4000",
-      "http://proxy.internal:4000",
-      "https://metadata.google.internal",
-    ] as const;
-    for (const baseUrl of cases) {
-      resolveProviderHttpRequestConfigMock.mockClear();
-      mockGeneratedPngResponse();
-      const provider = buildLitellmImageGenerationProvider();
-      await provider.generateImage({
-        provider: "litellm",
-        model: "gpt-image-2",
-        prompt: "x",
-        cfg: { models: { providers: { litellm: { baseUrl, models: [] } } } },
-      });
-      expect(
-        mockObjectArg(resolveProviderHttpRequestConfigMock),
-        `expected no automatic allowPrivateNetwork for ${baseUrl}`,
-      ).toHaveProperty("allowPrivateNetwork", undefined);
-      expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(false);
-    }
-  });
-
-  it("honors explicit private-network opt-in for a LAN LiteLLM proxy", async () => {
-    mockGeneratedPngResponse();
-
-    const provider = buildLitellmImageGenerationProvider();
-    await provider.generateImage({
-      provider: "litellm",
-      model: "gpt-image-2",
-      prompt: "x",
-      cfg: {
-        models: {
-          providers: {
-            litellm: {
-              baseUrl: "http://192.168.5.10:4000",
-              request: { allowPrivateNetwork: true },
-              models: [],
-            },
-          },
-        },
-      },
-    });
-
-    expectFields(mockObjectArg(resolveProviderHttpRequestConfigMock), {
-      allowPrivateNetwork: undefined,
-      request: { allowPrivateNetwork: true },
-    });
-    expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(true);
-  });
-
-  it("does not allow private network for public hosts that embed private strings in the URL", async () => {
-    // Must not be fooled by an attacker-controlled URL that mentions
-    // "host.docker.internal" (or any private-looking literal) in the path,
-    // query string, or fragment. Only the parsed hostname should count.
-    const cases = [
-      "https://evil.example.com/?target=host.docker.internal",
-      "https://evil.example.com/host.docker.internal/foo",
-      "https://evil.example.com/redirect?to=127.0.0.1",
-      "https://public-api.openai.com/v1",
-    ] as const;
-    for (const baseUrl of cases) {
-      resolveProviderHttpRequestConfigMock.mockClear();
-      mockGeneratedPngResponse();
-      const provider = buildLitellmImageGenerationProvider();
-      await provider.generateImage({
-        provider: "litellm",
-        model: "gpt-image-2",
-        prompt: "x",
-        cfg: { models: { providers: { litellm: { baseUrl, models: [] } } } },
-      });
-      expect(
-        mockObjectArg(resolveProviderHttpRequestConfigMock),
-        `expected allowPrivateNetwork=false for ${baseUrl}`,
-      ).toHaveProperty("allowPrivateNetwork", undefined);
-    }
   });
 });

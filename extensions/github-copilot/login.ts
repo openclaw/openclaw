@@ -2,6 +2,7 @@
 import { intro, note, outro, spinner } from "@clack/prompts";
 import { stylePromptTitle } from "openclaw/plugin-sdk/cli-runtime";
 import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-mutation";
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   resolveExpiresAtMsFromDurationMs,
   nonNegativeSecondsToSafeMilliseconds,
@@ -14,13 +15,11 @@ import {
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const GITHUB_DEVICE_VERIFICATION_URL = "https://github.com/login/device";
-const GITHUB_AUTH_SSRF_POLICY: SsrFPolicy = { hostnameAllowlist: ["github.com"] };
 
 type DeviceCodeResponse = {
   deviceCode: string;
@@ -57,12 +56,12 @@ class GitHubDeviceFlowError extends Error {
   }
 }
 
-let githubDeviceFlowFetchGuard = fetchWithSsrFGuard;
+let githubDeviceFlowFetchGuard = fetchWithResponseRelease;
 
 export function setGitHubCopilotDeviceFlowFetchGuardForTesting(
-  impl: typeof fetchWithSsrFGuard | null,
+  impl: typeof fetchWithResponseRelease | null,
 ): void {
-  githubDeviceFlowFetchGuard = impl ?? fetchWithSsrFGuard;
+  githubDeviceFlowFetchGuard = impl ?? fetchWithResponseRelease;
 }
 
 async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
@@ -139,9 +138,6 @@ async function postGitHubDeviceFlowForm(params: {
       },
       body: params.body,
     },
-    requireHttps: true,
-    policy: GITHUB_AUTH_SSRF_POLICY,
-    auditContext: "github-copilot-device-flow",
   });
   try {
     if (!response.ok) {

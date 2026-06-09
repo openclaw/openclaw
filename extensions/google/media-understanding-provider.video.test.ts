@@ -37,14 +37,14 @@ describe("describeGeminiVideo", () => {
     expect(result.text).toBe("video ok");
   });
 
-  it("keeps private-network disabled for the default Google media endpoint", async () => {
+  it("uses the default Google media endpoint", async () => {
     expect(
       resolveGoogleGenerativeAiHttpRequestConfig({
         apiKey: "test-key",
         capability: "video",
         transport: "media-understanding",
-      }).allowPrivateNetwork,
-    ).toBe(false);
+      }).baseUrl,
+    ).toBe("https://generativelanguage.googleapis.com/v1beta");
 
     const fetchFn = withFetchPreconnect(async () => {
       return new Response(

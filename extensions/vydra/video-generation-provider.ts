@@ -84,13 +84,12 @@ export function buildVydraVideoGenerationProvider(): VideoGenerationProvider {
         throw new Error("Vydra video generation does not support video reference inputs.");
       }
 
-      const { fetchFn, baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        await resolveVydraRequestContext({
-          cfg: req.cfg,
-          agentDir: req.agentDir,
-          authStore: req.authStore,
-          capability: "video",
-        });
+      const { fetchFn, baseUrl, headers, dispatcherPolicy } = await resolveVydraRequestContext({
+        cfg: req.cfg,
+        agentDir: req.agentDir,
+        authStore: req.authStore,
+        capability: "video",
+      });
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs ?? DEFAULT_VYDRA_VIDEO_TIMEOUT_MS,
         label: "Vydra video generation",
@@ -105,7 +104,6 @@ export function buildVydraVideoGenerationProvider(): VideoGenerationProvider {
           defaultTimeoutMs: DEFAULT_VYDRA_VIDEO_TIMEOUT_MS,
         }),
         fetchFn,
-        allowPrivateNetwork,
         dispatcherPolicy,
       });
 

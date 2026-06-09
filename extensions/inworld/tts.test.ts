@@ -5,11 +5,11 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
   return {
     ...actual,
-    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+    fetchWithResponseRelease: fetchWithSsrFGuardMock,
   };
 });
 
@@ -18,8 +18,6 @@ import { inworldTTS, listInworldVoices } from "./tts.js";
 type GuardRequest = {
   url: string;
   init?: RequestInit;
-  auditContext?: string;
-  policy?: unknown;
   timeoutMs?: number;
 };
 
@@ -33,7 +31,7 @@ function lastGuardRequest(): GuardRequest {
   const calls = fetchWithSsrFGuardMock.mock.calls;
   const call = calls[calls.length - 1];
   if (!call) {
-    throw new Error("fetchWithSsrFGuard was not called");
+    throw new Error("fetchWithResponseRelease was not called");
   }
   return call[0] as GuardRequest;
 }
@@ -73,11 +71,11 @@ const guardedSuccessReleaseCases = [
 ];
 
 afterAll(() => {
-  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.doUnmock("openclaw/plugin-sdk/fetch-runtime");
   vi.resetModules();
 });
 
-describe("Inworld guarded dispatcher lifecycle", () => {
+describe("Inworld response-release lifecycle", () => {
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
     vi.restoreAllMocks();
@@ -146,8 +144,6 @@ describe("listInworldVoices", () => {
     ]);
     const request = lastGuardRequest();
     expect(request.url).toBe("https://api.inworld.ai/voices/v1/voices");
-    expect(request.auditContext).toBe("inworld-voices");
-    expect(request.policy).toEqual({ hostnameAllowlist: ["api.inworld.ai"] });
     const headers = new Headers(request.init?.headers);
     expect(headers.get("authorization")).toBe("Basic test-key");
   });
@@ -266,8 +262,6 @@ describe("inworldTTS", () => {
 
     const request = lastGuardRequest();
     expect(request.url).toBe("https://api.inworld.ai/tts/v1/voice:stream");
-    expect(request.auditContext).toBe("inworld-tts");
-    expect(request.policy).toEqual({ hostnameAllowlist: ["api.inworld.ai"] });
     if (!request.init) {
       throw new Error("expected Inworld TTS request init");
     }
@@ -320,9 +314,6 @@ describe("inworldTTS", () => {
     });
 
     expect(lastGuardRequest().url).toBe("https://custom.inworld.example.com/tts/v1/voice:stream");
-    expect(lastGuardRequest().policy).toEqual({
-      hostnameAllowlist: ["custom.inworld.example.com"],
-    });
   });
 
   it("skips empty lines in streaming response", async () => {

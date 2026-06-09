@@ -1,6 +1,7 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Msteams plugin module implements graph behavior.
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
+import type { MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { createMSTeamsHttpError } from "./http-error.js";
@@ -51,7 +52,7 @@ async function requestGraph(params: {
   const hasBody = params.body !== undefined;
   const url = `${params.root ?? GRAPH_ROOT}${params.path}`;
   const currentFetch = globalThis.fetch;
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url,
     fetchImpl: async (input, guardedInit) => await currentFetch(input, guardedInit),
     init: {
@@ -64,7 +65,6 @@ async function requestGraph(params: {
       },
       body: hasBody ? JSON.stringify(params.body) : undefined,
     },
-    auditContext: "msteams.graph",
   });
   try {
     if (!response.ok) {
@@ -121,7 +121,7 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
   url: string;
   headers?: Record<string, string>;
 }): Promise<T> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: params.url,
     init: {
       headers: {
@@ -130,7 +130,6 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
         ...params.headers,
       },
     },
-    auditContext: "msteams.graph.absolute",
   });
   try {
     if (!response.ok) {

@@ -39,6 +39,7 @@ const {
   HttpsAgent,
   HttpsProxyAgent,
   fetchWithSsrFGuardMock,
+  createHttp1ProxyAgentMock,
   getLastAgent,
   getLastProxyAgent,
   resolveDebugProxySettingsMock,
@@ -67,6 +68,10 @@ const {
       release: vi.fn(),
     };
   });
+  const createHttp1ProxyAgentMockLocal = vi.fn((options: { uri: string }) => ({
+    options,
+    close: vi.fn(async () => undefined),
+  }));
 
   const GatewayIntentsLocal = {
     Guilds: 1 << 0,
@@ -129,6 +134,7 @@ const {
     HttpsAgent: HttpsAgentLocal,
     HttpsProxyAgent: HttpsProxyAgentLocal,
     fetchWithSsrFGuardMock: fetchWithSsrFGuardMockLocal,
+    createHttp1ProxyAgentMock: createHttp1ProxyAgentMockLocal,
     getLastAgent: () => HttpsAgentLocal.lastCreated,
     getLastProxyAgent: () => HttpsProxyAgentLocal.lastCreated,
     captureHttpExchangeSpy: captureHttpExchangeSpyLocal,
@@ -176,8 +182,9 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
   resolveDebugProxySettings: resolveDebugProxySettingsMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  createHttp1ProxyAgent: createHttp1ProxyAgentMock,
+  fetchWithResponseRelease: fetchWithSsrFGuardMock,
 }));
 
 describe("createDiscordGatewayPlugin", () => {
@@ -216,7 +223,7 @@ describe("createDiscordGatewayPlugin", () => {
   function firstGuardedFetchCall() {
     return firstMockArg(fetchWithSsrFGuardMock, "fetchWithSsrFGuardMock") as {
       url: string;
-      init?: RequestInit & { signal?: unknown };
+      init?: RequestInit & { dispatcher?: unknown; signal?: unknown };
       mode?: string;
       dispatcherPolicy?: unknown;
       policy?: unknown;
@@ -533,13 +540,11 @@ describe("createDiscordGatewayPlugin", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     const guardedFetch = firstGuardedFetchCall();
     expect(guardedFetch.url).toBe("https://discord.com/api/v10/gateway/bot");
-    expect(guardedFetch.mode).toBe("trusted_explicit_proxy");
-    expect(guardedFetch.dispatcherPolicy).toEqual({
-      mode: "explicit-proxy",
-      proxyUrl: "http://127.0.0.1:8080",
-      allowPrivateProxy: true,
-    });
-    expect(guardedFetch.policy).toEqual({ allowedHostnames: ["discord.com"] });
+    expect(createHttp1ProxyAgentMock).toHaveBeenCalledWith({ uri: "http://127.0.0.1:8080" });
+    expect(guardedFetch.init?.dispatcher).toBe(createHttp1ProxyAgentMock.mock.results[0]?.value);
+    expect(guardedFetch.mode).toBeUndefined();
+    expect(guardedFetch.dispatcherPolicy).toBeUndefined();
+    expect(guardedFetch.policy).toBeUndefined();
     expect(guardedFetch.init?.headers).toEqual({ Authorization: "Bot token-123" });
     expect(guardedFetch.init?.signal).toBeInstanceOf(AbortSignal);
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);

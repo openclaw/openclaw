@@ -1,7 +1,7 @@
+import { fetchWithResponseRelease } from "openclaw/plugin-sdk/fetch-runtime";
 // Voice Call API module exposes the plugin public contract.
-import { fetchWithSsrFGuard } from "../../../api.js";
 
-// Guarded Twilio REST API client helpers.
+// Twilio REST API client helpers.
 
 /** Minimal Twilio REST API error payload. */
 type ParsedTwilioApiError = {
@@ -45,7 +45,7 @@ export class TwilioApiError extends Error {
   }
 }
 
-/** POST a form-encoded Twilio REST API request through the SSRF guard. */
+/** POST a form-encoded Twilio REST API request. */
 export async function twilioApiRequest<T = unknown>(params: {
   baseUrl: string;
   accountSid: string;
@@ -69,7 +69,7 @@ export async function twilioApiRequest<T = unknown>(params: {
         }, new URLSearchParams());
 
   const requestUrl = `${params.baseUrl}${params.endpoint}`;
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchWithResponseRelease({
     url: requestUrl,
     init: {
       method: "POST",
@@ -79,9 +79,7 @@ export async function twilioApiRequest<T = unknown>(params: {
       },
       body: bodyParams,
     },
-    policy: { allowedHostnames: ["api.twilio.com"] },
     timeoutMs: TWILIO_API_TIMEOUT_MS,
-    auditContext: "voice-call.twilio.api",
   });
   try {
     if (!response.ok) {

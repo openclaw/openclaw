@@ -7,9 +7,9 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import type { MediaFetchUrlPolicy } from "../../media/fetch.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -296,7 +296,7 @@ async function loadReferenceImages(params: {
   inputs: string[];
   workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
-  ssrfPolicy?: SsrFPolicy;
+  ssrfPolicy?: MediaFetchUrlPolicy;
   timeoutMs?: number;
 }): Promise<
   Array<{

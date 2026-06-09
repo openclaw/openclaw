@@ -360,7 +360,7 @@ export async function isChromeReachable(
     const discoveryUrl = isWebSocketUrl(cdpUrl)
       ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
       : cdpUrl;
-    const version = await fetchChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
+    const version = await fetchChromeVersion(discoveryUrl, timeoutMs);
     if (version) {
       return true;
     }
@@ -376,10 +376,9 @@ export async function isChromeReachable(
 async function fetchChromeVersion(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
-  ssrfPolicy?: SsrFPolicy,
 ): Promise<ChromeVersion | null> {
   try {
-    return await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
+    return await readChromeVersion(cdpUrl, timeoutMs);
   } catch {
     return null;
   }
@@ -403,7 +402,7 @@ export async function getChromeWebSocketUrl(
   const discoveryUrl = isWebSocketUrl(cdpUrl)
     ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
     : cdpUrl;
-  const version = await fetchChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
+  const version = await fetchChromeVersion(discoveryUrl, timeoutMs);
   const wsUrl = normalizeOptionalString(version?.webSocketDebuggerUrl) ?? "";
   if (!wsUrl) {
     // /json/version unavailable or returned no WebSocket URL. For bare

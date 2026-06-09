@@ -18,7 +18,6 @@ const {
   })),
   resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-    allowPrivateNetwork: false,
     headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
     dispatcherPolicy: undefined,
   })),
@@ -170,7 +169,6 @@ describe("openrouter image generation provider", () => {
     expect(requireOpenRouterConfigRequest()).toEqual({
       baseUrl: "https://custom.openrouter.test/api/v1",
       defaultBaseUrl: "https://openrouter.ai/api/v1",
-      allowPrivateNetwork: false,
       defaultHeaders: {
         Authorization: "Bearer openrouter-key",
         "HTTP-Referer": "https://openclaw.ai",
@@ -208,7 +206,6 @@ describe("openrouter image generation provider", () => {
       },
       timeoutMs: 12_345,
       fetchFn: fetch,
-      allowPrivateNetwork: false,
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       dispatcherPolicy: undefined,
     });

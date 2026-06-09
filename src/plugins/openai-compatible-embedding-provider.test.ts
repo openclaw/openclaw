@@ -57,6 +57,7 @@ async function startEmbeddingServer(params?: {
   token?: string;
   respond?: (request: CapturedRequest) => FixtureResponse | Record<string, unknown>;
   status?: number;
+  headers?: Record<string, string>;
 }): Promise<{ baseUrl: string; requests: CapturedRequest[] }> {
   const requests: CapturedRequest[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -77,7 +78,10 @@ async function startEmbeddingServer(params?: {
           expect(req.headers.authorization).toBeUndefined();
         }
 
-        res.writeHead(params?.status ?? 200, { "content-type": "application/json" });
+        res.writeHead(params?.status ?? 200, {
+          "content-type": "application/json",
+          ...params?.headers,
+        });
         res.end(
           JSON.stringify(
             params?.respond?.(captured) ?? {
@@ -248,6 +252,26 @@ describe("openai-compatible generic embedding provider", () => {
       input: ["a", "abcd"],
       dimensions: 1024,
     });
+  });
+
+  it("does not follow embedding POST redirects", async () => {
+    const server = await startEmbeddingServer({
+      status: 307,
+      headers: { location: "http://127.0.0.1:9/leak" },
+    });
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        model: "text-embedding-bge-m3",
+        remote: {
+          baseUrl: server.baseUrl,
+          headers: { "x-api-key": "secret" },
+        },
+      }),
+    );
+
+    await expect(provider.embed("private input")).rejects.toThrow();
+    expect(server.requests).toHaveLength(1);
+    expect(server.requests[0]?.body.input).toEqual(["private input"]);
   });
 
   it("resolves env SecretRef API keys on the memory search secret surface", async () => {
