@@ -1642,6 +1642,7 @@ export const ar: TranslationMap = {
       timeoutInvalid: "إذا تم تعيينها، يجب أن تكون المهلة أكبر من 0 ثانية.",
       webhookUrlRequired: "عنوان URL للـ Webhook مطلوب.",
       webhookUrlInvalid: "يجب أن يبدأ عنوان URL للـ Webhook بـ http:// أو https://.",
+      telegramChatIdRequired: "Telegram To must be a numeric chat ID (e.g. -1001234567890).",
       invalidRunTime: "وقت التشغيل غير صالح.",
       invalidIntervalAmount: "مقدار الفاصل غير صالح.",
       cronExprRequiredShort: "تعبير Cron مطلوب.",
