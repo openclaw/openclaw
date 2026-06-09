@@ -9,7 +9,6 @@ import {
   type ModelProviderConfig,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildCodexAppServerUsageSnapshot } from "openclaw/plugin-sdk/provider-usage";
 import { resolveCodexSystemPromptContribution } from "./prompt-overlay.js";
 import {
   buildCodexModelDefinition,
@@ -28,6 +27,7 @@ import type {
   CodexAppServerModel,
   CodexAppServerModelListResult,
 } from "./src/app-server/models.js";
+import { buildCodexAppServerUsageSnapshot } from "./src/app-server/rate-limits.js";
 
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 2500;
 const LIVE_DISCOVERY_ENV = "OPENCLAW_CODEX_DISCOVERY_LIVE";

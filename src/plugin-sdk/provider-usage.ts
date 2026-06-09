@@ -20,4 +20,3 @@ export {
   buildUsageHttpErrorSnapshot,
   fetchJson,
 } from "../infra/provider-usage.fetch.shared.js";
-export { buildCodexAppServerUsageSnapshot } from "../infra/provider-usage.fetch.codex.js";

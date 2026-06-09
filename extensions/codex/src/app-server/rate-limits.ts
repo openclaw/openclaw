@@ -6,6 +6,12 @@ import {
   MAX_DATE_TIMESTAMP_MS,
   resolveExpiresAtMsFromEpochSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import {
+  clampPercent,
+  PROVIDER_LABELS,
+  type ProviderUsageSnapshot,
+  type UsageWindow,
+} from "openclaw/plugin-sdk/provider-usage";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
@@ -180,6 +186,22 @@ export function summarizeCodexAccountUsage(
     ...(blockedResetRelative ? { blockedResetRelative } : {}),
     ...(blockingPeriod ? { blockingPeriod } : {}),
     ...(blockingReason ? { blockingReason } : {}),
+  };
+}
+
+/** Converts Codex app-server rate-limit payloads into OpenAI/Codex usage windows. */
+export function buildCodexAppServerUsageSnapshot(value: unknown): ProviderUsageSnapshot {
+  const snapshot = selectCodexProviderUsageSnapshot(value);
+  const windows = snapshot
+    ? readWindowEntries(snapshot)
+        .map(readProviderUsageWindow)
+        .filter((window): window is UsageWindow => Boolean(window))
+    : [];
+  return {
+    provider: "openai",
+    displayName: PROVIDER_LABELS.openai,
+    windows,
+    ...(snapshot ? { plan: resolveCodexProviderUsagePlan(snapshot) } : {}),
   };
 }
 
@@ -437,6 +459,56 @@ function snapshotHasLimitBlock(snapshot: JsonObject): boolean {
 function isCodexLimitSnapshot(snapshot: JsonObject): boolean {
   const id = readNullableString(snapshot, "limitId") ?? readNullableString(snapshot, "limit_id");
   return !id || id === CODEX_LIMIT_ID;
+}
+
+function selectCodexProviderUsageSnapshot(value: unknown): JsonObject | undefined {
+  const snapshots = collectCodexRateLimitSnapshots(value as JsonValue | undefined);
+  return snapshots.find(isCodexLimitSnapshot) ?? snapshots[0];
+}
+
+function readProviderUsageWindow(entry: RateLimitWindowEntry): UsageWindow | undefined {
+  const { window } = entry;
+  if (window.usedPercent === undefined && window.resetsAtMs <= 0) {
+    return undefined;
+  }
+  return {
+    label: formatProviderUsageWindowLabel(window.windowDurationMins, entry.key),
+    usedPercent: clampPercent(window.usedPercent ?? 0),
+    resetAt: window.resetsAtMs > 0 ? window.resetsAtMs : undefined,
+  };
+}
+
+function formatProviderUsageWindowLabel(
+  minutes: number | undefined,
+  fallback: LimitWindowKey,
+): string {
+  if (minutes === 7 * 24 * 60) {
+    return "Week";
+  }
+  if (minutes === 24 * 60) {
+    return "Day";
+  }
+  if (minutes !== undefined && minutes > 0 && minutes < 24 * 60) {
+    return minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`;
+  }
+  if (minutes !== undefined && minutes > 0 && minutes % (24 * 60) === 0) {
+    return `${minutes / (24 * 60)}d`;
+  }
+  if (minutes !== undefined && minutes > 0 && minutes % 60 === 0) {
+    return `${minutes / 60}h`;
+  }
+  return fallback === "primary" ? "Short" : "Long";
+}
+
+function resolveCodexProviderUsagePlan(snapshot: JsonObject): string | undefined {
+  const plan = readString(snapshot, "planType") ?? readString(snapshot, "plan_type");
+  const credits = isJsonObject(snapshot.credits) ? snapshot.credits : undefined;
+  const rawBalance = credits?.balance;
+  if (rawBalance === undefined || rawBalance === null) {
+    return plan;
+  }
+  const balance = asFiniteNumber(rawBalance) ?? 0;
+  return plan ? `${plan} ($${balance.toFixed(2)})` : `$${balance.toFixed(2)}`;
 }
 
 function selectSnapshotBlockingReset(
