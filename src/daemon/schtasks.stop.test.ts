@@ -20,6 +20,31 @@ const sleepMock = vi.hoisted(() =>
     timeState.now += ms;
   }),
 );
+const childUnref = vi.hoisted(() => vi.fn());
+const spawn = vi.hoisted(() => vi.fn(() => ({ unref: childUnref })));
+type SpawnSyncResult = {
+  pid: number;
+  output: (string | null)[];
+  stdout: string;
+  stderr: string;
+  status: number;
+  signal: null;
+};
+const spawnSync = vi.hoisted(() =>
+  vi.fn<(command: string, args?: readonly string[]) => SpawnSyncResult>(() => ({
+    pid: 0,
+    output: [null, "", ""],
+    stdout: "",
+    stderr: "",
+    status: 0,
+    signal: null,
+  })),
+);
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return { ...actual, spawn, spawnSync };
+});
 
 vi.mock("../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
@@ -91,10 +116,37 @@ async function withPreparedGatewayTask(
   });
 }
 
+/** Schtasks query output representing a completed task (not "not-yet-run").
+ *  Makes readLaunchObservation return { state: "other" } so the poll loop
+ *  is skipped, matching the old readScheduledTaskRuntime behavior for empty
+ *  queries on non-Windows mocks. */
+function completedTaskQueryOutput(taskName = "OpenClaw Gateway") {
+  return [
+    `HostName: TEST-HOST`,
+    `TaskName: \\${taskName}`,
+    "Status: Ready",
+    "Last Run Time: 6/9/2026 10:00:00 AM",
+    "Last Run Result: 0",
+    "",
+  ].join("\r\n");
+}
+
 beforeEach(() => {
   resetSchtasksBaseMocks();
   findVerifiedGatewayListenerPidsOnPortSync.mockReset();
   findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+  childUnref.mockReset();
+  spawn.mockReset();
+  spawn.mockImplementation(() => ({ unref: childUnref }));
+  spawnSync.mockReset();
+  spawnSync.mockImplementation(() => ({
+    pid: 0,
+    output: [null, "", ""],
+    stdout: "",
+    stderr: "",
+    status: 0,
+    signal: null,
+  }));
   timeState.now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
   sleepMock.mockReset();
@@ -192,7 +244,13 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
   it("kills lingering verified gateway listeners and waits for port release before restart", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
-      pushSuccessfulSchtasksResponses(4);
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: completedTaskQueryOutput(), stderr: "" },
+      );
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
       inspectPortUsage
         .mockResolvedValueOnce(busyPortUsage(5151))
@@ -210,7 +268,6 @@ describe("Scheduled Task stop/restart cleanup", () => {
         ["/Query", "/TN", "OpenClaw Gateway"],
         ["/End", "/TN", "OpenClaw Gateway"],
         ["/Run", "/TN", "OpenClaw Gateway"],
-        ["/Query"],
         ["/Query", "/TN", "OpenClaw Gateway", "/V", "/FO", "LIST"],
       ]);
     });
@@ -218,7 +275,13 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
   it("does not wait on or force-kill the gateway port when restarting a node Scheduled Task", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
-      pushSuccessfulSchtasksResponses(4);
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: completedTaskQueryOutput("OpenClaw Node"), stderr: "" },
+      );
       env.OPENCLAW_SERVICE_KIND = "node";
       env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Node";
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
@@ -236,7 +299,6 @@ describe("Scheduled Task stop/restart cleanup", () => {
         ["/Query", "/TN", "OpenClaw Node"],
         ["/End", "/TN", "OpenClaw Node"],
         ["/Run", "/TN", "OpenClaw Node"],
-        ["/Query"],
         ["/Query", "/TN", "OpenClaw Node", "/V", "/FO", "LIST"],
       ]);
     });
