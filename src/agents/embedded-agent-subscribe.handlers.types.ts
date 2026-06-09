@@ -42,9 +42,10 @@ export type ToolCallSummary = {
 };
 
 export type EmbeddedAgentSubscribeState = {
-  /** Message count when the current compaction started. Used to scope
-   *  stale-usage clearing to pre-compaction messages only. (#50795) */
-  preCompactionMessageCount?: number;
+  /** Assistant messages that existed when the current compaction started.
+   *  Used to scope stale-usage clearing to pre-compaction messages only.
+   *  Messages added during/after compaction are excluded. (#50795) */
+  preCompactionAssistantMessages?: Set<object>;
   assistantTexts: string[];
   toolMetas: Array<{ toolName?: string; meta?: string; asyncStarted?: boolean }>;
   acceptedSessionSpawns: AcceptedSessionSpawn[];
