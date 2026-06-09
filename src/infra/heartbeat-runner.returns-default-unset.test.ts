@@ -1787,7 +1787,7 @@ tasks:
         if (expectCronContext) {
           const calledCtx = replyBody(replySpy);
           expect(calledCtx.Provider, name).toBe("cron-event");
-          expect(calledCtx.Body, name).toContain("scheduled reminder has been triggered");
+          expect(calledCtx.Body, name).toContain("system message above");
         }
       } finally {
         replySpy.mockReset();
@@ -1841,7 +1841,7 @@ tasks:
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
       const calledCtx = replyBody(replySpy);
       expect(calledCtx.Provider).toBe("cron-event");
-      expect(calledCtx.Body).toContain("Handle this reminder internally");
+      expect(calledCtx.Body).toContain("system message above");
       expect(calledCtx.Body).not.toContain("Please relay this reminder to the user");
     } finally {
       replySpy.mockReset();

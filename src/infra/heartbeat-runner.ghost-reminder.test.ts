@@ -284,8 +284,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(result.status).toBe("ran");
     expect(replyCallCount).toBe(1);
     expect(calledCtx?.Provider).toBe("cron-event");
-    expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
-    expect(calledCtx?.Body).toContain("Cron: QMD maintenance completed");
+    expect(calledCtx?.Body).toContain("system message above");
     expect(calledCtx?.Body).not.toContain("Read HEARTBEAT.md");
     expect(sendTelegram).toHaveBeenCalled();
   });
@@ -339,7 +338,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
         Body?: string;
       };
       expect(firstCtx.Provider).toBe("cron-event");
-      expect(firstCtx.Body).toContain("Cron: QMD maintenance completed");
+      expect(firstCtx.Body).toContain("system message above");
       expect(secondCtx.Provider).toBe("heartbeat");
       expect(secondCtx.Body).toContain("Read HEARTBEAT.md");
       expect(secondCtx.Body).not.toContain("Cron: QMD maintenance completed");

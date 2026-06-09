@@ -78,10 +78,12 @@ export function buildCronEventPrompt(
   opts?: {
     deliverToUser?: boolean;
     useHeartbeatResponseTool?: boolean;
+    alreadySystemMessage?: boolean;
   },
 ): string {
   const deliverToUser = opts?.deliverToUser ?? true;
   const useHeartbeatResponseTool = opts?.useHeartbeatResponseTool ?? false;
+  const alreadySystemMessage = opts?.alreadySystemMessage ?? false;
   const eventText = pendingEvents.join("\n").trim();
   if (!eventText) {
     if (useHeartbeatResponseTool) {
@@ -100,6 +102,15 @@ export function buildCronEventPrompt(
       "A scheduled cron event was triggered, but no event content was found. " +
       "Reply HEARTBEAT_OK."
     );
+  }
+  if (alreadySystemMessage) {
+    const reference =
+      "A scheduled cron event was triggered. " +
+      "The event content was delivered as a system message above. Act on it.";
+    if (useHeartbeatResponseTool) {
+      return `${reference} ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
+    }
+    return reference;
   }
   if (!deliverToUser) {
     return (

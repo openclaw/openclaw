@@ -1179,6 +1179,9 @@ function resolveHeartbeatRunPrompt(params: {
         isCronSystemEvent(event.text),
     )
     .map((event) => event.text);
+  const cronEventsAreSystemMessages = pendingEventEntries.some(
+    (event) => event.contextKey?.startsWith("cron:") && isCronSystemEvent(event.text),
+  );
   const execEvents = params.preflight.shouldInspectPendingEvents
     ? pendingEventEntries
         .filter((event) => isExecCompletionEvent(event.text))
@@ -1247,6 +1250,7 @@ ${completionInstruction}`;
       ? buildCronEventPrompt(cronEvents, {
           deliverToUser: params.canRelayToUser,
           useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
+          alreadySystemMessage: cronEventsAreSystemMessages,
         })
       : baseUsesHeartbeatResponseTool
         ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)

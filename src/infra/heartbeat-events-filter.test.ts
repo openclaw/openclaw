@@ -112,6 +112,31 @@ describe("heartbeat event prompts", () => {
     expect(prompt.length).toBeLessThan(8_500);
   });
 
+  it.each([
+    {
+      name: "references system message instead of repeating text",
+      events: ["Cron: rotate logs"],
+      opts: { deliverToUser: false, alreadySystemMessage: true },
+      expected: ["system message above", "Act on it"],
+      unexpected: ["Cron: rotate logs", "reminder content", "Handle this reminder internally"],
+    },
+    {
+      name: "references system message with heartbeat_respond in response-tool mode",
+      events: ["Cron: rotate logs"],
+      opts: { deliverToUser: false, alreadySystemMessage: true, useHeartbeatResponseTool: true },
+      expected: ["system message above", "Act on it", "heartbeat_respond"],
+      unexpected: ["Cron: rotate logs", "reminder content"],
+    },
+  ])("$name", ({ events, opts, expected, unexpected }) => {
+    const prompt = buildCronEventPrompt(events, opts);
+    for (const part of expected) {
+      expect(prompt).toContain(part);
+    }
+    for (const part of unexpected) {
+      expect(prompt).not.toContain(part);
+    }
+  });
+
   it("uses heartbeat_respond for empty cron events in response-tool mode", () => {
     const prompt = buildCronEventPrompt([""], { useHeartbeatResponseTool: true });
 

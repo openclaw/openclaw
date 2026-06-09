@@ -275,7 +275,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
 
       expect(firstCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
       expect(firstCtx.Provider).toBe("cron-event");
-      expect(firstCtx.Body).toContain("Cron: QMD maintenance completed");
+      expect(firstCtx.Body).toContain("system message above");
       expect(secondCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
       expect(secondCtx.Body).not.toContain("Cron: QMD maintenance completed");
     });
