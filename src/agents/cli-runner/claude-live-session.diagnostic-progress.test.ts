@@ -65,6 +65,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetClaudeLiveSessionsForTest();
   vi.restoreAllMocks();
 });
 
