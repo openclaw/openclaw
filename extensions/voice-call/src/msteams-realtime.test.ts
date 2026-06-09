@@ -434,6 +434,73 @@ describe("createMsteamsRealtimeCall", () => {
     expect(arg.images?.[0]).toMatchObject({ type: "image", data: "AQID", mimeType: "image/jpeg" });
   });
 
+  it("realtime subagent session key honors sessionScope (per-phone keys by caller AAD across calls)", async () => {
+    const keyFor = async (opts: {
+      sessionScope?: "per-phone" | "per-call";
+      aadId: string | null;
+      callId: string;
+    }): Promise<string> => {
+      consultSpy.mockClear();
+      consultSpy.mockResolvedValueOnce({ text: "ok" });
+      const ctx = createMockSession();
+      ctx.session.callId = opts.callId;
+      ctx.session.caller.aadId = opts.aadId;
+      const mock = createMockProvider();
+      createMsteamsRealtimeCall({
+        session: ctx.session,
+        deps: {
+          provider: mock.provider,
+          providerConfig: {},
+          tools: [CONSULT_TOOL],
+          toolPolicy: "owner",
+          agentRuntime: { resolveThinkingDefault: () => "high" } as unknown as CoreAgentDeps,
+          voiceConfig: {
+            realtime: {},
+            agentId: "main",
+            ...(opts.sessionScope ? { sessionScope: opts.sessionScope } : {}),
+          } as unknown as VoiceCallConfig,
+          cfg: {} as unknown as OpenClawConfig,
+          getLatestFrame: () => ({
+            source: "screenshare",
+            dataBase64: "AQID",
+            mime: "image/jpeg",
+            width: 1,
+            height: 1,
+            ts: 0,
+          }),
+        },
+      });
+      mock.getRequest().onToolCall?.({
+        itemId: "i",
+        callId: "look",
+        name: "look_at_screen",
+        args: { question: "?" },
+      });
+      await vi.waitFor(() => expect(consultSpy).toHaveBeenCalled());
+      const lastCall = consultSpy.mock.calls.at(-1);
+      if (!lastCall) {
+        throw new Error("consult was not called");
+      }
+      return (lastCall[0] as { sessionKey: string }).sessionKey;
+    };
+
+    // per-phone (default): the same caller AAD across two different calls reuses one subagent key.
+    const k1 = await keyFor({ aadId: "aad-X", callId: "call-A" });
+    const k2 = await keyFor({ aadId: "aad-X", callId: "call-B" });
+    expect(k1).toContain("aad-X");
+    expect(k1).not.toContain("call-A");
+    expect(k2).toBe(k1);
+
+    // per-call scope keys by callId instead of the caller.
+    const perCall = await keyFor({ sessionScope: "per-call", aadId: "aad-X", callId: "call-C" });
+    expect(perCall).toContain("call-C");
+    expect(perCall).not.toContain("aad-X");
+
+    // anonymous caller (no AAD) falls back to per-call so distinct callers never collide.
+    const anon = await keyFor({ aadId: null, callId: "call-D" });
+    expect(anon).toContain("call-D");
+  });
+
   it("look_at_screen caches the answer for an unchanged frame and re-runs when it changes", async () => {
     consultSpy.mockClear();
     consultSpy.mockResolvedValue({ text: "A stack trace." });
