@@ -60,7 +60,7 @@ describe("hub-delegated lifecycle", () => {
     });
   });
 
-  it("clears hubDelegated before closing runtime", async () => {
+  it("clears hubDelegated and routing fields before closing runtime", async () => {
     await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
       const storePath = path.join(home, "agents/codex/sessions/sessions.json");
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
@@ -68,6 +68,9 @@ describe("hub-delegated lifecycle", () => {
       const entry: SessionEntry = {
         sessionId: "sess-close-order",
         updatedAt: Date.now(),
+        label: "refactor",
+        spawnedBy: "agent:main:main",
+        parentSessionKey: "agent:main:main",
         hubDelegated: {
           ownerSessionKey: "agent:main:main",
           createdAt: Date.now(),
@@ -85,6 +88,9 @@ describe("hub-delegated lifecycle", () => {
           events.push("close");
           const persisted = readSessionStoreForTest(storePath);
           expect(persisted[sessionKey]?.hubDelegated).toBeUndefined();
+          expect(persisted[sessionKey]?.label).toBeUndefined();
+          expect(persisted[sessionKey]?.spawnedBy).toBeUndefined();
+          expect(persisted[sessionKey]?.parentSessionKey).toBeUndefined();
         },
         unbind: async () => {
           events.push("unbind");
@@ -127,7 +133,7 @@ describe("hub-delegated lifecycle", () => {
     });
   });
 
-  it("restores hubDelegated when runtime close fails", async () => {
+  it("restores hubDelegated and routing fields when runtime close fails", async () => {
     await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
       const storePath = path.join(home, "agents/codex/sessions/sessions.json");
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
@@ -139,6 +145,9 @@ describe("hub-delegated lifecycle", () => {
       const entry: SessionEntry = {
         sessionId: "sess-close-restore",
         updatedAt: Date.now(),
+        label: "refactor",
+        spawnedBy: "agent:main:main",
+        parentSessionKey: "agent:main:main",
         hubDelegated: marker,
       };
       writeSessionStoreForTest(storePath, { [sessionKey]: entry });
@@ -158,6 +167,9 @@ describe("hub-delegated lifecycle", () => {
 
       const persisted = readSessionStoreForTest(storePath);
       expect(persisted[sessionKey]?.hubDelegated).toEqual(marker);
+      expect(persisted[sessionKey]?.label).toBe("refactor");
+      expect(persisted[sessionKey]?.spawnedBy).toBe("agent:main:main");
+      expect(persisted[sessionKey]?.parentSessionKey).toBe("agent:main:main");
     });
   });
 
@@ -246,7 +258,7 @@ describe("hub-delegated lifecycle", () => {
     expect(expired).toHaveLength(1);
   });
 
-  it("clearHubDelegatedSessionMarker removes hubDelegated from the store row", async () => {
+  it("clearHubDelegatedSessionMarker removes delegate routing fields from the store row", async () => {
     await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
       const storePath = path.join(home, "sessions.json");
       const sessionKey = "agent:codex:acp:marker";
@@ -254,6 +266,9 @@ describe("hub-delegated lifecycle", () => {
         [sessionKey]: {
           sessionId: "sess-marker",
           updatedAt: Date.now(),
+          label: "refactor",
+          spawnedBy: "agent:main:main",
+          parentSessionKey: "agent:main:main",
           hubDelegated: {
             ownerSessionKey: "agent:main:main",
             createdAt: Date.now(),
@@ -263,6 +278,48 @@ describe("hub-delegated lifecycle", () => {
       await clearHubDelegatedSessionMarker({ storePath, storeSessionKey: sessionKey });
       const persisted = readSessionStoreForTest(storePath);
       expect(persisted[sessionKey]?.hubDelegated).toBeUndefined();
+      expect(persisted[sessionKey]?.label).toBeUndefined();
+      expect(persisted[sessionKey]?.spawnedBy).toBeUndefined();
+      expect(persisted[sessionKey]?.parentSessionKey).toBeUndefined();
+    });
+  });
+
+  it("closed delegate rows no longer resolve by owner or spawnedBy label filters", async () => {
+    await withTempDir({ prefix: "openclaw-hub-delegate-life-" }, async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const sessionKey = "agent:codex:acp:closed-delegate";
+      const ownerSessionKey = "agent:main:webchat:main";
+      writeSessionStoreForTest(storePath, {
+        [sessionKey]: {
+          sessionId: "sess-closed-delegate",
+          updatedAt: Date.now(),
+          label: "refactor",
+          spawnedBy: ownerSessionKey,
+          parentSessionKey: ownerSessionKey,
+          hubDelegated: {
+            ownerSessionKey,
+            createdAt: Date.now(),
+          },
+        },
+      });
+      await clearHubDelegatedSessionMarker({ storePath, storeSessionKey: sessionKey });
+
+      const { listSessionsFromStore } = await import("../gateway/session-utils.js");
+      const closedStore = readSessionStoreForTest(storePath);
+      const ownerScoped = listSessionsFromStore({
+        cfg: {},
+        storePath,
+        store: closedStore,
+        opts: { label: "refactor", hubDelegatedOwner: ownerSessionKey },
+      });
+      const spawnedScoped = listSessionsFromStore({
+        cfg: {},
+        storePath,
+        store: closedStore,
+        opts: { label: "refactor", spawnedBy: ownerSessionKey },
+      });
+      expect(ownerScoped.sessions).toHaveLength(0);
+      expect(spawnedScoped.sessions).toHaveLength(0);
     });
   });
 });

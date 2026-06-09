@@ -1344,6 +1344,52 @@ describe("sessions tools", () => {
     ).toBe(true);
   });
 
+  it("sessions_send rejects labels for closed hub-delegated workers", async () => {
+    const requesterKey = "agent:main:webchat:main";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve") {
+        throw new Error(`No session found with label: refactor`);
+      }
+      throw new Error(`unexpected gateway call: ${request.method ?? "unknown"}`);
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "webchat",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-closed-delegate-label", {
+      label: "refactor",
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("No session found with label");
+    expect(callGatewayMock).toHaveBeenCalledTimes(3);
+    expect(
+      (callGatewayMock.mock.calls[0]?.[0] as { params?: Record<string, unknown> }).params,
+    ).toEqual({
+      label: "refactor",
+      hubDelegatedOwner: requesterKey,
+    });
+    expect(
+      (callGatewayMock.mock.calls[1]?.[0] as { params?: Record<string, unknown> }).params,
+    ).toEqual({
+      label: "refactor",
+      spawnedBy: requesterKey,
+    });
+    expect(
+      (callGatewayMock.mock.calls[2]?.[0] as { params?: Record<string, unknown> }).params,
+    ).toEqual({
+      label: "refactor",
+    });
+  });
+
   it("sessions_send resolves generic labels without spawnedBy under visibility=all", async () => {
     const requesterKey = "agent:main:webchat:main";
     const targetKey = "agent:beta:discord:channel:123";

@@ -24,6 +24,13 @@ export function isAcpBackendUnavailableForDelegateClose(error: unknown): boolean
   return acpError.code === "ACP_BACKEND_MISSING" || acpError.code === "ACP_BACKEND_UNAVAILABLE";
 }
 
+type HubDelegatedCloseSnapshot = {
+  marker: HubDelegatedSessionMeta;
+  label?: string;
+  spawnedBy?: string;
+  parentSessionKey?: string;
+};
+
 export async function clearHubDelegatedSessionMarker(params: {
   storePath: string;
   storeSessionKey: string;
@@ -37,7 +44,11 @@ export async function clearHubDelegatedSessionMarker(params: {
         return entry ?? null;
       }
       const next = { ...entry };
+      // Close must be terminal for label routing; keep the row but drop delegate identity.
       delete next.hubDelegated;
+      delete next.label;
+      delete next.spawnedBy;
+      delete next.parentSessionKey;
       store[params.storeSessionKey] = next;
       return next;
     },
@@ -48,10 +59,10 @@ export async function clearHubDelegatedSessionMarker(params: {
   );
 }
 
-function readHubDelegatedSessionMarker(params: {
+function readHubDelegatedCloseSnapshot(params: {
   storePath: string;
   storeSessionKey: string;
-}): HubDelegatedSessionMeta | undefined {
+}): HubDelegatedCloseSnapshot | undefined {
   let store: Record<string, SessionEntry>;
   try {
     store = loadSessionStore(params.storePath, { clone: false });
@@ -62,13 +73,21 @@ function readHubDelegatedSessionMarker(params: {
   if (!isHubDelegatedAcpSessionEntry(entry) || !entry.hubDelegated) {
     return undefined;
   }
-  return entry.hubDelegated;
+  return {
+    marker: entry.hubDelegated,
+    label: normalizeOptionalString(entry.label),
+    spawnedBy: normalizeOptionalString(entry.spawnedBy),
+    parentSessionKey: normalizeOptionalString(entry.parentSessionKey),
+  };
 }
 
 export async function restoreHubDelegatedSessionMarker(params: {
   storePath: string;
   storeSessionKey: string;
   marker: HubDelegatedSessionMeta;
+  label?: string;
+  spawnedBy?: string;
+  parentSessionKey?: string;
 }): Promise<void> {
   const { updateSessionStore } = await import("../config/sessions/store.js");
   await updateSessionStore(
@@ -78,7 +97,16 @@ export async function restoreHubDelegatedSessionMarker(params: {
       if (!entry) {
         return null;
       }
-      const next = { ...entry, hubDelegated: params.marker };
+      const next: SessionEntry = { ...entry, hubDelegated: params.marker };
+      if (params.label) {
+        next.label = params.label;
+      }
+      if (params.spawnedBy) {
+        next.spawnedBy = params.spawnedBy;
+      }
+      if (params.parentSessionKey) {
+        next.parentSessionKey = params.parentSessionKey;
+      }
       store[params.storeSessionKey] = next;
       return next;
     },
@@ -106,11 +134,11 @@ export async function closeHubDelegatedAcpWorker(params: {
   // Missing ACP metadata must be repaired while the delegate marker still exists;
   // the repair classifier intentionally uses that marker as persistent evidence.
   await params.prepareRuntime?.({ cfg: params.cfg, sessionKey: params.sessionKey });
-  const markerSnapshot = readHubDelegatedSessionMarker({
+  const closeSnapshot = readHubDelegatedCloseSnapshot({
     storePath: params.storePath,
     storeSessionKey: params.storeSessionKey,
   });
-  if (markerSnapshot) {
+  if (closeSnapshot) {
     // Drop the delegate marker before runtime close so missing-metadata repair cannot
     // resurrect a worker whose sqlite metadata was already cleared.
     await clearHubDelegatedSessionMarker({
@@ -125,12 +153,15 @@ export async function closeHubDelegatedAcpWorker(params: {
       reason: params.reason,
     });
   } catch (err) {
-    if (markerSnapshot) {
+    if (closeSnapshot) {
       try {
         await restoreHubDelegatedSessionMarker({
           storePath: params.storePath,
           storeSessionKey: params.storeSessionKey,
-          marker: markerSnapshot,
+          marker: closeSnapshot.marker,
+          label: closeSnapshot.label,
+          spawnedBy: closeSnapshot.spawnedBy,
+          parentSessionKey: closeSnapshot.parentSessionKey,
         });
       } catch {
         // Best-effort restore keeps maintenance/operator paths able to retry close.
