@@ -402,7 +402,7 @@ async function streamAssistantResponse(
       case "toolcall_delta":
       case "toolcall_end":
         if (partialMessage) {
-          const message = event.partial;
+          const message: AssistantMessage = event.partial ?? partialMessage;
           partialMessage = message;
           context.messages[context.messages.length - 1] = message;
           await emit({
