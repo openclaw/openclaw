@@ -42,7 +42,7 @@ function noSessionFoundResult(key: string): SessionsResolveResult {
 function validateSessionAgentExists(
   cfg: OpenClawConfig,
   key: string,
-  entry?: Pick<SessionEntry, "acp"> | null,
+  entry?: SessionEntry | null,
 ): SessionsResolveResult | null {
   const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, key, entry);
   if (deletedAgentId === null) {
