@@ -28,21 +28,6 @@
       "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
       "oneOf": [
         {
-          "enum": [
-            "contextWindowExceeded",
-            "usageLimitExceeded",
-            "serverOverloaded",
-            "cyberPolicy",
-            "internalServerError",
-            "unauthorized",
-            "badRequest",
-            "threadRollbackFailed",
-            "sandboxError",
-            "other"
-          ],
-          "type": "string"
-        },
-        {
           "additionalProperties": false,
           "properties": {
             "httpConnectionFailed": {
@@ -158,6 +143,21 @@
           ],
           "title": "ActiveTurnNotSteerableCodexErrorInfo",
           "type": "object"
+        },
+        {
+          "enum": [
+            "contextWindowExceeded",
+            "usageLimitExceeded",
+            "serverOverloaded",
+            "cyberPolicy",
+            "internalServerError",
+            "unauthorized",
+            "badRequest",
+            "threadRollbackFailed",
+            "sandboxError",
+            "other"
+          ],
+          "type": "string"
         }
       ]
     },
