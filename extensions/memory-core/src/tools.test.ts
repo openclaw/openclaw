@@ -157,8 +157,10 @@ describe("memory_search unavailable payloads", () => {
     vi.useFakeTimers();
     try {
       let searchCalls = 0;
-      setMemorySearchImpl(async () => {
+      let searchSignal: AbortSignal | undefined;
+      setMemorySearchImpl(async (opts) => {
         searchCalls += 1;
+        searchSignal = opts?.signal;
         return await new Promise(() => {});
       });
       const tool = createMemorySearchToolOrThrow();
@@ -172,6 +174,8 @@ describe("memory_search unavailable payloads", () => {
         warning: "Memory search is unavailable due to an embedding/provider error.",
         action: "Check embedding provider configuration and retry memory_search.",
       });
+      // The deadline must abort the orphaned search, not just race past it.
+      expect(searchSignal?.aborted).toBe(true);
       const cooldownResult = await tool.execute("search-cooldown", { query: "hello again" });
       expectUnavailableMemorySearchDetails(cooldownResult.details, {
         error: "memory_search timed out after 15s",

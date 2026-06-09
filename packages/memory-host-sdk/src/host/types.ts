@@ -101,6 +101,8 @@ export interface MemorySearchManager {
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
+      /** Caller-owned cancellation; aborts in-flight embedding work when the caller stops waiting. */
+      signal?: AbortSignal;
     },
   ): Promise<MemorySearchResult[]>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
