@@ -180,6 +180,7 @@ type DetectedPluginDoctorStateMigrationPlan = {
 
 const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
+const LEGACY_SESSION_FILE_MOVE_PLAN_NAME = ".openclaw-session-migration-plan.json";
 const LEGACY_DELIVERY_QUEUE_DIRS = [
   { label: "outbound delivery queue", queueName: "outbound", dirName: "delivery-queue" },
   { label: "session delivery queue", queueName: "session", dirName: "session-delivery-queue" },
@@ -1931,6 +1932,342 @@ function mergeSessionEntry(params: {
   return params.preferIncomingOnTie ? params.incoming : params.existing;
 }
 
+function rewriteLegacySessionFilePaths(params: {
+  store: Record<string, SessionEntryLike>;
+  legacyDir: string;
+  movedFiles: MovedSessionFiles;
+}): Record<string, SessionEntryLike> {
+  const rewritten: Record<string, SessionEntryLike> = {};
+  const legacyDir = path.resolve(params.legacyDir);
+  for (const [key, entry] of Object.entries(params.store)) {
+    const rawSessionFile = (entry as { sessionFile?: unknown }).sessionFile;
+    const movedSessionFile =
+      typeof rawSessionFile === "string"
+        ? lookupMovedSessionFile(
+            params.movedFiles,
+            path.isAbsolute(rawSessionFile)
+              ? path.resolve(rawSessionFile)
+              : path.resolve(legacyDir, rawSessionFile),
+          )
+        : resolveMovedSessionFileFromSessionId({
+            entry,
+            legacyDir,
+            movedFiles: params.movedFiles,
+          });
+    if (!movedSessionFile) {
+      rewritten[key] = entry;
+      continue;
+    }
+    rewritten[key] = {
+      ...entry,
+      sessionFile: movedSessionFile,
+    };
+  }
+  return rewritten;
+}
+
+function resolveMovedSessionFileFromSessionId(params: {
+  entry: SessionEntryLike;
+  legacyDir: string;
+  movedFiles: MovedSessionFiles;
+}): string | undefined {
+  const rawSessionId = (params.entry as { sessionId?: unknown }).sessionId;
+  if (typeof rawSessionId !== "string") {
+    return undefined;
+  }
+  try {
+    const sessionId = validateSessionId(rawSessionId);
+    return lookupMovedSessionFile(
+      params.movedFiles,
+      path.join(params.legacyDir, `${sessionId}.jsonl`),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+type LegacySessionFileMove = {
+  from: string;
+  to: string;
+  name: string;
+};
+
+type MovedSessionFiles = {
+  exact: Map<string, string>;
+  folded: Map<string, string>;
+  ambiguousFolded: Set<string>;
+};
+
+// Case-insensitive filesystems can report a source file with casing that differs
+// from stored sessionFile metadata. Folded aliases are safe only when exactly
+// one moved source owns that spelling; otherwise keep lookup exact.
+function buildMovedSessionFiles(moves: LegacySessionFileMove[]): MovedSessionFiles {
+  const foldedCounts = new Map<string, number>();
+  for (const move of moves) {
+    const folded = sessionMovePathKey(move.from);
+    foldedCounts.set(folded, (foldedCounts.get(folded) ?? 0) + 1);
+  }
+
+  const movedFiles: MovedSessionFiles = {
+    exact: new Map(),
+    folded: new Map(),
+    ambiguousFolded: new Set(),
+  };
+  for (const [folded, count] of foldedCounts) {
+    if (count > 1) {
+      movedFiles.ambiguousFolded.add(folded);
+    }
+  }
+  return movedFiles;
+}
+
+function recordMovedSessionFile(params: {
+  movedFiles: MovedSessionFiles;
+  move: LegacySessionFileMove;
+}): void {
+  const exact = path.resolve(params.move.from);
+  const folded = sessionMovePathKey(params.move.from);
+  params.movedFiles.exact.set(exact, params.move.to);
+  if (!params.movedFiles.ambiguousFolded.has(folded)) {
+    params.movedFiles.folded.set(folded, params.move.to);
+  }
+}
+
+function lookupMovedSessionFile(
+  movedFiles: MovedSessionFiles,
+  filePath: string,
+): string | undefined {
+  const exact = movedFiles.exact.get(path.resolve(filePath));
+  if (exact) {
+    return exact;
+  }
+  const folded = sessionMovePathKey(filePath);
+  if (movedFiles.ambiguousFolded.has(folded)) {
+    return undefined;
+  }
+  return movedFiles.folded.get(folded);
+}
+
+function resolveLegacySessionFileMovePlanPath(legacyDir: string): string {
+  return path.join(legacyDir, LEGACY_SESSION_FILE_MOVE_PLAN_NAME);
+}
+
+function isLegacySessionFileMovePlanName(name: string): boolean {
+  return (
+    name === LEGACY_SESSION_FILE_MOVE_PLAN_NAME ||
+    name === `${LEGACY_SESSION_FILE_MOVE_PLAN_NAME}.tmp`
+  );
+}
+
+// Transcript moves happen before SQLite import so metadata can point at final
+// paths. Persist the plan first so a crash in that window can retry without
+// guessing conflict-renamed transcript names.
+function parseLegacySessionFileMovePlan(raw: string): LegacySessionFileMove[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+  const moves = (parsed as { moves?: unknown }).moves;
+  if (!Array.isArray(moves)) {
+    return null;
+  }
+  const plan: LegacySessionFileMove[] = [];
+  for (const move of moves) {
+    if (!move || typeof move !== "object") {
+      return null;
+    }
+    const rec = move as { from?: unknown; to?: unknown; name?: unknown };
+    if (
+      typeof rec.from !== "string" ||
+      typeof rec.to !== "string" ||
+      typeof rec.name !== "string"
+    ) {
+      return null;
+    }
+    plan.push({
+      from: rec.from,
+      to: rec.to,
+      name: rec.name,
+    });
+  }
+  return plan;
+}
+
+function readLegacySessionFileMovePlan(params: {
+  legacyDir: string;
+  targetDir: string;
+}): LegacySessionFileMove[] | null {
+  const legacyDir = path.resolve(params.legacyDir);
+  const targetDir = path.resolve(params.targetDir);
+  const planPath = resolveLegacySessionFileMovePlanPath(legacyDir);
+  if (!fileExists(planPath)) {
+    return null;
+  }
+  try {
+    const moves = parseLegacySessionFileMovePlan(fs.readFileSync(planPath, "utf-8"));
+    if (!moves) {
+      return null;
+    }
+    for (const move of moves) {
+      if (
+        !isWithinDir(legacyDir, move.from) ||
+        !isWithinDir(targetDir, move.to) ||
+        path.basename(move.from) !== move.name
+      ) {
+        return null;
+      }
+    }
+    return moves;
+  } catch {
+    return null;
+  }
+}
+
+function writeLegacySessionFileMovePlan(params: {
+  legacyDir: string;
+  moves: LegacySessionFileMove[];
+}): void {
+  if (params.moves.length === 0) {
+    return;
+  }
+  const planPath = resolveLegacySessionFileMovePlanPath(params.legacyDir);
+  const tempPath = `${planPath}.tmp`;
+  fs.writeFileSync(
+    tempPath,
+    JSON.stringify(
+      {
+        version: 1,
+        moves: params.moves,
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  fs.renameSync(tempPath, planPath);
+}
+
+function revalidateLegacySessionFileMovePlan(params: {
+  moves: LegacySessionFileMove[];
+  targetDir: string;
+  now: () => number;
+}): { moves: LegacySessionFileMove[]; changed: boolean } {
+  let changed = false;
+  const reservedPaths = new Set(
+    safeReadDir(params.targetDir)
+      .filter((entry) => entry.isFile())
+      .map((entry) => sessionMovePathKey(path.join(params.targetDir, entry.name))),
+  );
+  const moves: LegacySessionFileMove[] = [];
+  for (const move of params.moves) {
+    let to = move.to;
+    const sourceExists = fileExists(move.from);
+    const targetKey = sessionMovePathKey(to);
+    if (sourceExists && reservedPaths.has(targetKey)) {
+      to = nextLegacySessionConflictPath({
+        targetDir: params.targetDir,
+        name: move.name,
+        now: params.now,
+        reservedPaths,
+      });
+      changed = true;
+    }
+    reservedPaths.add(sessionMovePathKey(to));
+    moves.push(to === move.to ? move : { ...move, to });
+  }
+  return { moves, changed };
+}
+
+function nextLegacySessionConflictPath(params: {
+  targetDir: string;
+  name: string;
+  now: () => number;
+  reservedPaths: Set<string>;
+}): string {
+  const parsed = path.parse(params.name);
+  const baseName = parsed.name || "session";
+  const ext = parsed.ext || ".jsonl";
+  const suffix = `.legacy-${params.now()}`;
+  let index = 0;
+  while (true) {
+    const numbered = index === 0 ? "" : `-${index}`;
+    const candidate = path.join(params.targetDir, `${baseName}${suffix}${numbered}${ext}`);
+    if (!fileExists(candidate) && !params.reservedPaths.has(sessionMovePathKey(candidate))) {
+      return candidate;
+    }
+    index++;
+  }
+}
+
+function sessionMovePathKey(filePath: string): string {
+  return normalizeLowercaseStringOrEmpty(path.resolve(filePath));
+}
+
+function buildLegacySessionFileMovePlan(params: {
+  legacyDir: string;
+  targetDir: string;
+  now: () => number;
+}): LegacySessionFileMove[] {
+  const moves: LegacySessionFileMove[] = [];
+  const entries = safeReadDir(params.legacyDir)
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        entry.name !== "sessions.json" &&
+        !isLegacySessionFileMovePlanName(entry.name),
+    )
+    .toSorted((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+  const existingTargetPaths = new Set(
+    safeReadDir(params.targetDir)
+      .filter((entry) => entry.isFile())
+      .map((entry) => sessionMovePathKey(path.join(params.targetDir, entry.name))),
+  );
+  const defaultTargetPaths = new Set(
+    entries.map((entry) => sessionMovePathKey(path.join(params.targetDir, entry.name))),
+  );
+  const plannedTargetPaths = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.isFile() || entry.name === "sessions.json") {
+      continue;
+    }
+    const from = path.join(params.legacyDir, entry.name);
+    const defaultTo = path.join(params.targetDir, entry.name);
+    const resolvedDefaultTo = sessionMovePathKey(defaultTo);
+    const mustUseConflictName =
+      fileExists(defaultTo) ||
+      existingTargetPaths.has(resolvedDefaultTo) ||
+      plannedTargetPaths.has(resolvedDefaultTo);
+    const reservedPaths = new Set([
+      ...existingTargetPaths,
+      ...defaultTargetPaths,
+      ...plannedTargetPaths,
+    ]);
+    if (!mustUseConflictName) {
+      reservedPaths.delete(resolvedDefaultTo);
+    }
+    const to = mustUseConflictName
+      ? nextLegacySessionConflictPath({
+          targetDir: params.targetDir,
+          name: entry.name,
+          now: params.now,
+          reservedPaths,
+        })
+      : defaultTo;
+    plannedTargetPaths.add(sessionMovePathKey(to));
+    moves.push({
+      from,
+      to,
+      name: entry.name,
+    });
+  }
+  return moves;
+}
+
 function canonicalizeSessionStore(params: {
   store: Record<string, SessionEntryLike>;
   agentId: string;
@@ -2687,8 +3024,10 @@ export async function detectLegacyStateMigrations(params: {
   const sessionsTargetDir = path.join(stateDir, "agents", targetAgentId, "sessions");
   const sessionsTargetStorePath = path.join(sessionsTargetDir, "sessions.json");
   const legacySessionEntries = safeReadDir(sessionsLegacyDir);
+  const legacySessionMovePlanPath = resolveLegacySessionFileMovePlanPath(sessionsLegacyDir);
   const hasLegacySessions =
     fileExists(sessionsLegacyStorePath) ||
+    fileExists(legacySessionMovePlanPath) ||
     legacySessionEntries.some((e) => e.isFile() && e.name.endsWith(".jsonl"));
 
   const targetSessionParsed = fileExists(sessionsTargetStorePath)
@@ -2909,28 +3248,6 @@ async function migrateLegacySessions(
     scope: detected.targetScope,
   });
 
-  const merged: Record<string, SessionEntryLike> = { ...canonicalizedTarget.store };
-  for (const [key, entry] of Object.entries(canonicalizedLegacy.store)) {
-    merged[key] = mergeSessionEntry({
-      existing: merged[key],
-      incoming: entry,
-      preferIncomingOnTie: false,
-    });
-  }
-
-  const mainKey = buildAgentMainSessionKey({
-    agentId: detected.targetAgentId,
-    mainKey: detected.targetMainKey,
-  });
-  let migratedDirectChatKey: string | undefined;
-  if (!merged[mainKey]) {
-    const latest = pickLatestLegacyDirectEntry(legacyStore);
-    if (latest?.sessionId) {
-      merged[mainKey] = latest;
-      migratedDirectChatKey = mainKey;
-    }
-  }
-
   if (!legacyParsed.ok) {
     warnings.push(
       `Legacy sessions store unreadable; left in place at ${detected.sessions.legacyStorePath}`,
@@ -2958,20 +3275,121 @@ async function migrateLegacySessions(
     }
   }
 
+  if (!targetReadable) {
+    return { changes, warnings };
+  }
+
+  const persistedSessionFileMovePlans = readLegacySessionFileMovePlan({
+    legacyDir: detected.sessions.legacyDir,
+    targetDir: detected.sessions.targetDir,
+  });
+  const revalidatedSessionFileMovePlans = persistedSessionFileMovePlans
+    ? revalidateLegacySessionFileMovePlan({
+        moves: persistedSessionFileMovePlans,
+        targetDir: detected.sessions.targetDir,
+        now,
+      })
+    : null;
+  const movedSessionFilePlans =
+    revalidatedSessionFileMovePlans?.moves ??
+    buildLegacySessionFileMovePlan({
+      legacyDir: detected.sessions.legacyDir,
+      targetDir: detected.sessions.targetDir,
+      now,
+    });
+  if (!persistedSessionFileMovePlans || revalidatedSessionFileMovePlans?.changed) {
+    writeLegacySessionFileMovePlan({
+      legacyDir: detected.sessions.legacyDir,
+      moves: movedSessionFilePlans,
+    });
+  }
+  const movedSessionFiles = buildMovedSessionFiles(movedSessionFilePlans);
+  const completedMovedSessionFilePlans: LegacySessionFileMove[] = [];
+  for (const move of movedSessionFilePlans) {
+    try {
+      if (fileExists(move.from)) {
+        fs.renameSync(move.from, move.to);
+      } else if (!fileExists(move.to)) {
+        warnings.push(`Skipped missing legacy transcript ${move.from}`);
+        continue;
+      }
+      recordMovedSessionFile({
+        movedFiles: movedSessionFiles,
+        move,
+      });
+      completedMovedSessionFilePlans.push(move);
+    } catch (err) {
+      warnings.push(`Failed moving ${move.from}: ${String(err)}`);
+    }
+  }
+
+  const rewrittenLegacyStore = rewriteLegacySessionFilePaths({
+    store: canonicalizedLegacy.store,
+    legacyDir: detected.sessions.legacyDir,
+    movedFiles: movedSessionFiles,
+  });
+  const merged: Record<string, SessionEntryLike> = { ...canonicalizedTarget.store };
+  for (const [key, entry] of Object.entries(rewrittenLegacyStore)) {
+    merged[key] = mergeSessionEntry({
+      existing: merged[key],
+      incoming: entry,
+      preferIncomingOnTie: false,
+    });
+  }
+
+  const mainKey = buildAgentMainSessionKey({
+    agentId: detected.targetAgentId,
+    mainKey: detected.targetMainKey,
+  });
+  let migratedDirectChatKey: string | undefined;
+  if (!merged[mainKey]) {
+    const latest = pickLatestLegacyDirectEntry(legacyStore);
+    if (latest?.sessionId) {
+      const latestStore = rewriteLegacySessionFilePaths({
+        store: { latest },
+        legacyDir: detected.sessions.legacyDir,
+        movedFiles: movedSessionFiles,
+      });
+      merged[mainKey] = latestStore.latest ?? latest;
+      migratedDirectChatKey = mainKey;
+    }
+  }
+
   if (
-    targetReadable &&
     (legacyParsed.ok || targetParsed.ok) &&
     (targetExists ||
       fileExists(detected.sessions.legacyStorePath) ||
       Object.keys(legacyStore).length > 0 ||
       Object.keys(targetStore).length > 0)
   ) {
-    const { imported, acpMigrated } = importNormalizedSessionsIntoSqlite({
-      storePath: detected.sessions.targetStorePath,
-      store: merged,
-      stateDir: detected.stateDir,
-      now,
-    });
+    let imported: number;
+    let acpMigrated: number;
+    try {
+      const result = importNormalizedSessionsIntoSqlite({
+        storePath: detected.sessions.targetStorePath,
+        store: merged,
+        stateDir: detected.stateDir,
+        now,
+      });
+      imported = result.imported;
+      acpMigrated = result.acpMigrated;
+    } catch (err) {
+      const rollbackFailures: string[] = [];
+      for (const move of completedMovedSessionFilePlans.toReversed()) {
+        try {
+          fs.renameSync(move.to, move.from);
+        } catch (rollbackErr) {
+          rollbackFailures.push(`${move.to}: ${String(rollbackErr)}`);
+        }
+      }
+      if (rollbackFailures.length > 0) {
+        throw new Error(
+          `Failed importing session metadata: ${String(err)}; additionally failed rolling back moved transcript(s): ${rollbackFailures.join("; ")}`,
+          { cause: err },
+        );
+      }
+      throw err;
+    }
     if (migratedDirectChatKey) {
       changes.push(`Migrated latest direct-chat session → ${migratedDirectChatKey}`);
     }
@@ -2995,29 +3413,13 @@ async function migrateLegacySessions(
     }
   }
 
-  if (!targetReadable) {
-    return { changes, warnings };
-  }
-
-  const entries = safeReadDir(detected.sessions.legacyDir);
-  for (const entry of entries) {
-    if (!entry.isFile()) {
-      continue;
-    }
-    if (entry.name === "sessions.json") {
-      continue;
-    }
-    const from = path.join(detected.sessions.legacyDir, entry.name);
-    const to = path.join(detected.sessions.targetDir, entry.name);
-    if (fileExists(to)) {
-      continue;
-    }
-    try {
-      fs.renameSync(from, to);
-      changes.push(`Moved ${entry.name} → agents/${detected.targetAgentId}/sessions`);
-    } catch (err) {
-      warnings.push(`Failed moving ${from}: ${String(err)}`);
-    }
+  for (const move of completedMovedSessionFilePlans) {
+    const movedName = path.basename(move.to);
+    changes.push(
+      movedName === move.name
+        ? `Moved ${move.name} → agents/${detected.targetAgentId}/sessions`
+        : `Moved ${move.name} → agents/${detected.targetAgentId}/sessions/${movedName}`,
+    );
   }
 
   if (legacyParsed.ok && targetReadable) {
@@ -3028,6 +3430,17 @@ async function migrateLegacySessions(
     } catch {
       // ignore
     }
+  }
+
+  try {
+    const movePlanPath = resolveLegacySessionFileMovePlanPath(detected.sessions.legacyDir);
+    if (fileExists(movePlanPath)) {
+      fs.rmSync(movePlanPath, { force: true });
+    }
+  } catch (err) {
+    warnings.push(
+      `Migrated legacy sessions, but failed removing ${LEGACY_SESSION_FILE_MOVE_PLAN_NAME}: ${String(err)}`,
+    );
   }
 
   removeDirIfEmpty(detected.sessions.legacyDir);

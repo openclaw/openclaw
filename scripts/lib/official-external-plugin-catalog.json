@@ -191,6 +191,26 @@
       }
     },
     {
+      "name": "@openclaw/llama-cpp-provider",
+      "description": "OpenClaw llama.cpp embedding provider plugin",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "llama-cpp",
+          "label": "llama.cpp Provider"
+        },
+        "contracts": {
+          "embeddingProviders": ["local"]
+        },
+        "install": {
+          "npmSpec": "@openclaw/llama-cpp-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/openshell-sandbox",
       "description": "OpenClaw OpenShell sandbox backend",
       "source": "official",

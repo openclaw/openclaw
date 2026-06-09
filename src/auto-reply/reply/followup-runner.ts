@@ -231,24 +231,28 @@ async function forwardFollowupProgressEvent(params: {
   if (evt.stream === "compaction") {
     const phase = readStringValue(evt.data.phase) ?? "";
     const hookMessages = readCompactionHookMessages(evt.data.messages);
-    if (phase === "start" && emitChannelProgress) {
-      await opts?.onCompactionStart?.();
-    }
-    if (phase === "start") {
+    const sendCompactionUserNotices = async (noticePhase: "start" | "end" | "incomplete") => {
       const hookPayload = createCompactionHookNoticePayload({
         messages: hookMessages,
         currentMessageId: params.currentMessageId,
       });
       if (hookPayload) {
         await params.onCompactionNoticePayload?.(hookPayload);
-      } else if (params.notifyUserAboutCompaction === true) {
+      }
+      if (params.notifyUserAboutCompaction === true) {
         await params.onCompactionNoticePayload?.(
           createCompactionNoticePayload({
-            phase: "start",
+            phase: noticePhase,
             currentMessageId: params.currentMessageId,
           }),
         );
       }
+    };
+    if (phase === "start" && emitChannelProgress) {
+      await opts?.onCompactionStart?.();
+    }
+    if (phase === "start") {
+      await sendCompactionUserNotices("start");
     }
     if (phase === "end" && evt.data?.completed === true) {
       params.onCompactionComplete?.();
@@ -258,35 +262,9 @@ async function forwardFollowupProgressEvent(params: {
       if (evt.data?.willRetry === true) {
         return;
       }
-      const hookPayload = createCompactionHookNoticePayload({
-        messages: hookMessages,
-        currentMessageId: params.currentMessageId,
-      });
-      if (hookPayload) {
-        await params.onCompactionNoticePayload?.(hookPayload);
-      } else if (params.notifyUserAboutCompaction === true) {
-        await params.onCompactionNoticePayload?.(
-          createCompactionNoticePayload({
-            phase: "end",
-            currentMessageId: params.currentMessageId,
-          }),
-        );
-      }
+      await sendCompactionUserNotices("end");
     } else if (phase === "end") {
-      const hookPayload = createCompactionHookNoticePayload({
-        messages: hookMessages,
-        currentMessageId: params.currentMessageId,
-      });
-      if (hookPayload) {
-        await params.onCompactionNoticePayload?.(hookPayload);
-      } else if (params.notifyUserAboutCompaction === true) {
-        await params.onCompactionNoticePayload?.(
-          createCompactionNoticePayload({
-            phase: "incomplete",
-            currentMessageId: params.currentMessageId,
-          }),
-        );
-      }
+      await sendCompactionUserNotices("incomplete");
     }
   }
 }

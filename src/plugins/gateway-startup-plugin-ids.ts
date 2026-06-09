@@ -484,14 +484,9 @@ function collectConfiguredVoiceProviderIds(config: OpenClawConfig): ConfiguredVo
   };
 }
 
-// Explicit memory provider startup only pulls plugin-owned remote/custom
-// providers into Gateway boot. Missing/"auto" stays lazy, "local" is covered by
-// the selected memory slot, and "none" disables provider-backed embeddings.
-const MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS: ReadonlySet<string> = new Set([
-  "auto",
-  "local",
-  "none",
-]);
+// Explicit memory provider startup pulls plugin-owned providers into Gateway
+// boot. Missing/"auto" stays lazy, and "none" disables provider-backed embeddings.
+const MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS: ReadonlySet<string> = new Set(["auto", "none"]);
 
 function normalizeMemoryEmbeddingProviderIdValue(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -1383,10 +1378,7 @@ function canStartConfiguredMemoryEmbeddingProviderPlugin(params: {
     enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
     activationSource: params.activationSource,
   });
-  return (
-    activationState.enabled &&
-    (params.plugin.origin === "bundled" || activationState.explicitlyEnabled)
-  );
+  return activationState.enabled;
 }
 
 function canStartConfiguredModelProviderPlugin(params: {

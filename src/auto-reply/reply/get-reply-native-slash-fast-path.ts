@@ -296,7 +296,10 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     skillFilter: params.skillFilter,
   });
   if (inlineActionResult.kind === "reply") {
-    return { handled: true, reply: inlineActionResult.reply };
+    return {
+      handled: true,
+      reply: markCommandReplyForDelivery(inlineActionResult.reply),
+    };
   }
   return { handled: false };
 }
