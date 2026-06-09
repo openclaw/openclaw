@@ -493,6 +493,7 @@ describe("prepared provider auth state", () => {
                 provider: "openai",
               },
             },
+            usageStats: {},
           },
         },
       ],
