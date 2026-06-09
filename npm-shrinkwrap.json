@@ -10,7 +10,7 @@
       "hasInstallScript": true,
       "license": "MIT",
       "dependencies": {
-        "@agentclientprotocol/sdk": "0.22.1",
+        "@agentclientprotocol/sdk": "0.25.0",
         "@anthropic-ai/sdk": "0.100.1",
         "@clack/core": "1.3.1",
         "@clack/prompts": "1.4.0",
@@ -28,7 +28,7 @@
         "chalk": "5.6.2",
         "chokidar": "5.0.0",
         "clawpdf": "0.3.0",
-        "commander": "14.0.3",
+        "commander": "15.0.0",
         "croner": "10.0.1",
         "cross-spawn": "7.0.6",
         "diff": "9.0.0",
@@ -77,9 +77,9 @@
       }
     },
     "node_modules/@agentclientprotocol/sdk": {
-      "version": "0.22.1",
-      "resolved": "https://registry.npmjs.org/@agentclientprotocol/sdk/-/sdk-0.22.1.tgz",
-      "integrity": "sha512-DfqXtl/8gO9NImq094MTaCXEU2vkhh6v7q/kT+9UjZxUqj8hYaya2OjLVIqn16MzNHcXEpShTR2RIauLSYeDQQ==",
+      "version": "0.25.0",
+      "resolved": "https://registry.npmjs.org/@agentclientprotocol/sdk/-/sdk-0.25.0.tgz",
+      "integrity": "sha512-wU1VgXNtMvdVotX49txc3WJUDV+/QbLpsgjMvFhlRmp37osdLbI7L7y+iwAlQATwfjLxcv1r1p3ZxZBcXlGhcQ==",
       "license": "Apache-2.0",
       "peerDependencies": {
         "zod": "^3.25.0 || ^4.0.0"
@@ -818,12 +818,12 @@
       "license": "MIT"
     },
     "node_modules/commander": {
-      "version": "14.0.3",
-      "resolved": "https://registry.npmjs.org/commander/-/commander-14.0.3.tgz",
-      "integrity": "sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==",
+      "version": "15.0.0",
+      "resolved": "https://registry.npmjs.org/commander/-/commander-15.0.0.tgz",
+      "integrity": "sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==",
       "license": "MIT",
       "engines": {
-        "node": ">=20"
+        "node": ">=22.12.0"
       }
     },
     "node_modules/content-disposition": {
