@@ -252,10 +252,16 @@ function buildTempArchiveGlobPattern(outputPath: string): RegExp {
   return new RegExp(`^${escaped}\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.tmp$`);
 }
 
+const BACKUP_TEMP_STALE_AGE_MS = 30_000;
+
 async function cleanupStaleTempArchives(params: {
   outputPath: string;
+  staleAgeMs?: number;
+  nowMs?: number;
   log?: (message: string) => void;
 }): Promise<void> {
+  const now = params.nowMs ?? Date.now();
+  const staleAge = params.staleAgeMs ?? BACKUP_TEMP_STALE_AGE_MS;
   const dir = path.dirname(params.outputPath);
   const pattern = buildTempArchiveGlobPattern(params.outputPath);
   let entries: import("node:fs").Dirent[];
@@ -276,6 +282,7 @@ async function cleanupStaleTempArchives(params: {
   }
   let cleaned = 0;
   let cleanedBytes = 0;
+  let skippedActive = 0;
   for (const entry of entries) {
     if (!entry.isFile() || !pattern.test(entry.name)) {
       continue;
@@ -285,6 +292,13 @@ async function cleanupStaleTempArchives(params: {
       const stat = await fs.stat(fullPath);
       // Defensive: skip non-files or already-deleted entries.
       if (!stat.isFile()) {
+        continue;
+      }
+      // Only remove temp archives whose mtime is older than the staleness
+      // threshold. This protects against concurrently running backup processes
+      // that are actively writing to a temp archive for the same output path.
+      if (now - stat.mtimeMs < staleAge) {
+        skippedActive += 1;
         continue;
       }
       const size = stat.size;
@@ -307,10 +321,14 @@ async function cleanupStaleTempArchives(params: {
         : cleanedBytes >= 1_048_576
           ? `${(cleanedBytes / 1_048_576).toFixed(1)}MB`
           : `${cleanedBytes} bytes`;
+    const skippedNote =
+      skippedActive > 0
+        ? ` (${skippedActive} active temp archive${skippedActive === 1 ? "" : "s"} skipped)`
+        : "";
     params.log?.(
       `Backup cleaned up ${cleaned} stale temp archive${
         cleaned === 1 ? "" : "s"
-      } (${sizeLabel}) from a previous interrupted run.`,
+      } (${sizeLabel}) from a previous interrupted run.${skippedNote}`,
     );
   }
 }

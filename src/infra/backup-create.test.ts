@@ -311,7 +311,10 @@ describe("cleanupStaleTempArchives", () => {
       await fs.writeFile(finalArchive, "final archive", "utf8");
 
       const log = vi.fn();
-      await cleanupStaleTempArchives({ outputPath, log });
+      // Use a future nowMs so all newly-written files appear older than the
+      // default 30 s staleness threshold.
+      const futureNow = Date.now() + 60_000;
+      await cleanupStaleTempArchives({ outputPath, log, nowMs: futureNow });
 
       // Stale files removed
       await expect(fs.access(stale1)).rejects.toMatchObject({ code: "ENOENT" });
@@ -338,7 +341,7 @@ describe("cleanupStaleTempArchives", () => {
       await fs.writeFile(outputPath, "final archive", "utf8");
 
       const log = vi.fn();
-      await cleanupStaleTempArchives({ outputPath, log });
+      await cleanupStaleTempArchives({ outputPath, log, nowMs: Date.now() + 60_000 });
 
       // Final archive preserved
       await expect(fs.access(outputPath)).resolves.toBeUndefined();
@@ -375,7 +378,8 @@ describe("cleanupStaleTempArchives", () => {
       await fs.writeFile(myStale, "my stale", "utf8");
 
       const log = vi.fn();
-      await cleanupStaleTempArchives({ outputPath, log });
+      const futureNow = Date.now() + 60_000;
+      await cleanupStaleTempArchives({ outputPath, log, nowMs: futureNow });
 
       // Only our .tmp removed
       await expect(fs.access(myStale)).rejects.toMatchObject({ code: "ENOENT" });
@@ -398,10 +402,76 @@ describe("cleanupStaleTempArchives", () => {
       await fs.writeFile(stale1, largeContent);
 
       const log = vi.fn();
-      await cleanupStaleTempArchives({ outputPath, log });
+      const futureNow = Date.now() + 60_000;
+      await cleanupStaleTempArchives({ outputPath, log, nowMs: futureNow });
 
       expect(log).toHaveBeenCalledTimes(1);
       expect(log.mock.calls[0][0]).toContain("(2.0MB)");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips temp archives whose mtime is within the staleness threshold", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-cleanup-"));
+    try {
+      const outputPath = path.join(dir, "backup.tar.gz");
+      // This file was just created — it simulates an active backup writer
+      const activeTmp = `${outputPath}.a1b2c3d4-e5f6-7890-abcd-ef1234567890.tmp`;
+      // This file is much older — it simulates a stale leftover
+      const staleTmp = `${outputPath}.12345678-90ab-cdef-1234-567890abcdef.tmp`;
+
+      await fs.writeFile(activeTmp, "active backup", "utf8");
+      await fs.writeFile(staleTmp, "stale leftover", "utf8");
+
+      // Set the stale file's mtime far in the past
+      const staleMtime = new Date(Date.now() - 120_000); // 2 minutes ago
+      await fs.utimes(staleTmp, staleMtime, staleMtime);
+
+      const log = vi.fn();
+      // Use current time as nowMs — the active file (mtime ~now) should be
+      // within the default 30 s threshold and skipped; the stale file
+      // (mtime 2 min ago) should be removed.
+      await cleanupStaleTempArchives({ outputPath, log });
+
+      // Active file preserved
+      await expect(fs.access(activeTmp)).resolves.toBeUndefined();
+      // Stale file removed
+      await expect(fs.access(staleTmp)).rejects.toMatchObject({ code: "ENOENT" });
+
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0][0]).toContain("Backup cleaned up 1 stale temp archive");
+      expect(log.mock.calls[0][0]).toContain("1 active temp archive skipped");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes all matching temp archives when none are recent", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-cleanup-"));
+    try {
+      const outputPath = path.join(dir, "backup.tar.gz");
+      const tmp1 = `${outputPath}.a1b2c3d4-e5f6-7890-abcd-ef1234567890.tmp`;
+      const tmp2 = `${outputPath}.12345678-90ab-cdef-1234-567890abcdef.tmp`;
+
+      await fs.writeFile(tmp1, "stale 1", "utf8");
+      await fs.writeFile(tmp2, "stale 2", "utf8");
+
+      // Make both files very old
+      const oldTime = new Date(Date.now() - 300_000); // 5 minutes ago
+      await fs.utimes(tmp1, oldTime, oldTime);
+      await fs.utimes(tmp2, oldTime, oldTime);
+
+      const log = vi.fn();
+      await cleanupStaleTempArchives({ outputPath, log });
+
+      await expect(fs.access(tmp1)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(tmp2)).rejects.toMatchObject({ code: "ENOENT" });
+
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0][0]).toContain("Backup cleaned up 2 stale temp archives");
+      // No active-skipped note when nothing was skipped
+      expect(log.mock.calls[0][0]).not.toContain("active temp archive");
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
