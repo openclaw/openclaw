@@ -1543,6 +1543,14 @@ describe("package artifact reuse", () => {
     const pluginNpmWorkflow = readFileSync(".github/workflows/plugin-npm-release.yml", "utf8");
     const openclawNpmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
     const approvalScript = readFileSync("scripts/validate-release-publish-approval.mjs", "utf8");
+    const clawHubResolveRefIndex = clawHubWorkflow.indexOf("- name: Resolve checked-out ref");
+    const clawHubValidateRefIndex = clawHubWorkflow.indexOf(
+      "- name: Validate ref is on a trusted publish branch",
+    );
+    const clawHubSetupIndex = clawHubWorkflow.indexOf("- name: Setup Node environment");
+    const clawHubMetadataIndex = clawHubWorkflow.indexOf(
+      "- name: Validate publishable plugin metadata",
+    );
 
     expect(packageJson.scripts?.["release:verify-beta"]).toBe(
       "node --import tsx scripts/release-verify-beta.ts",
@@ -1559,6 +1567,10 @@ describe("package artifact reuse", () => {
     expect(clawHubWorkflow).toContain("Verify published ClawHub package");
     expect(clawHubWorkflow).toContain("bun install failed while preparing ClawHub CLI; retrying");
     expect(clawHubWorkflow).toContain("max-parallel: 32");
+    expect(clawHubResolveRefIndex).toBeGreaterThanOrEqual(0);
+    expect(clawHubValidateRefIndex).toBeGreaterThan(clawHubResolveRefIndex);
+    expect(clawHubSetupIndex).toBeGreaterThan(clawHubValidateRefIndex);
+    expect(clawHubMetadataIndex).toBeGreaterThan(clawHubSetupIndex);
     expect(releaseWorkflow).toContain("Plugin npm run ID");
     expect(releaseWorkflow).toContain("Plugin ClawHub run ID");
     expect(releaseWorkflow).toContain("OpenClaw npm run ID");

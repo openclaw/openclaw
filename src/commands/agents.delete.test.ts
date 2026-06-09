@@ -64,6 +64,21 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: processMocks.runCommandWithTimeout,
 }));
 
+vi.mock("./session-state-migration.js", async () => {
+  const actual = await vi.importActual<typeof import("./session-state-migration.js")>(
+    "./session-state-migration.js",
+  );
+  return {
+    ...actual,
+    ensureSessionStateMigratedForCommand: async (cfg: { session?: { store?: unknown } }) => {
+      if (typeof cfg.session?.store === "string") {
+        await actual.ensureExplicitSessionStoreMigratedForCommand(cfg.session.store);
+      }
+    },
+    resetSessionStateMigratedForCommandForTest: vi.fn(),
+  };
+});
+
 import { agentsDeleteCommand } from "./agents.commands.delete.js";
 import { resetSessionStateMigratedForCommandForTest } from "./session-state-migration.js";
 
