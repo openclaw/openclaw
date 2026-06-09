@@ -137,4 +137,33 @@ describe("plugin shape compatibility matrix", () => {
       [[], ["text-inference"], ["text-inference", "web-search"], ["channel"]],
     );
   });
+
+  it("recognizes document-extractors contract as a capability kind", () => {
+    const { config, registry } = createPluginRegistryFixture();
+
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "document-extract-test",
+      name: "Document Extract Test",
+      contracts: {
+        documentExtractors: ["pdf", "docx"],
+      },
+      register() {},
+    });
+
+    const report = {
+      workspaceDir: "/virtual-workspace",
+      ...registry.registry,
+    };
+    const plugin = report.plugins.find((p) => p.id === "document-extract-test")!;
+    const summary = buildPluginShapeSummary({ plugin, report });
+
+    expect(summary.shape).toBe("plain-capability");
+    expect(summary.capabilityMode).toBe("plain");
+    expect(summary.capabilityCount).toBe(1);
+    expect(summary.capabilities).toEqual([
+      { kind: "document-extractors", ids: ["pdf", "docx"] },
+    ]);
+  });
 });
