@@ -3,11 +3,13 @@
 import { EventStream as LlmEventStream } from "@openclaw/llm-core";
 import type {
   AssistantMessage,
+  AssistantMessageEvent,
   Context,
   EventStream,
   ToolResultMessage,
 } from "../../llm-core/src/index.js";
 import type { EventStream as SourceEventStream } from "../../llm-core/src/index.js";
+import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import type {
   AgentContext,
@@ -34,6 +36,49 @@ const EMPTY_USAGE = {
 };
 
 const EventStreamConstructor: typeof SourceEventStream = LlmEventStream;
+
+type AssistantMessageUpdateEvent = Extract<
+  AssistantMessageEvent,
+  {
+    type:
+      | "text_start"
+      | "text_delta"
+      | "text_end"
+      | "thinking_start"
+      | "thinking_delta"
+      | "thinking_end"
+      | "toolcall_start"
+      | "toolcall_delta"
+      | "toolcall_end";
+  }
+>;
+
+function appendTextDeltaToAssistantMessage(
+  message: AssistantMessage,
+  contentIndex: number,
+  delta: string,
+): AssistantMessage {
+  const content = [...message.content];
+  const currentContent = content[contentIndex];
+  content[contentIndex] =
+    currentContent?.type === "text"
+      ? { ...currentContent, text: currentContent.text + delta }
+      : { type: "text", text: delta };
+  return { ...message, content };
+}
+
+function resolveAssistantMessageUpdate(
+  event: AssistantMessageUpdateEvent,
+  currentMessage: AssistantMessage,
+): AssistantMessage {
+  if ("partial" in event && event.partial) {
+    return event.partial;
+  }
+  if (event.type === "text_delta") {
+    return appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta);
+  }
+  return currentMessage;
+}
 
 /**
  * Start an agent loop with a new prompt message.
@@ -297,14 +342,19 @@ async function runLoop(
       const nextTurnSnapshot = await config.prepareNextTurn?.(nextTurnContext);
       if (nextTurnSnapshot) {
         currentContext = nextTurnSnapshot.context ?? currentContext;
+        const nextModel = nextTurnSnapshot.model ?? config.model;
+        const nextThinkingLevel = nextTurnSnapshot.thinkingLevel ?? config.thinkingLevel;
+        const shouldResolveReasoning =
+          nextTurnSnapshot.thinkingLevel !== undefined ||
+          (nextTurnSnapshot.model !== undefined && nextThinkingLevel !== undefined);
+        const nextReasoning =
+          shouldResolveReasoning && nextThinkingLevel !== undefined
+            ? resolveAgentReasoningOption(nextModel, nextThinkingLevel)
+            : config.reasoning;
         config = Object.assign({}, config, {
-          model: nextTurnSnapshot.model ?? config.model,
-          reasoning:
-            nextTurnSnapshot.thinkingLevel === undefined
-              ? config.reasoning
-              : nextTurnSnapshot.thinkingLevel === "off"
-                ? undefined
-                : nextTurnSnapshot.thinkingLevel,
+          model: nextModel,
+          thinkingLevel: nextThinkingLevel,
+          reasoning: nextReasoning,
         });
       }
 
@@ -402,7 +452,7 @@ async function streamAssistantResponse(
       case "toolcall_delta":
       case "toolcall_end":
         if (partialMessage) {
-          const message = event.partial;
+          const message = resolveAssistantMessageUpdate(event, partialMessage);
           partialMessage = message;
           context.messages[context.messages.length - 1] = message;
           await emit({

@@ -1,14 +1,20 @@
 // Docker E2E scenario catalog.
 // Keep lane names, commands, image kind, timeout, resources, and release chunks
 // here. Planning and execution live in separate modules.
+import { fileURLToPath } from "node:url";
 
 export const DEFAULT_LIVE_RETRIES = 1;
+const LIVE_DOCKER_DEFAULT_HARNESS_DIR =
+  /[\\/]\\.release-harness[\\/]/u.test(fileURLToPath(import.meta.url)) &&
+  process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT
+    ? ".release-harness"
+    : ".";
 const LIVE_ACP_TIMEOUT_MS = 20 * 60 * 1000;
 const LIVE_CLI_TIMEOUT_MS = 20 * 60 * 1000;
 const LIVE_PROFILE_TIMEOUT_MS = 30 * 60 * 1000;
 const OPENWEBUI_TIMEOUT_MS = 20 * 60 * 1000;
 const RELEASE_OPENWEBUI_COMMAND =
-  "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENWEBUI_SMOKE_MODE=models OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui";
+  "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui";
 export const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS = 24;
 const upgradeSurvivorCommand = "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor";
 const rootManagedVpsUpgradeCommand =
@@ -29,7 +35,7 @@ const LIVE_RETRY_PATTERNS = [
 function liveDockerScriptCommand(script, envPrefix = "", options = {}) {
   const prefix = envPrefix ? `${envPrefix} ` : "";
   const skipBuild = options.skipBuild === false ? "" : "OPENCLAW_SKIP_DOCKER_BUILD=1 ";
-  return `${prefix}${skipBuild}bash -c 'harness="\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-}"; if [ -z "$harness" ]; then if [ -d .release-harness/scripts ]; then harness=.release-harness; else harness=.; fi; fi; OPENCLAW_LIVE_DOCKER_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/${script}"'`;
+  return `${prefix}${skipBuild}bash -c 'harness="\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-${LIVE_DOCKER_DEFAULT_HARNESS_DIR}}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/${script}"'`;
 }
 
 function lane(name, command, options = {}) {
@@ -694,11 +700,14 @@ const releasePathBundledChannelLanes = [
 ];
 
 const releasePathPackageInstallOpenAiLanes = [
-  npmLane(
+  liveLane(
     "install-e2e-openai",
     "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120 pnpm test:install:e2e",
     {
-      resources: ["service"],
+      e2eImageKind: "bare",
+      needsLiveImage: false,
+      provider: "openai",
+      resources: ["npm", "service"],
       timeoutMs: 15 * 60 * 1000,
       weight: 3,
     },
@@ -714,11 +723,14 @@ const releasePathPackageInstallOpenAiLanes = [
 ];
 
 const releasePathPackageInstallAnthropicLanes = [
-  npmLane(
+  liveLane(
     "install-e2e-anthropic",
     "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e",
     {
-      resources: ["service"],
+      e2eImageKind: "bare",
+      needsLiveImage: false,
+      provider: "claude",
+      resources: ["npm", "service"],
       weight: 3,
     },
   ),

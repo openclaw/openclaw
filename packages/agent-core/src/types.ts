@@ -1,3 +1,4 @@
+// Agent Core type module defines shared TypeScript contracts.
 import type { Static, TSchema } from "typebox";
 import type {
   AssistantMessage,
@@ -132,6 +133,8 @@ export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
   model: Model;
+  /** Logical thinking level retained across model changes before provider mapping. */
+  thinkingLevel?: ThinkingLevel;
 
   /**
    * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.

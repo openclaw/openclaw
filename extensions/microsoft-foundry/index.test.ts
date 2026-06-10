@@ -1,14 +1,26 @@
+// Microsoft Foundry tests cover index plugin behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { shouldTestFoundryTextConnection } from "./auth.js";
 import { getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
-import { buildFoundryConnectionTest, isValidTenantIdentifier } from "./onboard.js";
+import {
+  buildFoundryConnectionTest,
+  isValidTenantIdentifier,
+  promptApiKeyEndpointAndModel,
+  selectFoundryDeployment,
+} from "./onboard.js";
 import { resetFoundryRuntimeAuthCaches } from "./runtime.js";
 import {
   buildFoundryAuthResult,
+  isAnthropicFoundryDeployment,
+  isFoundryMaiImageModel,
   normalizeFoundryEndpoint,
+  partitionFoundryDeployments,
   requiresFoundryMaxCompletionTokens,
+  supportsFoundryReasoningContent,
   supportsFoundryReasoningEffort,
   supportsFoundryImageInput,
   usesFoundryResponsesByDefault,
@@ -633,9 +645,126 @@ describe("microsoft-foundry plugin", () => {
     expect(supportsFoundryReasoningEffort("gpt-5.1-chat")).toBe(true);
     expect(supportsFoundryReasoningEffort("o3")).toBe(true);
     expect(supportsFoundryReasoningEffort("o1-mini")).toBe(false);
+    expect(supportsFoundryReasoningEffort("MAI-DS-R1")).toBe(false);
+    expect(supportsFoundryReasoningContent("MAI-DS-R1")).toBe(true);
     expect(supportsFoundryImageInput("gpt-5.4")).toBe(true);
     expect(supportsFoundryImageInput("gpt-4o")).toBe(true);
     expect(supportsFoundryImageInput("MAI-DS-R1")).toBe(false);
+    expect(isFoundryMaiImageModel("MAI-Image-2.5-Flash")).toBe(true);
+    expect(isFoundryMaiImageModel("MAI-Image-2e")).toBe(true);
+    expect(isFoundryMaiImageModel("MAI-DS-R1")).toBe(false);
+  });
+
+  it("records MAI chat deployments with reasoning-content token limits", () => {
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:entra",
+      apiKey: "__entra_id_dynamic__",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "mai-r1-prod",
+      modelNameHint: "MAI-DS-R1",
+      api: "openai-completions",
+      authMethod: "entra-id",
+    });
+
+    const model = requireFoundryProviderPatch(result).models[0];
+    expect(model?.api).toBe("openai-completions");
+    expect(model?.reasoning).toBe(true);
+    expect(model?.contextWindow).toBe(163_840);
+    expect(model?.maxTokens).toBe(163_840);
+    expect(model?.input).toEqual(["text"]);
+    expect(model?.compat?.supportsReasoningEffort).toBe(false);
+    expect(model?.compat?.maxTokensField).toBe("max_tokens");
+  });
+
+  it("configures the image default for MAI image deployments", () => {
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:entra",
+      apiKey: "__entra_id_dynamic__",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "mai-image-prod",
+      modelNameHint: "MAI-Image-2.5",
+      api: "openai-completions",
+      authMethod: "entra-id",
+    });
+
+    expect(result.configPatch?.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "microsoft-foundry/mai-image-prod",
+    });
+    expect(result.defaultModel).toBeUndefined();
+    expect(requireFoundryProviderPatch(result).models[0]?.name).toBe("MAI-Image-2.5");
+  });
+
+  it("skips chat connection probes for MAI image deployments", () => {
+    expect(
+      shouldTestFoundryTextConnection({
+        modelId: "prod-image",
+        modelNameHint: "MAI-Image-2.5",
+      }),
+    ).toBe(false);
+    expect(
+      shouldTestFoundryTextConnection({
+        modelId: "prod-chat",
+        modelNameHint: "gpt-5.4",
+      }),
+    ).toBe(true);
+  });
+
+  it("classifies custom API-key MAI image deployments during manual setup", async () => {
+    const text = vi
+      .fn()
+      .mockResolvedValueOnce("https://example.services.ai.azure.com")
+      .mockResolvedValueOnce("prod-image");
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("mai-image")
+      .mockResolvedValueOnce("MAI-Image-2.5");
+    const selection = await promptApiKeyEndpointAndModel({
+      prompter: {
+        text,
+        select,
+      },
+    } as never);
+
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:default",
+      apiKey: "test-api-key",
+      endpoint: selection.endpoint,
+      modelId: selection.modelId,
+      modelNameHint: selection.modelNameHint,
+      api: selection.api,
+      authMethod: "api-key",
+    });
+
+    expect(selection).toEqual({
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "prod-image",
+      modelNameHint: "MAI-Image-2.5",
+      api: "openai-completions",
+    });
+    expect(result.configPatch?.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "microsoft-foundry/prod-image",
+    });
+    expect(result.defaultModel).toBeUndefined();
+  });
+
+  it("uses discovered deployment metadata for MAI image defaults", () => {
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:entra",
+      apiKey: "__entra_id_dynamic__",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "custom-image-prod",
+      api: "openai-completions",
+      authMethod: "entra-id",
+      deployments: [
+        { name: "custom-image-prod", modelName: "MAI-Image-2.5-Flash" },
+        { name: "custom-chat-prod", modelName: "gpt-5.4", api: "openai-responses" },
+      ],
+    });
+
+    expect(result.configPatch?.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "microsoft-foundry/custom-image-prod",
+    });
+    expect(result.defaultModel).toBeUndefined();
   });
 
   it("records GPT-family Foundry deployments as image-capable during auth setup", () => {
@@ -780,6 +909,60 @@ describe("microsoft-foundry plugin", () => {
     expect(provider?.models[0]?.compat?.maxTokensField).toBe("max_completion_tokens");
   });
 
+  it("keeps replay item ids for Foundry encrypted reasoning continuations", async () => {
+    const provider = registerProvider();
+    let capturedReplayIds: boolean | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedReplayIds = (options as { replayResponsesItemIds?: boolean } | undefined)
+        ?.replayResponsesItemIds;
+      return {} as never;
+    };
+
+    const wrappedStreamFn = provider.wrapStreamFn?.({
+      streamFn: baseStreamFn,
+      modelId: "gpt-5.4",
+      model: buildFoundryModel({
+        reasoning: true,
+        compat: { supportsStore: false },
+      }),
+      extraParams: {},
+      config: {},
+      agentDir: defaultFoundryAgentDir,
+    } as never);
+
+    expect(wrappedStreamFn).toBeTypeOf("function");
+    await wrappedStreamFn?.(
+      buildFoundryModel({
+        reasoning: true,
+        compat: { supportsStore: false },
+      }) as never,
+      { systemPrompt: "system", messages: [] } as never,
+      {},
+    );
+
+    expect(capturedReplayIds).toBe(true);
+  });
+
+  it("leaves Foundry chat completions streams unwrapped by Responses defaults", () => {
+    const provider = registerProvider();
+    const baseStreamFn: StreamFn = () => ({}) as never;
+
+    expect(
+      provider.wrapStreamFn?.({
+        streamFn: baseStreamFn,
+        modelId: "gpt-4o-mini",
+        model: buildFoundryModel({
+          id: "gpt-4o-mini",
+          name: "gpt-4o-mini",
+          api: "openai-completions",
+        }),
+        extraParams: {},
+        config: {},
+        agentDir: defaultFoundryAgentDir,
+      } as never),
+    ).toBe(baseStreamFn);
+  });
+
   it("marks Foundry chat models as not supporting reasoning_effort", () => {
     const result = buildFoundryAuthResult({
       profileId: "microsoft-foundry:default",
@@ -820,6 +1003,38 @@ describe("microsoft-foundry plugin", () => {
       "high",
     ]);
     expect(provider?.models[0]?.compat?.maxTokensField).toBe("max_completion_tokens");
+  });
+
+  it("emits only persisted-schema thinkingLevelMap level keys for Entra ID reasoning onboarding (openclaw#91011)", () => {
+    // The persisted ModelDefinitionSchema only accepts these ModelThinkingLevel keys; if the writer
+    // emits one outside the set, updateConfig rolls the Entra ID onboarding write back.
+    const allowedThinkingLevels = new Set([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:entra",
+      apiKey: "__entra_id_dynamic__",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "gpt-5.1-chat",
+      modelNameHint: "gpt-5.1-chat",
+      api: "openai-responses",
+      authMethod: "entra-id",
+    });
+
+    const thinkingLevelMap =
+      result.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0]?.thinkingLevelMap;
+    expect(thinkingLevelMap).toBeDefined();
+    for (const [level, value] of Object.entries(thinkingLevelMap ?? {})) {
+      expect(allowedThinkingLevels.has(level)).toBe(true);
+      expect(value === null || typeof value === "string").toBe(true);
+    }
   });
 
   it("records model-name reasoning effort limits for Foundry deployment aliases", () => {
@@ -1103,4 +1318,138 @@ describe("microsoft-foundry plugin", () => {
     ]);
     expect(result.defaultModel).toBe("microsoft-foundry/deployment-gpt5");
   });
+});
+
+describe("partitionFoundryDeployments", () => {
+  it("keeps OpenAI-compatible deployments and skips Claude in mixed resources", () => {
+    const { supported, anthropic } = partitionFoundryDeployments([
+      { name: "prod-gpt", modelName: "gpt-5.4" },
+      { name: "prod-claude", modelName: "claude-opus-4-6" },
+      { name: "prod-mini", modelName: "gpt-4o-mini" },
+    ]);
+
+    expect(supported.map((deployment) => deployment.name)).toEqual(["prod-gpt", "prod-mini"]);
+    expect(anthropic.map((deployment) => deployment.name)).toEqual(["prod-claude"]);
+  });
+
+  it("returns no supported deployments when only Anthropic deployments exist", () => {
+    const { supported, anthropic } = partitionFoundryDeployments([
+      { name: "only-claude", modelName: "claude-3.5-sonnet" },
+    ]);
+
+    expect(supported).toEqual([]);
+    expect(anthropic.map((deployment) => deployment.name)).toEqual(["only-claude"]);
+  });
+
+  it("is a no-op for all-OpenAI resources", () => {
+    const deployments = [
+      { name: "prod-gpt", modelName: "gpt-5.4" },
+      { name: "prod-mini", modelName: "gpt-4o-mini" },
+    ];
+    const { supported, anthropic } = partitionFoundryDeployments(deployments);
+
+    expect(supported).toEqual(deployments);
+    expect(anthropic).toEqual([]);
+  });
+
+  it("classifies by deployment name when modelName is missing", () => {
+    const { supported, anthropic } = partitionFoundryDeployments([
+      { name: "claude-opus-4-6" },
+      { name: "gpt-5.4-prod" },
+    ]);
+
+    expect(supported.map((deployment) => deployment.name)).toEqual(["gpt-5.4-prod"]);
+    expect(anthropic.map((deployment) => deployment.name)).toEqual(["claude-opus-4-6"]);
+  });
+});
+
+describe("selectFoundryDeployment", () => {
+  function makeCtx(overrides: { selectValue?: string } = {}) {
+    const noteCalls: Array<{ message: string; title: string }> = [];
+    const selectCalls: Array<{ options: Array<{ value: string }> }> = [];
+    const ctx = {
+      prompter: {
+        note: vi.fn(async (message: string, title: string) => {
+          noteCalls.push({ message, title });
+        }),
+        select: vi.fn(async (params: { options: Array<{ value: string }> }) => {
+          selectCalls.push({ options: params.options });
+          return overrides.selectValue ?? params.options[0]?.value;
+        }),
+      },
+    } as never;
+    return { ctx, noteCalls, selectCalls };
+  }
+
+  const fakeResource = {
+    id: "/sub/x/rg/y/account/z",
+    accountName: "foundry-resource",
+    kind: "AIServices" as const,
+    resourceGroup: "rg",
+    endpoint: "https://example.services.ai.azure.com",
+    projects: [],
+  };
+
+  it("offers and returns only supported deployments for mixed GPT and Claude resources", async () => {
+    const { ctx, selectCalls, noteCalls } = makeCtx({ selectValue: "prod-gpt" });
+    const result = await selectFoundryDeployment(ctx, fakeResource, [
+      { name: "prod-gpt", modelName: "gpt-5.4", state: "Succeeded" },
+      { name: "prod-claude", modelName: "claude-opus-4-6", state: "Succeeded" },
+      { name: "prod-mini", modelName: "gpt-4o-mini", state: "Succeeded" },
+    ]);
+
+    expect(result.supported.map((deployment) => deployment.name)).toEqual([
+      "prod-gpt",
+      "prod-mini",
+    ]);
+    expect(result.selected.name).toBe("prod-gpt");
+    expect(selectCalls[0]?.options.map((option) => option.value)).toEqual([
+      "prod-gpt",
+      "prod-mini",
+    ]);
+    expect(noteCalls.some((call) => call.title === "Unsupported Deployments")).toBe(true);
+  });
+
+  it("throws an actionable error when only Anthropic deployments exist", async () => {
+    const { ctx, noteCalls } = makeCtx();
+
+    await expect(
+      selectFoundryDeployment(ctx, fakeResource, [
+        { name: "only-claude", modelName: "claude-3.5-sonnet", state: "Succeeded" },
+      ]),
+    ).rejects.toThrow(/Only Anthropic deployments/);
+    expect(noteCalls.some((call) => call.title === "Unsupported Deployments")).toBe(true);
+  });
+
+  it("leaves all-OpenAI resources unchanged", async () => {
+    const { ctx, selectCalls, noteCalls } = makeCtx({ selectValue: "prod-mini" });
+    const result = await selectFoundryDeployment(ctx, fakeResource, [
+      { name: "prod-gpt", modelName: "gpt-5.4", state: "Succeeded" },
+      { name: "prod-mini", modelName: "gpt-4o-mini", state: "Succeeded" },
+    ]);
+
+    expect(result.supported.map((deployment) => deployment.name)).toEqual([
+      "prod-gpt",
+      "prod-mini",
+    ]);
+    expect(result.selected.name).toBe("prod-mini");
+    expect(selectCalls).toHaveLength(1);
+    expect(noteCalls.some((call) => call.title === "Unsupported Deployments")).toBe(false);
+  });
+});
+
+describe("isAnthropicFoundryDeployment", () => {
+  it.each(["claude-opus-4-6", "Claude-Sonnet-4", "claude-3.5-haiku", "CLAUDE-instant"])(
+    "detects Anthropic model: %s",
+    (name) => {
+      expect(isAnthropicFoundryDeployment(name)).toBe(true);
+    },
+  );
+
+  it.each(["gpt-5.4", "o4-mini", "phi-4", "llama-3", undefined, null, ""])(
+    "rejects non-Anthropic model: %s",
+    (name) => {
+      expect(isAnthropicFoundryDeployment(name)).toBe(false);
+    },
+  );
 });

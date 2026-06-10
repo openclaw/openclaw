@@ -1,3 +1,5 @@
+// Restart sentinel tests protect queued post-restart delivery recovery and the
+// session/channel context used when the gateway resumes an interrupted run.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 
@@ -599,7 +601,7 @@ describe("scheduleRestartSentinelWake", () => {
       },
       {
         Body: "Reply with exactly: Yay! I did it!",
-        BodyForAgent: "stamped:Reply with exactly: Yay! I did it!",
+        BodyForAgent: "Reply with exactly: Yay! I did it!",
         BodyForCommands: "",
         CommandBody: "",
         CommandAuthorized: true,

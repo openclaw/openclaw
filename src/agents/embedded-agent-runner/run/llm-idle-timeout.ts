@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "../../../config/agent-timeout-defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { onLlmRequestActivity } from "../../../shared/llm-request-activity.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
@@ -239,20 +240,6 @@ export function streamWithIdleTimeout(
       ...options,
       signal: streamAbortController.signal,
     } as typeof options;
-    const existingRequestTimeoutMs =
-      typeof (model as { requestTimeoutMs?: unknown })?.requestTimeoutMs === "number" &&
-      Number.isFinite((model as { requestTimeoutMs?: number }).requestTimeoutMs) &&
-      (model as { requestTimeoutMs?: number }).requestTimeoutMs! > 0
-        ? Math.floor((model as { requestTimeoutMs?: number }).requestTimeoutMs!)
-        : timeoutMs;
-    const wrappedModel =
-      typeof model === "object" && model !== null
-        ? ({
-            ...model,
-            requestTimeoutMs: Math.min(existingRequestTimeoutMs, timeoutMs),
-          } as typeof model)
-        : model;
-
     const createTimeoutPromise = (setTimer: (timer: NodeJS.Timeout) => void): Promise<never> => {
       return new Promise((_, reject) => {
         const timer = setTimeout(() => {
@@ -268,7 +255,7 @@ export function streamWithIdleTimeout(
 
     let maybeStream: ReturnType<StreamFn>;
     try {
-      maybeStream = baseFn(wrappedModel, context, wrappedOptions);
+      maybeStream = baseFn(model, context, wrappedOptions);
     } catch (error) {
       cleanupSourceSignal();
       throw error;
@@ -280,6 +267,8 @@ export function streamWithIdleTimeout(
         function () {
           const iterator = originalAsyncIterator();
           let idleTimer: NodeJS.Timeout | null = null;
+          let waitingForProvider = false;
+          let rejectIdleTimeout: ((error: Error) => void) | undefined;
 
           const clearTimer = () => {
             if (idleTimer) {
@@ -287,42 +276,61 @@ export function streamWithIdleTimeout(
               idleTimer = null;
             }
           };
+          const armTimer = () => {
+            clearTimer();
+            if (!waitingForProvider) {
+              return;
+            }
+            idleTimer = setTimeout(() => {
+              idleTimer = null;
+              const error = createIdleTimeoutError();
+              abortStream(error);
+              onIdleTimeout?.(error);
+              rejectIdleTimeout?.(error);
+            }, timeoutMs);
+            idleTimer.unref?.();
+          };
+          const stopWaiting = () => {
+            waitingForProvider = false;
+            rejectIdleTimeout = undefined;
+            clearTimer();
+          };
+          const unsubscribeActivity = onLlmRequestActivity(streamAbortController.signal, armTimer);
+          const cleanupIterator = () => {
+            stopWaiting();
+            unsubscribeActivity();
+            cleanupSourceSignal();
+          };
 
           return createStreamIteratorWrapper({
             iterator,
             next: async (streamIterator) => {
-              clearTimer();
-
+              waitingForProvider = true;
               try {
-                // Arm the watchdog only while waiting for provider progress.
-                const result = await Promise.race([
-                  streamIterator.next(),
-                  createTimeoutPromise((timer) => {
-                    idleTimer = timer;
-                  }),
-                ]);
+                const timeoutPromise = new Promise<never>((_, reject) => {
+                  rejectIdleTimeout = reject;
+                  armTimer();
+                });
+                const result = await Promise.race([streamIterator.next(), timeoutPromise]);
 
                 if (result.done) {
-                  clearTimer();
-                  cleanupSourceSignal();
+                  cleanupIterator();
                   return result;
                 }
 
-                clearTimer();
+                stopWaiting();
                 return result;
               } catch (error) {
-                clearTimer();
+                cleanupIterator();
                 throw error;
               }
             },
             onReturn(streamIterator) {
-              clearTimer();
-              cleanupSourceSignal();
+              cleanupIterator();
               return streamIterator.return?.() ?? Promise.resolve({ done: true, value: undefined });
             },
             onThrow(streamIterator, error) {
-              clearTimer();
-              cleanupSourceSignal();
+              cleanupIterator();
               return (
                 streamIterator.throw?.(error) ??
                 Promise.reject(toLintErrorObject(error, "Non-Error rejection"))

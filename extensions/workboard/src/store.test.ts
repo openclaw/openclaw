@@ -1,3 +1,4 @@
+// Workboard tests cover store plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -2416,6 +2417,35 @@ describe("WorkboardStore", () => {
     expect(dispatch.orchestrated.map((card) => card.id).toSorted()).toEqual(
       [ops.id, product.id].toSorted(),
     );
+  });
+
+  it("scopes dispatch mutations by board", async () => {
+    const boards = createMemoryStore<PersistedWorkboardBoard>();
+    const store = new WorkboardStore(createMemoryStore(), { boards });
+    await store.upsertBoard({
+      id: "ops",
+      orchestration: { autoDecompose: true, autoDecomposePerDispatch: 1 },
+    });
+    await store.upsertBoard({
+      id: "product",
+      orchestration: { autoDecompose: true, autoDecomposePerDispatch: 1 },
+    });
+    const ops = await store.create({ title: "Ops rough", status: "triage", boardId: "ops" });
+    const product = await store.create({
+      title: "Product rough",
+      status: "triage",
+      boardId: "product",
+    });
+
+    const dispatch = await store.dispatch({ now: 10, boardId: "ops" });
+
+    expect(dispatch.orchestrated.map((card) => card.id)).toEqual([ops.id]);
+    await expect(store.get(ops.id)).resolves.toMatchObject({
+      metadata: { workerProtocol: expect.any(Object) },
+    });
+    await expect(store.get(product.id)).resolves.not.toMatchObject({
+      metadata: { workerProtocol: expect.any(Object) },
+    });
   });
 
   it("deletes board notification subscriptions with empty board metadata", async () => {

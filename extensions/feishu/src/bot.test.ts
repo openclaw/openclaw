@@ -1,3 +1,4 @@
+// Feishu tests cover bot plugin behavior.
 import type * as ConversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -1016,6 +1017,54 @@ describe("handleFeishuMessage command authorization", () => {
         },
       }),
     );
+  });
+
+  it("routes /compact through the standard reply dispatch path (#90185)", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(true);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: {
+          sender_id: {
+            open_id: "ou-command-user",
+          },
+        },
+        message: {
+          message_id: "msg-compact-command",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "/compact" }),
+        },
+      },
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    const dispatchParams = mockCallArg<{
+      ctx: {
+        CommandAuthorized?: boolean;
+        CommandBody?: string;
+        BodyForCommands?: string;
+        RawBody?: string;
+        MessageSid?: string;
+      };
+    }>(mockDispatchReplyFromConfig, 0, 0);
+    expect(dispatchParams.ctx).toMatchObject({
+      CommandAuthorized: true,
+      CommandBody: "/compact",
+      BodyForCommands: "/compact",
+      RawBody: "/compact",
+      MessageSid: "msg-compact-command",
+    });
   });
 
   it("does not enqueue inbound preview text as system events", async () => {
