@@ -132,6 +132,7 @@ type GatewayHost = {
   assistantAgentId: string | null;
   serverVersion: string | null;
   pendingUpdateExpectedVersion: string | null;
+  pendingUpdateHandoff: boolean;
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   sessionKey: string;
   sessionsShowArchived: boolean;
@@ -179,6 +180,12 @@ type GatewayHostWithSideResults = GatewayHost & {
 const SESSIONS_CHANGED_RELOAD_DEBOUNCE_MS = 5_000;
 const DEFERRED_SESSION_MESSAGE_REPLAY_POLL_MS = 250;
 const DEFERRED_SESSION_MESSAGE_REPLAY_TIMEOUT_MS = 10_000;
+const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
+const UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
+const PENDING_UPDATE_HANDOFF_REASONS = new Set([
+  UPDATE_HANDOFF_STARTED_REASON,
+  UPDATE_RESTART_HEALTH_PENDING_REASON,
+]);
 
 function enqueueApprovalRequest(host: GatewayHost, entry: ExecApprovalRequest | null) {
   if (!entry) {
@@ -281,12 +288,35 @@ function resolvePostRestartUpdateBanner(reason: string | null | undefined): {
   };
 }
 
+function resolvePendingUpdateHandoffTimeoutBanner(): {
+  tone: "danger";
+  text: string;
+} {
+  return {
+    tone: "danger",
+    text: "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
+  };
+}
+
+function isPendingUpdateHandoffSentinel(
+  sentinel: UpdateRestartStatusResponse["sentinel"],
+): boolean {
+  const reason = sentinel?.stats?.reason;
+  return (
+    sentinel?.kind === "update" &&
+    sentinel.status === "skipped" &&
+    typeof reason === "string" &&
+    PENDING_UPDATE_HANDOFF_REASONS.has(reason)
+  );
+}
+
 async function verifyPendingUpdateVersion(
   host: GatewayHost,
   client: GatewayBrowserClient,
 ): Promise<void> {
   const expectedVersion = host.pendingUpdateExpectedVersion?.trim();
-  if (!expectedVersion) {
+  const pendingHandoff = host.pendingUpdateHandoff;
+  if (!expectedVersion && !pendingHandoff) {
     return;
   }
   const deadline = Date.now() + 10_000;
@@ -298,14 +328,33 @@ async function verifyPendingUpdateVersion(
       response = null;
     }
     const sentinel = response?.sentinel;
+    if (isPendingUpdateHandoffSentinel(sentinel)) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 250);
+      });
+      continue;
+    }
+    if (sentinel?.kind === "update" && sentinel.status && sentinel.status !== "ok") {
+      host.pendingUpdateExpectedVersion = null;
+      host.pendingUpdateHandoff = false;
+      host.updateStatusBanner = resolvePostRestartUpdateBanner(sentinel.stats?.reason ?? null);
+      return;
+    }
     const actualVersion = sentinel?.stats?.after?.version?.trim() || null;
+    if (
+      sentinel?.kind === "update" &&
+      sentinel.status === "ok" &&
+      !actualVersion &&
+      !expectedVersion
+    ) {
+      host.pendingUpdateExpectedVersion = null;
+      host.pendingUpdateHandoff = false;
+      return;
+    }
     if (sentinel?.kind === "update" && actualVersion) {
       host.pendingUpdateExpectedVersion = null;
-      if (sentinel.status && sentinel.status !== "ok") {
-        host.updateStatusBanner = resolvePostRestartUpdateBanner(sentinel.stats?.reason ?? null);
-        return;
-      }
-      if (actualVersion !== expectedVersion) {
+      host.pendingUpdateHandoff = false;
+      if (expectedVersion && actualVersion !== expectedVersion) {
         host.updateStatusBanner = resolveUpdateVerificationBanner({
           expectedVersion,
           actualVersion,
@@ -322,11 +371,14 @@ async function verifyPendingUpdateVersion(
   }
   const currentVersion = host.hello?.server?.version?.trim() || null;
   host.pendingUpdateExpectedVersion = null;
-  if (currentVersion !== expectedVersion) {
+  host.pendingUpdateHandoff = false;
+  if (expectedVersion && currentVersion !== expectedVersion) {
     host.updateStatusBanner = resolveUpdateVerificationBanner({
       expectedVersion,
       actualVersion: currentVersion,
     });
+  } else if (pendingHandoff) {
+    host.updateStatusBanner = resolvePendingUpdateHandoffTimeoutBanner();
   }
 }
 
