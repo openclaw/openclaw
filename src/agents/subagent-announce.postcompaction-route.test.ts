@@ -160,7 +160,7 @@ describe("announce-path post-compaction routing (#978 :995 — leaf-lifeboat sea
     // session (consumed at the PARENT's next compaction, not the leaf's own).
     // Caught-on-completion != staged-in-turn — #974's doc names this. Asserting
     // the sessionKey here pins the behavior so a future change is visible.
-    const stagedSessionKey = stageMock.mock.calls[0]?.[0] as string;
+    const stagedSessionKey = stageMock.mock.calls[0]?.[0];
     expect(stagedSessionKey).toBe("agent:main:discord:dm:test-route"); // requesterSessionKey
     expect(stagedSessionKey).not.toBe("agent:main:subagent:postcompaction-route"); // NOT childSessionKey
     const stagedArg = stageMock.mock.calls[0]?.[1] as { task?: string };
@@ -206,7 +206,7 @@ describe("announce-path post-compaction routing (#978 :995 — leaf-lifeboat sea
     // The staged event is enqueued under the requester session key (see :996/:1011).
     const events = drainSystemEventEntries("agent:main:discord:dm:test-route");
     const stagedEvent = events.find((e) =>
-      String(e.text ?? "").includes("[continuation:delegate-staged-post-compaction]"),
+      (e.text ?? "").includes("[continuation:delegate-staged-post-compaction]"),
     );
     expect(stagedEvent).toBeDefined();
   });
