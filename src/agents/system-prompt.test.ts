@@ -1,3 +1,5 @@
+// System prompt tests cover the main prompt facade, prompt-surface routing, and
+// user-visible sections for owners, tools, safety, skills, and subagents.
 import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
@@ -173,7 +175,7 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   it("includes skills in minimal prompt mode when skillsPrompt is provided (cron regression)", () => {
-    // Isolated cron sessions use promptMode="minimal" but must still receive skills.
+    // Isolated cron sessions use promptMode="minimal" but still need skills.
     const skillsPrompt =
       "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>";
     const prompt = buildAgentSystemPrompt({
@@ -184,6 +186,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Skills");
     expect(prompt).toContain("<available_skills>");
+    expect(prompt).toContain("If a skill's <version> differs from a previous turn");
     expect(prompt).toContain("External API writes: batch when safe");
   });
 
@@ -501,6 +504,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Scan <available_skills>. If one clearly applies, read its SKILL.md at exact <location> with `Read`, then follow it.",
     );
+    expect(prompt).toContain("If a skill's <version> differs from a previous turn");
     expect(prompt).toContain("If several apply, choose the most specific.");
     expect(prompt).toContain("Docs: /tmp/openclaw/docs");
     expect(prompt).toContain("OpenClaw behavior/config/architecture: read local docs first.");
@@ -680,6 +684,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Scan <available_skills>. If one clearly applies, read its SKILL.md at exact <location> with `read`, then follow it.",
     );
+    expect(prompt).toContain("If a skill's <version> differs from a previous turn");
     expect(prompt).toContain("If several apply, choose the most specific.");
   });
 

@@ -1,3 +1,4 @@
+// Discord plugin module implements manager behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -1772,6 +1773,10 @@ export class DiscordVoiceManager {
     const analysis = analyzeVoiceReceiveError(err);
     if (analysis.isAbortLike && !analysis.countsAsDecryptFailure) {
       logVoiceVerbose(`receive stream ended: ${analysis.message}`);
+      return;
+    }
+    if (analysis.isDecodeCorruption && !analysis.countsAsDecryptFailure) {
+      logVoiceVerbose(`receive decode skipped: ${analysis.message}`);
       return;
     }
     logger.warn(`discord voice: receive error: ${analysis.message}`);

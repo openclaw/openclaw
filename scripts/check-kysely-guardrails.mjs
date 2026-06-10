@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Enforces Kysely and SQLite guardrails in infrastructure code.
 import { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -54,6 +55,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/outbound/current-conversation-bindings.ts",
     "src/media/store.ts",
     "src/plugin-sdk/memory-core-host-engine-storage.ts",
+    "src/config/sessions/store-sqlite.ts",
     "src/plugins/installed-plugin-index-record-reader.ts",
     "src/plugins/installed-plugin-index-store.ts",
     "src/plugin-state/plugin-state-store.sqlite.ts",
@@ -217,6 +219,9 @@ function isPersistedStringCastType(typeText) {
   ].some((pattern) => pattern.test(typeText));
 }
 
+/**
+ * Collects Kysely/raw SQLite violations from one source file.
+ */
 export function collectKyselyGuardrailViolations(content, relativePath) {
   const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
   const imports = collectImports(sourceFile);
@@ -338,6 +343,9 @@ export function collectKyselyGuardrailViolations(content, relativePath) {
   return violations;
 }
 
+/**
+ * Collects Kysely guardrail violations across configured source roots.
+ */
 export async function collectKyselyGuardrails() {
   const files = await collectTypeScriptFilesFromRoots(sourceRoots, { includeTests: true });
   const violations = [];
@@ -351,6 +359,9 @@ export async function collectKyselyGuardrails() {
   return violations;
 }
 
+/**
+ * Runs the Kysely guardrail check.
+ */
 export async function main() {
   const violations = await collectKyselyGuardrails();
   if (violations.length === 0) {

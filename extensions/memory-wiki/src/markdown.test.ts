@@ -1,3 +1,4 @@
+// Memory Wiki tests cover markdown plugin behavior.
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
@@ -57,6 +58,17 @@ describe("formatWikiLink", () => {
     expect(
       formatWikiLink({ renderMode: "obsidian", relativePath: "entities/alice.md", title: "Alice" }),
     ).toBe("[[entities/alice|Alice]]");
+  });
+
+  it("uses extensionless relative targets for native wiki links", () => {
+    expect(
+      formatWikiLink({
+        renderMode: "native",
+        relativePath: "entities/alice.md",
+        sourceRelativeTo: "reports/weekly.md",
+        title: "Alice",
+      }),
+    ).toBe("[Alice](../entities/alice)");
   });
 });
 

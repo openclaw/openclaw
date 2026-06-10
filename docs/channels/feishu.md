@@ -42,7 +42,7 @@ Requires OpenClaw 2026.5.29 or above. Run `openclaw --version` to check. Upgrade
 Configure `dmPolicy` to control who can DM the bot:
 
 - `"pairing"` - unknown users receive a pairing code; approve via CLI
-- `"allowlist"` - only users listed in `allowFrom` can chat (default: bot owner only)
+- `"allowlist"` - only users listed in `allowFrom` can chat
 - `"open"` - allow public DMs only when `allowFrom` includes `"*"`; with restrictive entries, only matching users can chat
 - `"disabled"` - disable all DMs
 
@@ -567,8 +567,8 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.accounts.<id>.appSecret`                | App Secret                                                                       | -                                    |
 | `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                      | `feishu`                             |
 | `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                         | `messages.tts`                       |
-| `channels.feishu.dmPolicy`                               | DM policy                                                                        | `allowlist`                          |
-| `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                      | [BotOwnerId]                         |
+| `channels.feishu.dmPolicy`                               | DM policy                                                                        | `pairing`                            |
+| `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                      | -                                    |
 | `channels.feishu.groupPolicy`                            | Group policy                                                                     | `allowlist`                          |
 | `channels.feishu.groupAllowFrom`                         | Group allowlist                                                                  | -                                    |
 | `channels.feishu.requireMention`                         | Require @mention in groups                                                       | `true`                               |

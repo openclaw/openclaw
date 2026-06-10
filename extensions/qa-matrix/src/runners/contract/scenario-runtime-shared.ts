@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime shared behavior.
 import { randomUUID } from "node:crypto";
 import { createMatrixQaClient, type MatrixQaRoomObserver } from "../../substrate/client.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
@@ -56,7 +57,7 @@ export type MatrixQaScenarioContext = {
   topology: MatrixQaProvisionedTopology;
   patchGatewayConfig?: (
     patch: Record<string, unknown>,
-    opts?: { restartDelayMs?: number },
+    opts?: { replacePaths?: string[]; restartDelayMs?: number },
   ) => Promise<void>;
   waitGatewayAccountReady?: (accountId: string, opts?: { timeoutMs?: number }) => Promise<void>;
 };

@@ -1,3 +1,4 @@
+// Model Catalog Core helper module supports provider model id normalize behavior.
 const ANTIGRAVITY_BARE_PRO_IDS = new Set(["gemini-3-pro", "gemini-3.1-pro", "gemini-3-1-pro"]);
 const GOOGLE_PROVIDER_PREFIX = "google/";
 
@@ -24,6 +25,9 @@ export function normalizeGooglePreviewModelId(id: string): string {
   }
   if (id === "gemini-3.1-flash" || id === "gemini-3.1-flash-preview") {
     return "gemini-3-flash-preview";
+  }
+  if (id === "gemma-4-26b") {
+    return "gemma-4-26b-a4b-it";
   }
   return id;
 }

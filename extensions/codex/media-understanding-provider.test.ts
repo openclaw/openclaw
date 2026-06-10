@@ -1,5 +1,6 @@
+// Codex tests cover media understanding provider plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import type { CodexAppServerClient } from "./src/app-server/client.js";
 import type { CodexServerNotification, JsonValue } from "./src/app-server/protocol.js";
@@ -174,6 +175,11 @@ function createFakeClient(options?: {
 }
 
 describe("codex media understanding provider", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("runs image understanding through a bounded Codex app-server turn", async () => {
     const { client, requests } = createFakeClient();
     const provider = buildCodexMediaUnderstandingProvider({
@@ -231,9 +237,8 @@ describe("codex media understanding provider", () => {
   });
 
   it("clamps oversized image understanding turn timeouts", async () => {
-    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       const { client } = createFakeClient();
       const provider = buildCodexMediaUnderstandingProvider({
         clientFactory: async () => client,
@@ -253,6 +258,8 @@ describe("codex media understanding provider", () => {
       expect(result?.text).toBe("A red square.");
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
+      vi.restoreAllMocks();
+      vi.clearAllTimers();
       vi.useRealTimers();
     }
   });

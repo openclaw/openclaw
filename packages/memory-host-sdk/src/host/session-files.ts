@@ -1,4 +1,4 @@
-import fsSync from "node:fs";
+// Memory Host SDK module implements session files behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readRegularFile, statRegularFile } from "./fs-utils.js";
@@ -15,11 +15,13 @@ import {
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
+  loadSessionStore,
   parseUsageCountedSessionIdFromFileName,
   resolveSessionTranscriptsDirForAgent,
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
+import { retryTransientMemoryRead } from "./read-retry.js";
 
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // Keep the historical one-line-per-message export shape for normal turns, but
@@ -251,11 +253,10 @@ function readSessionTranscriptClassificationStore(
   storePath: string,
 ): Record<string, SessionTranscriptStoreEntry> {
   try {
-    const parsed = JSON.parse(fsSync.readFileSync(storePath, "utf-8")) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {};
-    }
-    return parsed as Record<string, SessionTranscriptStoreEntry>;
+    return loadSessionStore(storePath, { skipCache: true }) as Record<
+      string,
+      SessionTranscriptStoreEntry
+    >;
   } catch {
     return {};
   }
@@ -565,7 +566,12 @@ export async function buildSessionEntry(
         messageTimestampsMs: [],
       };
     }
-    const raw = (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8");
+    const raw = (
+      await retryTransientMemoryRead(
+        () => readRegularFile({ filePath: absPath }),
+        `read session transcript ${absPath}`,
+      )
+    ).buffer.toString("utf-8");
     const collected: string[] = [];
     const lineMap: number[] = [];
     const messageTimestampsMs: number[] = [];

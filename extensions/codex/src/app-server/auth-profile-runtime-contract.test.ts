@@ -1,3 +1,4 @@
+// Codex tests cover auth profile runtime contract plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -157,10 +158,12 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
+    vi.useRealTimers();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-auth-contract-"));
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     abortAgentHarnessRun(AUTH_PROFILE_RUNTIME_CONTRACT.sessionId);
     resetCodexAppServerClientFactoryForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });

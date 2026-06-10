@@ -1,3 +1,4 @@
+// Vitest scoped config tests validate scoped project config generation.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -118,6 +119,14 @@ function expectThreadedNonIsolatedRunner(config: {
   expect(testConfig.pool).toBe("threads");
   expect(testConfig.isolate).toBe(false);
   expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
+}
+function expectThreadedIsolatedRunner(config: {
+  test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
+}) {
+  const testConfig = requireTestConfig(config);
+  expect(testConfig.pool).toBe("threads");
+  expect(testConfig.isolate).toBe(true);
+  expect(testConfig.runner).toBeUndefined();
 }
 function expectForkedNonIsolatedRunner(config: {
   test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
@@ -251,6 +260,78 @@ describe("createScopedVitestConfig", () => {
     const testConfig = requireTestConfig(config);
 
     expect(testConfig.include).toEqual(["browser/index.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("narrows scoped includes to matching dot-prefixed CLI file filters", () => {
+    const config = createScopedVitestConfig(["extensions/codex/**/*.test.ts"], {
+      argv: ["node", "vitest", "run", "./extensions/codex/src/app-server/client.test.ts"],
+      dir: "extensions",
+      env: {},
+    });
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual(["codex/src/app-server/client.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("narrows scoped includes to matching dir-relative CLI file filters", () => {
+    const config = createScopedVitestConfig(["extensions/codex/**/*.test.ts"], {
+      argv: ["node", "vitest", "run", "codex/src/app-server/client.test.ts"],
+      dir: "extensions",
+      env: {},
+    });
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual(["codex/src/app-server/client.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("does not narrow scoped includes for bare Vitest name filters", () => {
+    const config = createScopedVitestConfig(["extensions/codex/**/*.test.ts"], {
+      argv: ["node", "vitest", "run", "client"],
+      dir: "extensions",
+      env: {},
+    });
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual(["codex/**/*.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("does not narrow scoped includes for changed refs", () => {
+    const config = createScopedVitestConfig(["extensions/codex/**/*.test.ts"], {
+      argv: ["node", "vitest", "run", "--changed", "origin/main"],
+      dir: "extensions",
+      env: {},
+    });
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual(["codex/**/*.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("does not narrow scoped includes for coverage option values", () => {
+    const config = createScopedVitestConfig(["extensions/codex/**/*.test.ts"], {
+      argv: ["node", "vitest", "run", "--coverage.include", "codex/src/app-server/client.ts"],
+      dir: "extensions",
+      env: {},
+    });
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual(["codex/**/*.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("does not narrow scoped includes for exclude option values", () => {
+    const config = createScopedVitestConfig(["extensions/codex/**/*.test.ts"], {
+      argv: ["node", "vitest", "run", "--exclude", "codex/src/app-server/run-attempt.test.ts"],
+      dir: "extensions",
+      env: {},
+    });
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual(["codex/**/*.test.ts"]);
     expect(testConfig.passWithNoTests).toBeUndefined();
   });
 
@@ -388,7 +469,6 @@ describe("scoped vitest configs", () => {
       defaultExtensionImessageConfig,
       defaultExtensionLineConfig,
       defaultExtensionProviderOpenAiConfig,
-      defaultExtensionProvidersConfig,
       defaultExtensionSignalConfig,
       defaultExtensionSlackConfig,
       defaultAutoReplyConfig,
@@ -407,6 +487,8 @@ describe("scoped vitest configs", () => {
     expectForkedNonIsolatedRunner(defaultCommandsConfig);
 
     expectThreadedNonIsolatedRunner(defaultUiConfig);
+    expectThreadedIsolatedRunner(defaultExtensionMemoryConfig);
+    expectThreadedIsolatedRunner(defaultExtensionProvidersConfig);
     expectForkedIsolatedRunner(defaultInfraConfig);
   });
 
@@ -495,12 +577,9 @@ describe("scoped vitest configs", () => {
     expectThreadedNonIsolatedRunner(defaultExtensionsConfig);
   });
 
-  it("isolates the Telegram extension lane so release shards do not accumulate suite state", () => {
-    const testConfig = requireTestConfig(defaultExtensionTelegramConfig);
-    expect(testConfig.pool).toBe("threads");
-    expect(testConfig.isolate).toBe(true);
-    expect(testConfig.runner).toBeUndefined();
-    expect(testConfig.fileParallelism).toBe(false);
+  it("serializes Telegram extension files that share process globals", () => {
+    expectThreadedNonIsolatedRunner(defaultExtensionTelegramConfig);
+    expect(requireTestConfig(defaultExtensionTelegramConfig).fileParallelism).toBe(false);
   });
 
   it("serializes Slack extension files that share process globals", () => {

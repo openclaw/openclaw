@@ -1,3 +1,8 @@
+/**
+ * Native Anthropic Messages streaming transport.
+ * Converts OpenClaw contexts/tools into Anthropic payloads, streams SSE events
+ * back into runtime output blocks, and applies provider request policy.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import { calculateCost } from "../llm/model-utils.js";
@@ -534,9 +539,22 @@ function mapStopReason(reason: string | undefined): string {
   }
 }
 
-function resolveAnthropicMessagesUrl(baseUrl?: string): string {
-  const normalized = (baseUrl?.trim() || "https://api.anthropic.com").replace(/\/+$/, "");
+const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
+
+/** Resolve the effective Anthropic API base URL from model or environment. */
+export function resolveAnthropicBaseUrl(baseUrl?: string): string {
+  return baseUrl?.trim() || process.env.ANTHROPIC_BASE_URL?.trim() || DEFAULT_ANTHROPIC_BASE_URL;
+}
+
+/** Resolve the Anthropic Messages endpoint URL for the effective base URL. */
+export function resolveAnthropicMessagesUrl(baseUrl?: string): string {
+  const normalized = resolveAnthropicBaseUrl(baseUrl).replace(/\/+$/, "");
   return normalized.endsWith("/v1") ? `${normalized}/messages` : `${normalized}/v1/messages`;
+}
+
+function withEffectiveAnthropicBaseUrl(model: AnthropicTransportModel): AnthropicTransportModel {
+  const baseUrl = resolveAnthropicBaseUrl(model.baseUrl);
+  return baseUrl === model.baseUrl ? model : { ...model, baseUrl };
 }
 
 function createAbortError(signal: AbortSignal): Error {
@@ -936,9 +954,10 @@ function resolveAnthropicTransportOptions(
   return resolved;
 }
 
+/** Create the stream function used by Anthropic Messages transport models. */
 export function createAnthropicMessagesTransportStreamFn(): StreamFn {
   return (rawModel, context, rawOptions) => {
-    const model = rawModel as AnthropicTransportModel;
+    const model = withEffectiveAnthropicBaseUrl(rawModel as AnthropicTransportModel);
     const options = rawOptions as AnthropicTransportOptions | undefined;
     const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
@@ -973,7 +992,6 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           { ...params, stream: true },
           transportOptions.signal ? { signal: transportOptions.signal } : undefined,
         );
-        stream.push({ type: "start", partial: output as never });
         const blocks = output.content;
         const signatureDeltaIndexes = new Set<number>();
         const allowReasoningContentReplay = supportsReasoningContentReplay(model);
@@ -1111,6 +1129,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               output.usage.cacheRead +
               output.usage.cacheWrite;
             calculateCost(model, output.usage);
+            // Defer start until after message_start so that pre-stream SSE errors
+            // (e.g. invalid thinking signatures) arrive before any non-error event
+            // is yielded, keeping yieldedOutput=false in pumpStreamWithRecovery
+            // and allowing the thinking-block recovery retry to fire.
+            stream.push({ type: "start", partial: output as never });
             continue;
           }
           if (event.type === "content_block_start") {

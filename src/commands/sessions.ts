@@ -1,3 +1,9 @@
+/**
+ * Session listing command.
+ *
+ * It loads one or more agent session stores, enriches rows with model/runtime
+ * metadata, and emits JSON or fixed-width terminal tables.
+ */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -15,12 +21,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { info } from "../globals.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { autoMigrateLegacyState } from "../infra/state-migrations.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { classifySessionKind, type SessionKind } from "../sessions/classify-session-kind.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
+import { ensureExplicitSessionStoreMigratedForCommand } from "./session-state-migration.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
   resolveSessionDisplayModelRef,
@@ -106,6 +114,8 @@ function selectNewestSessionRows(rows: SessionRow[], limit: number | undefined):
   if (limit > TOP_N_SELECTION_LIMIT) {
     return rows.toSorted(compareSessionRowsByUpdatedAt).slice(0, limit);
   }
+  // For small limits, keep only the top N rows without sorting the full store;
+  // large limits use the simpler full sort above.
   const selected: SessionRow[] = [];
   for (const row of rows) {
     const insertAt = selected.findIndex(
@@ -241,6 +251,8 @@ function stripChannelRecipientPrefix(
   }
   const stripped = raw.slice(prefix.length);
   const topicMarkerIndex = stripped.toLowerCase().indexOf(":topic:");
+  // Topic suffixes are routing detail, not the peer id used by runtime-policy
+  // session-key display.
   return topicMarkerIndex >= 0 ? stripped.slice(0, topicMarkerIndex) : stripped;
 }
 
@@ -272,6 +284,8 @@ function resolveDisplayRuntimePolicySessionKey(params: {
     stripChannelRecipientPrefix(to, channel) ??
     stripChannelRecipientPrefix(from, channel);
 
+  // Direct-message runtime policy can route by native user id, stripped
+  // recipient, or sender; expose the derived key when it differs from the row.
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
     cfg,
     sessionKey: key,
@@ -296,6 +310,7 @@ function resolveDisplayRuntimePolicySessionKey(params: {
     : undefined;
 }
 
+/** Lists sessions across selected stores with optional JSON output. */
 export async function sessionsCommand(
   opts: {
     json?: boolean;
@@ -307,27 +322,6 @@ export async function sessionsCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const aggregateAgents = opts.allAgents === true;
-  const cfg = getRuntimeConfig();
-  const displayDefaults = resolveSessionDisplayDefaults(cfg);
-  const configuredContextTokens = cfg.agents?.defaults?.contextTokens;
-  const configContextTokens =
-    configuredContextTokens ??
-    (await lookupContextTokensForDisplay(displayDefaults.model)) ??
-    DEFAULT_CONTEXT_TOKENS;
-  const targets = resolveSessionStoreTargetsOrExit({
-    cfg,
-    opts: {
-      store: opts.store,
-      agent: opts.agent,
-      allAgents: opts.allAgents,
-    },
-    runtime,
-  });
-  if (!targets) {
-    return;
-  }
-
   let activeMinutes: number | undefined;
   if (opts.active !== undefined) {
     const parsed = parseStrictPositiveInteger(opts.active);
@@ -345,6 +339,35 @@ export async function sessionsCommand(
     runtime.exit(1);
     return;
   }
+
+  const aggregateAgents = opts.allAgents === true;
+  const cfg = getRuntimeConfig();
+  const targets = resolveSessionStoreTargetsOrExit({
+    cfg,
+    opts: {
+      store: opts.store,
+      agent: opts.agent,
+      allAgents: opts.allAgents,
+    },
+    runtime,
+  });
+  if (!targets) {
+    return;
+  }
+
+  await autoMigrateLegacyState({ cfg, env: process.env });
+  for (const target of targets) {
+    await ensureExplicitSessionStoreMigratedForCommand(target.storePath, {
+      onWarning: (warning) => runtime.error?.(warning),
+    });
+  }
+
+  const displayDefaults = resolveSessionDisplayDefaults(cfg);
+  const configuredContextTokens = cfg.agents?.defaults?.contextTokens;
+  const configContextTokens =
+    configuredContextTokens ??
+    (await lookupContextTokensForDisplay(displayDefaults.model)) ??
+    DEFAULT_CONTEXT_TOKENS;
 
   const allRows = targets.flatMap((target) => {
     const store = loadSessionStore(target.storePath);
@@ -369,6 +392,8 @@ export async function sessionsCommand(
           entry,
         });
         const acpRuntime = acpMeta != null;
+        // ACP rows need stored-key metadata before model/runtime resolution so
+        // bridge sessions and true ACP runtime sessions display differently.
         const modelRef = applyAcpModelOverlayIfNeeded(
           resolveSessionDisplayModelRef(cfg, row),
           acpSessionKey,
@@ -443,6 +468,8 @@ export async function sessionsCommand(
             totalTokens: resolveSessionTotalTokens(r) ?? null,
             totalTokensFresh:
               typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
+            // Prefer row-level context tokens, then config/model lookup, so JSON
+            // mirrors the terminal percentage calculation.
             contextTokens:
               r.contextTokens ??
               configuredContextTokens ??

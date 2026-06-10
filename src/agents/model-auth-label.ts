@@ -1,3 +1,6 @@
+/**
+ * Formats user-facing auth labels for resolved provider/model credentials.
+ */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,6 +23,10 @@ import {
 } from "./model-auth.js";
 import { normalizeProviderId } from "./model-selection.js";
 
+// Builds concise auth labels for UI/status surfaces without exposing credential
+// values. Resolution follows profile override, provider profiles, env, CLI, then
+// custom provider config.
+/** Resolve the display label that describes how a provider is authenticated. */
 export function resolveModelAuthLabel(params: {
   provider?: string;
   cfg?: OpenClawConfig;
@@ -106,6 +113,8 @@ export function resolveModelAuthLabel(params: {
     return `api-key${label ? ` (${label})` : ""}`;
   }
   if (providerEntryProfileRef.kind === "profile-incompatible") {
+    // Preserve the fact that config pointed at a profile while avoiding a
+    // misleading auth mode for an incompatible provider/profile pairing.
     return "unknown";
   }
 

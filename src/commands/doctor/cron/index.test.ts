@@ -1,3 +1,4 @@
+// Doctor cron index tests cover cron doctor checks and repair entrypoints.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -422,6 +423,23 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(job.id).toBe("legacy-job");
     expect(job.notify).toBeUndefined();
     expectNoteContaining("Legacy cron job storage detected", "Cron");
+    expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
+  });
+
+  it("archives legacy cron stores when an older migrated archive already exists", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [createLegacyCronJob()]);
+    await fs.writeFile(`${storePath}.migrated`, "old archive", "utf-8");
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(`${storePath}.migrated`, "utf-8")).resolves.toBe("old archive");
+    await expect(fs.stat(`${storePath}.migrated.2`)).resolves.toBeTruthy();
     expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
   });
 

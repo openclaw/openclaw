@@ -1,3 +1,4 @@
+// Slack tests cover slash plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.js";
 
@@ -588,6 +589,7 @@ describe("Slack native command argument menus", () => {
     const commands = new Map<string, (args: unknown) => Promise<void>>();
     const actions = new Map<string | RegExp, (args: unknown) => Promise<void>>();
     const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
+    const runtimeLog = vi.fn();
     const app = {
       client: { chat: { postEphemeral } },
       command: (name: string, handler: (args: unknown) => Promise<void>) => {
@@ -603,7 +605,7 @@ describe("Slack native command argument menus", () => {
     };
     const ctx = {
       cfg: { commands: { native: true, nativeSkills: false } },
-      runtime: {},
+      runtime: { log: runtimeLog },
       botToken: "bot-token",
       botUserId: "bot",
       teamId: "T1",
@@ -636,6 +638,12 @@ describe("Slack native command argument menus", () => {
     // Registration should not throw despite app.options() throwing
     await registerCommands(ctx, account);
     expect(commands.size).toBeGreaterThan(0);
+    expect(runtimeLog).toHaveBeenCalledTimes(1);
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "slack: external arg-menu registration failed; falling back to static slash command menus.",
+      ),
+    );
     expect(
       Array.from(actions.keys()).some(
         (key) => key instanceof RegExp && String(key) === String(/^openclaw_cmdarg/),

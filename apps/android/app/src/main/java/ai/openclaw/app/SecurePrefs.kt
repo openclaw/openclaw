@@ -40,11 +40,14 @@ class SecurePrefs(
     private const val notificationsForwardingMaxEventsPerMinuteKey =
       "notifications.forwarding.maxEventsPerMinute"
     private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
+    private const val installedAppsSharingEnabledKey = "device.apps.sharing.enabled"
     private const val voiceMicEnabledKey = "voice.micEnabled"
+    private const val appearanceThemeModeKey = "appearance.themeMode"
   }
 
   private val appContext = context.applicationContext
   private val json = Json { ignoreUnknownKeys = true }
+
   // Non-secret UI/runtime preferences stay readable for migration and backup behavior.
   private val plainPrefs: SharedPreferences =
     appContext.getSharedPreferences(plainPrefsName, Context.MODE_PRIVATE)
@@ -114,6 +117,10 @@ class SecurePrefs(
     MutableStateFlow(plainPrefs.getBoolean("canvas.debugStatusEnabled", false))
   val canvasDebugStatusEnabled: StateFlow<Boolean> = _canvasDebugStatusEnabled
 
+  private val _installedAppsSharingEnabled =
+    MutableStateFlow(plainPrefs.getBoolean(installedAppsSharingEnabledKey, false))
+  val installedAppsSharingEnabled: StateFlow<Boolean> = _installedAppsSharingEnabled
+
   private val _notificationForwardingEnabled =
     MutableStateFlow(plainPrefs.getBoolean(notificationsForwardingEnabledKey, defaultNotificationForwardingEnabled))
   val notificationForwardingEnabled: StateFlow<Boolean> = _notificationForwardingEnabled
@@ -174,6 +181,10 @@ class SecurePrefs(
 
   private val _speakerEnabled = MutableStateFlow(plainPrefs.getBoolean("voice.speakerEnabled", true))
   val speakerEnabled: StateFlow<Boolean> = _speakerEnabled
+
+  private val _appearanceThemeMode =
+    MutableStateFlow(AppearanceThemeMode.fromRawValue(plainPrefs.getString(appearanceThemeModeKey, null)))
+  val appearanceThemeMode: StateFlow<AppearanceThemeMode> = _appearanceThemeMode
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
@@ -250,6 +261,11 @@ class SecurePrefs(
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     plainPrefs.edit { putBoolean("canvas.debugStatusEnabled", value) }
     _canvasDebugStatusEnabled.value = value
+  }
+
+  fun setInstalledAppsSharingEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean(installedAppsSharingEnabledKey, value) }
+    _installedAppsSharingEnabled.value = value
   }
 
   internal fun getNotificationForwardingPolicy(appPackageName: String): NotificationForwardingPolicy {
@@ -512,6 +528,11 @@ class SecurePrefs(
   fun setSpeakerEnabled(value: Boolean) {
     plainPrefs.edit { putBoolean("voice.speakerEnabled", value) }
     _speakerEnabled.value = value
+  }
+
+  fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
+    plainPrefs.edit { putString(appearanceThemeModeKey, mode.rawValue) }
+    _appearanceThemeMode.value = mode
   }
 
   private fun loadNotificationForwardingPackages(): Set<String> {

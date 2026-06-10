@@ -1,3 +1,4 @@
+// Defines the public plugin API and runtime extension contracts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type {
@@ -576,6 +577,7 @@ export type ProviderNormalizeTransportContext = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   provider: string;
+  modelId?: string;
   api?: string | null;
   baseUrl?: string;
 };
@@ -675,6 +677,7 @@ export type ProviderFetchUsageSnapshotContext = {
   provider: string;
   token: string;
   accountId?: string;
+  authProfileId?: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
 };
@@ -704,6 +707,8 @@ export type ProviderPrepareExtraParamsContext = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  agentId?: string;
+  nativeWebSearchAllowedByToolPolicy?: boolean;
   provider: string;
   modelId: string;
   model?: ProviderRuntimeModel;

@@ -1,8 +1,15 @@
-import { describe, expect, it } from "vitest";
+// Dev Tooling Safety tests cover dev tooling safety script behavior.
+import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { Readable } from "node:stream";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as promptProbeTesting } from "../../scripts/anthropic-prompt-probe.ts";
 import { testing as claudeUsageTesting } from "../../scripts/debug-claude-usage.ts";
 import { testing as discordSmokeTesting } from "../../scripts/dev/discord-acp-plain-language-smoke.ts";
 import { testing as realtimeSmokeTesting } from "../../scripts/dev/realtime-talk-live-smoke.ts";
+import { testing as tuiPtyWatchTesting } from "../../scripts/dev/tui-pty-test-watch.ts";
 import {
   maskIdentifier,
   parseBooleanEnv,
@@ -11,6 +18,15 @@ import {
   redactHomePath,
   redactJsonValueForDevToolLog,
 } from "../../scripts/lib/dev-tooling-safety.ts";
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  vi.useRealTimers();
+  for (const dir of tempDirs.splice(0)) {
+    await fs.rm(dir, { force: true, recursive: true });
+  }
+});
 
 describe("dev tooling safety helpers", () => {
   it("redacts secrets before truncating script log previews", () => {
@@ -64,10 +80,10 @@ describe("script-specific dev tooling hardening", () => {
 
   it("redacts Discord webhook tokens from API paths", () => {
     const token = "webhook-secret-token-abcdef123456"; // pragma: allowlist secret
-    const path = `/webhooks/123/${token}?wait=true`;
+    const apiPath = `/webhooks/123/${token}?wait=true`;
 
-    expect(discordSmokeTesting.redactDiscordApiPath(path)).not.toContain(token);
-    expect(discordSmokeTesting.redactDiscordApiPath(path)).toContain("/webhooks/123/");
+    expect(discordSmokeTesting.redactDiscordApiPath(apiPath)).not.toContain(token);
+    expect(discordSmokeTesting.redactDiscordApiPath(apiPath)).toContain("/webhooks/123/");
   });
 
   it("computes the remaining Discord smoke timeout budget", () => {
@@ -189,6 +205,121 @@ describe("script-specific dev tooling hardening", () => {
     expect(calls).toBe(1);
   });
 
+  it("escalates stalled TUI PTY watch children after interrupt cleanup", async () => {
+    vi.useFakeTimers();
+    const signals: NodeJS.Signals[] = [];
+    const stopper = tuiPtyWatchTesting.createChildStopper(
+      { kill: () => true },
+      {
+        signalChild(_child, signal: NodeJS.Signals): void {
+          signals.push(signal);
+        },
+        sigkillGraceMs: 20,
+        sigtermGraceMs: 10,
+      },
+    );
+
+    stopper.stop();
+    expect(signals).toEqual(["SIGINT"]);
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(signals).toEqual(["SIGINT", "SIGTERM"]);
+
+    await vi.advanceTimersByTimeAsync(20);
+    expect(signals).toEqual(["SIGINT", "SIGTERM", "SIGKILL"]);
+  });
+
+  it("reads TUI PTY mirror updates incrementally with a bounded chunk", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tui-watch-test-"));
+    tempDirs.push(tempRoot);
+    const mirrorPath = path.join(tempRoot, "mirror.ansi");
+    await fs.writeFile(mirrorPath, "first-second-third", "utf8");
+
+    const first = await tuiPtyWatchTesting.readNewMirrorData(mirrorPath, 0, 6);
+    expect(first.chunk.toString("utf8")).toBe("first-");
+    expect(first.offset).toBe(6);
+
+    const second = await tuiPtyWatchTesting.readNewMirrorData(mirrorPath, first.offset, 6);
+    expect(second.chunk.toString("utf8")).toBe("second");
+    expect(second.offset).toBe(12);
+  });
+
+  it("restarts TUI PTY mirror reads when the mirror file is truncated", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tui-watch-test-"));
+    tempDirs.push(tempRoot);
+    const mirrorPath = path.join(tempRoot, "mirror.ansi");
+    await fs.writeFile(mirrorPath, "fresh", "utf8");
+
+    const result = await tuiPtyWatchTesting.readNewMirrorData(mirrorPath, 10, 1024);
+
+    expect(result.chunk.toString("utf8")).toBe("fresh");
+    expect(result.offset).toBe(5);
+  });
+
+  it("drains all pending TUI PTY mirror chunks after the child exits", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tui-watch-test-"));
+    tempDirs.push(tempRoot);
+    const mirrorPath = path.join(tempRoot, "mirror.ansi");
+    await fs.writeFile(mirrorPath, "first-second-third", "utf8");
+    const chunks: string[] = [];
+
+    const offset = await tuiPtyWatchTesting.drainNewMirrorData(
+      mirrorPath,
+      0,
+      (chunk: Buffer) => chunks.push(chunk.toString("utf8")),
+      6,
+    );
+
+    expect(chunks).toEqual(["first-", "second", "-third"]);
+    expect(offset).toBe("first-second-third".length);
+  });
+
+  it("keeps only diagnostic tails from noisy TUI PTY child output", () => {
+    const retained = tuiPtyWatchTesting.appendBufferTail(
+      Buffer.from("0123456789", "utf8"),
+      Buffer.from("abcdef", "utf8"),
+      8,
+    );
+
+    expect(retained.toString("utf8")).toBe("89abcdef");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "signals the TUI PTY watch process group before falling back to the child",
+    () => {
+      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+      const childKill = vi.fn(() => true);
+
+      try {
+        tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM");
+        expect(kill).toHaveBeenCalledWith(-123, "SIGTERM");
+        expect(childKill).not.toHaveBeenCalled();
+      } finally {
+        kill.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "falls back to direct TUI PTY watch child signaling when the process group is gone",
+    () => {
+      const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+        const error = new Error("missing process group") as NodeJS.ErrnoException;
+        error.code = "ESRCH";
+        throw error;
+      });
+      const childKill = vi.fn(() => true);
+
+      try {
+        tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM");
+        expect(kill).toHaveBeenCalledWith(-123, "SIGTERM");
+        expect(childKill).toHaveBeenCalledWith("SIGTERM");
+      } finally {
+        kill.mockRestore();
+      }
+    },
+  );
+
   it("aborts stalled OpenAI realtime smoke fetches at the request timeout", async () => {
     let signal: AbortSignal | undefined;
     const request = realtimeSmokeTesting.createOpenAIClientSecret("test-key", {
@@ -268,6 +399,169 @@ describe("script-specific dev tooling hardening", () => {
         "https://api.anthropic.com",
       ),
     ).toThrow(/refusing non-origin proxy request URL/u);
+  });
+
+  it("bounds Anthropic capture proxy request bodies", async () => {
+    const request = Readable.from([Buffer.alloc(8), Buffer.alloc(8)]) as never;
+    const destroy = vi.spyOn(request, "destroy");
+
+    await expect(promptProbeTesting.readRequestBody(request, 12)).rejects.toThrow(
+      "Anthropic capture proxy request body exceeded 12 bytes",
+    );
+    expect(destroy).toHaveBeenCalled();
+  });
+
+  it("reads only the bounded Anthropic prompt probe gateway log tail", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-probe-log-"));
+    tempDirs.push(tempRoot);
+    const logPath = path.join(tempRoot, "gateway.log");
+    const token = "sk-test1234567890abcdefghijklmnop"; // pragma: allowlist secret
+    await fs.writeFile(
+      logPath,
+      [
+        `DO_NOT_PRINT_OLD_GATEWAY_LOG OPENAI_API_KEY=${token}`,
+        "x".repeat(256),
+        `recent gateway tail Authorization: Bearer ${token}`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const tail = await promptProbeTesting.readLogTail(logPath, 128);
+
+    expect(tail).toContain("recent gateway tail");
+    expect(tail).not.toContain("DO_NOT_PRINT_OLD_GATEWAY_LOG");
+    expect(tail).not.toContain(token);
+  });
+
+  it("drops partial Anthropic prompt probe log lines before redaction", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-probe-log-"));
+    tempDirs.push(tempRoot);
+    const logPath = path.join(tempRoot, "gateway.log");
+    const token = `sk-test${"a".repeat(80)}`; // pragma: allowlist secret
+    await fs.writeFile(logPath, `Authorization: Bearer ${token}\nrecent gateway tail`, "utf8");
+
+    const tail = await promptProbeTesting.readLogTail(logPath, "recent gateway tail".length + 24);
+
+    expect(tail).toBe("recent gateway tail");
+    expect(tail).not.toContain(token.slice(-16));
+  });
+
+  it("cleans Anthropic prompt probe temp dirs unless explicitly kept", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-probe-test-"));
+    const keepRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-probe-test-"));
+
+    expect(promptProbeTesting.promptProbeTmpResult(tempRoot, false)).toEqual({});
+    expect(promptProbeTesting.promptProbeTmpResult(keepRoot, true)).toEqual({ tmpDir: keepRoot });
+
+    await promptProbeTesting.cleanupPromptProbeTmpDir(tempRoot, false);
+    await promptProbeTesting.cleanupPromptProbeTmpDir(keepRoot, true);
+
+    await expect(fs.stat(tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(keepRoot)).resolves.toBeTruthy();
+    await fs.rm(keepRoot, { force: true, recursive: true });
+  });
+
+  it("waits for the Anthropic prompt gateway child after SIGKILL cleanup", async () => {
+    const events = new EventEmitter();
+    const signals: NodeJS.Signals[] = [];
+    let closeCalls = 0;
+    const child = {
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      kill(signal: NodeJS.Signals) {
+        signals.push(signal);
+        if (signal === "SIGKILL") {
+          setTimeout(() => {
+            child.signalCode = "SIGKILL";
+            events.emit("exit");
+          }, 1);
+        }
+        return true;
+      },
+      once(event: "exit", listener: () => void) {
+        events.once(event, listener);
+      },
+    };
+
+    const stopped = await promptProbeTesting.stopGatewayPromptChild(
+      child,
+      {
+        close: async () => {
+          closeCalls += 1;
+        },
+      },
+      1,
+      50,
+    );
+
+    expect(stopped).toBe(true);
+    expect(signals).toEqual(["SIGINT", "SIGKILL"]);
+    expect(closeCalls).toBe(1);
+  });
+
+  it("bounds Anthropic prompt gateway cleanup when the child never exits", async () => {
+    const signals: NodeJS.Signals[] = [];
+    let closeCalls = 0;
+    const child = {
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      kill(signal: NodeJS.Signals) {
+        signals.push(signal);
+        return false;
+      },
+      once(_event: "exit", _listener: () => void) {},
+    };
+
+    const stopped = await promptProbeTesting.stopGatewayPromptChild(
+      child,
+      {
+        close: async () => {
+          closeCalls += 1;
+        },
+      },
+      1,
+      1,
+    );
+
+    expect(stopped).toBe(false);
+    expect(signals).toEqual(["SIGINT", "SIGKILL"]);
+    expect(closeCalls).toBe(1);
+  });
+
+  it("waits for Anthropic prompt gateway log writes before closing the log file", async () => {
+    let resolveWrite: (() => void) | undefined;
+    const order: string[] = [];
+    const pendingWrite = new Promise<void>((resolve) => {
+      resolveWrite = () => {
+        order.push("write");
+        resolve();
+      };
+    });
+    const stop = promptProbeTesting.stopGatewayPromptChild(
+      {
+        exitCode: 0,
+        signalCode: null,
+        kill: () => true,
+        once(_event: "exit", _listener: () => void) {},
+      },
+      {
+        close: async () => {
+          order.push("close");
+        },
+      },
+      1,
+      1,
+      [pendingWrite],
+    );
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    expect(order).toEqual([]);
+
+    resolveWrite?.();
+    await expect(stop).resolves.toBe(true);
+    expect(order).toEqual(["write", "close"]);
   });
 
   it("uses exact Claude cookie host matchers instead of broad substring matches", () => {

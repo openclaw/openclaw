@@ -1,8 +1,14 @@
+// Codex tests cover conversation turn collector plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexConversationTurnCollector } from "./conversation-turn-collector.js";
 
 describe("codex conversation turn collector", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("collects streamed assistant deltas for the active turn", async () => {
     const collector = createCodexConversationTurnCollector("thread-1");
     collector.setTurnId("turn-1");
@@ -186,14 +192,14 @@ describe("codex conversation turn collector", () => {
       await vi.advanceTimersByTimeAsync(100);
       await assertion;
     } finally {
+      vi.restoreAllMocks();
       vi.useRealTimers();
     }
   });
 
   it("clamps oversized turn wait timers", async () => {
-    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       const collector = createCodexConversationTurnCollector("thread-1");
       collector.setTurnId("turn-1");
       const completion = collector.wait({ timeoutMs: MAX_TIMER_TIMEOUT_MS + 1 });
@@ -206,6 +212,8 @@ describe("codex conversation turn collector", () => {
 
       await expect(completion).resolves.toEqual({ replyText: "" });
     } finally {
+      vi.restoreAllMocks();
+      vi.clearAllTimers();
       vi.useRealTimers();
     }
   });

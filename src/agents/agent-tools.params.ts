@@ -1,3 +1,8 @@
+/**
+ * Shared validation for model-supplied tool parameters.
+ * Converts malformed file-tool arguments into retryable errors and fixes the
+ * specific XML suffix corruption seen in path arguments.
+ */
 import type { AnyAgentTool } from "./agent-tools.types.js";
 
 export type RequiredParamGroup = {
@@ -35,6 +40,8 @@ function formatReceivedParamHint(
   record: Record<string, unknown>,
   groups: readonly RequiredParamGroup[],
 ): string {
+  // Include only present fields so errors can distinguish missing parameters
+  // from wrong-shaped or empty values without echoing full content.
   const allowEmptyKeys = new Set<string>();
   for (const group of groups) {
     if (group.allowEmpty) {
@@ -80,6 +87,7 @@ function hasValidEditReplacements(record: Record<string, unknown>): boolean {
   );
 }
 
+/** Required parameter groups for file-style tools that need retry guidance. */
 export const REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path"], label: "path" }],
   write: [
@@ -92,14 +100,17 @@ export const REQUIRED_PARAM_GROUPS = {
   ],
 } as const;
 
+/** Return a record view of model-supplied tool params when possible. */
 export function getToolParamsRecord(params: unknown): Record<string, unknown> | undefined {
   return params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
 }
 
+/** Strip extra closing markers sometimes produced in XML arg_value path params. */
 export function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
 }
 
+/** Strip malformed XML suffixes from selected string fields without mutating input. */
 export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string, unknown>>(
   record: T,
   keys: readonly string[],
@@ -133,6 +144,7 @@ function resolveMalformedXmlArgValuePathKeys(
   return [...keys];
 }
 
+/** Throw actionable retry guidance when required tool params are missing. */
 export function assertRequiredParams(
   record: Record<string, unknown> | undefined,
   groups: readonly RequiredParamGroup[],
@@ -174,6 +186,7 @@ export function assertRequiredParams(
   }
 }
 
+/** Wrap a tool execute function with required-parameter validation. */
 export function wrapToolParamValidation(
   tool: AnyAgentTool,
   requiredParamGroups?: readonly RequiredParamGroup[],

@@ -1,3 +1,4 @@
+// Qqbot tests cover token plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TokenManager } from "./token.js";
 
@@ -42,6 +43,10 @@ describe("QQBot token manager", () => {
       url: "https://bots.qq.com/app/getAppAccessToken",
       auditContext: "qqbot-token",
       capture: false,
+      policy: {
+        hostnameAllowlist: ["bots.qq.com"],
+        allowRfc2544BenchmarkRange: true,
+      },
       init: {
         method: "POST",
         headers: {
@@ -52,6 +57,25 @@ describe("QQBot token manager", () => {
       },
     });
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the RFC2544 SSRF allowance to the token fetch (regression for #88984)", async () => {
+    mockGuardedTokenResponse('{"access_token":"token-1","expires_in":7200}', {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(new TokenManager().getAccessToken("app-id", "secret")).resolves.toBe("token-1");
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://bots.qq.com/app/getAppAccessToken",
+        auditContext: "qqbot-token",
+        policy: {
+          hostnameAllowlist: ["bots.qq.com"],
+          allowRfc2544BenchmarkRange: true,
+        },
+      }),
+    );
   });
 
   it("does not cache access tokens forever when expires_in is unsafe", async () => {

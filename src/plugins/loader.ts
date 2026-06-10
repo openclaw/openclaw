@@ -1,3 +1,4 @@
+// Discovers, validates, and loads plugin metadata and runtime entrypoints.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -2122,6 +2123,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         (!enableState.enabled || forceSetupOnlyChannelPlugins);
       const canLoadScopedSetupOnlyChannelPlugin =
         scopedSetupOnlyChannelPluginRequested &&
+        (candidate.origin !== "workspace" || enableState.enabled) &&
         (!requireSetupEntryForSetupOnlyChannelPlugins || Boolean(manifestRecord.setupSource));
       const registrationPlan = resolvePluginRegistrationPlan({
         canLoadScopedSetupOnlyChannelPlugin,
@@ -2579,7 +2581,23 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               }
             }
           }
-          api.registerChannel(mergedSetupPlugin);
+          try {
+            api.registerChannel(mergedSetupPlugin);
+          } catch (err) {
+            recordPluginError({
+              logger,
+              registry,
+              record,
+              seenIds,
+              pluginId,
+              origin: candidate.origin,
+              phase: "load",
+              error: err,
+              logPrefix: `[plugins] ${record.id} failed to register setup channel from ${record.source}: `,
+              diagnosticMessagePrefix: "failed to register setup channel: ",
+            });
+            continue;
+          }
           registry.plugins.push(record);
           seenIds.set(pluginId, candidate.origin);
           continue;
