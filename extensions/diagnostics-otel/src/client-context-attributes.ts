@@ -52,9 +52,6 @@ export function assignClientContextAttributes(
       attributes[attrKey] = value;
       continue;
     }
-    const json = JSON.stringify(value);
-    if (json) {
-      attributes[attrKey] = json.slice(0, MAX_CLIENT_CONTEXT_ATTRIBUTE_CHARS);
-    }
+    attributes[attrKey] = JSON.stringify(value).slice(0, MAX_CLIENT_CONTEXT_ATTRIBUTE_CHARS);
   }
 }

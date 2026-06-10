@@ -42,6 +42,13 @@ describe("assignClientContextAttributes", () => {
     assignClientContextAttributes(attrs, { big: "x".repeat(9000) });
     expect((attrs["openclaw.client.big"] as string).length).toBe(4096);
   });
+
+  it("encodes empty nested objects and arrays", () => {
+    const attrs: Record<string, string | number | boolean> = {};
+    assignClientContextAttributes(attrs, { obj: {}, arr: [] });
+    expect(attrs["openclaw.client.obj"]).toBe("{}");
+    expect(attrs["openclaw.client.arr"]).toBe("[]");
+  });
 });
 
 describe("clientContextKeys", () => {
