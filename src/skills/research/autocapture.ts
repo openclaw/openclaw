@@ -38,6 +38,16 @@ function isHookScopedSessionKey(sessionKey: string | undefined): boolean {
   );
 }
 
+function isActiveMemoryHelperSessionKey(sessionKey: string | undefined): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
+  const agentSessionRest = normalizeLowercaseStringOrEmpty(parseAgentSessionKey(sessionKey)?.rest);
+  return (
+    normalized.startsWith("active-memory-") ||
+    normalized.includes(":active-memory:") ||
+    agentSessionRest.startsWith("active-memory-")
+  );
+}
+
 function shouldSkipSkillResearchAutoCapture(ctx: SkillResearchAgentContext): boolean {
   const trigger = normalizeLowercaseStringOrEmpty(ctx.trigger);
   if (AUTOMATIC_CAPTURE_TRIGGERS.has(trigger)) {
@@ -46,7 +56,8 @@ function shouldSkipSkillResearchAutoCapture(ctx: SkillResearchAgentContext): boo
   return (
     isCronSessionKey(ctx.sessionKey) ||
     isSubagentSessionKey(ctx.sessionKey) ||
-    isHookScopedSessionKey(ctx.sessionKey)
+    isHookScopedSessionKey(ctx.sessionKey) ||
+    isActiveMemoryHelperSessionKey(ctx.sessionKey)
   );
 }
 

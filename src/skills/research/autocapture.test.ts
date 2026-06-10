@@ -165,6 +165,102 @@ describe("skill research auto-capture", () => {
     expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);
   });
 
+  it("skips Active Memory helper sessions with manual triggers", async () => {
+    const workspaceDir = await makeWorkspace();
+
+    await runSkillResearchAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content: "Remember to always verify generated screenshots before replying.",
+          },
+        ],
+      },
+      ctx: {
+        workspaceDir,
+        trigger: "manual",
+        sessionKey: "agent:main:active-memory:recall-1",
+      },
+      config: {
+        skills: {
+          workshop: {
+            autonomous: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);
+  });
+
+  it("skips unscoped Active Memory helper session ids with manual triggers", async () => {
+    const workspaceDir = await makeWorkspace();
+
+    await runSkillResearchAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content: "Remember to always verify generated screenshots before replying.",
+          },
+        ],
+      },
+      ctx: {
+        workspaceDir,
+        trigger: "manual",
+        sessionKey: "active-memory-recall-1",
+      },
+      config: {
+        skills: {
+          workshop: {
+            autonomous: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);
+  });
+
+  it("skips agent-scoped Active Memory helper session ids with manual triggers", async () => {
+    const workspaceDir = await makeWorkspace();
+
+    await runSkillResearchAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content: "Remember to always verify generated screenshots before replying.",
+          },
+        ],
+      },
+      ctx: {
+        workspaceDir,
+        trigger: "manual",
+        sessionKey: "agent:main:active-memory-recall-1",
+      },
+      config: {
+        skills: {
+          workshop: {
+            autonomous: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);
+  });
+
   it("preserves existing skill content when auto-capturing an update", async () => {
     const workspaceDir = await makeWorkspace();
     const skillFile = path.join(workspaceDir, "skills", "github-pr-workflow", "SKILL.md");
