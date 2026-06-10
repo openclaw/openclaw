@@ -76,9 +76,13 @@ const hookMocks = vi.hoisted(() => ({
     hasHooks: vi.fn<(hookName?: string) => boolean>(() => false),
     runInboundClaim: vi.fn(async () => undefined),
     runInboundClaimForPlugin: vi.fn(async () => undefined),
-    runInboundClaimForPluginOutcome: vi.fn<() => Promise<PluginTargetedInboundClaimOutcome>>(
-      async () => ({ status: "no_handler" as const }),
-    ),
+    runInboundClaimForPluginOutcome: vi.fn<
+      (
+        pluginId?: string,
+        event?: unknown,
+        context?: unknown,
+      ) => Promise<PluginTargetedInboundClaimOutcome>
+    >(async () => ({ status: "no_handler" as const })),
     runMessageReceived: vi.fn(async () => {}),
     runBeforeDispatch: vi.fn<
       (eventValue: unknown, _ctx: unknown) => Promise<PluginHookBeforeDispatchResult | undefined>
@@ -215,6 +219,11 @@ const transcriptMocks = vi.hoisted(() => ({
 const replyMediaPathMocks = vi.hoisted(() => ({
   createReplyMediaPathNormalizer: vi.fn(
     (_params?: unknown) => async (payload: ReplyPayload) => payload,
+  ),
+}));
+const stageSandboxMediaMocks = vi.hoisted(() => ({
+  stageSandboxMedia: vi.fn<(params: unknown) => Promise<{ staged: Map<string, string> }>>(
+    async () => ({ staged: new Map() }),
   ),
 }));
 const runtimePluginMocks = vi.hoisted(() => ({
@@ -518,6 +527,9 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 vi.mock("./reply-media-paths.runtime.js", () => ({
   createReplyMediaPathNormalizer: (params: unknown) =>
     replyMediaPathMocks.createReplyMediaPathNormalizer(params),
+}));
+vi.mock("./stage-sandbox-media.runtime.js", () => ({
+  stageSandboxMedia: (params: unknown) => stageSandboxMediaMocks.stageSandboxMedia(params),
 }));
 vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
   ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
@@ -1017,6 +1029,8 @@ describe("dispatchReplyFromConfig", () => {
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
       async (payload: ReplyPayload) => payload,
     );
+    stageSandboxMediaMocks.stageSandboxMedia.mockReset();
+    stageSandboxMediaMocks.stageSandboxMedia.mockResolvedValue({ staged: new Map() });
     runtimePluginMocks.ensureRuntimePluginsLoaded.mockClear();
   });
 
@@ -5411,6 +5425,111 @@ describe("dispatchReplyFromConfig", () => {
     expect(inboundClaimCall?.[2]?.conversationId).toBe("channel:1481858418548412579");
     expect(inboundClaimCall?.[2]?.pluginBinding?.data?.kind).toBe("codex-app-server-session");
     expect(inboundClaimCall?.[2]?.pluginBinding?.data?.sessionFile).toBe("/tmp/session.jsonl");
+    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+  });
+
+  it("stages remote iMessage media before plugin-bound inbound claim metadata reaches Codex", async () => {
+    setNoAbort();
+    const order: string[] = [];
+    const rawPath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
+    const stagedPath =
+      "/tmp/openclaw-proof/.openclaw/media/remote-cache/agent-main-imessage/photo.jpg";
+    stageSandboxMediaMocks.stageSandboxMedia.mockImplementationOnce(async (paramsUnknown) => {
+      order.push("stage");
+      const params = paramsUnknown as {
+        ctx: MsgContext;
+        sessionCtx: MsgContext;
+        sessionKey?: string;
+        workspaceDir?: string;
+      };
+      expect(params.sessionKey).toBe("agent:main:imessage:direct:user");
+      expect(params.workspaceDir).toContain(".openclaw/workspace");
+      params.ctx.MediaPath = stagedPath;
+      params.ctx.MediaPaths = [stagedPath];
+      params.ctx.MediaUrl = stagedPath;
+      params.ctx.MediaUrls = [stagedPath];
+      params.sessionCtx.MediaPath = stagedPath;
+      params.sessionCtx.MediaPaths = [stagedPath];
+      params.sessionCtx.MediaUrl = stagedPath;
+      params.sessionCtx.MediaUrls = [stagedPath];
+      return { staged: new Map([[rawPath, stagedPath]]) };
+    });
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
+      async (_plugin, event) => {
+        order.push("claim");
+        const claimEvent = event as { metadata?: Record<string, unknown> };
+        expect(claimEvent.metadata?.mediaPath).toBe(stagedPath);
+        expect(claimEvent.metadata?.mediaPaths).toEqual([stagedPath]);
+        expect(claimEvent.metadata?.mediaUrl).toBe(stagedPath);
+        expect(claimEvent.metadata?.mediaUrls).toEqual([stagedPath]);
+        expect(claimEvent.metadata?.mediaPath).not.toBe(rawPath);
+        expect(claimEvent.metadata?.mediaPaths).not.toContain(rawPath);
+        return { status: "handled", result: { handled: true } };
+      },
+    );
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-imessage-codex-media",
+      targetSessionKey: "plugin-binding:codex:imessage",
+      targetKind: "session",
+      conversation: {
+        channel: "imessage",
+        accountId: "default",
+        conversationId: "chat:abc",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/plugins/openclaw-codex-app-server",
+        data: {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/workspace/openclaw",
+        },
+      },
+    } satisfies SessionBindingRecord);
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "imessage",
+      Surface: "imessage",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:chat:abc",
+      To: "imessage:chat:abc",
+      AccountId: "default",
+      SenderId: "user-9",
+      CommandAuthorized: true,
+      WasMentioned: false,
+      CommandBody: "what is this?",
+      RawBody: "what is this?",
+      Body: "what is this?",
+      MessageSid: "msg-claim-imessage-media",
+      SessionKey: "agent:main:imessage:direct:user",
+      MediaPath: rawPath,
+      MediaPaths: [rawPath],
+      MediaUrl: rawPath,
+      MediaUrls: [rawPath],
+      MediaType: "image/jpeg",
+      MediaTypes: ["image/jpeg"],
+      MediaRemoteHost: "user@gateway-host",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(order).toEqual(["stage", "claim"]);
+    expect(ctx.MediaStaged).toBe(true);
+    expect(stageSandboxMediaMocks.stageSandboxMedia).toHaveBeenCalledTimes(1);
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-imessage-codex-media");
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
   });

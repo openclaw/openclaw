@@ -134,7 +134,7 @@ import type {
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
-import { hasInboundAudio } from "./inbound-media.js";
+import { hasInboundAudio, hasInboundMedia } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type {
@@ -263,6 +263,9 @@ const runtimePluginsLoader = createLazyImportLoader(
 const replyMediaPathsRuntimeLoader = createLazyImportLoader(
   () => import("./reply-media-paths.runtime.js"),
 );
+const stageSandboxMediaRuntimeLoader = createLazyImportLoader(
+  () => import("./stage-sandbox-media.runtime.js"),
+);
 
 function loadRouteReplyRuntime() {
   return routeReplyRuntimeLoader.load();
@@ -286,6 +289,40 @@ function loadRuntimePlugins() {
 
 function loadReplyMediaPathsRuntime() {
   return replyMediaPathsRuntimeLoader.load();
+}
+
+function loadStageSandboxMediaRuntime() {
+  return stageSandboxMediaRuntimeLoader.load();
+}
+
+async function stageRemoteInboundMediaForDispatchIfNeeded(params: {
+  ctx: FinalizedMsgContext;
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+  workspaceDir: string;
+}): Promise<boolean> {
+  if (
+    !params.sessionKey ||
+    params.ctx.MediaStaged ||
+    !normalizeOptionalString(params.ctx.MediaRemoteHost) ||
+    !hasInboundMedia(params.ctx)
+  ) {
+    return false;
+  }
+
+  const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
+  const result = await stageSandboxMedia({
+    ctx: params.ctx,
+    sessionCtx: params.ctx,
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    workspaceDir: params.workspaceDir,
+  });
+  if (result.staged.size === 0) {
+    return false;
+  }
+  params.ctx.MediaStaged = true;
+  return true;
 }
 
 function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
@@ -1358,6 +1395,14 @@ export async function dispatchReplyFromConfig(
     ensureRuntimePluginsLoaded({ config: cfg, workspaceDir });
   });
   const hookRunner = getGlobalHookRunner();
+  await traceReplyPhase("reply.stage_remote_media_for_dispatch", () =>
+    stageRemoteInboundMediaForDispatchIfNeeded({
+      ctx,
+      cfg,
+      sessionKey: acpDispatchSessionKey,
+      workspaceDir,
+    }),
+  );
 
   // Extract message context for hooks (plugin and internal)
   const timestamp =
