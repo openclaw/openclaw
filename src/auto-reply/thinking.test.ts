@@ -393,6 +393,32 @@ describe("listThinkingLevels", () => {
     ]);
   });
 
+  it("matches native Anthropic max parity for adaptive Claude on custom anthropic-messages providers", () => {
+    // Adaptive Claude families (e.g. claude-sonnet-4-6) take the adaptive-default
+    // branch in resolveClaudeThinkingProfile, which only exposes `max` when
+    // includeNativeMax is set. The fallback must pass the same option the
+    // bundled anthropic plugin uses, otherwise custom providers silently lose
+    // `max` parity with the native Anthropic policy.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "claude-sonnet-4-6",
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "claude-sonnet-4-6", catalog)).toContain("max");
+    expect(
+      isThinkingLevelSupported({
+        provider: "jdcloud-anthropic",
+        model: "claude-sonnet-4-6",
+        level: "max",
+        catalog,
+      }),
+    ).toBe(true);
+  });
+
   it("preserves provider-specific profiles for Fable Messages routes", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [{ id: "off" }, { id: "low" }],

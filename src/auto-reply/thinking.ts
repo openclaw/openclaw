@@ -200,7 +200,9 @@ export function resolveThinkingProfile(params: {
   });
   const anthropicMessagesProfile =
     context.api === "anthropic-messages"
-      ? resolveClaudeThinkingProfile(context.modelId, context.params)
+      ? resolveClaudeThinkingProfile(context.modelId, context.params, {
+          includeNativeMax: true,
+        })
       : undefined;
   const pluginProfile = providerProfile ?? anthropicMessagesProfile;
   if (pluginProfile) {
