@@ -13,6 +13,7 @@ export type ChannelLegacyStateMigrationPlan =
       pluginId: string;
       namespace: string;
       maxEntries: number;
+      defaultTtlMs?: number;
       scopeKey: string;
       stateDir?: string;
       cleanupSource?: "rename";

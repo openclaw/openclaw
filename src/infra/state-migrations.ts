@@ -1581,6 +1581,7 @@ async function runLegacyMigrationPlans(
         const store = createPluginStateKeyedStore<unknown>(plan.pluginId, {
           namespace: plan.namespace,
           maxEntries: plan.maxEntries,
+          ...(plan.defaultTtlMs != null ? { defaultTtlMs: plan.defaultTtlMs } : {}),
         });
         try {
           storeEntries = await store.entries();

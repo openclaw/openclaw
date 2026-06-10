@@ -170,6 +170,7 @@ function hasCurrentMessageDispatchDedupeTargets(params: {
   const store = createPluginStateSyncKeyedStore<PersistentDedupeEntry>("telegram", {
     namespace: params.namespace,
     maxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MAX_ENTRIES,
+    defaultTtlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
     env: params.env,
   });
   const existingByKey = new Map(store.entries().map((entry) => [entry.key, entry.value]));
@@ -436,7 +437,7 @@ function detectTelegramMessageDispatchLegacyStateMigration(params: {
         namespace: accountId,
       }),
     }));
-    const jsonPlans = sources.flatMap((source) => {
+    const jsonPlans: ChannelLegacyStateMigrationPlan[] = sources.flatMap((source) => {
       const sourcePath = source.sourcePath;
       if (!fileExists(sourcePath)) {
         return [];
@@ -449,6 +450,7 @@ function detectTelegramMessageDispatchLegacyStateMigration(params: {
         pluginId: "telegram",
         namespace,
         maxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MAX_ENTRIES,
+        defaultTtlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
         scopeKey: "",
         cleanupSource: "rename",
         preview: `- Telegram message dispatch dedupe: ${sourcePath} → plugin state (${namespace})`,
@@ -476,27 +478,26 @@ function detectTelegramMessageDispatchLegacyStateMigration(params: {
     ) {
       return jsonPlans;
     }
-    return [
-      ...jsonPlans,
-      {
-        kind: "plugin-state-import",
-        label: "Telegram message dispatch dedupe",
-        sourcePath: `plugin state:${TELEGRAM_MESSAGE_DISPATCH_LEGACY_BUCKET_NAMESPACE}:${accountId}`,
-        targetPath: `plugin state:${namespace}`,
-        pluginId: "telegram",
-        namespace,
-        maxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MAX_ENTRIES,
-        scopeKey: "",
-        preview: `- Telegram message dispatch dedupe: plugin state (${TELEGRAM_MESSAGE_DISPATCH_LEGACY_BUCKET_NAMESPACE}) → plugin state (${namespace})`,
-        shouldReplaceExistingEntry: ({ existingValue, incomingValue }) =>
-          shouldReplacePersistentDedupeEntry({ existingValue, incomingValue }),
-        readEntries: () =>
-          listTelegramLegacyMessageDispatchPluginStateEntries({
-            accountId,
-            env,
-          }),
-      },
-    ];
+    const pluginStatePlan: ChannelLegacyStateMigrationPlan = {
+      kind: "plugin-state-import",
+      label: "Telegram message dispatch dedupe",
+      sourcePath: `plugin state:${TELEGRAM_MESSAGE_DISPATCH_LEGACY_BUCKET_NAMESPACE}:${accountId}`,
+      targetPath: `plugin state:${namespace}`,
+      pluginId: "telegram",
+      namespace,
+      maxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MAX_ENTRIES,
+      defaultTtlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
+      scopeKey: "",
+      preview: `- Telegram message dispatch dedupe: plugin state (${TELEGRAM_MESSAGE_DISPATCH_LEGACY_BUCKET_NAMESPACE}) → plugin state (${namespace})`,
+      shouldReplaceExistingEntry: ({ existingValue, incomingValue }) =>
+        shouldReplacePersistentDedupeEntry({ existingValue, incomingValue }),
+      readEntries: () =>
+        listTelegramLegacyMessageDispatchPluginStateEntries({
+          accountId,
+          env,
+        }),
+    };
+    return [...jsonPlans, pluginStatePlan];
   });
 }
 

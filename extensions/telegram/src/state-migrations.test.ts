@@ -17,6 +17,7 @@ import {
   resolveTelegramMessageDispatchLegacyPath,
   TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MAX_ENTRIES,
   TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX,
+  TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
 } from "./message-dispatch-dedupe.js";
 import { detectTelegramLegacyStateMigrations } from "./state-migrations.js";
 import {
@@ -494,6 +495,7 @@ describe("telegram state migrations", () => {
       const targetStore = createPluginStateSyncKeyedStoreForTests("telegram", {
         namespace: dispatchNamespace,
         maxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MAX_ENTRIES,
+        defaultTtlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
         env,
       });
       for (const entry of entries) {
