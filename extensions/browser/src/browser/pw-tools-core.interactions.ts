@@ -529,6 +529,7 @@ export async function clickViaPlaywright(opts: {
   doubleClick?: boolean;
   button?: "left" | "right" | "middle";
   modifiers?: Array<"Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift">;
+  force?: boolean;
   delayMs?: number;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
@@ -601,6 +602,7 @@ export async function clickViaPlaywright(opts: {
               timeout,
               button: opts.button,
               modifiers: opts.modifiers,
+              force: opts.force,
             }),
             abortPromise,
             reconcileRemoteDialog,
@@ -612,6 +614,7 @@ export async function clickViaPlaywright(opts: {
             timeout,
             button: opts.button,
             modifiers: opts.modifiers,
+            force: opts.force,
           }),
           abortPromise,
           reconcileRemoteDialog,
@@ -1481,6 +1484,7 @@ async function executeSingleAction(
         modifiers: action.modifiers as Array<
           "Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift"
         >,
+        force: action.force,
         delayMs: action.delayMs,
         timeoutMs: action.timeoutMs,
         ssrfPolicy,

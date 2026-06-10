@@ -72,6 +72,7 @@ const BrowserActSchema = Type.Object({
   doubleClick: Type.Optional(Type.Boolean()),
   button: Type.Optional(Type.String()),
   modifiers: Type.Optional(Type.Array(Type.String())),
+  force: Type.Optional(Type.Boolean()),
   x: optionalFiniteNumberSchema(),
   y: optionalFiniteNumberSchema(),
   // type

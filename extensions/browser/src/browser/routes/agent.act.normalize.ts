@@ -143,6 +143,7 @@ export function normalizeActRequest(
         throw new Error(parsedModifiers.error);
       }
       const doubleClick = toBoolean(body.doubleClick);
+      const force = toBoolean(body.force);
       const delayMs = readBoundedActionDurationMs(
         body,
         "delayMs",
@@ -157,6 +158,7 @@ export function normalizeActRequest(
         ...(selector ? { selector } : {}),
         ...(targetId ? { targetId } : {}),
         ...(doubleClick !== undefined ? { doubleClick } : {}),
+        ...(force !== undefined ? { force } : {}),
         ...(button ? { button } : {}),
         ...(parsedModifiers.modifiers ? { modifiers: parsedModifiers.modifiers } : {}),
         ...(delayMs !== undefined ? { delayMs } : {}),

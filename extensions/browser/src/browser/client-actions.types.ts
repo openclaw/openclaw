@@ -21,6 +21,7 @@ export type BrowserActRequest =
       doubleClick?: boolean;
       button?: string;
       modifiers?: string[];
+      force?: boolean;
       delayMs?: number;
       timeoutMs?: number;
     }
