@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -10,7 +9,6 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isInboundCallAllowed } from "../allowlist.js";
 import { resolveVoiceCallEffectiveConfig, type VoiceCallConfig } from "../config.js";
 import type { CoreAgentDeps, CoreConfig } from "../core-bridge.js";
-import { inferEmotion } from "../expression.js";
 import {
   type GroupCallGateConfig,
   resolveGroupCallGateConfig,
@@ -19,7 +17,6 @@ import {
 import type { CallManager } from "../manager.js";
 import {
   MsteamsMediaStream,
-  MSTEAMS_PCM_SAMPLE_RATE_HZ,
   type MsteamsLogger,
   type MsteamsRecordingStatus,
   type MsteamsSession,
@@ -29,11 +26,11 @@ import {
   type MsteamsRealtimeCall,
   type MsteamsRealtimeDeps,
 } from "../msteams-realtime.js";
+import { playTtsToCall } from "../msteams-tts-playback.js";
 import type { MsteamsTtsProvider } from "../msteams-tts.js";
 import { describeMsteamsVideoFrameOwner, type MsteamsVideoFrame } from "../msteams-video-frame.js";
 import { MsteamsVisionStore } from "../msteams-vision-store.js";
 import { generateVoiceResponse } from "../response-generator.js";
-import { chunkAudio } from "../telephony-audio.js";
 import type {
   EndReason,
   GetCallStatusInput,
@@ -50,7 +47,6 @@ import type {
   WebhookParseOptions,
   WebhookVerificationResult,
 } from "../types.js";
-import { estimateVisemes } from "../viseme-estimate.js";
 import type { VoiceCallProvider } from "./base.js";
 
 export interface MsteamsProviderOptions {
@@ -108,13 +104,6 @@ interface MsteamsCallState {
   /** Epoch ms of the last turn that addressed the bot, for the group-call follow-up window. */
   lastAddressedAt?: number;
 }
-
-/** PCM 16 kHz, 16-bit mono — the wire format both directions of the Teams bridge. */
-const MSTEAMS_SAMPLE_RATE_HZ = MSTEAMS_PCM_SAMPLE_RATE_HZ;
-const FRAME_DURATION_MS = 20;
-const BYTES_PER_SAMPLE = 2;
-/** 16000 Hz * 0.02 s * 2 bytes = 640 bytes per 20 ms mono frame. */
-const FRAME_BYTES = (MSTEAMS_SAMPLE_RATE_HZ / 1000) * FRAME_DURATION_MS * BYTES_PER_SAMPLE;
 
 /** Cap the pre-connect audio buffer at ~5 s of 20 ms frames to bound memory. */
 const MAX_PRECONNECT_FRAMES = 250;
@@ -1159,99 +1148,7 @@ export class MsteamsProvider implements VoiceCallProvider {
       throw new Error("MsteamsProvider.playTts: TTS provider not configured");
     }
 
-    // Supersede any in-flight playback for this call (e.g. rapid responses).
-    state.ttsAbort?.abort();
-    const abort = new AbortController();
-    state.ttsAbort = abort;
-    state.turnId += 1;
-
-    // CVI Phase 6b: cue the avatar's emotion from the reply text before audio starts, so the face
-    // shapes its mouth (smile/frown/surprise) as it begins talking. Best-effort — the worker ignores
-    // an unknown tag, and a failed send must never block playback.
-    try {
-      const emotion = inferEmotion(input.text);
-      this.logger?.debug?.(
-        `MsteamsProvider: expression cue '${emotion}' for ${state.providerCallId}`,
-      );
-      state.session.send({ type: "expression", emotion });
-    } catch {
-      // non-fatal: expression is a cosmetic cue
-    }
-
-    // msteams-tts.ts synthesizes and resamples to PCM 16 kHz mono.
-    const pcm16k = await this.ttsProvider.synthesizePcm16k(input.text);
-    if (abort.signal.aborted) {
-      return;
-    }
-    if (pcm16k.length === 0) {
-      throw new Error("MsteamsProvider.playTts: TTS produced no audio");
-    }
-
-    // CVI Phase 5 (spike): send an estimated viseme timeline just ahead of the audio so the avatar can
-    // shape its mouth per sound (blended over RMS openness). 16-bit mono @ 16 kHz → 2 bytes/sample.
-    // Best-effort/cosmetic — the worker falls back to RMS-only if this is absent or it's an older worker.
-    try {
-      const durationMs = (pcm16k.length / BYTES_PER_SAMPLE / MSTEAMS_SAMPLE_RATE_HZ) * 1000;
-      const marks = estimateVisemes(input.text, durationMs);
-      if (marks.length > 0) {
-        this.logger?.debug?.(
-          `MsteamsProvider: speech.marks ${marks.length} visemes for ${state.providerCallId}`,
-        );
-        state.session.send({ type: "speech.marks", ts: 0, marks });
-      }
-    } catch {
-      // non-fatal: viseme marks are a cosmetic lip-shape hint
-    }
-
-    await this.streamPcmFrames(state, pcm16k, abort.signal);
-
-    if (state.ttsAbort === abort) {
-      state.ttsAbort = null;
-    }
-  }
-
-  /**
-   * Chunk PCM into 20 ms / 640-byte frames and send them to the worker with
-   * drift-corrected pacing, mirroring Twilio's `playTtsViaStream`. Uses an
-   * absolute clock so cumulative scheduling jitter does not accumulate.
-   */
-  private async streamPcmFrames(
-    state: MsteamsCallState,
-    pcm: Buffer,
-    signal: AbortSignal,
-  ): Promise<void> {
-    let nextFrameDueAt = Date.now() + FRAME_DURATION_MS;
-    for (const frame of chunkAudio(pcm, FRAME_BYTES)) {
-      if (signal.aborted) {
-        return;
-      }
-      // The worker socket can close mid-playback (caller hangs up between frames). `session.send`
-      // drops the frame silently and returns false rather than throwing, so make the failure visible:
-      // abort playback so playTts/speak finalize the turn instead of advancing seq/timestamps and
-      // reporting the audio as delivered on a dead socket.
-      const delivered = state.session.send({
-        type: "audio.frame",
-        seq: state.outboundSeq,
-        timestampMs: state.outboundTimestampMs,
-        payloadBase64: frame.toString("base64"),
-      });
-      if (!delivered) {
-        this.logger?.warn(
-          `MsteamsProvider: audio.frame dropped for ${state.providerCallId} — Teams socket closed; aborting playback`,
-        );
-        throw new Error(
-          `msteams audio send failed for ${state.providerCallId}: session socket closed`,
-        );
-      }
-      state.outboundSeq += 1;
-      state.outboundTimestampMs += FRAME_DURATION_MS;
-
-      const waitMs = nextFrameDueAt - Date.now();
-      if (waitMs > 0) {
-        await sleep(waitMs);
-      }
-      nextFrameDueAt += FRAME_DURATION_MS;
-    }
+    await playTtsToCall({ ttsProvider: this.ttsProvider, logger: this.logger }, state, input.text);
   }
 
   async startListening(_input: StartListeningInput): Promise<void> {
