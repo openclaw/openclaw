@@ -1780,6 +1780,12 @@ export async function resolveGatewayModelSupportsImages(params: {
       ) {
         return true;
       }
+      if (
+        normalizedProvider === "google-gemini-cli" &&
+        normalizedCandidates.some((candidate) => candidate.startsWith("gemini-"))
+      ) {
+        return true;
+      }
       return false;
     }
     if (
@@ -1791,6 +1797,12 @@ export async function resolveGatewayModelSupportsImages(params: {
           candidate === "haiku" ||
           candidate.startsWith("claude-"),
       )
+    ) {
+      return true;
+    }
+    if (
+      normalizedProvider === "google-gemini-cli" &&
+      normalizedCandidates.some((candidate) => candidate.startsWith("gemini-"))
     ) {
       return true;
     }
