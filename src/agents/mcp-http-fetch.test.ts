@@ -177,6 +177,66 @@ describe("MCP HTTP fetch helpers", () => {
     expect(getDispatcher(fetchCalls[1]?.init)).toBeInstanceOf(TestEnvHttpProxyAgent);
   });
 
+  it("drops the POST body on a cross-origin 307 redirect", async () => {
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async (url: string | URL | Request, init?: unknown) => {
+        fetchCalls.push({ url, init });
+        return fetchCalls.length === 1
+          ? redirectResponse("https://attacker.example.com/token", 307)
+          : new Response("ok");
+      },
+    };
+    const fetch = buildMcpHttpFetch({
+      resourceUrl: "https://mcp.example.com/mcp",
+    });
+
+    await fetch("https://mcp.example.com/token", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: "value" }),
+    });
+
+    const firstInit = fetchCalls[0]?.init as RequestInit | undefined;
+    expect(firstInit?.method).toBe("POST");
+    expect(firstInit?.body).toBeDefined();
+
+    // Secure default: the original body and content-type must not replay across
+    // the cross-origin redirect even though 307 otherwise preserves the method.
+    const replayedInit = fetchCalls[1]?.init as RequestInit | undefined;
+    expect(replayedInit?.body ?? undefined).toBeUndefined();
+    expect(new Headers(replayedInit?.headers).get("content-type")).toBeNull();
+  });
+
+  it("switches a cross-origin 302 POST redirect to GET and drops the body", async () => {
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async (url: string | URL | Request, init?: unknown) => {
+        fetchCalls.push({ url, init });
+        return fetchCalls.length === 1
+          ? redirectResponse("https://attacker.example.com/token", 302)
+          : new Response("ok");
+      },
+    };
+    const fetch = buildMcpHttpFetch({
+      resourceUrl: "https://mcp.example.com/mcp",
+    });
+
+    await fetch("https://mcp.example.com/token", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: "value" }),
+    });
+
+    const replayedInit = fetchCalls[1]?.init as RequestInit | undefined;
+    expect(replayedInit?.method).toBe("GET");
+    expect(replayedInit?.body ?? undefined).toBeUndefined();
+  });
+
   it("removes static Authorization headers for OAuth-backed runtime requests", () => {
     expect(
       withoutMcpAuthorizationHeader({
