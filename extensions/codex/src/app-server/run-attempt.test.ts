@@ -2194,6 +2194,7 @@ describe("runCodexAppServerAttempt", () => {
     const soulGuidance = "Soul voice goes here.";
     const identityGuidance = "Identity guidance goes here.";
     const toolGuidance = "Tool guidance goes here.";
+    const sharedToolGuidance = "Shared tool guidance goes here.";
     const userProfile = "User profile goes here.";
     const memorySummary = "Memory summary goes here.";
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -2201,6 +2202,7 @@ describe("runCodexAppServerAttempt", () => {
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
     await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), identityGuidance);
     await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), toolGuidance);
+    await fs.writeFile(path.join(workspaceDir, "TOOLS_SHARED.md"), sharedToolGuidance);
     await fs.writeFile(path.join(workspaceDir, "USER.md"), userProfile);
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
     testing.setOpenClawCodingToolsFactoryForTests(() => [
@@ -2222,6 +2224,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadDeveloperInstructions).not.toContain(soulGuidance);
     expect(threadDeveloperInstructions).not.toContain(identityGuidance);
     expect(threadDeveloperInstructions).toContain(toolGuidance);
+    expect(threadDeveloperInstructions).toContain(sharedToolGuidance);
     expect(threadDeveloperInstructions).not.toContain(userProfile);
     expect(threadDeveloperInstructions).not.toContain(memorySummary);
     expect(threadDeveloperInstructions).not.toContain("Codex loads AGENTS.md natively");
@@ -2235,6 +2238,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(collaborationInstructions).toContain(soulGuidance);
     expect(collaborationInstructions).toContain(identityGuidance);
     expect(collaborationInstructions).not.toContain(toolGuidance);
+    expect(collaborationInstructions).not.toContain(sharedToolGuidance);
     expect(collaborationInstructions).toContain(userProfile);
     expect(collaborationInstructions).toContain("OpenClaw Workspace Memory");
     expect(collaborationInstructions).toContain(
@@ -2249,6 +2253,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).not.toContain(soulGuidance);
     expect(inputText).not.toContain(identityGuidance);
     expect(inputText).not.toContain(toolGuidance);
+    expect(inputText).not.toContain(sharedToolGuidance);
     expect(inputText).not.toContain(userProfile);
     expect(inputText).not.toContain(memorySummary);
     expect(inputText).not.toContain("OpenClaw Workspace Memory");
@@ -2280,6 +2285,11 @@ describe("runCodexAppServerAttempt", () => {
       injectedChars: toolGuidance.length,
       truncated: false,
     });
+    expect(fileStats.get("TOOLS_SHARED.md")).toMatchObject({
+      rawChars: sharedToolGuidance.length,
+      injectedChars: sharedToolGuidance.length,
+      truncated: false,
+    });
     expect(fileStats.get("USER.md")).toMatchObject({
       rawChars: userProfile.length,
       injectedChars: userProfile.length,
@@ -2304,12 +2314,14 @@ describe("runCodexAppServerAttempt", () => {
     const soulGuidance = "Soul voice goes here.";
     const identityGuidance = "Identity guidance goes here.";
     const toolGuidance = "Tool guidance goes here.";
+    const sharedToolGuidance = "Shared tool guidance goes here.";
     const userProfile = "User profile goes here.";
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), agentsGuidance);
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
     await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), identityGuidance);
     await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), toolGuidance);
+    await fs.writeFile(path.join(workspaceDir, "TOOLS_SHARED.md"), sharedToolGuidance);
     await fs.writeFile(path.join(workspaceDir, "USER.md"), userProfile);
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
@@ -2331,6 +2343,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadStartParams.config?.instructions).toBeUndefined();
     expect(threadStartParams.developerInstructions).toContain("OpenClaw Workspace Instructions");
     expect(threadStartParams.developerInstructions).toContain(toolGuidance);
+    expect(threadStartParams.developerInstructions).toContain(sharedToolGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(agentsGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(soulGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(identityGuidance);
@@ -2354,6 +2367,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(collaborationInstructions).toContain(identityGuidance);
     expect(collaborationInstructions).toContain(userProfile);
     expect(collaborationInstructions).not.toContain(toolGuidance);
+    expect(collaborationInstructions).not.toContain(sharedToolGuidance);
 
     const inputText = turnStartParams.input?.[0]?.text ?? "";
     expect(inputText).toBe("hello");
