@@ -44,6 +44,18 @@ const STATIC_MODEL_OVERRIDES = new Map<string, Partial<ModelDefinitionConfig>>([
       maxTokens: 128_000,
     },
   ],
+  [
+    "claude-opus-4.8",
+    {
+      name: "Claude Opus 4.8",
+      api: "anthropic-messages",
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
+      input: ["text", "image"],
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+    },
+  ],
 ]);
 
 function isCopilotGeminiModelId(modelId: string): boolean {
