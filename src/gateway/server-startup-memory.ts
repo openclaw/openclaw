@@ -10,8 +10,12 @@ import {
 import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
-/** True when qmd memory config has startup work that requires a live manager. */
-function shouldStartQmdManagerOnStartup(qmd: ResolvedQmdConfig): boolean {
+/**
+ * True when qmd memory config has startup work that requires a live manager.
+ * `onBoot: false` suppresses the boot refresh only; interval and embed
+ * maintenance still need startup to keep timers and file watches armed.
+ */
+export function hasQmdStartupWork(qmd: ResolvedQmdConfig): boolean {
   return (
     qmd.update.startup !== "off" &&
     (qmd.update.onBoot ||
@@ -64,7 +68,7 @@ export async function startGatewayMemoryBackend(params: {
     if (resolved.backend !== "qmd" || !resolved.qmd) {
       continue;
     }
-    if (!shouldStartQmdManagerOnStartup(resolved.qmd)) {
+    if (!hasQmdStartupWork(resolved.qmd)) {
       continue;
     }
     if (

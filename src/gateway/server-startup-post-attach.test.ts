@@ -181,6 +181,14 @@ vi.mock("./server-restart-sentinel.js", () => ({
 }));
 
 vi.mock("./server-startup-memory.js", () => ({
+  hasQmdStartupWork: (qmd: {
+    searchMode: string;
+    update: { startup: string; onBoot: boolean; intervalMs: number; embedIntervalMs: number };
+  }) =>
+    qmd.update.startup !== "off" &&
+    (qmd.update.onBoot ||
+      qmd.update.intervalMs > 0 ||
+      (qmd.searchMode !== "search" && qmd.update.embedIntervalMs > 0)),
   startGatewayMemoryBackend: hoisted.startGatewayMemoryBackend,
 }));
 

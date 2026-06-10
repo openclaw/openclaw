@@ -13,10 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
-import {
-  resolveMemoryBackendConfig,
-  type ResolvedQmdConfig,
-} from "../memory-host-sdk/host/backend-config.js";
+import { resolveMemoryBackendConfig } from "../memory-host-sdk/host/backend-config.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -30,6 +27,7 @@ import {
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
+import { hasQmdStartupWork } from "./server-startup-memory.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
@@ -177,14 +175,6 @@ function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemorySt
       ? Math.floor(rawDelayMs)
       : QMD_STARTUP_IDLE_DELAY_MS;
   return { mode: "idle", delayMs };
-}
-
-function hasQmdStartupWork(qmd: ResolvedQmdConfig): boolean {
-  return (
-    qmd.update.onBoot ||
-    qmd.update.intervalMs > 0 ||
-    (qmd.searchMode !== "search" && qmd.update.embedIntervalMs > 0)
-  );
 }
 
 function scheduleGatewayMemoryBackend(params: {

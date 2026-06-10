@@ -626,6 +626,7 @@ describe("QmdMemoryManager", () => {
     for (const root of roots) {
       expect(ignored?.(root)).toBe(false);
       expect(ignored?.(path.join(root, "note.md"))).toBe(false);
+      expect(ignored?.(path.join(root, "..notes", "daily.md"))).toBe(false);
       expect(ignored?.(path.join(root, "notes", "daily.md"))).toBe(false);
       expect(ignored?.(path.join(root, "node_modules", "pkg", "note.md"))).toBe(true);
       expect(ignored?.(path.join(root, "build", "artifact.md"))).toBe(true);
