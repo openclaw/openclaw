@@ -6,6 +6,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/config.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
+import {
+  markFallbackCandidateSkipped,
+  resetFallbackSkipCacheForTest,
+} from "./fallback-skip-cache.js";
+import { clearAgentHarnesses, registerAgentHarness } from "./harness/registry.js";
+import type { AgentHarness } from "./harness/types.js";
 import type { SessionSuspensionParams } from "./session-suspension.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
@@ -282,6 +288,7 @@ describe("runWithModelFallback – probe logic", () => {
     soonest: number | null;
     isPrimary?: boolean;
     hasFallbackCandidates?: boolean;
+    hasAvailableAuthFallbackCandidate?: boolean;
     requestedModel?: boolean;
     throttleKey?: string;
     usageStats?: AuthProfileStore["usageStats"];
@@ -297,6 +304,8 @@ describe("runWithModelFallback – probe logic", () => {
       isPrimary: params.isPrimary ?? true,
       requestedModel: params.requestedModel ?? true,
       hasFallbackCandidates: params.hasFallbackCandidates ?? true,
+      hasAvailableAuthFallbackCandidate:
+        params.hasAvailableAuthFallbackCandidate ?? params.hasFallbackCandidates ?? true,
       now: NOW,
       probeThrottleKey: params.throttleKey ?? "openai",
       authRuntime: {
@@ -377,6 +386,8 @@ describe("runWithModelFallback – probe logic", () => {
     resetLogger();
     sessionSuspensionMocks.suspendSession.mockClear();
     sessionSuspensionMocks.runWithDeferredSessionSuspension.mockClear();
+    clearAgentHarnesses();
+    resetFallbackSkipCacheForTest();
     vi.restoreAllMocks();
   });
 
@@ -394,6 +405,142 @@ describe("runWithModelFallback – probe logic", () => {
 
   it("uses inferred unavailable reason when skipping a cooldowned primary model", async () => {
     await expectPrimarySkippedAfterLongCooldown("billing");
+  });
+
+  it("probes billing cooldowns when configured fallbacks share the unavailable auth path", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["openai/gpt-4.1"],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 60 * 1000);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    const run = vi.fn().mockResolvedValue("recovered");
+
+    const result = await runPrimaryCandidate(cfg, run);
+
+    expectPrimaryProbeSuccess(result, run, "recovered");
+  });
+
+  it("uses config-aware auth order when deciding whether a fallback is available", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+    mockedResolveAuthProfileOrder.mockImplementation(
+      ({ provider, cfg: activeCfg }: { provider: string; cfg?: OpenClawConfig }) => {
+        if (provider === "openai") {
+          return ["openai-profile-1"];
+        }
+        if (provider === "anthropic") {
+          return activeCfg
+            ? ["anthropic-cooldown-profile"]
+            : ["anthropic-cooldown-profile", "anthropic-healthy-profile"];
+        }
+        return [];
+      },
+    );
+    mockedIsProfileInCooldown.mockImplementation(
+      (_store: AuthProfileStore, profileId: string) => profileId !== "anthropic-healthy-profile",
+    );
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 60 * 1000);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    const run = vi.fn().mockResolvedValue("recovered");
+
+    const result = await runPrimaryCandidate(cfg, run);
+
+    expectPrimaryProbeSuccess(result, run, "recovered");
+  });
+
+  it("does not count a session-skip-cached fallback as available for billing probe gating", async () => {
+    const sessionId = "session:billing-probe-skip-cache";
+    markFallbackCandidateSkipped({
+      sessionId,
+      provider: "anthropic",
+      model: "claude-haiku-3-5",
+      reason: "auth",
+      ttlMs: 60_000,
+    });
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 60 * 1000);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    const run = vi.fn().mockResolvedValue("recovered");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      sessionId,
+      run,
+    });
+
+    expectPrimaryProbeSuccess(result, run, "recovered");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
+  });
+
+  it("treats harness-backed fallbacks as available despite provider cooldown state", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+          models: {
+            "anthropic/*": { agentRuntime: { id: "claude-tmux" } },
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+    registerAgentHarness(
+      {
+        id: "claude-tmux",
+        label: "Claude tmux",
+        supports: ({ provider }) =>
+          provider === "anthropic" ? { supported: true } : { supported: false },
+        runAttempt: vi.fn<AgentHarness["runAttempt"]>(async () => {
+          throw new Error("probe test should not invoke the harness runtime");
+        }),
+      },
+      { ownerPluginId: "claude-tmux-test" },
+    );
+    mockedIsProfileInCooldown.mockReturnValue(true);
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 60 * 1000);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    const run = vi.fn().mockResolvedValue("fallback-ok");
+
+    const result = await runPrimaryCandidate(cfg, run);
+
+    expect(result.result).toBe("fallback-ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
   });
 
   it("re-probes a single-provider primary blocked by a far-future subscription_limit (#90702)", () => {
@@ -837,6 +984,13 @@ describe("runWithModelFallback – probe logic", () => {
       }),
       "billing",
     );
+    expect(
+      resolveOpenAiCooldownDecision({
+        reason: "billing",
+        soonest: NOW + 30 * 60 * 1000,
+        hasAvailableAuthFallbackCandidate: false,
+      }),
+    ).toEqual({ type: "attempt", reason: "billing", markProbe: true });
   });
 
   it("does not lock lane when fallback candidates remain after suspend_lanes decision", async () => {

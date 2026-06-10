@@ -42,8 +42,13 @@ vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
 }));
 
+const authProfileStore = vi.hoisted(() => ({ version: 1, profiles: {} }));
 const upsertAuthProfile = vi.hoisted(() => vi.fn(() => ({ version: 1, profiles: {} })));
+const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => authProfileStore));
+const clearProviderAuthProfileCooldowns = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../agents/auth-profiles.js", () => ({
+  clearProviderAuthProfileCooldowns,
+  ensureAuthProfileStore,
   upsertAuthProfile,
   upsertAuthProfileWithLock: upsertAuthProfile,
 }));
@@ -222,6 +227,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     applyAuthProfileConfig.mockImplementation((config) => config);
+    ensureAuthProfileStore.mockReturnValue(authProfileStore);
     resolveManifestProviderAuthChoice.mockReturnValue(undefined);
     resolvePluginSetupProvider.mockReturnValue(undefined);
     resolveProviderInstallCatalogEntry.mockReturnValue(undefined);
@@ -588,6 +594,12 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       provider: LOCAL_PROVIDER_ID,
       mode: "api_key",
     });
+    expect(clearProviderAuthProfileCooldowns).toHaveBeenCalledWith({
+      store: authProfileStore,
+      provider: LOCAL_PROVIDER_ID,
+      profileIds: [LOCAL_PROFILE_ID],
+      agentDir: "/tmp/agent",
+    });
     expect(note).toHaveBeenCalledWith(
       "Detected local provider runtime.\nPulled model metadata.",
       "Provider notes",
@@ -615,6 +627,28 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     });
 
     expect(result.defaultModel).toBe("google/gemini-3.1-pro-preview");
+  });
+
+  it("keeps plugin auth successful when stale cooldown cleanup fails", async () => {
+    const provider = buildProvider();
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider,
+      method: provider.auth[0],
+    });
+    clearProviderAuthProfileCooldowns.mockRejectedValueOnce(new Error("lock busy"));
+
+    const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
+
+    expect(result?.config.agents?.defaults?.model).toEqual({
+      primary: LOCAL_DEFAULT_MODEL,
+    });
+    expect(clearProviderAuthProfileCooldowns).toHaveBeenCalledWith({
+      store: authProfileStore,
+      provider: LOCAL_PROVIDER_ID,
+      profileIds: [LOCAL_PROFILE_ID],
+      agentDir: "/tmp/agent",
+    });
   });
 
   it("replaces provider-owned default model maps during auth migrations", async () => {

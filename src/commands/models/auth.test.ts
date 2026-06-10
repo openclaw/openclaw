@@ -61,7 +61,7 @@ const mocks = vi.hoisted(() => ({
   loadAuthProfileStoreForRuntime: vi.fn(),
   listProfilesForProvider: vi.fn(),
   promoteAuthProfileInOrder: vi.fn(),
-  clearAuthProfileCooldown: vi.fn(),
+  clearProviderAuthProfileCooldowns: vi.fn(),
   resolvePluginSetupProvider: vi.fn(),
   resolvePluginSetupRegistry: vi.fn(),
 }));
@@ -79,7 +79,7 @@ vi.mock("../../agents/auth-profiles/store.js", () => ({
 }));
 
 vi.mock("../../agents/auth-profiles/usage.js", () => ({
-  clearAuthProfileCooldown: mocks.clearAuthProfileCooldown,
+  clearProviderAuthProfileCooldowns: mocks.clearProviderAuthProfileCooldowns,
 }));
 
 vi.mock("../../plugins/provider-auth-helpers.js", () => ({
@@ -418,7 +418,7 @@ describe("modelsAuthLoginCommand", () => {
     ]);
     mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {}, usageStats: {} });
     mocks.listProfilesForProvider.mockReturnValue([]);
-    mocks.clearAuthProfileCooldown.mockResolvedValue(undefined);
+    mocks.clearProviderAuthProfileCooldowns.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -471,12 +471,12 @@ describe("modelsAuthLoginCommand", () => {
         providerIds: ["openai"],
       },
     });
-    expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
+    expect(mocks.clearProviderAuthProfileCooldowns).toHaveBeenCalledWith({
       store: fakeStore,
-      profileId: "openai:user@example.com",
+      provider: "openai",
       agentDir: "/tmp/openclaw/agents/main",
     });
-    expect(mocks.clearAuthProfileCooldown.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(mocks.clearProviderAuthProfileCooldowns.mock.invocationCallOrder[0]).toBeLessThan(
       runProviderAuth.mock.invocationCallOrder[0],
     );
     expect(runProviderAuth).toHaveBeenCalledOnce();
@@ -593,13 +593,6 @@ describe("modelsAuthLoginCommand", () => {
       select,
     });
     mocks.loadAuthProfileStoreForRuntime.mockReturnValue(fakeStore);
-    mocks.listProfilesForProvider.mockImplementation((_store: unknown, provider: string) =>
-      provider === "openai"
-        ? ["openai:api-key-backup"]
-        : provider === "openai"
-          ? ["openai:user@example.com"]
-          : [],
-    );
     mocks.resolvePluginProviders.mockReturnValue([
       createProvider({
         id: "openai",
@@ -647,12 +640,12 @@ describe("modelsAuthLoginCommand", () => {
     expect(runOauthAuth).toHaveBeenCalledOnce();
     expect(runApiKeyAuth).not.toHaveBeenCalled();
     expect(select).not.toHaveBeenCalled();
-    expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
+    expect(mocks.clearProviderAuthProfileCooldowns).toHaveBeenCalledWith({
       store: fakeStore,
-      profileId: "openai:api-key-backup",
+      provider: "openai",
       agentDir: "/tmp/openclaw/agents/main",
     });
-    expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledOnce();
+    expect(mocks.clearProviderAuthProfileCooldowns).toHaveBeenCalledOnce();
   });
 
   it("honors --method api-key for OpenAI login", async () => {
@@ -995,19 +988,14 @@ describe("modelsAuthLoginCommand", () => {
 
     expect(runClaudeCliMigration).toHaveBeenCalledOnce();
     expect(runApiKeyAuth).not.toHaveBeenCalled();
-    expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledTimes(2);
-    expect(mocks.clearAuthProfileCooldown).toHaveBeenNthCalledWith(1, {
+    expect(mocks.clearProviderAuthProfileCooldowns).toHaveBeenCalledTimes(1);
+    expect(mocks.clearProviderAuthProfileCooldowns).toHaveBeenCalledWith({
       store: fakeStore,
-      profileId: "anthropic:claude-cli",
-      agentDir: "/tmp/openclaw/agents/main",
-    });
-    expect(mocks.clearAuthProfileCooldown).toHaveBeenNthCalledWith(2, {
-      store: fakeStore,
-      profileId: "anthropic:legacy",
+      provider: "anthropic",
       agentDir: "/tmp/openclaw/agents/main",
     });
     expect(
-      mocks.clearAuthProfileCooldown.mock.invocationCallOrder.every(
+      mocks.clearProviderAuthProfileCooldowns.mock.invocationCallOrder.every(
         (order) => order < runClaudeCliMigration.mock.invocationCallOrder[0],
       ),
     ).toBe(true);

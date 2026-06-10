@@ -5,7 +5,11 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { upsertAuthProfileWithLock } from "../agents/auth-profiles.js";
+import {
+  clearProviderAuthProfileCooldowns,
+  ensureAuthProfileStore,
+  upsertAuthProfileWithLock,
+} from "../agents/auth-profiles.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
@@ -225,6 +229,31 @@ async function loadPluginProviderRuntime() {
   return await providerAuthChoiceDeps.loadPluginProviderRuntime();
 }
 
+async function clearRefreshedProviderCooldowns(params: {
+  profiles: Array<{ profileId: string; credential: { provider: string } }>;
+  agentDir: string;
+}): Promise<void> {
+  const providers = [...new Set(params.profiles.map((profile) => profile.credential.provider))];
+  if (providers.length === 0) {
+    return;
+  }
+  try {
+    const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+    for (const provider of providers) {
+      await clearProviderAuthProfileCooldowns({
+        store,
+        provider,
+        profileIds: params.profiles
+          .filter((profile) => profile.credential.provider === provider)
+          .map((profile) => profile.profileId),
+        agentDir: params.agentDir,
+      });
+    }
+  } catch {
+    // Best-effort recovery: a cleanup failure must not block successful auth setup.
+  }
+}
+
 function resolveManifestAuthChoiceScope(params: {
   authChoice: string;
   config: OpenClawConfig;
@@ -321,6 +350,7 @@ export async function runProviderPluginAuthMethod(params: {
         : {}),
     });
   }
+  await clearRefreshedProviderCooldowns({ profiles: result.profiles, agentDir });
 
   if (params.emitNotes !== false && result.notes && result.notes.length > 0) {
     await params.prompter.note(result.notes.join("\n"), "Provider notes");
