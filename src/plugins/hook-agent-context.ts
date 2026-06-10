@@ -107,9 +107,13 @@ export function buildAgentHookContextChannelFields(params: {
   currentChannelId?: string | null;
   messageTo?: string | null;
   senderId?: string | null;
+  accountId?: string | null;
+  /** Alias for `accountId` so existing `RunEmbeddedAgentParams`-shaped call sites
+   * spread through unchanged; `accountId` wins. Follow-up: migrate and retire. */
+  agentAccountId?: string | null;
 }): Pick<
   PluginHookAgentContext,
-  "channel" | "channelId" | "chatId" | "messageProvider" | "senderId"
+  "channel" | "channelId" | "chatId" | "messageProvider" | "senderId" | "accountId"
 > {
   const channel = resolveAgentHookChannel(params);
   const channelId = resolveAgentHookChannelId(params);
@@ -119,6 +123,7 @@ export function buildAgentHookContextChannelFields(params: {
     channelId,
     chatId: channelId,
     senderId: normalizeOptionalString(params.senderId),
+    accountId: normalizeOptionalString(params.accountId ?? params.agentAccountId),
   };
 }
 

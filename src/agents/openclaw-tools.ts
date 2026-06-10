@@ -594,6 +594,7 @@ export function createOpenClawTools(
     ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
     ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
     ...(options?.currentChannelId ? { channelId: options.currentChannelId } : {}),
+    ...(options?.agentAccountId ? { accountId: options.agentAccountId } : {}),
     loopDetection: resolveToolLoopDetectionConfig({ cfg: resolvedConfig, agentId: hookAgentId }),
   };
   const hookContext = {

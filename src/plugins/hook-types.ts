@@ -259,6 +259,9 @@ export type PluginHookAgentContext = {
   senderId?: string;
   trigger?: string;
   channelId?: string;
+  /** Channel-account id the turn belongs to. Canonical seam for account-aware
+   * plugins; `sessionKey` does not reliably encode it (group/cron shapes). */
+  accountId?: string;
   /** Resolved effective context-token budget after model/config/agent caps. */
   contextTokenBudget?: number;
   /** Source that supplied the resolved context-token budget. */

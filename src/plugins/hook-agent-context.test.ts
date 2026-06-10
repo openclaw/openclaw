@@ -73,6 +73,7 @@ describe("buildAgentHookContextChannelFields", () => {
       channelId: "c1",
       chatId: "c1",
       senderId: "user-123",
+      accountId: undefined,
     });
   });
 
@@ -88,7 +89,36 @@ describe("buildAgentHookContextChannelFields", () => {
       channelId: "1472750640760623226",
       chatId: "1472750640760623226",
       senderId: undefined,
+      accountId: undefined,
     });
+  });
+
+  it("surfaces accountId when supplied", () => {
+    expect(
+      buildAgentHookContextChannelFields({
+        messageProvider: "test",
+        accountId: "acct-1",
+      }).accountId,
+    ).toBe("acct-1");
+  });
+
+  it("accepts the legacy `agentAccountId` alias from existing runtime params", () => {
+    expect(
+      buildAgentHookContextChannelFields({
+        messageProvider: "test",
+        agentAccountId: "acct-1",
+      }).accountId,
+    ).toBe("acct-1");
+  });
+
+  it("prefers `accountId` when both names are present", () => {
+    expect(
+      buildAgentHookContextChannelFields({
+        messageProvider: "test",
+        accountId: "acct-canonical",
+        agentAccountId: "acct-legacy",
+      }).accountId,
+    ).toBe("acct-canonical");
   });
 });
 

@@ -986,6 +986,7 @@ export async function getReplyFromConfig(
               currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
               messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
               senderId: sessionCtx.SenderId ?? ctx.SenderId,
+              accountId: sessionCtx.AccountId ?? ctx.AccountId,
             }),
             ...buildAgentHookContextIdentityFields({
               trigger: hookTrigger,

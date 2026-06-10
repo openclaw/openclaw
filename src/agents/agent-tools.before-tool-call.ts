@@ -125,6 +125,11 @@ export type HookContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
+  /** Channel account the run belongs to — the account's own identity, sourced from the
+   * canonical `PluginHookAgentContext.accountId`; feeds account-aware tool hooks such as
+   * `resolve_exec_env`. Distinct from `turnSourceAccountId` below, which carries the
+   * approval-routing source of an originating turn, not the run's own account. */
+  accountId?: string;
   /** Originating channel for approval delivery routing; mirrors exec approval turn-source fields. */
   turnSourceChannel?: string;
   turnSourceTo?: string;
