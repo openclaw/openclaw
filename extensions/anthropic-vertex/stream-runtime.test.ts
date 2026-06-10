@@ -210,12 +210,12 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(streamTransportOptions(streamAnthropicMock)).not.toHaveProperty("temperature");
   });
 
-  it("maps explicit Fable 5 off to low effort on Vertex", () => {
+  it("preserves Fable 5 low effort on Vertex", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
     const model = makeModel({ id: "claude-fable-5", maxTokens: 128000 });
 
-    void streamFn(model, { messages: [] }, { reasoning: "off" });
+    void streamFn(model, { messages: [] }, { reasoning: "low" });
 
     expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
       thinkingEnabled: true,
