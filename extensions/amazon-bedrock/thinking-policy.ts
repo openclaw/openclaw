@@ -3,6 +3,7 @@
  * model ids to the provider SDK thinking levels that are actually supported.
  */
 import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveClaudeFable5ModelIdentity } from "openclaw/plugin-sdk/provider-model-shared";
 
 const BASE_CLAUDE_THINKING_LEVELS = [
   { id: "off" },
@@ -31,8 +32,18 @@ export function isOpus47OrNewerBedrockModelRef(modelRef: string): boolean {
 }
 
 /** Resolve supported Claude thinking levels for a Bedrock model id. */
-export function resolveBedrockClaudeThinkingProfile(modelId: string): ProviderThinkingProfile {
+export function resolveBedrockClaudeThinkingProfile(
+  modelId: string,
+  params?: Record<string, unknown>,
+): ProviderThinkingProfile {
   const trimmed = modelId.trim();
+  if (resolveClaudeFable5ModelIdentity({ id: trimmed, params })) {
+    return {
+      levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
+      defaultLevel: "high",
+      preserveWhenCatalogReasoningFalse: true,
+    };
+  }
   if (isOpus48BedrockModelRef(trimmed)) {
     return {
       levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],

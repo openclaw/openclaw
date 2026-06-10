@@ -96,6 +96,7 @@ function resolveThinkingPolicyContext(params: {
     modelId,
     modelKey,
     reasoning: candidate?.reasoning,
+    ...(candidate?.params ? { params: candidate.params } : {}),
     compat: candidate?.compat,
   };
 }
@@ -188,6 +189,7 @@ export function resolveThinkingProfile(params: {
     provider: context.normalizedProvider,
     modelId: context.modelId,
     reasoning: context.reasoning,
+    ...(context.params ? { params: context.params } : {}),
     compat: context.compat,
   };
   const pluginProfile = resolveProviderThinkingProfile({

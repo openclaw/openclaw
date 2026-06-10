@@ -10,6 +10,7 @@ import {
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setAwsSharedIniFileLoaderForTest } from "./aws-credential-refresh.js";
+import { supportsBedrockPromptCaching } from "./bedrock-options.js";
 import { resetBedrockDiscoveryCacheForTest } from "./discovery.js";
 import amazonBedrockPlugin from "./index.js";
 import {
@@ -355,6 +356,47 @@ describe("amazon-bedrock provider plugin", () => {
     }
   });
 
+  it("keeps Claude Fable 5 always adaptive with high default effort", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    for (const modelId of [
+      "anthropic.claude-fable-5",
+      "us.anthropic.claude-fable-5",
+      "global.anthropic.claude-fable-5",
+    ]) {
+      expectThinkingProfile(
+        provider.resolveThinkingProfile?.({
+          provider: "amazon-bedrock",
+          modelId,
+        } as never),
+        {
+          levelIds: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
+          defaultLevel: "high",
+        },
+      );
+    }
+  });
+
+  it("keeps Fable thinking policy for opaque deployment aliases", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    expectThinkingProfile(
+      provider.resolveThinkingProfile?.({
+        provider: "amazon-bedrock",
+        modelId: "company-fable",
+        params: { canonicalModelId: "claude-fable-5" },
+      } as never),
+      {
+        levelIds: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
+        defaultLevel: "high",
+      },
+    );
+  });
+
+  it("recognizes direct Fable model refs as prompt-cache eligible", () => {
+    expect(supportsBedrockPromptCaching("us.anthropic.claude-fable-5")).toBe(true);
+  });
+
   it("owns Anthropic-style replay policy for Claude Bedrock models", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
@@ -452,6 +494,7 @@ describe("amazon-bedrock provider plugin", () => {
 
     expectWrappedResultFields(result, { maxTokens: 10 });
     expect(result).not.toHaveProperty("temperature");
+    expect(result).not.toHaveProperty("cacheRetention", "none");
   });
 
   it("omits temperature for Bedrock Opus 4.8 model ids", async () => {
@@ -474,6 +517,37 @@ describe("amazon-bedrock provider plugin", () => {
 
     expectWrappedResultFields(result, { maxTokens: 10 });
     expect(result).not.toHaveProperty("temperature");
+    expect(result).not.toHaveProperty("cacheRetention", "none");
+  });
+
+  it("omits temperature for Bedrock Fable deployment aliases", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "production-fable",
+      model: {
+        api: "bedrock-converse-stream",
+        provider: "amazon-bedrock",
+        id: "production-fable",
+        params: { canonicalModelId: "claude-fable-5" },
+      },
+      streamFn: spyStreamFn,
+    } as never);
+
+    const result = wrapped?.(
+      {
+        api: "bedrock-converse-stream",
+        provider: "amazon-bedrock",
+        id: "production-fable",
+        params: { canonicalModelId: "claude-fable-5" },
+      } as never,
+      { messages: [] } as never,
+      { temperature: 0.2, maxTokens: 10 },
+    ) as Record<string, unknown> | undefined;
+
+    expectWrappedResultFields(result, { maxTokens: 10 });
+    expect(result).not.toHaveProperty("temperature");
+    expect(result).not.toHaveProperty("cacheRetention", "none");
   });
 
   it("omits temperature for dotted Bedrock Opus 4.7 model ids", async () => {
@@ -928,6 +1002,38 @@ describe("amazon-bedrock provider plugin", () => {
         { serviceTier: "not-a-tier" },
       );
       expect(result).not.toHaveProperty("capturedPayload");
+    });
+
+    it("omits unsupported service tiers for Fable", async () => {
+      const provider = await registerWithConfig(undefined);
+      const result = await callWrappedStream(
+        provider,
+        "us.anthropic.claude-fable-5",
+        {
+          api: "bedrock-converse-stream",
+          provider: "amazon-bedrock",
+          id: "us.anthropic.claude-fable-5",
+        } as never,
+        runtimePluginConfig(undefined),
+        { serviceTier: "flex" },
+      );
+      expect(result).not.toHaveProperty("capturedPayload");
+    });
+
+    it("keeps the standard service tier for Fable", async () => {
+      const provider = await registerWithConfig(undefined);
+      const result = await callWrappedStream(
+        provider,
+        "us.anthropic.claude-fable-5",
+        {
+          api: "bedrock-converse-stream",
+          provider: "amazon-bedrock",
+          id: "us.anthropic.claude-fable-5",
+        } as never,
+        runtimePluginConfig(undefined),
+        { serviceTier: "default" },
+      );
+      expectPayloadServiceTier(result, "default");
     });
 
     it("does not overwrite caller-provided serviceTier in payload", async () => {

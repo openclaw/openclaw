@@ -285,6 +285,37 @@ describe("listThinkingLevels", () => {
     ).toBe("low");
   });
 
+  it("passes catalog params into provider thinking profiles", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
+      context.params?.canonicalModelId === "claude-fable-5"
+        ? {
+            levels: [{ id: "off" }, { id: "high" }, { id: "adaptive" }],
+            defaultLevel: "high",
+          }
+        : undefined,
+    );
+    const catalog = [
+      {
+        provider: "amazon-bedrock",
+        id: "company-fable",
+        params: { canonicalModelId: "claude-fable-5" },
+      },
+    ];
+
+    expect(listThinkingLevels("amazon-bedrock", "company-fable", catalog)).toEqual([
+      "off",
+      "adaptive",
+      "high",
+    ]);
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "amazon-bedrock",
+        model: "company-fable",
+        catalog,
+      }),
+    ).toBe("high");
+  });
+
   it("matches provider-qualified catalog ids for provider thinking profiles", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
       context.reasoning === true && context.compat?.thinkingFormat === "qwen-chat-template"

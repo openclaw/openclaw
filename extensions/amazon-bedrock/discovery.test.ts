@@ -248,6 +248,58 @@ describe("bedrock discovery", () => {
     );
   });
 
+  it("applies Fable limits and reasoning metadata to foundation and profile models", async () => {
+    sendMock
+      .mockResolvedValueOnce({
+        modelSummaries: [
+          {
+            modelId: "anthropic.claude-fable-5",
+            modelName: "Claude Fable 5",
+            providerName: "anthropic",
+            inputModalities: ["TEXT", "IMAGE"],
+            outputModalities: ["TEXT"],
+            responseStreamingSupported: true,
+            modelLifecycle: { status: "ACTIVE" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "company-fable",
+            inferenceProfileName: "Company Fable",
+            status: "ACTIVE",
+            type: "APPLICATION",
+            models: [
+              {
+                modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-fable-5",
+              },
+            ],
+          },
+        ],
+      });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    const expected = {
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+    };
+
+    expectModelFields(
+      models.find((model) => model.id === "anthropic.claude-fable-5"),
+      expected,
+    );
+    expectModelFields(
+      models.find((model) => model.id === "company-fable"),
+      {
+        ...expected,
+        params: { canonicalModelId: "claude-fable-5" },
+      },
+    );
+  });
+
   it("caches results when refreshInterval is enabled", async () => {
     mockSingleActiveSummary();
 

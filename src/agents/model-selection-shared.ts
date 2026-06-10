@@ -659,6 +659,10 @@ function applyModelCatalogMetadata(params: {
   const nextContextTokens = configuredEntry?.contextTokens ?? params.entry.contextTokens;
   const nextReasoning = configuredEntry?.reasoning ?? params.entry.reasoning;
   const nextInput = configuredEntry?.input ?? params.entry.input;
+  const nextParams =
+    params.entry.params || configuredEntry?.params
+      ? { ...params.entry.params, ...configuredEntry?.params }
+      : undefined;
   const nextCompat =
     params.entry.compat || configuredEntry?.compat
       ? { ...params.entry.compat, ...configuredEntry?.compat }
@@ -672,6 +676,7 @@ function applyModelCatalogMetadata(params: {
     ...(nextContextTokens !== undefined ? { contextTokens: nextContextTokens } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
+    ...(nextParams ? { params: nextParams } : {}),
     ...(nextCompat ? { compat: nextCompat } : {}),
   };
 }
@@ -687,6 +692,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
   const nextContextTokens = configuredEntry?.contextTokens;
   const nextReasoning = configuredEntry?.reasoning;
   const nextInput = configuredEntry?.input;
+  const nextParams = configuredEntry?.params;
   const nextCompat = configuredEntry?.compat;
 
   return {
@@ -698,6 +704,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
     ...(nextContextTokens !== undefined ? { contextTokens: nextContextTokens } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
+    ...(nextParams ? { params: nextParams } : {}),
     ...(nextCompat ? { compat: nextCompat } : {}),
   };
 }
@@ -1302,6 +1309,8 @@ export function buildConfiguredModelCatalog(params: {
           ? model.contextTokens
           : undefined;
       const input = Array.isArray(model?.input) ? model.input : undefined;
+      const modelParams =
+        model?.params && typeof model.params === "object" ? model.params : undefined;
       const compat = model?.compat && typeof model.compat === "object" ? model.compat : undefined;
       const reasoning =
         typeof model?.reasoning === "boolean"
@@ -1318,6 +1327,7 @@ export function buildConfiguredModelCatalog(params: {
         contextTokens,
         reasoning,
         input,
+        ...(modelParams ? { params: modelParams } : {}),
         compat,
       });
     }

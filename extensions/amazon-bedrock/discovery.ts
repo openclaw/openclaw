@@ -18,6 +18,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { resolveClaudeFable5ModelIdentity } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -53,6 +54,7 @@ const DEFAULT_MAX_TOKENS = 4096;
  */
 const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic Claude
+  "anthropic.claude-fable-5": 1_000_000,
   "anthropic.claude-3-7-sonnet-20250219-v1:0": 200_000,
   "anthropic.claude-opus-4-8": 1_000_000,
   "anthropic.claude-opus-4-7": 1_000_000,
@@ -130,6 +132,9 @@ function resolveKnownContextWindow(modelId: string): number | undefined {
   const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
   const candidates = [modelId, stripped];
   for (const candidate of candidates) {
+    if (resolveClaudeFable5ModelIdentity({ id: candidate })) {
+      return 1_000_000;
+    }
     if (/(?:^|[/.:])anthropic\.claude-opus-4[.-]8(?:$|[-.:/])/i.test(candidate)) {
       return 1_000_000;
     }
@@ -147,7 +152,10 @@ function resolveKnownContextWindow(modelId: string): number | undefined {
   return undefined;
 }
 
-function isKnownClaudeOpus47OrNewerModelId(modelId: string): boolean {
+function isKnownAdaptiveClaudeModelId(modelId: string): boolean {
+  if (resolveClaudeFable5ModelIdentity({ id: modelId })) {
+    return true;
+  }
   const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
   return [modelId, stripped].some((candidate) =>
     /(?:^|[/.:])anthropic\.claude-opus-4[.-][78](?:$|[-.:/])/i.test(candidate),
@@ -157,10 +165,17 @@ function isKnownClaudeOpus47OrNewerModelId(modelId: string): boolean {
 function resolveKnownThinkingLevelMap(
   modelId: string,
 ): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
-  if (!isKnownClaudeOpus47OrNewerModelId(modelId)) {
+  if (resolveClaudeFable5ModelIdentity({ id: modelId })) {
+    return { off: "low", minimal: "low", xhigh: "xhigh", max: "max" };
+  }
+  if (!isKnownAdaptiveClaudeModelId(modelId)) {
     return undefined;
   }
   return { xhigh: "xhigh", max: "max" };
+}
+
+function resolveKnownMaxTokens(modelId: string): number | undefined {
+  return resolveClaudeFable5ModelIdentity({ id: modelId }) ? 128_000 : undefined;
 }
 
 const DEFAULT_COST = {
@@ -271,7 +286,7 @@ function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image
 }
 
 function inferReasoningSupport(summary: BedrockModelSummary): boolean {
-  if (isKnownClaudeOpus47OrNewerModelId(summary.modelId ?? "")) {
+  if (isKnownAdaptiveClaudeModelId(summary.modelId ?? "")) {
     return true;
   }
   const haystack = normalizeLowercaseStringOrEmpty(
@@ -340,7 +355,7 @@ function toModelDefinition(
     input: mapInputModalities(summary),
     cost: DEFAULT_COST,
     contextWindow: resolveKnownContextWindow(id) ?? defaults.contextWindow,
-    maxTokens: defaults.maxTokens,
+    maxTokens: resolveKnownMaxTokens(id) ?? defaults.maxTokens,
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
   };
 }
@@ -456,23 +471,28 @@ function resolveInferenceProfiles(
     const knownThinkingLevelMap = resolveKnownThinkingLevelMap(
       baseModelId ?? profile.inferenceProfileId,
     );
+    const canonicalFableId = resolveClaudeFable5ModelIdentity({ id: baseModelId });
 
     discovered.push({
       id: profile.inferenceProfileId,
       name: profile.inferenceProfileName?.trim() || profile.inferenceProfileId,
       reasoning:
         baseModel?.reasoning ??
-        isKnownClaudeOpus47OrNewerModelId(baseModelId ?? profile.inferenceProfileId),
+        isKnownAdaptiveClaudeModelId(baseModelId ?? profile.inferenceProfileId),
       input: baseModel?.input ?? ["text"],
       cost: baseModel?.cost ?? DEFAULT_COST,
       contextWindow:
         baseModel?.contextWindow ??
         resolveKnownContextWindow(baseModelId ?? profile.inferenceProfileId ?? "") ??
         defaults.contextWindow,
-      maxTokens: baseModel?.maxTokens ?? defaults.maxTokens,
+      maxTokens:
+        baseModel?.maxTokens ??
+        resolveKnownMaxTokens(baseModelId ?? profile.inferenceProfileId) ??
+        defaults.maxTokens,
       ...(baseModel?.thinkingLevelMap || knownThinkingLevelMap
         ? { thinkingLevelMap: baseModel?.thinkingLevelMap ?? knownThinkingLevelMap }
         : {}),
+      ...(canonicalFableId ? { params: { canonicalModelId: canonicalFableId } } : {}),
     });
   }
   return discovered;

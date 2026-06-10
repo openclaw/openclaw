@@ -1,6 +1,8 @@
 // Amazon Bedrock tests cover stream plugin behavior.
-import { describe, expect, it } from "vitest";
-import { testing } from "./stream.runtime.js";
+import { BedrockRuntimeClient, ConversationRole } from "@aws-sdk/client-bedrock-runtime";
+import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { streamBedrock, streamSimpleBedrock, testing } from "./stream.runtime.js";
 
 function bedrockModel(overrides: Record<string, unknown>) {
   return {
@@ -38,6 +40,16 @@ function signedThinkingContext(modelId: string) {
     ],
   } as never;
 }
+
+async function* streamEvents(events: unknown[]) {
+  for (const event of events) {
+    yield event;
+  }
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("Bedrock reasoning replay", () => {
   it("preserves signed reasoning for Claude profile descriptors", () => {
@@ -114,5 +126,192 @@ describe("Bedrock thinking effort mapping", () => {
         "max",
       ),
     ).toBe("max");
+  });
+});
+
+describe("Bedrock Fable contract", () => {
+  function fableModel() {
+    return bedrockModel({
+      id: "production-fable",
+      name: "Production deployment",
+      reasoning: false,
+      params: { canonicalModelId: "claude-fable-5" },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+  }
+
+  function context() {
+    return {
+      messages: [{ role: "user", content: "Reply briefly.", timestamp: 0 }],
+      tools: [
+        {
+          name: "lookup",
+          description: "Lookup",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+    } as never;
+  }
+
+  it("sends always-adaptive high effort without unsupported request controls", async () => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        { messageStop: { stopReason: "end_turn" } },
+      ]),
+    } as never);
+
+    const stream = streamBedrock(fableModel(), context(), {
+      reasoning: "high",
+      temperature: 0.2,
+      toolChoice: "any",
+    });
+    await stream.result();
+
+    const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
+    expect(command.input).toMatchObject({
+      modelId: "production-fable",
+      inferenceConfig: {},
+      messages: [
+        {
+          role: "user",
+          content: [{ text: "Reply briefly." }, { cachePoint: { type: "default" } }],
+        },
+      ],
+      toolConfig: { toolChoice: { auto: {} } },
+      additionalModelRequestFields: {
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "high" },
+      },
+      additionalModelResponseFieldPaths: ["/stop_details"],
+    });
+  });
+
+  it("preserves explicit tool disabling", async () => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        { messageStop: { stopReason: "end_turn" } },
+      ]),
+    } as never);
+
+    const stream = streamBedrock(fableModel(), context(), {
+      reasoning: "high",
+      toolChoice: "none",
+    });
+    await stream.result();
+
+    const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
+    expect(command.input?.toolConfig).toBeUndefined();
+  });
+
+  it("quarantines partial output when Fable returns a terminal refusal", async () => {
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        {
+          contentBlockDelta: {
+            contentBlockIndex: 0,
+            delta: { text: "discard this partial output" },
+          },
+        },
+        {
+          messageStop: {
+            stopReason: "refusal",
+            additionalModelResponseFields: {
+              stop_details: {
+                category: "cyber",
+                explanation: "This request is not allowed.",
+              },
+            },
+          },
+        },
+      ]),
+    } as never);
+
+    const stream = streamSimpleBedrock(fableModel(), context());
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result.content).toEqual([]);
+    expect(result.errorMessage).toBe(
+      "Anthropic refusal (category: cyber): This request is not allowed.",
+    );
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        type: "provider_refusal",
+        details: {
+          provider: "amazon-bedrock",
+          category: "cyber",
+          explanation: "This request is not allowed.",
+        },
+      }),
+    ]);
+  });
+
+  it("discards partial output when the Fable stream ends without messageStop", async () => {
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        {
+          contentBlockDelta: {
+            contentBlockIndex: 0,
+            delta: { text: "unsafe partial output" },
+          },
+        },
+      ]),
+    } as never);
+
+    const stream = streamSimpleBedrock(fableModel(), context());
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result.content).toEqual([]);
+    expect(result.errorMessage).toContain("ended before messageStop");
+  });
+
+  it("reports activity while Fable events are buffered", async () => {
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        {
+          contentBlockDelta: {
+            contentBlockIndex: 0,
+            delta: { text: "buffered output" },
+          },
+        },
+        { messageStop: { stopReason: "end_turn" } },
+      ]),
+    } as never);
+    const controller = new AbortController();
+    let activityCount = 0;
+    const unsubscribe = onLlmRequestActivity(controller.signal, () => {
+      activityCount += 1;
+    });
+
+    try {
+      const stream = streamSimpleBedrock(fableModel(), context(), {
+        signal: controller.signal,
+      });
+      await stream.result();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(activityCount).toBeGreaterThan(0);
   });
 });

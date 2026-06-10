@@ -1,10 +1,7 @@
 // Model-bound thinking cannot be exposed or replayed after a model switch.
+import { resolveClaudeFable5ModelIdentity } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-
-type ClaudeModelRef = {
-  id?: string;
-  params?: Record<string, unknown>;
-};
+export { resolveClaudeFable5ModelIdentity } from "@openclaw/llm-core";
 
 type ReplayModelRef = {
   provider?: string;
@@ -22,16 +19,6 @@ function normalizeModelId(modelId?: string): string {
   return unprefixed.replace(/[._\s]+/g, "-");
 }
 
-export function resolveClaudeFable5ModelIdentity(ref: ClaudeModelRef): string | undefined {
-  const configuredCanonicalModelId =
-    typeof ref.params?.canonicalModelId === "string" ? ref.params.canonicalModelId : undefined;
-  const normalized = normalizeModelId(configuredCanonicalModelId ?? ref.id);
-  if (normalized.startsWith("claude-fable-5")) {
-    return normalized;
-  }
-  return undefined;
-}
-
 function normalizeApi(api?: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(api);
   return normalized === "openclaw-anthropic-messages-transport" ? "anthropic-messages" : normalized;
@@ -44,9 +31,11 @@ function hasConcreteResponseModel(ref: ReplayModelRef): boolean {
   return responseModelId.length > 0 && responseModelId !== normalizeModelId(ref.modelId);
 }
 
-export function usesClaudeFable5MessagesContract(
-  model: ClaudeModelRef & { api?: string },
-): boolean {
+export function usesClaudeFable5MessagesContract(model: {
+  id?: string;
+  params?: Record<string, unknown>;
+  api?: string;
+}): boolean {
   return (
     normalizeApi(model.api) === "anthropic-messages" &&
     resolveClaudeFable5ModelIdentity(model) !== undefined

@@ -27,6 +27,7 @@ export type {
   ModelApi,
   ModelProviderDeclarationConfig as ModelProviderConfig,
 } from "../config/types.models.js";
+export { resolveClaudeFable5ModelIdentity } from "@openclaw/llm-core";
 export type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogKind,

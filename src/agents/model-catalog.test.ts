@@ -496,6 +496,28 @@ describe("loadModelCatalog", () => {
     });
   });
 
+  it("preserves runtime model params in the internal catalog", async () => {
+    mockAgentDiscoveryModels([
+      {
+        id: "company-fable",
+        name: "Company Fable",
+        provider: "amazon-bedrock",
+        params: { canonicalModelId: "claude-fable-5" },
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    expect(result).toEqual([
+      {
+        id: "company-fable",
+        name: "Company Fable",
+        provider: "amazon-bedrock",
+        params: { canonicalModelId: "claude-fable-5" },
+      },
+    ]);
+  });
+
   it("writes runtime discovery results under the refreshed models.json fingerprint", async () => {
     buildModelsJsonSourceFingerprintMock.mockResolvedValue({
       agentDir: "/tmp/openclaw",

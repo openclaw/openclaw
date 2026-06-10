@@ -10,6 +10,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
   normalizeProviderId,
+  resolveClaudeFable5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
@@ -103,9 +104,17 @@ function createBedrockServiceTierWrapper(
 }
 
 function createGuardrailWrapStreamFn(
-  innerWrapStreamFn: (ctx: { modelId: string; streamFn?: StreamFn }) => StreamFn | null | undefined,
+  innerWrapStreamFn: (ctx: {
+    modelId: string;
+    model?: { params?: Record<string, unknown> };
+    streamFn?: StreamFn;
+  }) => StreamFn | null | undefined,
   guardrailConfig: GuardrailConfig,
-): (ctx: { modelId: string; streamFn?: StreamFn }) => StreamFn | null | undefined {
+): (ctx: {
+  modelId: string;
+  model?: { params?: Record<string, unknown> };
+  streamFn?: StreamFn;
+}) => StreamFn | null | undefined {
   return (ctx) => {
     const inner = innerWrapStreamFn(ctx);
     if (!inner) {
@@ -382,8 +391,19 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
 
   api.registerMemoryEmbeddingProvider(bedrockMemoryEmbeddingProviderAdapter);
 
-  const baseWrapStreamFn = ({ modelId, streamFn }: { modelId: string; streamFn?: StreamFn }) => {
-    if (isAnthropicBedrockModel(modelId)) {
+  const baseWrapStreamFn = ({
+    modelId,
+    model,
+    streamFn,
+  }: {
+    modelId: string;
+    model?: { params?: Record<string, unknown> };
+    streamFn?: StreamFn;
+  }) => {
+    if (
+      isAnthropicBedrockModel(modelId) ||
+      resolveClaudeFable5ModelIdentity({ id: modelId, params: model?.params })
+    ) {
       return streamFn;
     }
     // For app inference profiles with opaque IDs, don't force cacheRetention: "none"
@@ -394,11 +414,15 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     return createBedrockNoCacheWrapper(streamFn);
   };
 
-  function omitDeprecatedOpus47Temperature<TOptions extends object>(
-    modelId: string,
+  function omitUnsupportedClaudeTemperature<TOptions extends object>(
+    modelRef: { id: string; params?: Record<string, unknown> },
     options: TOptions,
   ): TOptions {
-    if (!isOpus47OrNewerBedrockModelRef(modelId) || !("temperature" in options)) {
+    if (
+      (!isOpus47OrNewerBedrockModelRef(modelRef.id) &&
+        !resolveClaudeFable5ModelIdentity(modelRef)) ||
+      !("temperature" in options)
+    ) {
       return options;
     }
     const next = { ...options } as typeof options & { temperature?: unknown };
@@ -406,7 +430,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     return next;
   }
 
-  function omitDeprecatedOpus47PayloadTemperature(payload: Record<string, unknown>): void {
+  function omitUnsupportedClaudePayloadTemperature(payload: Record<string, unknown>): void {
     const inferenceConfig = payload.inferenceConfig;
     if (!inferenceConfig || typeof inferenceConfig !== "object") {
       return;
@@ -505,16 +529,29 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     wrapStreamFn: ({ modelId, config, model, streamFn, thinkingLevel, extraParams }) => {
       const currentPluginConfig = resolveCurrentPluginConfig(config);
       const currentGuardrail = currentPluginConfig?.guardrail;
+      const modelRef = { id: modelId, params: model?.params };
+      const fable5 = resolveClaudeFable5ModelIdentity(modelRef) !== undefined;
       let wrapped =
         (currentGuardrail?.guardrailIdentifier && currentGuardrail?.guardrailVersion
-          ? createGuardrailWrapStreamFn(baseWrapStreamFn, currentGuardrail)({ modelId, streamFn })
-          : baseWrapStreamFn({ modelId, streamFn })) ?? undefined;
+          ? createGuardrailWrapStreamFn(
+              baseWrapStreamFn,
+              currentGuardrail,
+            )({
+              modelId,
+              model,
+              streamFn,
+            })
+          : baseWrapStreamFn({ modelId, model, streamFn })) ?? undefined;
 
       const serviceTier = resolveBedrockServiceTier(extraParams, (message) =>
         api.logger.warn(message),
       );
       if (serviceTier && wrapped) {
-        wrapped = createBedrockServiceTierWrapper(wrapped, serviceTier);
+        if (fable5 && serviceTier !== "default") {
+          api.logger.warn(`ignoring unsupported Fable 5 Bedrock service tier: ${serviceTier}`);
+        } else {
+          wrapped = createBedrockServiceTierWrapper(wrapped, serviceTier);
+        }
       }
 
       const region =
@@ -523,8 +560,9 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         currentPluginConfig?.discovery?.region;
       const mayNeedCacheInjection =
         isBedrockAppInferenceProfile(modelId) && !sharedRuntimeWouldInjectCachePoints(modelId);
-      const shouldOmitTemperature = isOpus47OrNewerBedrockModelRef(modelId);
-      const shouldPatchMaxThinking = shouldOmitTemperature && thinkingLevel === "max";
+      const shouldOmitTemperature = isOpus47OrNewerBedrockModelRef(modelId) || fable5;
+      const shouldPatchMaxThinking =
+        isOpus47OrNewerBedrockModelRef(modelId) && thinkingLevel === "max";
 
       // For known Anthropic models (heuristic match), enable injection immediately.
       // For opaque profile IDs, we'll resolve via GetInferenceProfile on first call.
@@ -539,8 +577,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         return wrapped;
       }
       return (streamModel, context, options) => {
-        const merged = omitDeprecatedOpus47Temperature(
-          modelId,
+        const merged = omitUnsupportedClaudeTemperature(
+          modelRef,
           Object.assign({}, options, region ? { region } : {}),
         );
 
@@ -560,7 +598,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
                       if (payload && typeof payload === "object") {
                         const payloadRecord = payload as Record<string, unknown>;
                         patchOpus47MaxThinkingEffort(payloadRecord);
-                        omitDeprecatedOpus47PayloadTemperature(payloadRecord);
+                        omitUnsupportedClaudePayloadTemperature(payloadRecord);
                       }
                       return originalOnPayload?.(payload, payloadModel);
                     },
@@ -597,11 +635,11 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
                     patchOpus47MaxThinkingEffort(payloadRecord);
                   }
                   if (shouldOmitTemperature) {
-                    omitDeprecatedOpus47PayloadTemperature(payloadRecord);
+                    omitUnsupportedClaudePayloadTemperature(payloadRecord);
                   } else if (mayNeedTemperatureTrait) {
                     const traits = await resolveAppProfileTraits(modelId, region);
                     if (traits.omitTemperature) {
-                      omitDeprecatedOpus47PayloadTemperature(payloadRecord);
+                      omitUnsupportedClaudePayloadTemperature(payloadRecord);
                     }
                   }
                 }
@@ -629,7 +667,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
                   patchOpus47MaxThinkingEffort(payloadRecord);
                 }
                 if (traits.omitTemperature) {
-                  omitDeprecatedOpus47PayloadTemperature(payloadRecord);
+                  omitUnsupportedClaudePayloadTemperature(payloadRecord);
                 }
               }
               return originalOnPayload?.(payload, payloadModel);
@@ -652,6 +690,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       }
       return undefined;
     },
-    resolveThinkingProfile: ({ modelId }) => resolveBedrockClaudeThinkingProfile(modelId),
+    resolveThinkingProfile: ({ modelId, params }) =>
+      resolveBedrockClaudeThinkingProfile(modelId, params),
   });
 }

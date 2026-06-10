@@ -68,6 +68,7 @@ type DiscoveredModel = {
   contextTokens?: number;
   reasoning?: boolean;
   input?: ModelInputType[];
+  params?: ModelCatalogEntry["params"];
   compat?: ModelCatalogEntry["compat"];
 };
 
@@ -159,16 +160,31 @@ function mergeCatalogCompat(
   return { ...base, ...override };
 }
 
+function mergeCatalogParams(
+  base: ModelCatalogEntry["params"] | undefined,
+  override: ModelCatalogEntry["params"] | undefined,
+): ModelCatalogEntry["params"] | undefined {
+  if (!base) {
+    return override;
+  }
+  if (!override) {
+    return base;
+  }
+  return { ...base, ...override };
+}
+
 function overlayCatalogMetadata(
   base: ModelCatalogEntry,
   overlay: ModelCatalogEntry,
 ): ModelCatalogEntry {
+  const params = mergeCatalogParams(base.params, overlay.params);
   return {
     ...base,
     ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
     ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
     ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),
     ...(overlay.input !== undefined ? { input: overlay.input } : {}),
+    ...(params ? { params } : {}),
     compat: mergeCatalogCompat(base.compat, overlay.compat),
   };
 }
@@ -313,6 +329,10 @@ function normalizePersistedModelCatalogEntry(
     entry?.compat && typeof entry.compat === "object"
       ? (entry.compat as ModelCatalogEntry["compat"])
       : undefined;
+  const modelParams =
+    entry?.params && typeof entry.params === "object"
+      ? (entry.params as ModelCatalogEntry["params"])
+      : undefined;
   return {
     id,
     name,
@@ -321,6 +341,7 @@ function normalizePersistedModelCatalogEntry(
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     reasoning,
     input,
+    ...(modelParams ? { params: modelParams } : {}),
     compat,
   };
 }
@@ -645,6 +666,8 @@ export async function loadModelCatalog(params?: {
             : undefined;
         const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
+        const modelParams =
+          entry?.params && typeof entry.params === "object" ? entry.params : undefined;
         const compat = entry?.compat && typeof entry.compat === "object" ? entry.compat : undefined;
         models.push({
           id,
@@ -654,6 +677,7 @@ export async function loadModelCatalog(params?: {
           ...(contextTokens !== undefined ? { contextTokens } : {}),
           reasoning,
           input,
+          ...(modelParams ? { params: modelParams } : {}),
           compat,
         });
       }

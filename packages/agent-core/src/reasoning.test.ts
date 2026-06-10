@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { Model } from "../../llm-core/src/index.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 
-function makeModel(thinkingLevelMap?: Model["thinkingLevelMap"]): Model {
+function makeModel(
+  thinkingLevelMap?: Model["thinkingLevelMap"],
+  overrides: Partial<Model> = {},
+): Model {
   return {
     id: "test-model",
     name: "Test Model",
@@ -15,6 +18,7 @@ function makeModel(thinkingLevelMap?: Model["thinkingLevelMap"]): Model {
     contextWindow: 1000,
     maxTokens: 100,
     thinkingLevelMap,
+    ...overrides,
   };
 }
 
@@ -30,4 +34,20 @@ describe("resolveAgentReasoningOption", () => {
   it("preserves enabled thinking levels", () => {
     expect(resolveAgentReasoningOption(makeModel({ off: "low" }), "high")).toBe("high");
   });
+
+  it.each(["anthropic-messages", "bedrock-converse-stream"] as const)(
+    "maps explicit off to low for canonical Fable aliases on %s",
+    (api) => {
+      expect(
+        resolveAgentReasoningOption(
+          makeModel(undefined, {
+            id: "production-deployment",
+            api,
+            params: { canonicalModelId: "claude-fable-5" },
+          }),
+          "off",
+        ),
+      ).toBe("low");
+    },
+  );
 });
