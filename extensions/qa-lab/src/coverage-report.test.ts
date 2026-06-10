@@ -429,7 +429,7 @@ describe("qa coverage report", () => {
     ]);
   });
 
-  it("reports retired profile names without accepting them as current profiles", () => {
+  it("reports category profile refs missing from top-level mapping profiles", () => {
     const taxonomy = parseQaScorecardTaxonomy({
       version: 1,
       id: "test-taxonomy",
@@ -440,14 +440,7 @@ describe("qa coverage report", () => {
       mappingAuthority: "scaffold",
       mappingOwner: "maturity-scorecard-maintainers",
       reportOnly: true,
-      profiles: [
-        ...testScorecardProfiles(TEST_EXECUTABLE_CATEGORY_ID, "release"),
-        {
-          id: "extended",
-          description: "Retired profile.",
-          categoryIds: [TEST_EXECUTABLE_CATEGORY_ID],
-        },
-      ],
+      profiles: [...testScorecardProfiles(TEST_EXECUTABLE_CATEGORY_ID, "release")],
       categories: [
         {
           id: TEST_EXECUTABLE_CATEGORY_ID,
@@ -455,10 +448,10 @@ describe("qa coverage report", () => {
           taxonomyCategoryName: "Agent Turn Execution",
           supportStatus: "lts-included",
           releaseBlocking: true,
-          requirement: "Only smoke-ci and release are current profiles.",
-          evidenceRequired: "Retired profile names should be reported.",
+          requirement: "Category profile refs must resolve to top-level mapping profiles.",
+          evidenceRequired: "Unknown profile refs should be reported.",
           evidence: {
-            profiles: ["release", "extended"],
+            profiles: ["release", "nightly"],
             liveProofRequired: false,
             freshness: "target-ref",
             coverageIds: ["channels.dm"],
@@ -476,13 +469,10 @@ describe("qa coverage report", () => {
       scenarios: readQaScenarioPack().scenarios,
     });
 
-    expect(report.validationIssues.map((issue) => issue.code)).toEqual([
-      "unsupported-profile-name",
-      "unsupported-profile-name",
-    ]);
+    expect(report.validationIssues.map((issue) => issue.code)).toEqual(["profile-ref-not-found"]);
   });
 
-  it("does not count retired profiles as runnable category membership", () => {
+  it("counts declared custom profiles as runnable category membership", () => {
     const taxonomy = parseQaScorecardTaxonomy({
       version: 1,
       id: "test-taxonomy",
@@ -496,8 +486,8 @@ describe("qa coverage report", () => {
       profiles: [
         ...testScorecardProfiles(TEST_EXECUTABLE_CATEGORY_ID, "none"),
         {
-          id: "extended",
-          description: "Retired profile.",
+          id: "nightly",
+          description: "Nightly mapped profile.",
           categoryIds: [TEST_EXECUTABLE_CATEGORY_ID],
         },
       ],
@@ -508,10 +498,10 @@ describe("qa coverage report", () => {
           taxonomyCategoryName: "Agent Turn Execution",
           supportStatus: "deferred",
           releaseBlocking: false,
-          requirement: "Retired profile names must not satisfy current runnable coverage.",
-          evidenceRequired: "Only smoke-ci or release should count as runnable profile proof.",
+          requirement: "Declared profile names can satisfy runnable coverage.",
+          evidenceRequired: "Profile names come from taxonomy-mappings.yaml.",
           evidence: {
-            profiles: ["extended"],
+            profiles: ["nightly"],
             liveProofRequired: false,
             freshness: "target-ref",
             coverageIds: ["channels.dm"],
@@ -529,11 +519,7 @@ describe("qa coverage report", () => {
       scenarios: readQaScenarioPack().scenarios,
     });
 
-    expect(report.validationIssues.map((issue) => issue.code)).toEqual([
-      "unsupported-profile-name",
-      "unsupported-profile-name",
-      "non-advisory-category-missing-profile-membership",
-    ]);
+    expect(report.validationIssues).toStrictEqual([]);
   });
 
   it("rejects taxonomy refs outside the repository", () => {

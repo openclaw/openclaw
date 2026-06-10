@@ -8,22 +8,6 @@ import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 export const QA_SCORECARD_TAXONOMY_PATH = "taxonomy-mappings.yaml";
 export const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
 
-const QA_SCORECARD_PROFILE_IDS = ["smoke-ci", "release"] as const;
-const QA_SCORECARD_RETIRED_PROFILE_IDS = new Set([
-  "core",
-  "full",
-  "extended",
-  "soak",
-  "manual",
-  "advisory",
-]);
-
-function isQaScorecardProfileId(
-  profileId: string,
-): profileId is (typeof QA_SCORECARD_PROFILE_IDS)[number] {
-  return QA_SCORECARD_PROFILE_IDS.includes(profileId as (typeof QA_SCORECARD_PROFILE_IDS)[number]);
-}
-
 const qaScorecardIdSchema = z
   .string()
   .trim()
@@ -131,16 +115,6 @@ const qaScorecardTaxonomySchema = z
       }
     }
 
-    for (const requiredProfileId of QA_SCORECARD_PROFILE_IDS) {
-      if (!seenProfileIds.has(requiredProfileId)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["profiles"],
-          message: `missing required scorecard profile id: ${requiredProfileId}`,
-        });
-      }
-    }
-
     const seenCategoryIds = new Set<string>();
     for (const [categoryIndex, category] of taxonomy.categories.entries()) {
       if (seenCategoryIds.has(category.id)) {
@@ -217,7 +191,7 @@ export type QaScorecardValidationIssueCode =
   | "non-advisory-category-missing-profile-membership"
   | "release-blocking-category-missing-release-profile"
   | "advisory-category-has-profile-membership"
-  | "unsupported-profile-name"
+  | "profile-ref-not-found"
   | "category-profile-missing-top-level-membership"
   | "profile-membership-missing-category-profile"
   | "taxonomy-fixture-not-found";
@@ -474,6 +448,7 @@ export function buildQaScorecardTaxonomyReport(params: {
   const mappedCoverageIds = new Set<string>();
   const mappedScenarioRefs = new Set<string>();
   const categoryIds = new Set(params.taxonomy.categories.map((category) => category.id));
+  const profileIds = new Set(params.taxonomy.profiles.map((profile) => profile.id));
   const maturityTaxonomy = readQaMaturityTaxonomy(
     params.repoRoot,
     params.taxonomy.taxonomy.sourcePath,
@@ -481,18 +456,6 @@ export function buildQaScorecardTaxonomyReport(params: {
   const maturityCategoryKeys = buildMaturityCategoryKeys(maturityTaxonomy);
   const profileCategoryIdsByCategoryId = new Map<string, Set<string>>();
   const profiles = params.taxonomy.profiles.map((profile) => {
-    const supportedProfile = isQaScorecardProfileId(profile.id);
-    if (!supportedProfile) {
-      issues.push({
-        code: "unsupported-profile-name",
-        severity: "warning",
-        ref: profile.id,
-        message: QA_SCORECARD_RETIRED_PROFILE_IDS.has(profile.id)
-          ? `${profile.id} is a retired scorecard profile name; use smoke-ci or release`
-          : `${profile.id} is not a supported scorecard profile; use smoke-ci or release`,
-      });
-    }
-
     for (const categoryId of profile.categoryIds) {
       if (!categoryIds.has(categoryId)) {
         issues.push({
@@ -501,9 +464,6 @@ export function buildQaScorecardTaxonomyReport(params: {
           ref: categoryId,
           message: `${profile.id} profile references missing executable scorecard category ${categoryId}`,
         });
-        continue;
-      }
-      if (!supportedProfile) {
         continue;
       }
       const profileIds = profileCategoryIdsByCategoryId.get(categoryId) ?? new Set<string>();
@@ -541,8 +501,8 @@ export function buildQaScorecardTaxonomyReport(params: {
     const missingCoverageIds: string[] = [];
     const missingScenarioRefs: string[] = [];
     const declaredProfileIds = new Set(category.evidence.profiles);
-    const supportedDeclaredProfileIds = new Set(
-      [...declaredProfileIds].filter(isQaScorecardProfileId),
+    const declaredKnownProfileIds = new Set(
+      [...declaredProfileIds].filter((profileId) => profileIds.has(profileId)),
     );
     const membershipProfileIds =
       profileCategoryIdsByCategoryId.get(category.id) ?? new Set<string>();
@@ -563,20 +523,18 @@ export function buildQaScorecardTaxonomyReport(params: {
     }
 
     for (const profileId of declaredProfileIds) {
-      const supportedProfile = isQaScorecardProfileId(profileId);
-      if (!supportedProfile) {
+      if (!profileIds.has(profileId)) {
         issues.push({
-          code: "unsupported-profile-name",
+          code: "profile-ref-not-found",
           severity: "warning",
           categoryId: category.id,
           ref: profileId,
-          message: QA_SCORECARD_RETIRED_PROFILE_IDS.has(profileId)
-            ? `${category.id} declares retired profile ${profileId}; use smoke-ci or release`
-            : `${category.id} declares unsupported profile ${profileId}; use smoke-ci or release`,
+          message: `${category.id} declares profile ${profileId}, but taxonomy-mappings.yaml has no matching top-level profile`,
         });
+        continue;
       }
 
-      if (supportedProfile && !membershipProfileIds.has(profileId)) {
+      if (!membershipProfileIds.has(profileId)) {
         issues.push({
           code: "category-profile-missing-top-level-membership",
           severity: "warning",
@@ -627,13 +585,13 @@ export function buildQaScorecardTaxonomyReport(params: {
     if (
       category.supportStatus !== "advisory" &&
       membershipProfileIds.size === 0 &&
-      supportedDeclaredProfileIds.size === 0
+      declaredKnownProfileIds.size === 0
     ) {
       issues.push({
         code: "non-advisory-category-missing-profile-membership",
         severity: "warning",
         categoryId: category.id,
-        message: `${category.id} is ${category.supportStatus} but has no runnable smoke-ci or release profile membership`,
+        message: `${category.id} is ${category.supportStatus} but has no runnable profile membership`,
       });
     }
 
