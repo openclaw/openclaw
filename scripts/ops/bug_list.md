@@ -43,11 +43,11 @@
 
 <!-- AUTOSCAN:START -->
 
-_Last automated scan: 2026-06-09 22:26:13 UTC · hosts:eu us_
+_Last automated scan: 2026-06-10 06:00:09 UTC · hosts:eu us_
 
 | Pri | Host | Agent      | Issue                    | Detail                                                                                                  |
 | --- | ---- | ---------- | ------------------------ | ------------------------------------------------------------------------------------------------------- |
-| P1  | us   | -          | Heavy swap usage         | 1475MiB swap in use; host is memory-pressured. Consider a RAM rescale.                                  |
+| P1  | us   | -          | Heavy swap usage         | 1478MiB swap in use; host is memory-pressured. Consider a RAM rescale.                                  |
 | P1  | us   | productguy | Auth/token failure (401) | 401/Unauthorized in logs — bot token or API key likely invalid.                                         |
 | P2  | us   | -          | No docker log rotation   | /etc/docker/daemon.json lacks max-size; container logs grow unbounded (disk-fill risk on a crash loop). |
 
