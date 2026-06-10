@@ -78,11 +78,11 @@ Each agent = its own `docker compose` project named after the agent. The gateway
 host port. Config lives at `/root/.openclaw/agents/<agent>/openclaw.json` with secrets in
 `/root/.openclaw/agents/<agent>/docker.env`.
 
-### EU (`89.167.70.46`) — 12 agents, all on `gateway:v2026.05.24.1`
+### EU (`89.167.70.46`) — 12 agents, all on `gateway:v2026.06.10.1`
 
 `braveisrael, cashtronics, my-pa, mystory, onlyclaw, researcher, specy, stillasystems, testingbot, thebook, tzahi1, wellwell` (mikyhelper + kycbot deleted; a `main` agent dir exists with no running container)
 
-### US (`5.161.84.219`) — 12 agents (image versions vary — see §10)
+### US (`5.161.84.219`) — 12 agents, all on `gateway:v2026.06.10.1` (drift resolved 2026-06-10)
 
 `agentav, bob-the-project-manager, designer, familyorganizer, gems, jim-the-ceo, life, projectmanager, raingame, social-bob, thebook, vcode1bot` (productguy deleted 2026-06-10 — invalid bot token)
 
@@ -220,6 +220,13 @@ prompts (`AGENTS.md` etc.), or infra/compose (`/opt/...`) — must, **as part of
 >   then `chown -R 1000:1000` the dir.
 > - **productguy (US) deleted 2026-06-10** (invalid Telegram token, 401 loop — stopped first,
 >   then removed by owner; verified no container/dir/volume remnants). US fleet = 12 agents.
+> - **channel-error-hardening delivered** (see docs/experiments/plans/channel-error-hardening.md
+>   addendum): gateway terminal-error circuit (openclaw#58) rolled fleet-wide as
+>   `v2026.06.10.1`; token validation at save (dashboard#115); hourly `gateway-watchdog.sh`
+>   cron (:17) on both hosts; diagnostic restart-delta/log-rate checks. ⚠️ B3 resource caps
+>   REVERTED — 1 GiB mem_limit OOM-cycled the EU fleet at boot; see compose comment before
+>   retrying. Release `v2026.06.10.1` (sourceSha 5ad5cd10c) NOT yet registered via
+>   /api/platform/releases (manual dashboard step).
 > - `diagnostic-cron.sh` now archives stale `*.bak` / `.archive-*` (>7 days) from
 >   `/opt/openclaw` on both hosts into `/root/openclaw-cruft-archive/<date>/` (never deletes;
 >   `soul.md` + `status/` untouched — soul.md seeds new agents' SOUL.md at deploy).
@@ -228,7 +235,8 @@ prompts (`AGENTS.md` etc.), or infra/compose (`/opt/...`) — must, **as part of
    (~3.4 GiB available after stopping the productguy loop + fixing the mcp-bridge crash-loops +
    full recreate); watch the daily AUTOSCAN — rescale only if `swap_used` stays >1 GiB. The
    US Graphiti stack still adds load on the smallest box (2 vCPU).
-2. **Image drift on US:** `designer`, `agentav`, `gems` run a **stale local image
+2. **Image drift on US — RESOLVED 2026-06-10:** fleet unified on `gateway:v2026.06.10.1`
+   (terminal-error circuit release). Superseded text: `designer`, `agentav`, `gems` run a **stale local image
    `openclaw:v2026.05.05.1`** (not from the registry); `raingame` `v2026.05.24.2`; `life`
    `v2026.06.01.1`; the rest `v2026.05.24.1`. EU is uniform on `v2026.05.24.1`. The fleet is
    not on a single version.
