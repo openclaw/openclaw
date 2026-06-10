@@ -121,6 +121,22 @@ describe("github-copilot model defaults", () => {
       });
     });
 
+    it("uses static metadata overrides for claude-opus-4.8 (native 1M + thinking)", () => {
+      const def = buildCopilotModelDefinition("claude-opus-4.8");
+      expect(def).toEqual({
+        id: "claude-opus-4.8",
+        name: "Claude Opus 4.8",
+        api: "anthropic-messages",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 64_000,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      });
+    });
+
     it("trims whitespace from model id", () => {
       const def = buildCopilotModelDefinition("  gpt-4o  ");
       expect(def.id).toBe("gpt-4o");
