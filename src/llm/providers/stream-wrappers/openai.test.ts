@@ -11,12 +11,18 @@ import {
   createCodexNativeWebSearchWrapper,
 } from "./openai.js";
 
-function createPayloadCapture(opts?: { initialReasoning?: unknown }) {
+function createPayloadCapture(opts?: {
+  initialReasoning?: unknown;
+  initialReasoningEffort?: string;
+}) {
   const payloads: Array<Record<string, unknown>> = [];
   const baseStreamFn: StreamFn = (model, context, options) => {
     const payload: Record<string, unknown> = { model: model.id };
     if (opts?.initialReasoning !== undefined) {
       payload.reasoning = structuredClone(opts.initialReasoning);
+    }
+    if (opts?.initialReasoningEffort !== undefined) {
+      payload.reasoning_effort = opts.initialReasoningEffort;
     }
     options?.onPayload?.(payload, model);
     payloads.push(structuredClone(payload));
@@ -36,6 +42,27 @@ const openaiModel = {
   provider: "openai",
   id: "gpt-5.2",
 } as Model<"openai-responses">;
+
+const lmstudioBinaryModel = {
+  api: "openai-completions",
+  provider: "lmstudio",
+  id: "google/gemma-4-26b-a4b-qat",
+  baseUrl: "http://127.0.0.1:1234/v1",
+  reasoning: true,
+  compat: {
+    supportsReasoningEffort: true,
+    supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+    reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
+  },
+} as unknown as Model<"openai-completions">;
+
+const lmstudioBareModel = {
+  api: "openai-completions",
+  provider: "lmstudio",
+  id: "qwen3-8b-instruct",
+  baseUrl: "http://127.0.0.1:1234/v1",
+  reasoning: true,
+} as unknown as Model<"openai-completions">;
 
 describe("createOpenAICompletionsToolsCompatWrapper", () => {
   it("strips tools fields when OpenAI-compatible models disable tool support", () => {
@@ -504,6 +531,55 @@ describe("createOpenAIThinkingLevelWrapper", () => {
     void wrapped(codexModel, { messages: [] }, {});
 
     expect(payloads[0]).not.toHaveProperty("reasoning");
+  });
+
+  it("maps completions reasoning_effort to the model's disabled value when thinkingLevel is off", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoningEffort: "high",
+    });
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "off");
+    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
+
+    expect(payloads[0]?.reasoning_effort).toBe("none");
+  });
+
+  it("drops completions reasoning_effort when thinkingLevel is off and the model has no disabled effort", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoningEffort: "high",
+    });
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "off");
+    void wrapped(lmstudioBareModel, { messages: [] }, {});
+
+    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("does not add completions reasoning_effort when thinkingLevel is off and none was sent", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture();
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "off");
+    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
+
+    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+    expect(payloads[0]).not.toHaveProperty("reasoning");
+  });
+
+  it("maps completions reasoning_effort to none when thinkingLevel is off on native OpenAI completions", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoning: { effort: "medium" },
+      initialReasoningEffort: "high",
+    });
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "off");
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-5.2",
+      } as Model<"openai-completions">,
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]).not.toHaveProperty("reasoning");
+    expect(payloads[0]?.reasoning_effort).toBe("none");
   });
 
   it("maps adaptive thinkingLevel to medium effort on reasoning-capable model", () => {
