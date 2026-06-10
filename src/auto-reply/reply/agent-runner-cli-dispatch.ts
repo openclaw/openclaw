@@ -8,9 +8,16 @@ import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { clearCliSession } from "../../agents/cli-session.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
+import {
+  DEFAULT_FAST_MODE_AUTO_ON_SECONDS,
+  formatFastModeAutoProgressText,
+  resolveFastModeForElapsed,
+  type FastModeAutoProgressState,
+} from "../../agents/fast-mode.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
 import { emitAgentEvent, onAgentEvent } from "../../infra/agent-events.js";
+import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payload.js";
 
 function shouldBridgeCliAssistantTextToReasoning(provider: string): boolean {
   return normalizeLowercaseStringOrEmpty(provider) === "claude-cli";
@@ -56,6 +63,20 @@ function createAgentEventBridge<T>(params: {
       await delivery;
     },
   };
+}
+
+type AgentEventBridge = {
+  unsubscribe: () => void;
+  drain: () => Promise<void>;
+};
+
+async function stopAgentEventBridges(bridges: readonly AgentEventBridge[]): Promise<void> {
+  for (const bridge of bridges) {
+    bridge.unsubscribe();
+  }
+  for (const bridge of bridges) {
+    await bridge.drain();
+  }
 }
 
 function createAssistantTextBridge(params: {
@@ -173,6 +194,25 @@ function createToolEventBridge(params: {
   });
 }
 
+function createToolBoundaryBridge(params: {
+  runId: string;
+  suppressed?: boolean;
+  deliver?: () => Promise<void>;
+}) {
+  return createAgentEventBridge({
+    runId: params.runId,
+    suppressed: params.suppressed,
+    deliver: params.deliver,
+    read: (evt) => {
+      if (evt.stream !== "tool") {
+        return undefined;
+      }
+      const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+      return ["completed", "end", "error", "result"].includes(phase) ? true : undefined;
+    },
+  });
+}
+
 export async function runCliAgentWithLifecycle(params: {
   runId: string;
   provider: string;
@@ -185,10 +225,71 @@ export async function runCliAgentWithLifecycle(params: {
   onAssistantText?: (text: string) => Promise<void>;
   onReasoningText?: (text: string) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
+  onFastModeAutoProgress?: (payload: ReplyPayload) => Promise<void>;
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
   transformResult?: (result: EmbeddedAgentRunResult) => EmbeddedAgentRunResult;
 }): Promise<EmbeddedAgentRunResult> {
   const startedAt = params.startedAt ?? Date.now();
+  const fastModeStartedAtMs = params.runParams.fastModeStartedAtMs ?? startedAt;
+  const fastModeAutoOnSeconds =
+    params.runParams.fastModeAutoOnSeconds ?? DEFAULT_FAST_MODE_AUTO_ON_SECONDS;
+  const fastModeAutoProgressState: FastModeAutoProgressState = params.runParams
+    .fastModeAutoProgressState ?? {
+    offAnnounced: false,
+    resetAnnounced: false,
+  };
+  const emitFastModeAutoProgress = async (payload: {
+    enabled: boolean;
+    elapsedSeconds: number;
+    fastAutoOnSeconds?: number;
+  }) => {
+    const summary = formatFastModeAutoProgressText(payload);
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "item",
+      data: {
+        kind: "status",
+        title: "Fast",
+        phase: "update",
+        summary,
+      },
+      ...(params.runParams.sessionKey ? { sessionKey: params.runParams.sessionKey } : {}),
+    });
+    try {
+      await params.onFastModeAutoProgress?.({
+        text: summary,
+        channelData: { openclawProgressKind: FAST_MODE_AUTO_PROGRESS_KIND },
+      });
+    } catch {
+      // Progress hints are best-effort; a channel failure must not fail the agent turn.
+    }
+  };
+  const maybeAnnounceFastModeAutoOff = async () => {
+    if (params.runParams.fastMode !== "auto" || fastModeAutoProgressState.offAnnounced) {
+      return;
+    }
+    const next = resolveFastModeForElapsed({
+      mode: "auto",
+      startedAtMs: fastModeStartedAtMs,
+      fastAutoOnSeconds: fastModeAutoOnSeconds,
+    });
+    if (next.enabled) {
+      return;
+    }
+    fastModeAutoProgressState.offAnnounced = true;
+    await emitFastModeAutoProgress(next);
+  };
+  const maybeEmitFastModeAutoReset = async () => {
+    if (!fastModeAutoProgressState.offAnnounced || fastModeAutoProgressState.resetAnnounced) {
+      return;
+    }
+    fastModeAutoProgressState.resetAnnounced = true;
+    await emitFastModeAutoProgress({
+      enabled: true,
+      elapsedSeconds: 0,
+      fastAutoOnSeconds: fastModeAutoOnSeconds,
+    });
+  };
   const emitLifecycleStart = params.emitLifecycleStart ?? true;
   const emitLifecycleTerminal = params.emitLifecycleTerminal ?? true;
   params.onAgentRunStart?.();
@@ -219,16 +320,19 @@ export async function runCliAgentWithLifecycle(params: {
     suppressed: params.suppressAssistantBridge,
     deliver: params.onToolEvent,
   });
+  const toolBoundaryBridge = createToolBoundaryBridge({
+    runId: params.runId,
+    suppressed: params.suppressAssistantBridge,
+    deliver: maybeAnnounceFastModeAutoOff,
+  });
+  const bridges = [assistantBridge, reasoningBridge, toolBridge, toolBoundaryBridge].filter(
+    (bridge): bridge is AgentEventBridge => bridge !== undefined,
+  );
   let lifecycleTerminalEmitted = false;
   try {
     const rawResult = await runCliAgent(params.runParams);
     const result = params.transformResult?.(rawResult) ?? rawResult;
-    assistantBridge.unsubscribe();
-    reasoningBridge.unsubscribe();
-    toolBridge.unsubscribe();
-    await assistantBridge.drain();
-    await reasoningBridge.drain();
-    await toolBridge.drain();
+    await stopAgentEventBridges(bridges);
 
     const cliText = normalizeOptionalString(result.payloads?.[0]?.text);
     if (cliText) {
@@ -253,12 +357,7 @@ export async function runCliAgentWithLifecycle(params: {
     }
     return result;
   } catch (err) {
-    assistantBridge.unsubscribe();
-    reasoningBridge.unsubscribe();
-    toolBridge.unsubscribe();
-    await assistantBridge.drain();
-    await reasoningBridge.drain();
-    await toolBridge.drain();
+    await stopAgentEventBridges(bridges);
     await params.onErrorBeforeLifecycle?.(err);
     if (emitLifecycleTerminal) {
       emitAgentEvent({
@@ -275,9 +374,10 @@ export async function runCliAgentWithLifecycle(params: {
     }
     throw err;
   } finally {
-    assistantBridge.unsubscribe();
-    reasoningBridge.unsubscribe();
-    toolBridge.unsubscribe();
+    for (const bridge of bridges) {
+      bridge.unsubscribe();
+    }
+    await maybeEmitFastModeAutoReset();
     if (emitLifecycleTerminal && !lifecycleTerminalEmitted) {
       emitAgentEvent({
         runId: params.runId,

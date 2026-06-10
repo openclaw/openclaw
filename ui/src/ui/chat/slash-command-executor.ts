@@ -4,6 +4,10 @@
  */
 
 import {
+  formatFastModeCommandOptions,
+  formatFastModeCurrentStatus,
+} from "../../../../src/shared/fast-mode.js";
+import {
   createChatModelOverride,
   resolvePreferredServerChatModelValue,
 } from "../chat-model-ref.ts";
@@ -23,6 +27,7 @@ import type {
   ChatModelOverride,
   GatewaySessionRow,
   GatewayThinkingLevelOption,
+  FastMode,
   ModelCatalogEntry,
   SessionsListResult,
   SessionsPatchResult,
@@ -349,6 +354,19 @@ async function executeVerbose(
   }
 }
 
+function normalizeFastMode(raw: string): FastMode | undefined {
+  if (raw === "auto") {
+    return "auto";
+  }
+  if (raw === "on") {
+    return true;
+  }
+  if (raw === "off") {
+    return false;
+  }
+  return undefined;
+}
+
 async function executeFast(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -362,8 +380,10 @@ async function executeFast(
       const session = await loadCurrentSession(client, sessionKey);
       return {
         content: formatDirectiveOptions(
-          `Current fast mode: ${resolveCurrentFastMode(session)}.`,
-          "status, on, off, default",
+          resolveCurrentFastModeStatus(session),
+          formatFastModeCommandOptions({
+            fastAutoOnSeconds: session?.fastAutoOnSeconds,
+          }),
         ),
       };
     } catch (err) {
@@ -387,9 +407,10 @@ async function executeFast(
     }
   }
 
-  if (rawMode !== "on" && rawMode !== "off") {
+  const nextMode = normalizeFastMode(rawMode);
+  if (nextMode === undefined) {
     return {
-      content: `Unrecognized fast mode "${args.trim()}". Valid levels: status, on, off, default.`,
+      content: `Unrecognized fast mode "${args.trim()}". Valid levels: on, off, auto, default, status.`,
     };
   }
 
@@ -397,10 +418,13 @@ async function executeFast(
     await client.request("sessions.patch", {
       key: sessionKey,
       ...selectedGlobalScope(sessionKey, context),
-      fastMode: rawMode === "on",
+      fastMode: nextMode,
     });
     return {
-      content: `Fast mode ${rawMode === "on" ? "enabled" : "disabled"}.`,
+      content:
+        nextMode === "auto"
+          ? "Fast mode set to auto."
+          : `Fast mode ${nextMode ? "enabled" : "disabled"}.`,
       action: "refresh",
     };
   } catch (err) {
@@ -702,8 +726,13 @@ function resolveCurrentThinkingLevel(
   });
 }
 
-function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | "off" {
-  return session?.fastMode === true ? "on" : "off";
+function resolveCurrentFastModeStatus(session: GatewaySessionRow | undefined): string {
+  const mode = session?.effectiveFastMode ?? session?.fastMode;
+  return formatFastModeCurrentStatus({
+    mode,
+    source: session?.effectiveFastModeSource,
+    fastAutoOnSeconds: session?.fastAutoOnSeconds,
+  });
 }
 
 async function resolveSteerTarget(

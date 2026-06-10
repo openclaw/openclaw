@@ -2531,6 +2531,7 @@ export async function runEmbeddedAttempt(
         toolCount: effectiveTools.length,
         clientToolCount: clientToolDefs.length,
       });
+      const trajectoryFastMode = typeof params.fastMode === "boolean" ? params.fastMode : undefined;
       trajectoryRecorder?.recordEvent(
         "trace.metadata",
         buildTrajectoryRunMetadata({
@@ -2547,7 +2548,7 @@ export async function runEmbeddedAttempt(
           modelId: params.modelId,
           modelApi: params.model.api,
           timeoutMs: params.timeoutMs,
-          fastMode: params.fastMode,
+          fastMode: trajectoryFastMode,
           thinkLevel: params.thinkLevel,
           reasoningLevel: params.reasoningLevel,
           toolResultFormat: params.toolResultFormat,
@@ -3275,6 +3276,7 @@ export async function runEmbeddedAttempt(
           onAssistantMessageStart: params.onAssistantMessageStart,
           onExecutionPhase: params.onExecutionPhase,
           onAgentEvent: params.onAgentEvent,
+          onToolStreamBoundary: params.onToolStreamBoundary,
           terminalLifecyclePhase: params.deferTerminalLifecycleEnd ? "finishing" : "end",
           isTerminalAborted: () => aborted,
           onBeforeLifecycleTerminal: () => {

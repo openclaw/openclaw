@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelId,
@@ -21,6 +22,7 @@ import {
   selectApplicableRuntimeConfig,
   type OpenClawConfig,
 } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -196,6 +198,35 @@ export const resolveEnforceFinalTag = (
   provider: string,
   model = run.model,
 ) => resolveEnforceFinalTagWithResolver(run, provider, model, isReasoningTagProvider);
+
+/** Resolves candidate-scoped fast mode after model fallback changes provider/model. */
+export function resolveRunFastModeForFallbackCandidate(params: {
+  run: FollowupRun["run"];
+  config: OpenClawConfig;
+  provider: string;
+  model: string;
+  sessionEntry?: Pick<SessionEntry, "fastMode">;
+}) {
+  if (params.run.fastModeOverride) {
+    return {
+      fastMode: params.run.fastMode,
+      fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
+    };
+  }
+  const state = resolveFastModeState({
+    cfg: params.config,
+    provider: params.provider,
+    model: params.model,
+    agentId: params.run.agentId,
+    sessionEntry: params.sessionEntry,
+  });
+  return {
+    fastMode: state.mode,
+    fastModeAutoOnSeconds: params.run.fastModeAutoOnSecondsOverride
+      ? params.run.fastModeAutoOnSeconds
+      : state.fastAutoOnSeconds,
+  };
+}
 
 /** Builds base embedded run params with auth and provider runtime hints. */
 export function buildEmbeddedRunBaseParams(

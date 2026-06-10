@@ -314,6 +314,13 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/chat/session-controls.ts",
+      "text": "Auto"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/chat/session-controls.ts",
       "text": "Default"
     },
     {
@@ -3646,13 +3653,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/cron.ts",
-      "text": "Command"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/cron.ts",
       "text": "Consecutive errors before alerting."
     },
     {
@@ -3668,13 +3668,6 @@
       "name": "text",
       "path": "ui/src/ui/views/cron.ts",
       "text": "Custom per-job settings"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/cron.ts",
-      "text": "CWD"
     },
     {
       "count": 1,

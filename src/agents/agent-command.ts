@@ -1693,6 +1693,7 @@ async function agentCommandInternal(
 
         let fallbackAttemptIndex = 0;
         attemptLifecycleState.currentTurnUserMessagePersisted = false;
+        const fastModeStartedAtMs = Date.now();
         const fallbackResult = await runWithModelFallback<AgentAttemptResult>({
           cfg,
           provider,
@@ -1752,6 +1753,14 @@ async function agentCommandInternal(
               provider: providerOverride,
               model: modelOverride,
             });
+            const fastModeState = resolveFastModeState({
+              cfg,
+              provider: providerOverride,
+              model: modelOverride,
+              agentId: sessionAgentId,
+              sessionEntry,
+            });
+            const fastMode = opts.fastMode ?? fastModeState.mode;
             return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
@@ -1768,13 +1777,12 @@ async function agentCommandInternal(
               body,
               isFallbackRetry,
               resolvedThinkLevel,
-              fastMode: resolveFastModeState({
-                cfg,
-                provider: providerOverride,
-                model: modelOverride,
-                agentId: sessionAgentId,
-                sessionEntry,
-              }).enabled,
+              fastMode,
+              fastModeStartedAtMs,
+              fastModeAutoOnSeconds:
+                fastMode === "auto"
+                  ? (opts.fastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds)
+                  : fastModeState.fastAutoOnSeconds,
               timeoutMs,
               runId,
               opts,

@@ -4,14 +4,21 @@ import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
   const resolveEffectiveModelFallbacksMock = vi.fn();
+  const resolveAgentConfigMock = vi.fn();
   const getChannelPluginMock = vi.fn();
   const isReasoningTagProviderMock = vi.fn();
-  return { resolveEffectiveModelFallbacksMock, getChannelPluginMock, isReasoningTagProviderMock };
+  return {
+    resolveEffectiveModelFallbacksMock,
+    resolveAgentConfigMock,
+    getChannelPluginMock,
+    isReasoningTagProviderMock,
+  };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveEffectiveModelFallbacks: (...args: unknown[]) =>
     hoisted.resolveEffectiveModelFallbacksMock(...args),
+  resolveAgentConfig: (...args: unknown[]) => hoisted.resolveAgentConfigMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -29,6 +36,7 @@ const {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
   resolveEnforceFinalTag,
+  resolveRunFastModeForFallbackCandidate,
   resolveProviderScopedAuthProfile,
 } = await import("./agent-runner-utils.js");
 
@@ -59,6 +67,7 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 describe("agent-runner-utils", () => {
   beforeEach(() => {
     hoisted.resolveEffectiveModelFallbacksMock.mockClear();
+    hoisted.resolveAgentConfigMock.mockReset();
     hoisted.getChannelPluginMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReturnValue(false);
@@ -126,8 +135,96 @@ describe("agent-runner-utils", () => {
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
   });
 
+  it("recomputes fast mode for fallback candidate model config", () => {
+    const run = makeRun({
+      fastMode: "auto",
+      fastModeAutoOnSeconds: 30,
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+              "anthropic/claude-sonnet-4-6": {
+                params: { fastMode: false, fastAutoOnSeconds: 45 },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveRunFastModeForFallbackCandidate({
+      run,
+      config: run.config,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+
+    expect(resolved).toEqual({ fastMode: false, fastModeAutoOnSeconds: 45 });
+  });
+
+  it("preserves explicit one-turn fast mode for fallback candidates", () => {
+    const run = makeRun({
+      fastMode: "auto",
+      fastModeAutoOnSeconds: 30,
+      fastModeOverride: true,
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {
+                params: { fastMode: false, fastAutoOnSeconds: 45 },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveRunFastModeForFallbackCandidate({
+      run,
+      config: run.config,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+
+    expect(resolved).toEqual({ fastMode: "auto", fastModeAutoOnSeconds: 30 });
+  });
+
+  it("recomputes fallback fast mode while preserving explicit auto cutoff", () => {
+    const run = makeRun({
+      fastMode: "auto",
+      fastModeAutoOnSeconds: 30,
+      fastModeAutoOnSecondsOverride: true,
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {
+                params: { fastMode: false, fastAutoOnSeconds: 45 },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveRunFastModeForFallbackCandidate({
+      run,
+      config: run.config,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+
+    expect(resolved).toEqual({ fastMode: false, fastModeAutoOnSeconds: 30 });
+  });
+
   it("builds embedded run base params with auth profile and run metadata", () => {
-    const run = makeRun({ enforceFinalTag: true, cwd: "/tmp/task-repo" });
+    const run = makeRun({
+      enforceFinalTag: true,
+      cwd: "/tmp/task-repo",
+      fastMode: "auto",
+    });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
       primaryProvider: "openai",
@@ -157,6 +254,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.authProfileId).toBe("profile-openai");
     expect(resolved.authProfileIdSource).toBe("user");
     expect(resolved.thinkLevel).toBe(run.thinkLevel);
+    expect(resolved.fastMode).toBe("auto");
     expect(resolved.verboseLevel).toBe(run.verboseLevel);
     expect(resolved.reasoningLevel).toBe(run.reasoningLevel);
     expect(resolved.execOverrides).toBe(run.execOverrides);
