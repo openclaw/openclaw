@@ -1294,8 +1294,10 @@ export class MsteamsProvider implements VoiceCallProvider {
   async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
     // Status is driven by the WS lifecycle, not by webhook polling. Report
     // active while a session exists; otherwise treat as terminal so the
-    // manager can reap stale persisted entries on restart.
-    if (this.calls.has(input.providerCallId)) {
+    // manager can reap stale persisted entries on restart. Outbound realtime
+    // calls live only in `realtimeCalls` (no streaming `calls` entry), so check
+    // both — else an active realtime callback is reaped as terminal on restore.
+    if (this.calls.has(input.providerCallId) || this.realtimeCalls.has(input.providerCallId)) {
       return { status: "in-progress", isTerminal: false };
     }
     return { status: "completed", isTerminal: true };
