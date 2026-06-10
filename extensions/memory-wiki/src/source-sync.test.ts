@@ -144,6 +144,52 @@ describe("syncMemoryWikiImportedSources", () => {
     expect(secondResult).toEqual(firstResult);
   });
 
+  it("keeps concurrent bridge syncs separate when default workspaces differ", async () => {
+    const config = createBridgeConfig();
+    const firstAppConfig = {
+      agents: {
+        defaults: { workspace: "/tmp/memory-wiki-source-sync-workspace-a" },
+        list: [{ id: "main", default: true }],
+      },
+    } as Parameters<typeof syncMemoryWikiImportedSources>[0]["appConfig"];
+    const secondAppConfig = {
+      agents: {
+        defaults: { workspace: "/tmp/memory-wiki-source-sync-workspace-b" },
+        list: [{ id: "main", default: true }],
+      },
+    } as Parameters<typeof syncMemoryWikiImportedSources>[0]["appConfig"];
+    const firstBridgeResult = { ...bridgeResult, pagePaths: ["sources/a.md"] };
+    const secondBridgeResult = { ...bridgeResult, pagePaths: ["sources/b.md"] };
+    let resolveFirstBridge!: (value: typeof firstBridgeResult) => void;
+    let resolveSecondBridge!: (value: typeof secondBridgeResult) => void;
+    syncBridgeMock
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFirstBridge = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveSecondBridge = resolve;
+        }),
+      );
+
+    const first = syncMemoryWikiImportedSources({ config, appConfig: firstAppConfig });
+    const second = syncMemoryWikiImportedSources({ config, appConfig: secondAppConfig });
+
+    expect(syncBridgeMock).toHaveBeenCalledTimes(2);
+    expect(syncBridgeMock).toHaveBeenNthCalledWith(1, { config, appConfig: firstAppConfig });
+    expect(syncBridgeMock).toHaveBeenNthCalledWith(2, { config, appConfig: secondAppConfig });
+
+    resolveFirstBridge(firstBridgeResult);
+    resolveSecondBridge(secondBridgeResult);
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(refreshIndexesMock).toHaveBeenCalledTimes(2);
+    expect(firstResult.pagePaths).toEqual(["sources/a.md"]);
+    expect(secondResult.pagePaths).toEqual(["sources/b.md"]);
+  });
+
   it("routes unsafe-local mode through unsafe-local sync", async () => {
     const unsafeLocalResult = {
       ...bridgeResult,
