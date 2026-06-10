@@ -774,9 +774,19 @@ describe("startGatewayPostAttachRuntime", () => {
     ).toEqual({ mode: "off" });
     expect(
       testing.resolveGatewayMemoryStartupPolicy({
-        memory: { backend: "qmd", qmd: { update: { startup: "immediate", onBoot: false } } },
+        memory: {
+          backend: "qmd",
+          qmd: {
+            update: { startup: "immediate", onBoot: false, interval: "0s", embedInterval: "0s" },
+          },
+        },
       } as never),
     ).toEqual({ mode: "off" });
+    expect(
+      testing.resolveGatewayMemoryStartupPolicy({
+        memory: { backend: "qmd", qmd: { update: { startup: "immediate", onBoot: false } } },
+      } as never),
+    ).toEqual({ mode: "immediate" });
   });
 
   it("starts the qmd memory backend when startup refresh is immediate", async () => {
@@ -785,6 +795,23 @@ describe("startGatewayPostAttachRuntime", () => {
       gatewayPluginConfigAtStart: {
         hooks: { internal: { enabled: false } },
         memory: { backend: "qmd", qmd: { update: { startup: "immediate" } } },
+      } as never,
+    });
+
+    await vi.waitFor(() => {
+      expect(hoisted.startGatewayMemoryBackend).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("starts the qmd memory backend for interval maintenance when boot refresh is disabled", async () => {
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      gatewayPluginConfigAtStart: {
+        hooks: { internal: { enabled: false } },
+        memory: {
+          backend: "qmd",
+          qmd: { update: { startup: "immediate", onBoot: false, interval: "5m" } },
+        },
       } as never,
     });
 

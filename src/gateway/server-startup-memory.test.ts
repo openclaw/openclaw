@@ -48,6 +48,13 @@ async function startQmdBackendWithManager(cfg: OpenClawConfig) {
   return await startMemoryBackendForTest(cfg);
 }
 
+async function startQmdBackendWithTrackedManager(cfg: OpenClawConfig) {
+  const manager = createQmdManagerMock();
+  getMemorySearchManagerMock.mockResolvedValue({ manager });
+  const log = await startMemoryBackendForTest(cfg);
+  return { log, manager };
+}
+
 function expectNoMemoryBackendStartup(log: ReturnType<typeof createGatewayLogMock>) {
   expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
   expect(log.info).not.toHaveBeenCalled();
@@ -60,19 +67,18 @@ function expectQmdManagerRequests(cfg: OpenClawConfig, agentIds: string[]) {
     expect(getMemorySearchManagerMock).toHaveBeenNthCalledWith(index + 1, {
       cfg,
       agentId,
-      purpose: "cli",
     });
   }
 }
 
-function expectBootSyncCompleted(
+function expectStartupInitialized(
   log: ReturnType<typeof createGatewayLogMock>,
   count: number,
   agents: string,
 ) {
   const noun = count === 1 ? "agent" : "agents";
   expect(log.info).toHaveBeenCalledWith(
-    `qmd memory startup boot sync completed for ${count} ${noun}: ${agents}`,
+    `qmd memory startup initialized for ${count} ${noun}: ${agents}`,
   );
 }
 
@@ -103,7 +109,7 @@ describe("startGatewayMemoryBackend", () => {
     expectNoMemoryBackendStartup(log);
   });
 
-  it("runs qmd boot sync for the default and explicitly configured agents", async () => {
+  it("initializes qmd startup managers for the default and explicitly configured agents", async () => {
     const cfg = createQmdConfig({
       list: [
         { id: "ops", default: true },
@@ -115,7 +121,7 @@ describe("startGatewayMemoryBackend", () => {
     const log = await startQmdBackendWithManager(cfg);
 
     expectQmdManagerRequests(cfg, ["ops", "main"]);
-    expectBootSyncCompleted(log, 2, '"ops", "main"');
+    expectStartupInitialized(log, 2, '"ops", "main"');
     expect(log.info).toHaveBeenCalledWith(
       'qmd memory startup initialization deferred for 1 agent: "lazy"',
     );
@@ -131,7 +137,7 @@ describe("startGatewayMemoryBackend", () => {
     const log = await startQmdBackendWithManager(cfg);
 
     expectQmdManagerRequests(cfg, ["ops", "main"]);
-    expectBootSyncCompleted(log, 2, '"ops", "main"');
+    expectStartupInitialized(log, 2, '"ops", "main"');
     expect(log.info.mock.calls.some(([message]) => String(message).includes("deferred"))).toBe(
       false,
     );
@@ -154,7 +160,7 @@ describe("startGatewayMemoryBackend", () => {
     expect(log.warn).toHaveBeenCalledWith(
       'qmd memory startup initialization failed for agent "main": qmd missing',
     );
-    expectBootSyncCompleted(log, 1, '"ops"');
+    expectStartupInitialized(log, 1, '"ops"');
   });
 
   it("skips agents with memory search disabled", async () => {
@@ -169,7 +175,45 @@ describe("startGatewayMemoryBackend", () => {
     const log = await startQmdBackendWithManager(cfg);
 
     expectQmdManagerRequests(cfg, ["main"]);
-    expectBootSyncCompleted(log, 1, '"main"');
+    expectStartupInitialized(log, 1, '"main"');
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("arms qmd interval maintenance when boot refresh is disabled", async () => {
+    const cfg = createQmdConfig(
+      {
+        list: [{ id: "main", default: true }],
+      },
+      { startup: "immediate", onBoot: false, interval: "5m", embedInterval: "0s" },
+    );
+
+    const { log, manager } = await startQmdBackendWithTrackedManager(cfg);
+
+    expectQmdManagerRequests(cfg, ["main"]);
+    expectStartupInitialized(log, 1, '"main"');
+    expect(manager.sync).not.toHaveBeenCalled();
+    expect(manager.close).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("arms qmd embed maintenance when boot refresh and interval updates are disabled", async () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          searchMode: "query",
+          update: { startup: "immediate", onBoot: false, interval: "0s", embedInterval: "5m" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const { log, manager } = await startQmdBackendWithTrackedManager(cfg);
+
+    expectQmdManagerRequests(cfg, ["main"]);
+    expectStartupInitialized(log, 1, '"main"');
+    expect(manager.sync).not.toHaveBeenCalled();
+    expect(manager.close).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
   });
 

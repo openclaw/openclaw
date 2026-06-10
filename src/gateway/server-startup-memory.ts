@@ -10,9 +10,14 @@ import {
 import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
-/** True when qmd memory config opts into startup boot sync work. */
-function shouldRunQmdStartupBootSync(qmd: ResolvedQmdConfig): boolean {
-  return qmd.update.onBoot && qmd.update.startup !== "off";
+/** True when qmd memory config has startup work that requires a live manager. */
+function shouldStartQmdManagerOnStartup(qmd: ResolvedQmdConfig): boolean {
+  return (
+    qmd.update.startup !== "off" &&
+    (qmd.update.onBoot ||
+      qmd.update.intervalMs > 0 ||
+      (qmd.searchMode !== "search" && qmd.update.embedIntervalMs > 0))
+  );
 }
 
 /** Check whether an agent overrides memory search instead of inheriting defaults. */
@@ -40,7 +45,7 @@ function shouldEagerlyStartAgentMemory(params: {
   return hasExplicitAgentMemorySearchConfig(params.cfg, params.agentId);
 }
 
-/** Start qmd memory boot sync for eligible agents without eagerly loading every agent. */
+/** Start qmd memory maintenance for eligible agents without eagerly loading every agent. */
 export async function startGatewayMemoryBackend(params: {
   cfg: OpenClawConfig;
   log: { info?: (msg: string) => void; warn: (msg: string) => void };
@@ -59,7 +64,7 @@ export async function startGatewayMemoryBackend(params: {
     if (resolved.backend !== "qmd" || !resolved.qmd) {
       continue;
     }
-    if (!shouldRunQmdStartupBootSync(resolved.qmd)) {
+    if (!shouldStartQmdManagerOnStartup(resolved.qmd)) {
       continue;
     }
     if (
@@ -78,7 +83,6 @@ export async function startGatewayMemoryBackend(params: {
     const { manager, error } = await getActiveMemorySearchManager({
       cfg: params.cfg,
       agentId,
-      purpose: "cli",
     });
     if (!manager) {
       params.log.warn(
@@ -86,23 +90,11 @@ export async function startGatewayMemoryBackend(params: {
       );
       continue;
     }
-    try {
-      await manager.sync?.({ reason: "boot", force: true });
-    } catch (err) {
-      params.log.warn(`qmd memory startup boot sync failed for agent "${agentId}": ${String(err)}`);
-      continue;
-    } finally {
-      await manager.close?.().catch((err: unknown) => {
-        params.log.warn(
-          `qmd memory startup manager close failed for agent "${agentId}": ${String(err)}`,
-        );
-      });
-    }
     armedAgentIds.push(agentId);
   }
   if (armedAgentIds.length > 0) {
     params.log.info?.(
-      `qmd memory startup boot sync completed for ${formatAgentCount(armedAgentIds.length)}: ${armedAgentIds
+      `qmd memory startup initialized for ${formatAgentCount(armedAgentIds.length)}: ${armedAgentIds
         .map((agentId) => `"${agentId}"`)
         .join(", ")}`,
     );
