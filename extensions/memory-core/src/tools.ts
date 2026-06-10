@@ -380,8 +380,12 @@ export function createMemorySearchTool(options: {
           }
         };
 
+        const effectiveTimeoutMs = Math.max(
+          MEMORY_SEARCH_TOOL_TIMEOUT_MS,
+          cfg.memory?.qmd?.limits?.timeoutMs ?? 0,
+        );
         const outcome = await runMemorySearchToolWithDeadline({
-          timeoutMs: MEMORY_SEARCH_TOOL_TIMEOUT_MS,
+          timeoutMs: effectiveTimeoutMs,
           run: async () => {
             const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
             const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
