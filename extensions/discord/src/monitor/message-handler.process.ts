@@ -1,3 +1,4 @@
+// Discord plugin module implements message handler.process behavior.
 import path from "node:path";
 import { MessageFlags } from "discord-api-types/v10";
 import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
@@ -998,6 +999,9 @@ async function processDiscordMessageInner(
         onModelSelected,
         suppressDefaultToolProgressMessages: draftPreview.suppressDefaultToolProgressMessages
           ? true
+          : undefined,
+        commentaryProgressEnabled: draftPreview.isProgressMode
+          ? draftPreview.commentaryProgressEnabled
           : undefined,
         onReasoningStream: async (payload) => {
           await statusReactions.setThinking();

@@ -1,3 +1,5 @@
+// Agent method tests cover run/steer/reset/wait behavior, task/subagent state,
+// approval followups, lifecycle hooks, and emitted gateway events.
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
@@ -720,6 +722,282 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.abortedLastRun).toBeUndefined();
     expect(capturedEntry?.sessionFile).toBeUndefined();
   });
+
+  it.each([
+    { name: "status terminal row", status: "done" as const },
+    { name: "endedAt-only terminal row" },
+  ])(
+    "rotates a terminal main session from a $name when its transcript is newer",
+    async (scenario) => {
+      const now = Date.parse("2026-05-18T09:47:00.000Z");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      dateOnlyFakeClockActive = true;
+      vi.setSystemTime(now);
+
+      await withTempDir(
+        { prefix: "openclaw-gateway-terminal-main-newer-transcript-" },
+        async (root) => {
+          const sessionsDir = `${root}/sessions`;
+          await fs.mkdir(sessionsDir, { recursive: true });
+          const sessionFile = "terminal-main-session.jsonl";
+          const transcriptPath = `${sessionsDir}/${sessionFile}`;
+          await fs.writeFile(
+            transcriptPath,
+            `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
+            "utf8",
+          );
+          await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+          mocks.loadSessionEntry.mockReturnValue({
+            cfg: {},
+            storePath: `${sessionsDir}/sessions.json`,
+            entry: {
+              sessionId: "terminal-main-session",
+              sessionFile,
+              ...(scenario.status ? { status: scenario.status } : {}),
+              updatedAt: now - 10_000,
+              sessionStartedAt: now - 60_000,
+              lastInteractionAt: now - 10_000,
+              startedAt: now - 20_000,
+              endedAt: now - 15_000,
+              runtimeMs: 5_000,
+              cliSessionBindings: {
+                "claude-cli": { sessionId: "old-claude-cli-session" },
+                "codex-cli": { sessionId: "old-codex-cli-session" },
+              },
+              cliSessionIds: {
+                "claude-cli": "old-claude-cli-session",
+                "codex-cli": "old-codex-cli-session",
+              },
+              claudeCliSessionId: "old-claude-cli-session",
+            },
+            canonicalKey: "agent:main:main",
+          });
+
+          const capturedEntry = await runMainAgentAndCaptureEntry(
+            "test-idem-terminal-main-newer-transcript",
+          );
+
+          const call = await waitForAgentCommandCall<{ sessionId?: string }>();
+          expect(call.sessionId).not.toBe("terminal-main-session");
+          expect(capturedEntry?.sessionId).not.toBe("terminal-main-session");
+          expect(capturedEntry?.status).toBeUndefined();
+          expect(capturedEntry?.startedAt).toBeUndefined();
+          expect(capturedEntry?.endedAt).toBeUndefined();
+          expect(capturedEntry?.runtimeMs).toBeUndefined();
+          expect(capturedEntry?.sessionFile).toBeUndefined();
+          expect(capturedEntry?.cliSessionBindings).toBeUndefined();
+          expect(capturedEntry?.cliSessionIds).toBeUndefined();
+          expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
+        },
+      );
+    },
+  );
+
+  it("reuses terminal main sessions when the fresh store row has the transcript marker", async () => {
+    const now = Date.parse("2026-05-18T09:47:30.000Z");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    dateOnlyFakeClockActive = true;
+    vi.setSystemTime(now);
+
+    await withTempDir({ prefix: "openclaw-gateway-terminal-main-fresh-marker-" }, async (root) => {
+      const sessionsDir = `${root}/sessions`;
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const sessionFile = "terminal-main-session.jsonl";
+      const transcriptPath = `${sessionsDir}/${sessionFile}`;
+      await fs.writeFile(
+        transcriptPath,
+        `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
+        "utf8",
+      );
+      await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+      const staleEntry = {
+        sessionId: "terminal-main-session",
+        sessionFile,
+        status: "done",
+        updatedAt: now - 10_000,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "existing-claude-cli-session" },
+        },
+        cliSessionIds: {
+          "claude-cli": "existing-claude-cli-session",
+        },
+        claudeCliSessionId: "existing-claude-cli-session",
+      };
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: {},
+        storePath: `${sessionsDir}/sessions.json`,
+        entry: staleEntry,
+        canonicalKey: "agent:main:main",
+      });
+      let capturedEntry: Record<string, unknown> | undefined;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        const store = {
+          "agent:main:main": {
+            ...staleEntry,
+            updatedAt: now,
+          },
+        };
+        const result = await updater(store);
+        capturedEntry = result as Record<string, unknown>;
+        return result;
+      });
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+
+      await runMainAgent("hi", "test-idem-terminal-main-fresh-marker");
+
+      const call = await waitForAgentCommandCall<{ sessionId?: string }>();
+      expect(call.sessionId).toBe("terminal-main-session");
+      expect(capturedEntry?.sessionId).toBe("terminal-main-session");
+      expect(capturedEntry?.sessionFile).toBe(sessionFile);
+      expect(capturedEntry?.cliSessionIds).toEqual({
+        "claude-cli": "existing-claude-cli-session",
+      });
+      expect(capturedEntry?.claudeCliSessionId).toBe("existing-claude-cli-session");
+    });
+  });
+
+  it("honors explicit gateway session-id resumes for terminal main rows", async () => {
+    const now = Date.parse("2026-05-18T09:48:00.000Z");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    dateOnlyFakeClockActive = true;
+    vi.setSystemTime(now);
+
+    await withTempDir(
+      { prefix: "openclaw-gateway-terminal-main-explicit-resume-" },
+      async (root) => {
+        const sessionsDir = `${root}/sessions`;
+        await fs.mkdir(sessionsDir, { recursive: true });
+        const sessionFile = "terminal-main-session.jsonl";
+        const transcriptPath = `${sessionsDir}/${sessionFile}`;
+        await fs.writeFile(
+          transcriptPath,
+          `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
+          "utf8",
+        );
+        await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+        const existingEntry = {
+          sessionId: "terminal-main-session",
+          sessionFile,
+          status: "done",
+          updatedAt: now - 10_000,
+          sessionStartedAt: now - 60_000,
+          lastInteractionAt: now - 10_000,
+          startedAt: now - 20_000,
+          endedAt: now - 15_000,
+          runtimeMs: 5_000,
+        };
+        mocks.loadSessionEntry.mockReturnValue({
+          cfg: {},
+          storePath: `${sessionsDir}/sessions.json`,
+          entry: existingEntry,
+          canonicalKey: "agent:main:main",
+        });
+        let capturedEntry: Record<string, unknown> | undefined;
+        mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+          const store: Record<string, unknown> = {
+            "agent:main:main": { ...existingEntry },
+          };
+          const result = await updater(store);
+          capturedEntry = result as Record<string, unknown>;
+          return result;
+        });
+        mocks.agentCommand.mockResolvedValue({
+          payloads: [{ text: "ok" }],
+          meta: { durationMs: 100 },
+        });
+
+        await invokeAgent({
+          message: "resume terminal main",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          sessionId: "terminal-main-session",
+          idempotencyKey: "test-idem-terminal-main-explicit-resume",
+        } as AgentParams);
+
+        const call = await waitForAgentCommandCall<{ sessionId?: string }>();
+        expect(call.sessionId).toBe("terminal-main-session");
+        expect(capturedEntry?.sessionId).toBe("terminal-main-session");
+        expect(capturedEntry?.sessionFile).toBe(sessionFile);
+        expect(capturedEntry?.status).toBe("done");
+        expect(capturedEntry?.startedAt).toBe(now - 20_000);
+        expect(capturedEntry?.endedAt).toBe(now - 15_000);
+        expect(capturedEntry?.runtimeMs).toBe(5_000);
+      },
+    );
+  });
+
+  it.each(["heartbeat", "cron"] as const)(
+    "preserves terminal main session reuse for %s gateway runs",
+    async (runKind) => {
+      const now = Date.parse("2026-05-18T09:49:00.000Z");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      dateOnlyFakeClockActive = true;
+      vi.setSystemTime(now);
+
+      await withTempDir(
+        { prefix: `openclaw-gateway-terminal-main-${runKind}-reuse-` },
+        async (root) => {
+          const sessionsDir = `${root}/sessions`;
+          await fs.mkdir(sessionsDir, { recursive: true });
+          const sessionFile = `terminal-main-${runKind}.jsonl`;
+          const transcriptPath = `${sessionsDir}/${sessionFile}`;
+          await fs.writeFile(
+            transcriptPath,
+            `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
+            "utf8",
+          );
+          await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+          const existingEntry = {
+            sessionId: "terminal-main-session",
+            sessionFile,
+            status: "done",
+            updatedAt: now - 10_000,
+            sessionStartedAt: now - 60_000,
+            lastInteractionAt: now - 10_000,
+            startedAt: now - 20_000,
+            endedAt: now - 15_000,
+            runtimeMs: 5_000,
+          };
+          mocks.loadSessionEntry.mockReturnValue({
+            cfg: {},
+            storePath: `${sessionsDir}/sessions.json`,
+            entry: existingEntry,
+            canonicalKey: "agent:main:main",
+          });
+
+          let capturedEntry: Record<string, unknown> | undefined;
+          mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+            const store: Record<string, unknown> = {
+              "agent:main:main": { ...existingEntry },
+            };
+            const result = await updater(store);
+            capturedEntry = result as Record<string, unknown>;
+            return result;
+          });
+          mocks.agentCommand.mockResolvedValue({
+            payloads: [{ text: "ok" }],
+            meta: { durationMs: 100 },
+          });
+
+          await invokeAgent({
+            message: `${runKind} probe`,
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            bootstrapContextRunKind: runKind,
+            idempotencyKey: `test-idem-terminal-main-${runKind}-reuse`,
+          } as AgentParams);
+
+          const call = await waitForAgentCommandCall<{ sessionId?: string }>();
+          expect(call.sessionId).toBe("terminal-main-session");
+          expect(capturedEntry?.sessionId).toBe("terminal-main-session");
+          expect(capturedEntry?.sessionFile).toBe(sessionFile);
+        },
+      );
+    },
+  );
 
   it("rotates a failed session when its default transcript is missing", async () => {
     const now = Date.parse("2026-05-18T09:48:00.000Z");
@@ -1545,6 +1823,7 @@ describe("gateway agent handler", () => {
   });
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
     const childSessionKey = "agent:main:subagent:followup";
+    const updatedAt = Date.now() - 1_000;
     const completedRun = {
       runId: "run-old",
       childSessionKey,
@@ -1565,7 +1844,7 @@ describe("gateway agent handler", () => {
       storePath: "/tmp/sessions.json",
       entry: {
         sessionId: "sess-followup",
-        updatedAt: Date.now(),
+        updatedAt,
       },
       canonicalKey: childSessionKey,
     });
@@ -1573,7 +1852,7 @@ describe("gateway agent handler", () => {
       const store: Record<string, unknown> = {
         [childSessionKey]: {
           sessionId: "sess-followup",
-          updatedAt: Date.now(),
+          updatedAt,
         },
       };
       return await updater(store);
@@ -1629,9 +1908,10 @@ describe("gateway agent handler", () => {
   });
 
   it("includes live session setting metadata in agent send events", async () => {
+    const updatedAt = Date.now() - 1_000;
     mockMainSessionEntry({
       sessionId: "sess-main",
-      updatedAt: Date.now(),
+      updatedAt,
       fastMode: true,
       sendPolicy: "deny",
       lastChannel: "telegram",
@@ -1642,6 +1922,8 @@ describe("gateway agent handler", () => {
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
       const store: Record<string, unknown> = {
         "agent:main:main": buildExistingMainStoreEntry({
+          sessionId: "sess-main",
+          updatedAt,
           fastMode: true,
           sendPolicy: "deny",
           lastChannel: "telegram",
@@ -1716,7 +1998,7 @@ describe("gateway agent handler", () => {
     expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({ dropIfSlow: true });
   });
 
-  it("injects a timestamp into the message passed to agentCommand", async () => {
+  it("passes the raw user message to agentCommand for LLM-boundary timestamping", async () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
 
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });
@@ -1732,7 +2014,7 @@ describe("gateway agent handler", () => {
     );
 
     const callArgs = await waitForAgentCommandCall<{ message?: string }>();
-    expect(callArgs.message).toBe("[Wed 2026-01-28 20:30 EST] Is it the weekend?");
+    expect(callArgs.message).toBe("Is it the weekend?");
 
     resetTimeConfig();
   });
@@ -2720,6 +3002,63 @@ describe("gateway agent handler", () => {
     expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore);
     expectRespondError(respond, {
       message: "exec approval followup idempotency keys are reserved for backend callers.",
+    });
+  });
+
+  it("drops a stale exec approval followup at preflight without touching the rebound session (#59349)", async () => {
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    const registration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-rebound-followup",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    if (!registration) {
+      throw new Error("expected runtime handoff id");
+    }
+    // Session was rebound by /new or /reset: current sessionId differs from the
+    // approval-time sessionId carried on the request.
+    mockMainSessionEntry({
+      sessionId: "current-session-after-reset",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    const context = makeContext();
+    const updateSessionStoreCallsBefore = mocks.updateSessionStore.mock.calls.length;
+    const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
+
+    const respond = await invokeAgent(
+      {
+        message: "exec followup",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: registration.idempotencyKey,
+        internalRuntimeHandoffId: registration.handoffId,
+        execApprovalFollowupExpectedSessionId: "approval-time-session-id",
+      },
+      {
+        reqId: "exec-followup-rebound-drop",
+        client: backendGatewayClient(),
+        context,
+        flushDispatch: false,
+      },
+    );
+
+    expect(mockCallArg(respond, 0, 1)).toMatchObject({
+      runId: registration.idempotencyKey,
+      status: "ok",
+      summary: expect.stringContaining("exec approval followup dropped"),
+    });
+    expect(mocks.updateSessionStore.mock.calls.length).toBe(updateSessionStoreCallsBefore);
+    expect(mocks.agentCommand.mock.calls.length).toBe(agentCommandCallsBefore);
+    const dedupeEntry = context.dedupe.get("agent:exec-approval-followup:req-rebound-followup");
+    expect(dedupeEntry?.ok).toBe(true);
+    expect(dedupeEntry?.payload).toMatchObject({
+      status: "ok",
+      summary: expect.stringContaining("exec approval followup dropped"),
     });
   });
 
@@ -4708,7 +5047,7 @@ describe("gateway agent handler", () => {
     expect(result.meta?.agentMeta?.sessionId).toBe("global-work-reset-session");
   });
 
-  it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {
+  it("uses /reset suffix as the post-reset message for LLM-boundary timestamping", async () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
     mockSessionResetSuccess({ reason: "reset" });
     mocks.performGatewaySessionReset.mockClear();
@@ -4729,7 +5068,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const call = await expectResetCall("[Wed 2026-01-28 20:30 EST] check status");
+    const call = await expectResetCall("check status");
     expect(call?.sessionId).toBe("reset-session-id");
 
     resetTimeConfig();

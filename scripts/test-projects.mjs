@@ -1,3 +1,5 @@
+// Dispatches Vitest project shards for explicit targets, changed files, or the
+// full local suite.
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { formatMs } from "./lib/check-timing-summary.mjs";

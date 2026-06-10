@@ -1,3 +1,4 @@
+// Vitest scoped config tests validate scoped project config generation.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -259,6 +260,78 @@ describe("createScopedVitestConfig", () => {
     const testConfig = requireTestConfig(config);
 
     expect(testConfig.include).toEqual(["browser/index.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("narrows scoped includes to matching dot-prefixed CLI file filters", () => {
+    const config = createScopedVitestConfig(["extensions/codex/**/*.test.ts"], {
+      argv: ["node", "vitest", "run", "./extensions/codex/src/app-server/client.test.ts"],
+      dir: "extensions",
+      env: {},
+    });
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual(["codex/src/app-server/client.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("narrows scoped includes to matching dir-relative CLI file filters", () => {
+    const config = createScopedVitestConfig(["extensions/codex/**/*.test.ts"], {
+      argv: ["node", "vitest", "run", "codex/src/app-server/client.test.ts"],
+      dir: "extensions",
+      env: {},
+    });
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual(["codex/src/app-server/client.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("does not narrow scoped includes for bare Vitest name filters", () => {
+    const config = createScopedVitestConfig(["extensions/codex/**/*.test.ts"], {
+      argv: ["node", "vitest", "run", "client"],
+      dir: "extensions",
+      env: {},
+    });
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual(["codex/**/*.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("does not narrow scoped includes for changed refs", () => {
+    const config = createScopedVitestConfig(["extensions/codex/**/*.test.ts"], {
+      argv: ["node", "vitest", "run", "--changed", "origin/main"],
+      dir: "extensions",
+      env: {},
+    });
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual(["codex/**/*.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("does not narrow scoped includes for coverage option values", () => {
+    const config = createScopedVitestConfig(["extensions/codex/**/*.test.ts"], {
+      argv: ["node", "vitest", "run", "--coverage.include", "codex/src/app-server/client.ts"],
+      dir: "extensions",
+      env: {},
+    });
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual(["codex/**/*.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("does not narrow scoped includes for exclude option values", () => {
+    const config = createScopedVitestConfig(["extensions/codex/**/*.test.ts"], {
+      argv: ["node", "vitest", "run", "--exclude", "codex/src/app-server/run-attempt.test.ts"],
+      dir: "extensions",
+      env: {},
+    });
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual(["codex/**/*.test.ts"]);
     expect(testConfig.passWithNoTests).toBeUndefined();
   });
 

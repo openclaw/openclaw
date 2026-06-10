@@ -24,6 +24,11 @@ on:
         description: Approved OpenClaw Release Publish workflow run id
         required: false
         type: string
+      dry_run:
+        description: Validate the full ClawHub artifact handoff without publishing.
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: plugin-clawhub-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
@@ -35,7 +40,7 @@ env:
   CLAWHUB_REGISTRY: "https://clawhub.ai"
   CLAWHUB_REPOSITORY: "openclaw/clawhub"
   # Pinned to a reviewed ClawHub commit so release behavior stays reproducible.
-  CLAWHUB_REF: "facf20ceb6cc459e2872d941e71335a784bbc55c"
+  CLAWHUB_REF: "c9bb13023598dcc547fdf4a93b9d42512b8c8854"
 
 jobs:
   preview_plugins_clawhub:
@@ -55,12 +60,6 @@ jobs:
           persist-credentials: false
           ref: ${{ github.ref }}
           fetch-depth: 0
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "false"
 
       - name: Resolve checked-out ref
         id: ref
@@ -106,6 +105,12 @@ jobs:
           fi
           echo "Plugin ClawHub publishes must target a commit reachable from main, release/*, or the matching Tideclaw alpha branch." >&2
           exit 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
 
       - name: Validate publishable plugin metadata
         env:
@@ -326,15 +331,12 @@ jobs:
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
         run: bash scripts/plugin-clawhub-publish.sh --dry-run "${PACKAGE_DIR}"
 
-  publish_plugins_clawhub:
+  pack_plugins_clawhub_artifacts:
     needs: [preview_plugins_clawhub, preview_plugin_pack, validate_release_publish_approval]
     if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
     runs-on: ubuntu-latest
-    environment: clawhub-plugin-release
     permissions:
-      actions: read
       contents: read
-      id-token: write
     strategy:
       fail-fast: false
       max-parallel: 32
@@ -407,73 +409,7 @@ jobs:
           chmod +x "$RUNNER_TEMP/clawhub"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
-      - name: Write ClawHub token config
-        env:
-          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
-          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${CLAWHUB_TOKEN}" ]]; then
-            echo "No CLAWHUB_TOKEN secret configured; publish will rely on GitHub OIDC trusted publishing."
-            exit 0
-          fi
-          node --input-type=module <<'EOF'
-          import { writeFileSync } from "node:fs";
-          import { join } from "node:path";
-
-          const path = join(process.env.RUNNER_TEMP, "clawhub-config.json");
-          writeFileSync(
-            path,
-            `${JSON.stringify(
-              {
-                registry: process.env.CLAWHUB_REGISTRY,
-                token: process.env.CLAWHUB_TOKEN,
-              },
-              null,
-              2,
-            )}\n`,
-          );
-          console.log(path);
-          EOF
-          echo "CLAWHUB_CONFIG_PATH=${RUNNER_TEMP}/clawhub-config.json" >> "$GITHUB_ENV"
-
-      - name: Check ClawHub package version
-        id: clawhub_package_version
-        env:
-          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
-          PACKAGE_VERSION: ${{ matrix.plugin.version }}
-          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
-        run: |
-          set -euo pipefail
-          encoded_name="$(node -e 'console.log(encodeURIComponent(process.env.PACKAGE_NAME ?? ""))')"
-          encoded_version="$(node -e 'console.log(encodeURIComponent(process.env.PACKAGE_VERSION ?? ""))')"
-          url="${CLAWHUB_REGISTRY%/}/api/v1/packages/${encoded_name}/versions/${encoded_version}"
-          status=""
-          for attempt in $(seq 1 8); do
-            status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "${url}")"
-            if [[ "${status}" == "404" || "${status}" =~ ^2 ]]; then
-              break
-            fi
-            if [[ "${status}" == "429" || "${status}" =~ ^5 ]]; then
-              echo "ClawHub availability check returned ${status} for ${PACKAGE_NAME}@${PACKAGE_VERSION}; retrying (${attempt}/8)."
-              sleep 60
-              continue
-            fi
-            break
-          done
-          if [[ "${status}" =~ ^2 ]]; then
-            echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is already published on ClawHub."
-            echo "already_published=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [[ "${status}" != "404" ]]; then
-            echo "Unexpected ClawHub response (${status}) for ${PACKAGE_NAME}@${PACKAGE_VERSION}."
-            exit 1
-          fi
-          echo "already_published=false" >> "$GITHUB_OUTPUT"
-
-      - name: Publish
-        if: steps.clawhub_package_version.outputs.already_published != 'true'
+      - name: Pack ClawHub package artifact
         env:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
           SOURCE_REPO: ${{ github.repository }}
@@ -481,8 +417,65 @@ jobs:
           SOURCE_REF: ${{ github.ref }}
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
-        run: bash scripts/plugin-clawhub-publish.sh --publish "${PACKAGE_DIR}"
+          OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: ${{ runner.temp }}/clawhub-package-artifact
+        run: bash scripts/plugin-clawhub-publish.sh --pack "${PACKAGE_DIR}"
 
+      - name: Upload ClawHub package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.plugin.artifactName }}
+          path: ${{ runner.temp }}/clawhub-package-artifact/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  approve_plugin_clawhub_release:
+    needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts]
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
+    runs-on: ubuntu-latest
+    environment: clawhub-plugin-release
+    permissions: {}
+    steps:
+      - name: Approve ClawHub package publish
+        run: echo "ClawHub package publish approved."
+
+  publish_plugins_clawhub:
+    needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts, approve_plugin_clawhub_release]
+    if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugin_clawhub_release.result == 'success')
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 32
+      matrix:
+        plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@c9bb13023598dcc547fdf4a93b9d42512b8c8854
+    with:
+      dry_run: ${{ inputs.dry_run }}
+      json: true
+      package_artifact_name: ${{ matrix.plugin.artifactName }}
+      registry: https://clawhub.ai
+      site: https://clawhub.ai
+      source_repo: ${{ github.repository }}
+      source_commit: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+      source_ref: ${{ github.ref }}
+      tags: ${{ matrix.plugin.publishTag }}
+    secrets:
+      clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}
+
+  verify_published_clawhub_package:
+    needs: [preview_plugins_clawhub, publish_plugins_clawhub]
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 32
+      matrix:
+        plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
+    steps:
       - name: Verify published ClawHub package
         env:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}

@@ -1,3 +1,4 @@
+// Microsoft Foundry setup module handles plugin onboarding behavior.
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -21,6 +22,7 @@ import {
   type FoundrySelection,
   buildFoundryProviderBaseUrl,
   extractFoundryEndpoint,
+  partitionFoundryDeployments,
   requiresFoundryMaxCompletionTokens,
   DEFAULT_API,
   DEFAULT_GPT5_API,
@@ -165,23 +167,43 @@ export async function selectFoundryDeployment(
   ctx: ProviderAuthContext,
   resource: FoundryResourceOption,
   deployments: AzDeploymentSummary[],
-): Promise<AzDeploymentSummary> {
-  if (deployments.length === 0) {
-    throw new Error(
+): Promise<{ selected: AzDeploymentSummary; supported: AzDeploymentSummary[] }> {
+  const { supported, anthropic } = partitionFoundryDeployments(deployments);
+  const anthropicNames = anthropic.map((deployment) => deployment.name);
+  if (anthropicNames.length > 0) {
+    await ctx.prompter.note(
       [
-        `No model deployments were found in ${resource.accountName}.`,
-        "Deploy a model in Azure AI Foundry or Azure OpenAI, then rerun onboard.",
-      ].join("\n"),
+        `Skipping ${anthropicNames.length} Anthropic deployment(s) (${anthropicNames.join(", ")}):`,
+        "the built-in Microsoft Foundry provider only supports OpenAI-compatible APIs.",
+        "To use Claude on Azure, configure a custom provider with base URL",
+        "https://<resource>.services.ai.azure.com/anthropic and API: anthropic-messages.",
+      ].join(" "),
+      "Unsupported Deployments",
     );
   }
-  if (deployments.length === 1) {
-    const only = deployments[0];
+  if (supported.length === 0) {
+    const hint =
+      anthropicNames.length > 0
+        ? [
+            `Only Anthropic deployments were found in ${resource.accountName},`,
+            "which are not supported by this provider.",
+            "Use a custom provider with the Anthropic Foundry endpoint, or",
+            "deploy an OpenAI-compatible model and rerun onboard.",
+          ].join(" ")
+        : [
+            `No model deployments were found in ${resource.accountName}.`,
+            "Deploy a model in Azure AI Foundry or Azure OpenAI, then rerun onboard.",
+          ].join("\n");
+    throw new Error(hint);
+  }
+  if (supported.length === 1) {
+    const only = supported[0];
     await ctx.prompter.note(`Using deployment: ${only.name}`, "Model Deployment");
-    return only;
+    return { selected: only, supported };
   }
   const selectedDeploymentName = await ctx.prompter.select({
     message: "Select model deployment",
-    options: deployments.map((deployment) => ({
+    options: supported.map((deployment) => ({
       value: deployment.name,
       label: deployment.name,
       hint: [deployment.modelName, deployment.modelVersion, deployment.sku]
@@ -189,9 +211,9 @@ export async function selectFoundryDeployment(
         .join(" | "),
     })),
   });
-  return (
-    deployments.find((deployment) => deployment.name === selectedDeploymentName) ?? deployments[0]
-  );
+  const selected =
+    supported.find((deployment) => deployment.name === selectedDeploymentName) ?? supported[0];
+  return { selected, supported };
 }
 
 async function promptFoundryApi(
@@ -216,7 +238,12 @@ async function promptFoundryApi(
   });
 }
 
-type ManualFoundryModelFamilyChoice = "reasoning-family" | "other-chat";
+type ManualFoundryModelFamilyChoice = "reasoning-family" | "mai-image" | "other-chat";
+type ManualFoundryMaiImageModel =
+  | "MAI-Image-2.5-Flash"
+  | "MAI-Image-2.5"
+  | "MAI-Image-2e"
+  | "MAI-Image-2";
 
 async function promptFoundryModelFamily(
   ctx: ProviderAuthContext,
@@ -230,12 +257,48 @@ async function promptFoundryModelFamily(
         hint: "Use for Azure OpenAI reasoning and Codex deployments",
       },
       {
+        value: "mai-image",
+        label: "MAI image model",
+        hint: "Use for Microsoft MAI image deployments",
+      },
+      {
         value: "other-chat",
         label: "Other chat model",
         hint: "Use for other chat/completions style Foundry models",
       },
     ],
     initialValue: "reasoning-family",
+  });
+}
+
+async function promptFoundryMaiImageModel(
+  ctx: ProviderAuthContext,
+): Promise<ManualFoundryMaiImageModel> {
+  return await ctx.prompter.select({
+    message: "MAI image base model",
+    options: [
+      {
+        value: "MAI-Image-2.5-Flash",
+        label: "MAI-Image-2.5-Flash",
+        hint: "Latest fast MAI image deployment",
+      },
+      {
+        value: "MAI-Image-2.5",
+        label: "MAI-Image-2.5",
+        hint: "Latest MAI image deployment",
+      },
+      {
+        value: "MAI-Image-2e",
+        label: "MAI-Image-2e",
+        hint: "Efficient MAI image deployment",
+      },
+      {
+        value: "MAI-Image-2",
+        label: "MAI-Image-2",
+        hint: "MAI image deployment",
+      },
+    ],
+    initialValue: "MAI-Image-2.5-Flash",
   });
 }
 
@@ -275,6 +338,14 @@ async function promptEndpointAndModelBase(
     })
   ).trim();
   const familyChoice = await promptFoundryModelFamily(ctx);
+  if (familyChoice === "mai-image") {
+    return {
+      endpoint,
+      modelId,
+      modelNameHint: await promptFoundryMaiImageModel(ctx),
+      api: DEFAULT_API,
+    };
+  }
   const resolvedModelName =
     familyChoice === "reasoning-family"
       ? usesFoundryResponsesByDefault(modelId) || requiresFoundryMaxCompletionTokens(modelId)

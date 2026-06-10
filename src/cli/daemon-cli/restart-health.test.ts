@@ -1,3 +1,4 @@
+// Daemon restart health tests cover health checks after daemon restart operations.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayService } from "../../daemon/service.js";
 import type { PortListenerKind, PortUsage } from "../../infra/ports.js";
@@ -373,6 +374,69 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.gatewayVersion).toBe("2026.4.24");
     expect(snapshot.expectedVersion).toBe("2026.4.24");
     expect(snapshot.versionMismatch).toBeUndefined();
+  });
+
+  it("waits for the managed service when running service proof is required", async () => {
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.4.24", connId: "new" },
+    });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    const readRuntime = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "stopped" })
+      .mockResolvedValue({ status: "running", pid: 8000 });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: { readRuntime } as unknown as GatewayService,
+      port: 18789,
+      expectedVersion: "2026.4.24",
+      requireRunningService: true,
+      attempts: 3,
+      delayMs: 1,
+    });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.runtime.status).toBe("running");
+    expect(snapshot.waitOutcome).toBe("healthy");
+    expect(snapshot.elapsedMs).toBe(1);
+    expect(sleep).toHaveBeenCalledOnce();
+  });
+
+  it("times out when running service proof never arrives", async () => {
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.4.24", connId: "stale" },
+    });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 5151, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "stopped" }),
+      port: 18789,
+      expectedVersion: "2026.4.24",
+      requireRunningService: true,
+      attempts: 2,
+      delayMs: 1,
+    });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.runtime.status).toBe("stopped");
+    expect(snapshot.waitOutcome).toBe("timeout");
+    expect(sleep).toHaveBeenCalledTimes(2);
   });
 
   it("accepts matching-version restart liveness when the probe lacks operator scope", async () => {

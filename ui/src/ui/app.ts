@@ -1,3 +1,4 @@
+// Control UI module implements app behavior.
 import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
@@ -803,7 +804,7 @@ export class OpenClawApp extends LitElement {
     this.onSlashAction = async (action: string) => {
       switch (action) {
         case "new-session":
-          await createChatSessionInternal(this as unknown as AppViewState);
+          await createChatSessionInternal(this as unknown as AppViewState, { source: "user" });
           break;
         case "export":
           exportChatMarkdown(this.chatMessages, this.assistantName);

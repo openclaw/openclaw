@@ -812,7 +812,7 @@ async function finishPreparedManualRun(
   try {
     let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
     try {
-      coreResult = await executeJobCoreWithTimeout(state, executionJob);
+      coreResult = await executeJobCoreWithTimeout(state, executionJob, { runId: taskRunId });
     } catch (err) {
       coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
     }

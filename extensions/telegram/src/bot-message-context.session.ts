@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot message context.session behavior.
 import {
   type BuildChannelInboundEventContextAsyncParams,
   type BuiltChannelInboundEventContext,
@@ -433,7 +434,9 @@ export async function buildTelegramInboundContextPayload(params: {
     : `telegram:${chatId}`;
   const telegramTo = buildTelegramInboundOriginTarget(chatId, threadSpec);
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
-  const commandSource = options?.commandSource;
+  const commandSource =
+    options?.commandSource ??
+    (commandAuthorized && hasControlCommand ? ("text" as const) : undefined);
   const unmentionedGroupPolicy = resolveUnmentionedGroupInboundPolicy({
     cfg,
     agentId: route.agentId,

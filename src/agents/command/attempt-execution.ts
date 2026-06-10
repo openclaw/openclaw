@@ -13,6 +13,10 @@ import {
 } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  injectTimestamp,
+  timestampOptsFromConfig,
+} from "../../gateway/server-methods/agent-timestamp.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { readErrorName } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
@@ -48,6 +52,7 @@ import {
   claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
 } from "./attempt-execution.helpers.js";
+import { persistSessionEntry } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { clearCliSessionInStore } from "./session-store.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -244,7 +249,9 @@ async function persistTextTurnTranscript(
     ...resolveSessionWriteLockOptions(params.config),
     allowReentrant: true,
   });
+  let transcriptMarkerUpdatedAt: number | undefined;
   try {
+    let wroteTranscript = false;
     const userMessage = params.userMessage;
     if (userMessage || promptText) {
       await appendUserTurnTranscriptMessage({
@@ -264,6 +271,7 @@ async function persistTextTurnTranscript(
             }),
         updateMode: "none",
       });
+      wroteTranscript = true;
     }
 
     if (replyText) {
@@ -293,10 +301,36 @@ async function persistTextTurnTranscript(
             timestamp: Date.now(),
           },
         });
+        wroteTranscript = true;
       }
+    }
+    if (wroteTranscript) {
+      transcriptMarkerUpdatedAt = Date.now();
     }
   } finally {
     await lock.release();
+  }
+
+  let updatedSessionEntry = sessionEntry;
+  if (params.sessionStore && params.storePath && transcriptMarkerUpdatedAt !== undefined) {
+    const currentEntry = params.sessionStore[params.sessionKey] ?? sessionEntry;
+    if (currentEntry?.sessionId === params.sessionId) {
+      // Keep updatedAt as the registry marker for transcript writes we own.
+      // Session reuse checks compare transcript mtime against this marker, not endedAt.
+      updatedSessionEntry =
+        (await persistSessionEntry({
+          sessionStore: params.sessionStore,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+          entry: {
+            sessionId: params.sessionId,
+            sessionFile,
+            updatedAt: transcriptMarkerUpdatedAt,
+          },
+          preserveTranscriptMarkerUpdatedAt: true,
+          shouldPersist: (current) => current?.sessionId === params.sessionId,
+        })) ?? updatedSessionEntry;
+    }
   }
 
   emitSessionTranscriptUpdate({
@@ -304,7 +338,7 @@ async function persistTextTurnTranscript(
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
   });
-  return sessionEntry;
+  return updatedSessionEntry;
 }
 
 function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
@@ -523,6 +557,10 @@ export function runAgentAttempt(params: {
   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
+    const cliPrompt =
+      params.opts.inputProvenance?.kind === "inter_session"
+        ? effectivePrompt
+        : injectTimestamp(effectivePrompt, timestampOptsFromConfig(params.cfg));
     const mutableCliSessionStore =
       params.sessionKey && params.sessionStore && params.storePath
         ? {
@@ -571,7 +609,7 @@ export function runAgentAttempt(params: {
         workspaceDir: params.workspaceDir,
         cwd: params.cwd,
         config: params.cfg,
-        prompt: effectivePrompt,
+        prompt: cliPrompt,
         provider: cliExecutionProvider,
         model: params.modelOverride,
         thinkLevel: params.resolvedThinkLevel,

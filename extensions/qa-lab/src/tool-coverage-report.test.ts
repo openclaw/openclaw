@@ -1,3 +1,4 @@
+// Qa Lab tests cover tool coverage report plugin behavior.
 import { describe, expect, it } from "vitest";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import {
@@ -339,6 +340,66 @@ describe("qa tool coverage report", () => {
     expect(report.passingTools).toBe(1);
   });
 
+  it("passes required OpenClaw dynamic tool coverage when Codex reports a soft tool error", () => {
+    const report = buildQaToolCoverageReport({
+      scenarios: [
+        makeScenario("tool-web-search", "web-search", {
+          toolName: "web_search",
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+            capabilityLayer: "openclaw-dynamic-direct",
+            required: true,
+          },
+        }),
+      ],
+      summary: {
+        scenarios: [
+          {
+            name: "tool web_search",
+            status: "pass",
+            runtimeParity: {
+              scenarioId: "tool-web-search",
+              drift: "tool-result-shape",
+              driftDetails: "Codex maps the controlled tool fault differently",
+              cells: {
+                openclaw: {
+                  runtime: "openclaw",
+                  transcriptBytes: "",
+                  toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r1" }],
+                  finalText: "",
+                  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                  wallClockMs: 1,
+                  bootStateLines: [],
+                },
+                codex: {
+                  runtime: "codex",
+                  transcriptBytes: "",
+                  toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r2" }],
+                  finalText: "",
+                  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                  wallClockMs: 1,
+                  runtimeErrorClass: "tool-error",
+                  bootStateLines: [],
+                },
+              },
+            },
+          },
+        ],
+      },
+      generatedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.failures).toEqual([]);
+    expect(report.rows[0]).toEqual(
+      expect.objectContaining({
+        codex: "pass",
+        drift: "tool-result-shape",
+      }),
+    );
+  });
+
   it("fails required OpenClaw dynamic tool coverage when a runtime skips the tool", () => {
     const report = buildQaToolCoverageReport({
       scenarios: [
@@ -539,6 +600,13 @@ describe("qa tool coverage report", () => {
         expectedLayer: "profile-or-plugin",
         required: false,
         action: "keep report-only in coding profile",
+      }),
+    );
+    expect(report.rows.find((row) => row.tool === "image-generate")).toEqual(
+      expect.objectContaining({
+        bucket: "openclaw-dynamic-integration",
+        expectedLayer: "openclaw-dynamic",
+        required: false,
       }),
     );
     expect(report.rows.find((row) => row.tool === "tavily-search")).toEqual(

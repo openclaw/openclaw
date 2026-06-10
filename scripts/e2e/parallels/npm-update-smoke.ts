@@ -1,4 +1,5 @@
 #!/usr/bin/env -S pnpm tsx
+// Npm Update Smoke script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
@@ -7,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import {
   die,
   ensureValue,
+  extractLastOpenClawVersionFromLog,
   makeTempDir,
   packOpenClaw,
   parsePlatformList,
@@ -1164,9 +1166,7 @@ export class NpmUpdateSmoke {
   }
 
   private async extractLastVersion(logPath: string): Promise<string> {
-    const log = await readFile(logPath, "utf8").catch(() => "");
-    const matches = [...log.matchAll(/OpenClaw\s+([0-9][^\s]*)/gi)];
-    return matches.at(-1)?.[1] ?? "";
+    return await extractLastOpenClawVersionFromLog(logPath);
   }
 
   private dumpLogTail(logPath: string): void {

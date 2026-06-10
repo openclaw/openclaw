@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Writes npm Telegram RTT config fixtures.
 import fs from "node:fs";
 
 const [configPath, mockPort, groupId, driverToken, sutToken, packageVersion] =
@@ -90,6 +91,7 @@ config.channels.telegram = {
     id: "TELEGRAM_BOT_TOKEN",
   },
   streaming: { mode: "off" },
+  replyToMode: "first",
   dmPolicy: "allowlist",
   allowFrom: [driverId],
   defaultTo: driverId,

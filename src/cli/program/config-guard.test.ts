@@ -1,3 +1,4 @@
+// Config guard tests cover program-level config checks before command execution.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -237,7 +238,7 @@ describe("ensureConfigReady", () => {
     ["Telegram pairing allowFrom", "credentials/telegram-allowFrom.json"],
     ["iMessage reply short-id cache", "imessage/reply-cache.jsonl"],
     ["iMessage sent echo cache", "imessage/sent-echoes.jsonl"],
-    ["iMessage catchup cursor", "imessage/catchup/default.json"],
+    ["iMessage catchup cursor", "imessage/catchup/default__37a8eec1ce19.json"],
     ["WhatsApp root auth", "credentials/creds.json"],
   ])("runs doctor flow for bundled channel legacy state: %s", async (_label, relativePath) => {
     const root = useTempOpenClawHome();

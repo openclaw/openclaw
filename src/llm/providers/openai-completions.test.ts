@@ -1,3 +1,4 @@
+// OpenAI completions tests cover chat completion stream adaptation.
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { describe, expect, it, vi } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
@@ -292,6 +293,82 @@ describe("OpenAI-compatible completions params", () => {
           text: "Dynamic suffix",
         },
       ],
+    });
+  });
+
+  it("adds reasoning_content replay fields for Xiaomi MiMo assistant tool history", async () => {
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "mimo-v2.5-pro",
+        name: "MiMo V2.5 Pro",
+        provider: "xiaomi",
+        baseUrl: "https://api.xiaomimimo.com/v1",
+        reasoning: true,
+      },
+      {
+        messages: [
+          {
+            role: "user",
+            content: "search first",
+            timestamp: 1,
+          },
+          {
+            role: "assistant",
+            api: "openai-completions",
+            provider: "xiaomi",
+            model: "mimo-v2.5-pro",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_search",
+                name: "search",
+                arguments: { query: "MiMo docs" },
+              },
+            ],
+            timestamp: 2,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_search",
+            toolName: "search",
+            content: [{ type: "text", text: "ok" }],
+            isError: false,
+            timestamp: 3,
+          },
+          {
+            role: "user",
+            content: "continue",
+            timestamp: 4,
+          },
+        ],
+      },
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<Record<string, unknown>>;
+    expect(messages.find((message) => message.role === "assistant")).toMatchObject({
+      role: "assistant",
+      reasoning_content: "",
     });
   });
 });

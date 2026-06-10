@@ -1,3 +1,5 @@
+// Managed image attachment tests cover storage, HTTP serving, cleanup, and
+// operator authorization for generated image artifacts attached to gateway replies.
 import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";

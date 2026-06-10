@@ -1,3 +1,4 @@
+// Msteams tests cover conversation store state plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";

@@ -214,7 +214,8 @@ func translateSnippet(ctx context.Context, translator docsTranslator, tm *Transl
 	}
 	translated, err := translator.Translate(ctx, textValue, srcLang, tgtLang)
 	if err != nil {
-		return "", err
+		log.Printf("docs-i18n: frontmatter fallback %s reason=%v", segmentID, err)
+		return textValue, nil
 	}
 	shouldCache := true
 	if validationErr := validateFrontmatterScalarTranslation(textValue, translated); validationErr != nil {
@@ -222,10 +223,14 @@ func translateSnippet(ctx context.Context, translator docsTranslator, tm *Transl
 		translated = textValue
 		shouldCache = false
 	}
+	sourcePath := segmentID
+	if path, _, ok := strings.Cut(segmentID, ":frontmatter:"); ok {
+		sourcePath = path
+	}
 	entry := TMEntry{
 		CacheKey:   ck,
 		SegmentID:  segmentID,
-		SourcePath: segmentID,
+		SourcePath: sourcePath,
 		TextHash:   textHash,
 		Text:       textValue,
 		Translated: translated,

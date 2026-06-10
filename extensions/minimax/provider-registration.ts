@@ -1,3 +1,4 @@
+// Minimax provider module implements model/runtime integration.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawPluginApi,
@@ -37,6 +38,7 @@ import {
   buildMinimaxProvider,
   resolveMinimaxCatalogBaseUrl,
 } from "./provider-catalog.js";
+import { resolveMinimaxThinkingProfile } from "./thinking.js";
 
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
@@ -63,6 +65,8 @@ const MINIMAX_PROVIDER_HOOKS = {
   ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
   ...MINIMAX_FAST_MODE_STREAM_HOOKS,
   resolveReasoningOutputMode: () => "native" as const,
+  resolveThinkingProfile: ({ modelId }: { modelId: string }) =>
+    resolveMinimaxThinkingProfile(modelId),
 };
 
 function getDefaultBaseUrl(region: MiniMaxRegion): string {

@@ -1,3 +1,4 @@
+// Control UI type declarations define types contracts.
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
@@ -547,6 +548,16 @@ export type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronPayload =
   | { kind: "systemEvent"; text: string }
+  | {
+      kind: "command";
+      argv: string[];
+      cwd?: string;
+      env?: Record<string, string>;
+      input?: string;
+      timeoutSeconds?: number;
+      noOutputTimeoutSeconds?: number;
+      outputMaxBytes?: number;
+    }
   | {
       kind: "agentTurn";
       message: string;

@@ -1,3 +1,4 @@
+// Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
 
@@ -125,6 +126,12 @@ export const SendParamsSchema = Type.Object(
     message: Type.Optional(Type.String()),
     mediaUrl: Type.Optional(Type.String()),
     mediaUrls: Type.Optional(Type.Array(Type.String())),
+    /** Base64 attachment payload for gateway-local media materialization. */
+    buffer: Type.Optional(Type.String()),
+    /** Optional filename for a base64 attachment payload. */
+    filename: Type.Optional(Type.String()),
+    /** Optional MIME type for a base64 attachment payload. */
+    contentType: Type.Optional(Type.String()),
     asVoice: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
     channel: Type.Optional(Type.String()),
@@ -212,6 +219,7 @@ export const AgentParamsSchema = Type.Object(
     ),
     acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
     internalRuntimeHandoffId: Type.Optional(NonEmptyString),
+    execApprovalFollowupExpectedSessionId: Type.Optional(NonEmptyString),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
     suppressPromptPersistence: Type.Optional(Type.Boolean()),

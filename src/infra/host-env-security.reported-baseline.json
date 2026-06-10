@@ -3,6 +3,7 @@
   "generatedAt": "2026-04-10",
   "reportedDangerousEverywhereKeys": [
     "ANT_OPTS",
+    "BASHOPTS",
     "BASH_ENV",
     "BROWSER",
     "BZR_EDITOR",
@@ -28,7 +29,9 @@
     "ERL_FLAGS",
     "ERL_ZFLAGS",
     "EXINIT",
+    "FPATH",
     "GCONV_PATH",
+    "GIT_ALLOW_PROTOCOL",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_COMMON_DIR",
     "GIT_DIR",
@@ -39,6 +42,7 @@
     "GIT_INDEX_FILE",
     "GIT_NAMESPACE",
     "GIT_OBJECT_DIRECTORY",
+    "GIT_PROTOCOL_FROM_USER",
     "GIT_SEQUENCE_EDITOR",
     "GIT_SSL_CAINFO",
     "GIT_SSL_CAPATH",
@@ -56,6 +60,7 @@
     "JAVA_TOOL_OPTIONS",
     "JDK_JAVA_OPTIONS",
     "JULIA_EDITOR",
+    "KSH_ENV",
     "LUA_INIT",
     "LUA_INIT_5_1",
     "LUA_INIT_5_2",
@@ -93,6 +98,7 @@
     "SUDO_ASKPASS",
     "SVN_EDITOR",
     "SVN_SSH",
+    "TCLLIBPATH",
     "VAGRANT_VAGRANTFILE",
     "VIMINIT",
     "_JAVA_OPTIONS"
@@ -220,6 +226,11 @@
     "REQUESTS_CA_BUNDLE",
     "RUSTC_WRAPPER",
     "RUSTFLAGS",
+    "RUSTUP_DIST_ROOT",
+    "RUSTUP_DIST_SERVER",
+    "RUSTUP_HOME",
+    "RUSTUP_TOOLCHAIN",
+    "RUSTUP_UPDATE_ROOT",
     "R_LIBS_USER",
     "SSH_ASKPASS",
     "SSH_AUTH_SOCK",
@@ -248,5 +259,5 @@
     "YARN_RC_FILENAME",
     "ZDOTDIR"
   ],
-  "expectedTotalReportedEntries": 243
+  "expectedTotalReportedEntries": 254
 }

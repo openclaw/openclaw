@@ -1,12 +1,14 @@
+// Qa Lab plugin module implements tool coverage report behavior.
 import {
   isRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  RuntimeId,
-  RuntimeParityCell,
-  RuntimeParityDrift,
-  RuntimeParityResult,
+import {
+  isRuntimeParityCellPassable,
+  type RuntimeId,
+  type RuntimeParityCell,
+  type RuntimeParityDrift,
+  type RuntimeParityResult,
 } from "./runtime-parity.js";
 import {
   readScenarioRuntimeToolCoverageMetadata,
@@ -94,7 +96,7 @@ function cellStatus(cell: RuntimeParityCell | undefined): QaToolCoverageStatus {
   if (!cell) {
     return "missing";
   }
-  return cell.runtimeErrorClass || cell.transportErrorClass ? "fail" : "pass";
+  return isRuntimeParityCellPassable(cell) ? "pass" : "fail";
 }
 
 function toolIdsForScenario(scenario: QaSeedScenarioWithSource): string[] {
