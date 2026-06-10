@@ -70,6 +70,7 @@ function createWebhookCall(params: {
   direction: "inbound" | "outbound";
   from: string;
   to: string;
+  threadId?: string;
 }): CallRecord {
   const callId = crypto.randomUUID();
   const effective = resolveVoiceCallEffectiveConfig(
@@ -90,6 +91,7 @@ function createWebhookCall(params: {
       config: effectiveConfig,
       callId,
       phone: params.direction === "outbound" ? params.to : params.from,
+      threadId: params.threadId,
     }),
     startedAt: Date.now(),
     transcript: [],
@@ -197,6 +199,8 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       direction: eventDirection === "outbound" ? "outbound" : "inbound",
       from: event.from || "unknown",
       to: event.to || ctx.config.fromNumber || "unknown",
+      // Conversation thread (e.g. Teams chat thread) for sessionScope "per-thread".
+      threadId: event.threadId,
     });
 
     // Normalize event to internal ID for downstream consumers.

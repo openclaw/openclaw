@@ -86,6 +86,8 @@ const BaseEventSchema = z.object({
   direction: z.enum(["inbound", "outbound"]).optional(),
   from: z.string().optional(),
   to: z.string().optional(),
+  // Conversation thread id (e.g. a Teams chat thread) for sessionScope "per-thread".
+  threadId: z.string().optional(),
 });
 
 const NormalizedEventSchema = z.discriminatedUnion("type", [

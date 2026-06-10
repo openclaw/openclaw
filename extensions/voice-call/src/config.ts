@@ -289,7 +289,7 @@ export type WebhookSecurityConfig = z.infer<typeof VoiceCallWebhookSecurityConfi
 const CallModeSchema = z.enum(["notify", "conversation"]);
 export type CallMode = z.infer<typeof CallModeSchema>;
 
-const VoiceCallSessionScopeSchema = z.enum(["per-phone", "per-call"]);
+const VoiceCallSessionScopeSchema = z.enum(["per-phone", "per-call", "per-thread"]);
 export type VoiceCallSessionScope = z.infer<typeof VoiceCallSessionScopeSchema>;
 
 const OutboundConfigSchema = z
@@ -858,6 +858,8 @@ export function resolveVoiceCallSessionKey(params: {
   config: Pick<VoiceCallConfig, "sessionScope">;
   callId: string;
   phone?: string;
+  /** Conversation thread id (e.g. a Teams chat thread) for sessionScope "per-thread". */
+  threadId?: string;
   explicitSessionKey?: string;
 }): string {
   const explicit = params.explicitSessionKey?.trim();
@@ -866,6 +868,12 @@ export function resolveVoiceCallSessionKey(params: {
   }
   if (params.config.sessionScope === "per-call") {
     return `voice:call:${params.callId}`;
+  }
+  // Per-thread: parallel conversations (different meetings/chats) get separate sessions even with
+  // the same caller; a recurring thread keeps its context across calls. Falls through to the
+  // per-phone key when the provider has no thread (e.g. PSTN).
+  if (params.config.sessionScope === "per-thread" && params.threadId?.trim()) {
+    return `voice:thread:${params.threadId.trim()}`;
   }
   const normalizedPhone = params.phone?.replace(/\D/g, "");
   return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
