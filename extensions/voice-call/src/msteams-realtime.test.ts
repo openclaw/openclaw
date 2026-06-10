@@ -256,6 +256,27 @@ describe("createMsteamsRealtimeCall", () => {
     expect(mock.sendAudio).toHaveBeenCalledTimes(1);
   });
 
+  it("notify mode: fires onDeliveryComplete once on the first assistant-final transcript", () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    const onDeliveryComplete = vi.fn();
+    createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: { provider: mock.provider, providerConfig: {}, onDeliveryComplete },
+    });
+    const req = mock.getRequest();
+
+    // A partial, and a non-assistant final, must not trigger it.
+    req.onTranscript?.("assistant", "Here is", false);
+    req.onTranscript?.("user", "ok", true);
+    expect(onDeliveryComplete).not.toHaveBeenCalled();
+
+    // First assistant-final = result delivered → fire exactly once, even across later turns.
+    req.onTranscript?.("assistant", "Here is your result.", true);
+    req.onTranscript?.("assistant", "Anything else?", true);
+    expect(onDeliveryComplete).toHaveBeenCalledTimes(1);
+  });
+
   it("answers a consult tool call with an unavailable result when no agent runtime is wired", () => {
     const ctx = createMockSession();
     const mock = createMockProvider();
