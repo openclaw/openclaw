@@ -53,7 +53,7 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
     expect(result.usage).toMatchObject({
       input_tokens: 75000,
       output_tokens: 2000,
-      total_tokens: 77000,
+      total_tokens: 82000,
     });
     expect(deriveSessionTotalTokensMock).toHaveBeenCalledWith({
       usage: {
