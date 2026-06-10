@@ -304,9 +304,8 @@ export class MsteamsProvider implements VoiceCallProvider {
     for (const providerCallId of Array.from(this.calls.keys())) {
       this.teardownCall(providerCallId, { closeSession: true, reason: "shutdown" });
     }
-    for (const [providerCallId, realtimeCall] of Array.from(this.realtimeCalls.entries())) {
-      this.realtimeCalls.delete(providerCallId);
-      realtimeCall.close();
+    for (const providerCallId of Array.from(this.realtimeCalls.keys())) {
+      this.disposeRealtimeCall(providerCallId);
     }
     // Cancel any outstanding outbound timers so they can't fire after teardown.
     for (const providerCallId of Array.from(this.pendingOutboundTimers.keys())) {
@@ -885,14 +884,11 @@ export class MsteamsProvider implements VoiceCallProvider {
     this.visionBudgetInstance?.release(info.callId);
     this.clearOutboundTimer(info.callId);
     this.clearTimedOutOutbound(info.callId);
-    const realtimeCall = this.realtimeCalls.get(info.callId);
-    if (realtimeCall) {
-      this.realtimeCalls.delete(info.callId);
-      realtimeCall.close();
-      // Outbound realtime calls have a CallRecord (manager.initiateCall); finalize it.
-      const internalCallId = this.outboundRealtimeInternalIds.get(info.callId);
+    // Outbound realtime calls have a CallRecord (manager.initiateCall); read it before disposal
+    // clears the mapping, then finalize it. Caller-driven session.end passes no close reason.
+    const internalCallId = this.outboundRealtimeInternalIds.get(info.callId);
+    if (this.disposeRealtimeCall(info.callId)) {
       if (internalCallId && this.manager) {
-        this.outboundRealtimeInternalIds.delete(info.callId);
         this.manager.processEvent({
           id: `msteams-ended-${info.callId}-${Date.now()}`,
           type: "call.ended",
@@ -918,6 +914,26 @@ export class MsteamsProvider implements VoiceCallProvider {
     });
   }
 
+  /**
+   * Close + forget a realtime call's bridge and its outbound CallRecord mapping.
+   * Pass a `reason` to also hang up the Teams worker session (manager-driven hangup);
+   * omit it for a caller-driven `session.end` that is already closing. Returns the
+   * disposed call, or undefined if no realtime call was registered for the id.
+   */
+  private disposeRealtimeCall(
+    providerCallId: string,
+    reason?: string,
+  ): MsteamsRealtimeCall | undefined {
+    const realtimeCall = this.realtimeCalls.get(providerCallId);
+    if (!realtimeCall) {
+      return undefined;
+    }
+    this.realtimeCalls.delete(providerCallId);
+    this.outboundRealtimeInternalIds.delete(providerCallId);
+    realtimeCall.close(reason);
+    return realtimeCall;
+  }
+
   /** Abort playback, close the STT session, and drop per-call state. */
   private teardownCall(
     providerCallId: string,
@@ -926,12 +942,10 @@ export class MsteamsProvider implements VoiceCallProvider {
     // Realtime calls have no streaming `this.calls` state, so close + remove the realtime bridge here:
     // a manager-driven hangup (idle timeout, notify auto-hangup, explicit endCall) must tear down the
     // realtime session and hang up the Teams call too — not only inbound/streaming sessions.
-    const realtimeCall = this.realtimeCalls.get(providerCallId);
-    if (realtimeCall) {
-      this.realtimeCalls.delete(providerCallId);
-      this.outboundRealtimeInternalIds.delete(providerCallId);
-      realtimeCall.close(options.closeSession ? (options.reason ?? "completed") : undefined);
-    }
+    this.disposeRealtimeCall(
+      providerCallId,
+      options.closeSession ? (options.reason ?? "completed") : undefined,
+    );
     const state = this.calls.get(providerCallId);
     if (!state) {
       return undefined;
@@ -956,6 +970,11 @@ export class MsteamsProvider implements VoiceCallProvider {
    * Tear down a call that cannot proceed (e.g. STT failed to connect): close the
    * worker session and notify the CallManager so the call does not linger as
    * active with no media path.
+   *
+   * Streaming-only: the sole caller is createStreamingCallState's STT-connect
+   * failure. Realtime calls have no STT session and never reach here — if that
+   * ever changes, fire call.ended for them directly (teardownCall returns
+   * undefined for realtime, so the !state guard below would swallow the notify).
    */
   private failCall(providerCallId: string, reason: string): void {
     const state = this.teardownCall(providerCallId, { closeSession: true, reason });
