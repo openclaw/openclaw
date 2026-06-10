@@ -1302,9 +1302,9 @@ export const FIELD_HELP: Record<string, string> = {
   "memory.qmd.update.debounceMs":
     "Sets the minimum delay between consecutive QMD refresh attempts in milliseconds (default: 15000). Increase this if frequent file changes cause update thrash or unnecessary background load.",
   "memory.qmd.update.onBoot":
-    "Runs an initial QMD update when the long-lived QMD manager opens (default: true). Set false to disable manager-start updates and legacy/opt-in startup refreshes.",
+    "Runs an initial QMD update when the long-lived QMD manager opens (default: true). Set false to skip manager-start boot updates while keeping configured interval/embed maintenance.",
   "memory.qmd.update.startup":
-    "Controls whether Gateway startup schedules a QMD refresh before memory is first used (`off`, `idle`, or `immediate`; default: off). Keep off for fastest startup and lazy memory initialization.",
+    "Controls whether Gateway startup initializes QMD before memory is first used (`off`, `idle`, or `immediate`; default: off). With onBoot disabled, startup only arms configured interval/embed maintenance.",
   "memory.qmd.update.startupDelayMs":
     'Sets the idle delay before an opt-in `memory.qmd.update.startup: "idle"` refresh runs (default: 120000). Increase to keep cold-start CPU available for channels and providers.',
   "memory.qmd.update.waitForBootSync":
