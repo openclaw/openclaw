@@ -67,6 +67,18 @@ const hasAuthProfileForProvider = vi.hoisted(() =>
     }) => boolean
   >(() => false),
 );
+const inspectPortUsage = vi.hoisted(() =>
+  vi.fn<
+    (
+      port: number,
+    ) => Promise<{ port: number; status: string; listeners: unknown[]; hints: string[] }>
+  >(async (port: number) => ({ port, status: "free", listeners: [], hints: [] })),
+);
+const formatPortDiagnostics = vi.hoisted(() =>
+  vi.fn<(diagnostics: { port: number }) => string[]>((diagnostics) => [
+    `Port ${diagnostics.port} is already in use.`,
+  ]),
+);
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
@@ -149,6 +161,11 @@ vi.mock("../daemon/systemd.js", () => ({
 
 vi.mock("../infra/control-ui-assets.js", () => ({
   ensureControlUiAssetsBuilt: vi.fn(async () => ({ ok: true })),
+}));
+
+vi.mock("../infra/ports.js", () => ({
+  inspectPortUsage,
+  formatPortDiagnostics,
 }));
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({
@@ -321,6 +338,17 @@ describe("finalizeSetupWizard", () => {
     listConfiguredWebSearchProviders.mockReturnValue([]);
     hasAuthProfileForProvider.mockReset();
     hasAuthProfileForProvider.mockReturnValue(false);
+    inspectPortUsage.mockReset();
+    inspectPortUsage.mockImplementation(async (port: number) => ({
+      port,
+      status: "free",
+      listeners: [],
+      hints: [],
+    }));
+    formatPortDiagnostics.mockReset();
+    formatPortDiagnostics.mockImplementation((diagnostics) => [
+      `Port ${diagnostics.port} is already in use.`,
+    ]);
   });
 
   it("resolves gateway password SecretRef for probe but omits auth from TUI hatch", async () => {
@@ -990,6 +1018,53 @@ describe("finalizeSetupWizard", () => {
     expect(runtime.error).not.toHaveBeenCalledWith("health failed");
     expectNoteContains(prompter, "Setup was run without Gateway service install", "Gateway");
     expectNoteTitleNotCalled(prompter, "Dashboard ready");
+  });
+
+  it("emits a port-conflict hint when the gateway port is busy on an unreachable gateway", async () => {
+    waitForGatewayReachable.mockResolvedValue({
+      ok: false,
+      detail: "gateway did not become reachable",
+    });
+    probeGatewayReachable.mockResolvedValue({
+      ok: false,
+      detail: "gateway did not become reachable",
+    });
+    inspectPortUsage.mockImplementation(async (port: number) => ({
+      port,
+      status: "busy",
+      listeners: [{ pid: 4242, command: "node" }],
+      hints: [],
+    }));
+    const prompter = createLaterPrompter();
+    const runtime = createRuntime();
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: false,
+        skipUi: false,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "test-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime,
+    });
+
+    expect(inspectPortUsage).toHaveBeenCalledWith(18789);
+    expectNoteContains(prompter, "Port 18789 is already in use.", "Gateway");
+    expectNoteContains(prompter, "openclaw onboard --port <port>", "Gateway");
   });
 
   it("does not show a Codex native search summary when web search is globally disabled", async () => {

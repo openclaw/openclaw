@@ -32,6 +32,7 @@ import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { launchTuiCli } from "../tui/tui-launch.js";
 import { resolveUserPath } from "../utils.js";
@@ -113,6 +114,19 @@ function getLocalizedGatewayDaemonRuntimeOptions() {
 function loadOnboardSearchModule(): Promise<OnboardSearchModule> {
   onboardSearchModulePromise ??= import("../commands/onboard-search.js");
   return onboardSearchModulePromise;
+}
+
+// Preflight the gateway port when the gateway is unreachable so a busy port
+// surfaces the holding process and a `--port` hint instead of a generic timeout.
+async function buildGatewayPortConflictLines(port: number): Promise<string[]> {
+  const diagnostics = await inspectPortUsage(port).catch(() => null);
+  if (diagnostics?.status !== "busy") {
+    return [];
+  }
+  return [
+    ...formatPortDiagnostics(diagnostics),
+    `Free the port or re-run with a different one: ${formatCliCommand("openclaw onboard --port <port>")}.`,
+  ];
 }
 
 export async function finalizeSetupWizard(
@@ -382,8 +396,10 @@ export async function finalizeSetupWizard(
           ),
         ),
       );
+      const portConflictLines = await buildGatewayPortConflictLines(settings.port);
       await prompter.note(
         [
+          ...portConflictLines,
           t("common.docs"),
           "https://docs.openclaw.ai/gateway/health",
           "https://docs.openclaw.ai/gateway/troubleshooting",
@@ -391,10 +407,12 @@ export async function finalizeSetupWizard(
         t("wizard.finalize.healthCheckHelp"),
       );
     } else {
+      const portConflictLines = await buildGatewayPortConflictLines(settings.port);
       await prompter.note(
         [
           t("wizard.finalize.gatewayNotDetected"),
           t("wizard.finalize.noBackgroundGatewayExpected"),
+          ...portConflictLines,
           t("wizard.finalize.startGatewayNow", {
             command: formatCliCommand("openclaw gateway run"),
           }),

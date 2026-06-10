@@ -325,6 +325,17 @@ export async function runNonInteractiveLocalSetup(params: {
       const diagnostics = opts.installDaemon
         ? await collectGatewayHealthFailureDiagnostics()
         : undefined;
+      // Preflight the port so a busy port surfaces the holding process and a
+      // `--port` hint instead of only a generic "not reachable" timeout.
+      const { formatPortDiagnostics, inspectPortUsage } = await import("../../infra/ports.js");
+      const portUsage = await inspectPortUsage(gatewayResult.port).catch(() => null);
+      const portConflictHints =
+        portUsage?.status === "busy"
+          ? [
+              ...formatPortDiagnostics(portUsage),
+              `Free the port or re-run with a different one: ${formatCliCommand("openclaw onboard --port <port>")}.`,
+            ]
+          : [];
       logNonInteractiveOnboardingFailure({
         opts,
         runtime,
@@ -342,13 +353,17 @@ export async function runNonInteractiveLocalSetup(params: {
         diagnostics,
         hints: !opts.installDaemon
           ? [
+              ...portConflictHints,
               "Non-interactive local setup only waits for an already-running gateway unless you pass --install-daemon.",
               `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, re-run with \`--install-daemon\`, or use \`--skip-health\`.`,
               process.platform === "win32"
                 ? "Native Windows managed gateway install tries Scheduled Tasks first and falls back to a per-user Startup-folder login item when task creation is denied."
                 : undefined,
             ].filter((value): value is string => Boolean(value))
-          : [`Run \`${formatCliCommand("openclaw gateway status --deep")}\` for more detail.`],
+          : [
+              ...portConflictHints,
+              `Run \`${formatCliCommand("openclaw gateway status --deep")}\` for more detail.`,
+            ],
       });
       runtime.exit(1);
       return;
