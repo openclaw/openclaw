@@ -6,9 +6,9 @@ import { getQaProvider, type QaProviderMode } from "./providers/index.js";
 export const QA_EVIDENCE_SUMMARY_KIND = "openclaw.qa.evidence-summary";
 export const QA_EVIDENCE_SUMMARY_SCHEMA_VERSION = 2;
 
-const qaEvidenceProfileSchema = z.enum(["smoke-ci", "release"]);
 const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
+const qaEvidenceProfileSchema = nonEmptyStringSchema;
 
 const qaEvidenceProviderSchema = z
   .object({
@@ -179,7 +179,11 @@ function resolveQaEvidenceProfile(params: {
   explicit?: QaEvidenceProfile;
 }) {
   if (params.explicit) {
-    return params.explicit;
+    const explicit = params.explicit.trim();
+    if (!explicit) {
+      throw new Error("evidence profile must be a non-empty string.");
+    }
+    return explicit;
   }
 
   const envProfiles = [
@@ -191,11 +195,7 @@ function resolveQaEvidenceProfile(params: {
     if (!normalized) {
       continue;
     }
-    const parsed = qaEvidenceProfileSchema.safeParse(normalized);
-    if (!parsed.success) {
-      throw new Error(`${source} must be one of smoke-ci, release, got "${normalized}".`);
-    }
-    return parsed.data;
+    return normalized;
   }
 
   return params.fallback;

@@ -257,30 +257,30 @@ describe("evidence summary", () => {
     });
   });
 
-  it("rejects profile env values outside the current evidence schema", () => {
-    expect(() =>
-      buildQaSuiteEvidenceSummary({
-        artifactPaths: ["qa-suite-summary.json"],
-        scenarioSpecs: [
-          {
-            id: "dm-chat-baseline",
-            title: "DM baseline conversation",
-            surface: "dm",
-            coverage: {
-              primary: ["channels.dm"],
-            },
+  it("carries profile env values without hardcoding taxonomy mapping ids", () => {
+    const evidence = buildQaSuiteEvidenceSummary({
+      artifactPaths: ["qa-suite-summary.json"],
+      scenarioSpecs: [
+        {
+          id: "dm-chat-baseline",
+          title: "DM baseline conversation",
+          surface: "dm",
+          coverage: {
+            primary: ["channels.dm"],
           },
-        ],
-        channelId: "qa-channel",
-        env: {
-          OPENCLAW_QA_PROFILE: "advisory",
-        } as NodeJS.ProcessEnv,
-        generatedAt: "2026-06-07T12:09:00.000Z",
-        primaryModel: "mock-openai/gpt-5.5",
-        providerMode: "mock-openai",
-        scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
-      }),
-    ).toThrow('OPENCLAW_QA_PROFILE must be one of smoke-ci, release, got "advisory".');
+        },
+      ],
+      channelId: "qa-channel",
+      env: {
+        OPENCLAW_QA_PROFILE: "experimental-profile",
+      } as NodeJS.ProcessEnv,
+      generatedAt: "2026-06-07T12:09:00.000Z",
+      primaryModel: "mock-openai/gpt-5.5",
+      providerMode: "mock-openai",
+      scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
+    });
+
+    expect(evidence.entries[0]?.profile).toBe("experimental-profile");
   });
 
   it("keeps mock non-OpenAI model refs attributed to their model provider", () => {
