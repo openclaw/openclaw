@@ -293,11 +293,11 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
 }
 
-function assertCronExpressionSatisfiable(job: Pick<CronJob, "schedule">, nowMs: number) {
+function assertCronExpressionSatisfiable(job: CronJob, nowMs: number) {
   if (job.schedule.kind !== "cron") {
     return;
   }
-  if (computeNextRunAtMs(job.schedule, nowMs) !== undefined) {
+  if (computeJobNextRunAtMs({ ...job, enabled: true }, nowMs) !== undefined) {
     return;
   }
   throw new Error(

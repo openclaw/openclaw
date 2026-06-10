@@ -801,4 +801,29 @@ describe("cron service ops seam coverage", () => {
 
     expect(updated.state.nextRunAtMs).toBe(Date.parse("2001-01-01T00:00:00.000Z"));
   });
+
+  it("accepts a finite-year cron while its final staggered run is pending", async () => {
+    const { storePath } = await makeStorePath();
+    const finalBaseRunAtMs = Date.parse("2001-01-01T00:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now: finalBaseRunAtMs + 1 });
+
+    const job = await add(state, {
+      name: "final staggered run",
+      enabled: true,
+      schedule: {
+        kind: "cron",
+        expr: "0 0 0 1 1 * 2001",
+        tz: "UTC",
+        staggerMs: 3_600_000,
+      },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "do work" },
+    });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+
+    expect(job.state.nextRunAtMs).toBeGreaterThan(finalBaseRunAtMs);
+  });
 });
