@@ -2135,6 +2135,28 @@ describe("sendChatMessage", () => {
 });
 
 describe("abortChatRun", () => {
+  it("locally terminalizes the active run after a successful abort", async () => {
+    const request = vi.fn().mockResolvedValue({ aborted: true, runIds: ["run-1"] });
+    const state = createState({
+      connected: true,
+      chatRunId: "run-1",
+      chatStream: "Partial reply",
+      chatStreamStartedAt: 10,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await abortChatRun(state);
+
+    expect(result).toBe(true);
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "main",
+      runId: "run-1",
+    });
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expectTextChatMessage(state.chatMessages.at(-1), "assistant", "Partial reply");
+  });
+
   it("formats structured non-auth connect failures for chat abort", async () => {
     // Abort now shares the same structured connect-error formatter as send.
     const request = vi.fn().mockRejectedValue(

@@ -55,7 +55,11 @@ import {
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
-import { resolveSessionFilePath, updateSessionStoreEntry } from "../../config/sessions.js";
+import {
+  resolveSessionFilePath,
+  updateSessionStoreEntry,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -204,6 +208,16 @@ type AbortedPartialSnapshot = {
   agentId?: string;
   text: string;
   abortOrigin: AbortOrigin;
+};
+
+type AbortedLifecycleSnapshot = {
+  runId: string;
+  sessionKey: string;
+  sessionId: string;
+  agentId?: string;
+  startedAtMs: number;
+  endedAtMs: number;
+  controlUiVisible?: boolean;
 };
 
 type ChatAbortRequester = {
@@ -1822,6 +1836,103 @@ function collectSessionAbortPartials(params: {
   return out;
 }
 
+function collectSessionAbortLifecycleSnapshots(params: {
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  runIds: ReadonlySet<string>;
+  endedAtMs: number;
+}): AbortedLifecycleSnapshot[] {
+  const out: AbortedLifecycleSnapshot[] = [];
+  for (const [runId, active] of params.chatAbortControllers) {
+    if (!params.runIds.has(runId)) {
+      continue;
+    }
+    out.push({
+      runId,
+      sessionKey: active.sessionKey,
+      sessionId: active.sessionId,
+      agentId: active.agentId,
+      startedAtMs: active.startedAtMs,
+      endedAtMs: params.endedAtMs,
+      controlUiVisible: active.controlUiVisible,
+    });
+  }
+  return out;
+}
+
+function finitePositiveTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function buildAbortedLifecyclePatch(
+  current: SessionEntry,
+  snapshot: AbortedLifecycleSnapshot,
+): Partial<SessionEntry> | null {
+  if (snapshot.sessionId && current.sessionId && current.sessionId !== snapshot.sessionId) {
+    return null;
+  }
+  const endedAt = finitePositiveTimestamp(snapshot.endedAtMs) ?? Date.now();
+  const startedAt = finitePositiveTimestamp(snapshot.startedAtMs) ?? current.startedAt;
+  return {
+    updatedAt: endedAt,
+    status: "killed",
+    startedAt,
+    endedAt,
+    runtimeMs: startedAt !== undefined ? Math.max(0, endedAt - startedAt) : current.runtimeMs,
+    abortedLastRun: true,
+  };
+}
+
+async function persistAbortedSessionLifecycles(params: {
+  context: Pick<
+    GatewayRequestContext,
+    | "chatAbortControllers"
+    | "broadcastToConnIds"
+    | "getRuntimeConfig"
+    | "getSessionEventSubscriberConnIds"
+    | "logGateway"
+  >;
+  snapshots: AbortedLifecycleSnapshot[];
+}): Promise<void> {
+  for (const snapshot of params.snapshots) {
+    if (snapshot.controlUiVisible === false) {
+      continue;
+    }
+    const sessionLoadOptions =
+      snapshot.sessionKey === "global" && snapshot.agentId
+        ? { agentId: snapshot.agentId }
+        : undefined;
+    const { storePath, canonicalKey, entry } = loadSessionEntry(
+      snapshot.sessionKey,
+      sessionLoadOptions,
+    );
+    if (!entry) {
+      continue;
+    }
+    try {
+      const persisted = await updateSessionStoreEntry({
+        storePath,
+        sessionKey: canonicalKey,
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+        update: (current) => buildAbortedLifecyclePatch(current, snapshot),
+      });
+      if (persisted) {
+        emitSessionsChanged(params.context, {
+          sessionKey: canonicalKey,
+          ...(canonicalKey === "global" && snapshot.agentId ? { agentId: snapshot.agentId } : {}),
+          reason: "abort",
+        });
+      }
+    } catch (err) {
+      params.context.logGateway.warn(
+        `chat.abort session lifecycle persistence failed for ${snapshot.runId}: ${formatErrorMessage(
+          err,
+        )}`,
+      );
+    }
+  }
+}
+
 async function persistAbortedPartials(params: {
   context: Pick<GatewayRequestContext, "logGateway">;
   sessionKey: string;
@@ -2240,6 +2351,12 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
     runIds: authorizedRunIdSet,
     abortOrigin: params.abortOrigin,
   });
+  const endedAt = Date.now();
+  const lifecycleSnapshots = collectSessionAbortLifecycleSnapshots({
+    chatAbortControllers: params.context.chatAbortControllers,
+    runIds: authorizedRunIdSet,
+    endedAtMs: endedAt,
+  });
   const runIds: string[] = [];
   for (const { runId, sessionKey } of authorizedRuns) {
     const res = abortChatRunById(params.ops, {
@@ -2251,7 +2368,6 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
       runIds.push(runId);
     }
   }
-  const endedAt = Date.now();
   const stopReason = params.stopReason ?? "rpc";
   for (const { runId, sessionKey, payload } of authorizedPendingAgentRuns) {
     writePreRegisteredAgentAbort({
@@ -2266,6 +2382,10 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   }
   const res = { aborted: runIds.length > 0, runIds, unauthorized: false };
   if (res.aborted) {
+    await persistAbortedSessionLifecycles({
+      context: params.context,
+      snapshots: lifecycleSnapshots,
+    });
     await persistAbortedPartials({
       context: params.context,
       sessionKey: params.persistSessionKey ?? params.sessionKey,
@@ -2948,6 +3068,22 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: active.sessionKey,
       stopReason: "rpc",
     });
+    if (res.aborted) {
+      await persistAbortedSessionLifecycles({
+        context,
+        snapshots: [
+          {
+            runId,
+            sessionKey: active.sessionKey,
+            sessionId: active.sessionId,
+            agentId: active.agentId,
+            startedAtMs: active.startedAtMs,
+            endedAtMs: Date.now(),
+            controlUiVisible: active.controlUiVisible,
+          },
+        ],
+      });
+    }
     if (res.aborted && active.controlUiVisible !== false && partialText && partialText.trim()) {
       await persistAbortedPartials({
         context,

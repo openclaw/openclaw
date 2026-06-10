@@ -20,7 +20,7 @@ type TranscriptLine = {
 const sessionEntryState = vi.hoisted(() => ({
   transcriptPath: "",
   sessionId: "",
-  hasEntry: true,
+  hasEntry: false,
   canonicalKey: "main",
   cfg: {} as Record<string, unknown>,
   loadCalls: [] as Array<{ sessionKey: string; opts?: { agentId?: string } }>,
@@ -59,6 +59,37 @@ async function writeTranscriptHeader(transcriptPath: string, sessionId: string) 
     cwd: "/tmp",
   };
   await fs.writeFile(transcriptPath, `${JSON.stringify(header)}\n`, "utf-8");
+}
+
+function storePathForTranscript(transcriptPath: string): string {
+  return path.join(path.dirname(transcriptPath), "sessions.json");
+}
+
+async function writeSessionStoreEntry(
+  transcriptPath: string,
+  sessionId: string,
+  overrides: Record<string, unknown> = {},
+) {
+  const entry = {
+    sessionId,
+    sessionFile: transcriptPath,
+    updatedAt: 1,
+    status: "running",
+    startedAt: 1,
+    abortedLastRun: false,
+    ...overrides,
+  };
+  await fs.writeFile(
+    storePathForTranscript(transcriptPath),
+    JSON.stringify({ main: entry }, null, 2),
+    "utf-8",
+  );
+}
+
+async function readSessionStoreEntry(transcriptPath: string): Promise<Record<string, unknown>> {
+  const raw = await fs.readFile(storePathForTranscript(transcriptPath), "utf-8");
+  const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+  return store.main;
 }
 
 async function readTranscriptLines(transcriptPath: string): Promise<TranscriptLine[]> {
@@ -169,6 +200,7 @@ async function createTranscriptFixture(prefix: string) {
   const sessionId = "sess-main";
   const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
   await writeTranscriptHeader(transcriptPath, sessionId);
+  await writeSessionStoreEntry(transcriptPath, sessionId);
   setMockSessionEntry(transcriptPath, sessionId);
   return { transcriptPath, sessionId };
 }
@@ -184,6 +216,12 @@ async function createMissingEntryFixture(prefix: string) {
 afterEach(() => {
   vi.restoreAllMocks();
   resetAgentEventsForTest();
+  sessionEntryState.transcriptPath = "";
+  sessionEntryState.sessionId = "";
+  sessionEntryState.hasEntry = false;
+  sessionEntryState.canonicalKey = "main";
+  sessionEntryState.cfg = {};
+  sessionEntryState.loadCalls = [];
 });
 
 describe("chat abort transcript persistence", () => {
@@ -239,6 +277,47 @@ describe("chat abort transcript persistence", () => {
       runId,
       stopReason: "stop",
     });
+  });
+
+  it("marks run-scoped rpc aborts as killed before replying", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-lifecycle-",
+    );
+    const runId = "idem-abort-lifecycle";
+    const startedAt = 1_700_000_000_000;
+    await writeSessionStoreEntry(transcriptPath, sessionId, {
+      status: "running",
+      startedAt,
+      endedAt: undefined,
+      runtimeMs: undefined,
+      abortedLastRun: false,
+    });
+    const active = createActiveRun("main", { sessionId });
+    active.startedAtMs = startedAt;
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, active]]),
+      chatRunBuffers: new Map([[runId, ""]]),
+      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+      logGateway: { warn: vi.fn() },
+    });
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main", runId },
+      respond,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: [runId] });
+    const entry = await readSessionStoreEntry(transcriptPath);
+    expect(entry.status).toBe("killed");
+    expect(entry.abortedLastRun).toBe(true);
+    expect(entry.startedAt).toBe(startedAt);
+    expect(typeof entry.endedAt).toBe("number");
+    expect(entry.runtimeMs).toBe((entry.endedAt as number) - startedAt);
   });
 
   it("does not let non-assistant idempotency collisions suppress abort partial persistence", async () => {

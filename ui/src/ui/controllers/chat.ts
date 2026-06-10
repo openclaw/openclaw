@@ -1204,6 +1204,24 @@ export async function sendSteerChatMessage(
   return sendChatMessageWithGeneratedRunId(state, message, attachments);
 }
 
+function reconcileSuccessfulLocalAbort(state: ChatState, runId: string | null) {
+  if (!runId && state.chatStream == null) {
+    return;
+  }
+  state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+  reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+    outcome: "interrupted",
+    sessionStatus: "killed",
+    runId,
+    sessionKey: state.sessionKey,
+    clearLocalRun: true,
+    clearChatStream: true,
+    clearToolStream: true,
+    clearSideResultTerminalRuns: true,
+    armLocalTerminalReconcile: Boolean(runId),
+  });
+}
+
 export async function abortChatRun(state: ChatState): Promise<boolean> {
   if (!state.client || !state.connected) {
     return false;
@@ -1229,6 +1247,7 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
             })(),
           },
     );
+    reconcileSuccessfulLocalAbort(state, runId);
     return true;
   } catch (err) {
     setChatError(state, formatConnectError(err));
