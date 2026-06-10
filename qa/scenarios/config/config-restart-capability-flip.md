@@ -111,9 +111,6 @@ steps:
                             ref: originalImageGenerationModelPrimary
                   sessionKey:
                     ref: sessionKey
-                  deliveryContext:
-                    channel: qa-channel
-                    to: dm:qa-operator
                   note:
                     ref: wakeMarker
                   replacePaths:
@@ -126,13 +123,6 @@ steps:
               args:
                 - ref: env
                 - 60000
-            - call: waitForOutboundMessage
-              args:
-                - ref: state
-                - lambda:
-                    params: [candidate]
-                    expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(wakeMarker)"
-                - expr: liveTurnTimeoutMs(env, config.imageTurnTimeoutMs)
             - call: waitForCondition
               saveAs: afterTools
               args:
