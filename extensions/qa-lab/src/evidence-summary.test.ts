@@ -11,7 +11,7 @@ import {
 } from "./evidence-summary.js";
 
 describe("evidence summary", () => {
-  it("builds scorecard-ready QA suite evidence entries from catalog metadata", () => {
+  it("builds taxonomy-mapped QA suite evidence entries from catalog metadata", () => {
     const evidence = buildQaSuiteEvidenceSummary({
       artifactPaths: ["qa-suite-summary.json", "qa-suite-report.md"],
       scenarioSpecs: [
@@ -49,38 +49,99 @@ describe("evidence summary", () => {
         kind: "qa-scenario",
         id: "dm-chat-baseline",
         title: "DM baseline conversation",
-        sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
+        source: {
+          path: "qa/scenarios/channels/dm-chat-baseline.md",
+        },
       },
-      coverageIds: ["channels.dm", "channels.qa-channel"],
-      runtimeParity: "standard",
-      scorecard: {
-        surfaceIds: ["dm"],
-        categoryIds: ["channels.dm"],
+      mapping: {
+        profile: {
+          id: "smoke-ci",
+        },
+        coverage: [
+          {
+            id: "channels.dm",
+            role: "primary",
+            sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
+            surfaceIds: ["dm"],
+            categoryIds: ["channels.dm"],
+            refIds: [
+              "code:extensions/qa-channel/src/gateway.ts",
+              "docs:docs/channels/qa-channel.md",
+            ],
+          },
+          {
+            id: "channels.qa-channel",
+            role: "secondary",
+            sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
+            surfaceIds: ["dm"],
+            categoryIds: [],
+            refIds: [
+              "code:extensions/qa-channel/src/gateway.ts",
+              "docs:docs/channels/qa-channel.md",
+            ],
+          },
+        ],
+        refs: [
+          {
+            id: "docs:docs/channels/qa-channel.md",
+            kind: "docs",
+            path: "docs/channels/qa-channel.md",
+            sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
+          },
+          {
+            id: "code:extensions/qa-channel/src/gateway.ts",
+            kind: "code",
+            path: "extensions/qa-channel/src/gateway.ts",
+            sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
+          },
+        ],
+        runtimeParity: {
+          id: "standard",
+          sourcePath: "qa/scenarios/channels/dm-chat-baseline.md",
+        },
       },
-      profile: "smoke-ci",
-      provider: {
-        id: "openai",
-        modelName: "gpt-5.5",
-        modelRef: "mock-openai/gpt-5.5",
+      execution: {
+        runner: {
+          id: "host",
+        },
+        provider: {
+          id: "openai",
+          live: false,
+          model: {
+            name: "gpt-5.5",
+            ref: "mock-openai/gpt-5.5",
+          },
+          fixture: "mock-openai",
+        },
+        channel: {
+          id: "qa-channel",
+          live: false,
+          driver: "local-shim",
+        },
+        packageSource: {
+          kind: "source-checkout",
+        },
+        environment: {
+          ref: "abc123",
+          os: process.platform,
+          nodeVersion: process.version,
+        },
+        artifacts: [
+          {
+            kind: "summary",
+            path: "qa-suite-summary.json",
+            source: "qa-suite",
+          },
+          {
+            kind: "report",
+            path: "qa-suite-report.md",
+            source: "qa-suite",
+          },
+        ],
       },
-      model_live: false,
-      provider_fixture: "mock-openai",
-      channel: {
-        id: "qa-channel",
+      result: {
+        status: "pass",
       },
-      channel_live: false,
-      channel_driver: "local-shim",
-      runner: "host",
-      packageSource: {
-        kind: "source-checkout",
-      },
-      environment: {
-        ref: "abc123",
-        os: process.platform,
-        nodeVersion: process.version,
-      },
-      artifactPaths: ["qa-suite-summary.json", "qa-suite-report.md"],
-      status: "pass",
     });
   });
 
@@ -118,36 +179,69 @@ describe("evidence summary", () => {
           id: "telegram-canary",
           title: "Telegram canary",
         },
-        coverageIds: ["channels.telegram.canary", "channels.telegram.live"],
-        scorecard: {
-          surfaceIds: ["channels.telegram"],
-          categoryIds: ["channels.telegram.live"],
+        mapping: {
+          profile: {
+            id: "release",
+          },
+          coverage: [
+            {
+              id: "channels.telegram.live",
+              role: "live-transport",
+              surfaceIds: ["channels.telegram"],
+              categoryIds: ["channels.telegram.live"],
+            },
+            {
+              id: "channels.telegram.canary",
+              role: "live-transport-standard",
+              surfaceIds: ["channels.telegram"],
+              categoryIds: ["channels.telegram.live"],
+            },
+          ],
         },
-        profile: "release",
-        provider: {
-          id: "openai",
-          modelName: "gpt-5.5",
-          modelRef: "openai/gpt-5.5",
-        },
-        model_live: true,
-        provider_auth: "live-frontier",
-        channel: {
-          id: "telegram",
-        },
-        channel_live: true,
-        channel_driver: "native",
-        runner: "crabbox",
-        artifactPaths: [
-          "telegram-qa-summary.json",
-          "telegram-qa-report.md",
-          "telegram-qa-observed-messages.json",
-        ],
-        status: "fail",
-        failure: {
-          reason: "timed out waiting for SUT reply",
-        },
-        timing: {
-          rttMs: 4321,
+        execution: expect.objectContaining({
+          runner: {
+            id: "crabbox",
+          },
+          provider: {
+            id: "openai",
+            live: true,
+            model: {
+              name: "gpt-5.5",
+              ref: "openai/gpt-5.5",
+            },
+            auth: "live-frontier",
+          },
+          channel: {
+            id: "telegram",
+            live: true,
+            driver: "native",
+          },
+          artifacts: [
+            {
+              kind: "summary",
+              path: "telegram-qa-summary.json",
+              source: "telegram-live-transport",
+            },
+            {
+              kind: "report",
+              path: "telegram-qa-report.md",
+              source: "telegram-live-transport",
+            },
+            {
+              kind: "transport-observations",
+              path: "telegram-qa-observed-messages.json",
+              source: "telegram-live-transport",
+            },
+          ],
+        }),
+        result: {
+          status: "fail",
+          failure: {
+            reason: "timed out waiting for SUT reply",
+          },
+          timing: {
+            rttMs: 4321,
+          },
         },
       }),
     ]);
@@ -189,21 +283,62 @@ describe("evidence summary", () => {
           kind: "vitest-test",
           id: "runtime.agent-runner-boundary",
           title: "Agent runner boundary integration tests",
-          sourcePath: "src/agents/agent-runner.e2e.test.ts",
+          source: {
+            path: "src/agents/agent-runner.e2e.test.ts",
+          },
         },
-        coverageIds: ["runtime.agent-runner", "runtime.delivery"],
-        scorecard: {
-          surfaceIds: ["agent-runtime-and-provider-execution"],
-          categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
+        mapping: {
+          profile: {
+            id: "smoke-ci",
+          },
+          coverage: [
+            {
+              id: "runtime.agent-runner",
+              role: "primary",
+              sourcePath: "src/agents/agent-runner.e2e.test.ts",
+              surfaceIds: ["agent-runtime-and-provider-execution"],
+              categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
+              refIds: ["code:src/agents/agent-runner.ts"],
+            },
+            {
+              id: "runtime.delivery",
+              role: "primary",
+              sourcePath: "src/agents/agent-runner.e2e.test.ts",
+              surfaceIds: ["agent-runtime-and-provider-execution"],
+              categoryIds: ["agent-runtime-and-provider-execution.agent-turn-execution"],
+              refIds: ["code:src/agents/agent-runner.ts"],
+            },
+          ],
+          refs: [
+            {
+              id: "code:src/agents/agent-runner.ts",
+              kind: "code",
+              path: "src/agents/agent-runner.ts",
+              sourcePath: "src/agents/agent-runner.e2e.test.ts",
+            },
+          ],
         },
-        profile: "smoke-ci",
-        model_live: false,
-        provider_fixture: "mock-openai",
-        runner: "vitest",
-        artifactPaths: ["vitest-results/runtime-boundary.vitest.json"],
-        status: "pass",
-        timing: {
-          wallMs: 1234,
+        execution: expect.objectContaining({
+          runner: {
+            id: "vitest",
+          },
+          provider: expect.objectContaining({
+            live: false,
+            fixture: "mock-openai",
+          }),
+          artifacts: [
+            {
+              kind: "runner-result",
+              path: "vitest-results/runtime-boundary.vitest.json",
+              source: "vitest",
+            },
+          ],
+        }),
+        result: {
+          status: "pass",
+          timing: {
+            wallMs: 1234,
+          },
         },
       }),
     ]);
@@ -246,21 +381,61 @@ describe("evidence summary", () => {
         kind: "playwright-test",
         id: "control-ui.browser-run",
         title: "Control UI browser workflow",
-        sourcePath: "ui/control-ui.e2e.test.ts",
+        source: {
+          path: "ui/control-ui.e2e.test.ts",
+        },
       },
-      coverageIds: ["control-ui.browser"],
-      scorecard: {
-        surfaceIds: ["browser-control-ui-and-webchat"],
-        categoryIds: ["browser-control-ui-and-webchat.browser-ui"],
+      mapping: {
+        coverage: [
+          {
+            id: "control-ui.browser",
+            role: "primary",
+            sourcePath: "ui/control-ui.e2e.test.ts",
+            surfaceIds: ["browser-control-ui-and-webchat"],
+            categoryIds: ["browser-control-ui-and-webchat.browser-ui"],
+            refIds: ["code:ui/", "docs:docs/concepts/qa-e2e-automation.md"],
+          },
+        ],
+        refs: [
+          {
+            id: "docs:docs/concepts/qa-e2e-automation.md",
+            kind: "docs",
+            path: "docs/concepts/qa-e2e-automation.md",
+            sourcePath: "ui/control-ui.e2e.test.ts",
+          },
+          {
+            id: "code:ui/",
+            kind: "code",
+            path: "ui/",
+            sourcePath: "ui/control-ui.e2e.test.ts",
+          },
+        ],
       },
-      runner: "playwright",
-      artifactPaths: ["playwright-results/control-ui.json", "playwright-report/index.html"],
-      status: "fail",
-      failure: {
-        reason: "locator timed out",
+      execution: {
+        runner: {
+          id: "playwright",
+        },
+        artifacts: [
+          {
+            kind: "runner-result",
+            path: "playwright-results/control-ui.json",
+            source: "playwright",
+          },
+          {
+            kind: "report",
+            path: "playwright-report/index.html",
+            source: "playwright",
+          },
+        ],
       },
-      timing: {
-        wallMs: 2300,
+      result: {
+        status: "fail",
+        failure: {
+          reason: "locator timed out",
+        },
+        timing: {
+          wallMs: 2300,
+        },
       },
     });
   });
@@ -288,7 +463,7 @@ describe("evidence summary", () => {
       scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
     });
 
-    expect(evidence.entries[0]?.profile).toBe("experimental-profile");
+    expect(evidence.entries[0]?.mapping.profile.id).toBe("experimental-profile");
   });
 
   it("keeps mock non-OpenAI model refs attributed to their model provider", () => {
@@ -311,14 +486,20 @@ describe("evidence summary", () => {
       scenarioResults: [{ name: "Anthropic parity", status: "pass" }],
     });
 
-    expect(evidence.entries[0]?.provider).toMatchObject({
+    expect(evidence.entries[0]?.execution.provider).toMatchObject({
       id: "anthropic",
-      modelName: "claude-opus-4-8",
-      modelRef: "anthropic/claude-opus-4-8",
+      model: {
+        name: "claude-opus-4-8",
+        ref: "anthropic/claude-opus-4-8",
+      },
     });
     expect(evidence.entries[0]).toMatchObject({
-      model_live: false,
-      provider_fixture: "mock-openai",
+      execution: {
+        provider: {
+          live: false,
+          fixture: "mock-openai",
+        },
+      },
     });
   });
 
@@ -346,11 +527,11 @@ describe("evidence summary", () => {
       transportId: "telegram",
     });
 
-    expect(npmEvidence.entries[0]?.packageSource).toEqual({
+    expect(npmEvidence.entries[0]?.execution.packageSource).toEqual({
       kind: "npm-package",
       spec: "openclaw@beta",
     });
-    expect(tarballEvidence.entries[0]?.packageSource).toEqual({
+    expect(tarballEvidence.entries[0]?.execution.packageSource).toEqual({
       kind: "packed-tarball",
       spec: "/tmp/openclaw.tgz",
     });
