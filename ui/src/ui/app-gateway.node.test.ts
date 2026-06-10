@@ -574,52 +574,115 @@ describe("connectGateway", () => {
   });
 
   it("keeps polling while managed-service handoff restart health is pending", async () => {
-    const host = createHost();
-    host.pendingUpdateHandoff = true;
+    vi.useFakeTimers();
+    try {
+      const host = createHost();
+      host.pendingUpdateHandoff = true;
 
-    connectGateway(host);
-    const client = requireGatewayClient();
-    let updateStatusCalls = 0;
-    client.request.mockImplementation(async (method: string) => {
-      if (method === "update.status") {
-        updateStatusCalls += 1;
-        if (updateStatusCalls === 1) {
+      connectGateway(host);
+      const client = requireGatewayClient();
+      let updateStatusCalls = 0;
+      client.request.mockImplementation(async (method: string) => {
+        if (method === "update.status") {
+          updateStatusCalls += 1;
+          if (updateStatusCalls === 1) {
+            return {
+              sentinel: {
+                kind: "update",
+                status: "skipped",
+                stats: {
+                  reason: "restart-health-pending",
+                },
+              },
+            };
+          }
           return {
             sentinel: {
               kind: "update",
-              status: "skipped",
+              status: "ok",
               stats: {
-                reason: "restart-health-pending",
+                after: { version: "2.0.0" },
               },
             },
           };
         }
-        return {
-          sentinel: {
-            kind: "update",
-            status: "ok",
-            stats: {
-              after: { version: "2.0.0" },
-            },
-          },
-        };
-      }
-      return {};
-    });
+        return {};
+      });
 
-    client.emitHello({
-      type: "hello-ok",
-      protocol: 4,
-      server: { version: "2.0.0" },
-      auth: { role: "operator", scopes: [] },
-      snapshot: {},
-    });
+      client.emitHello({
+        type: "hello-ok",
+        protocol: 4,
+        server: { version: "2.0.0" },
+        auth: { role: "operator", scopes: [] },
+        snapshot: {},
+      });
 
-    await vi.waitFor(() => {
+      await vi.advanceTimersByTimeAsync(1_000);
+
       expect(updateStatusCalls).toBeGreaterThanOrEqual(2);
       expect(host.pendingUpdateHandoff).toBe(false);
-    });
-    expect(host.updateStatusBanner).toBeNull();
+      expect(host.updateStatusBanner).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not fail managed-service handoff while the detached update is still pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost();
+      host.pendingUpdateHandoff = true;
+
+      connectGateway(host);
+      const client = requireGatewayClient();
+      let updateComplete = false;
+      let updateStatusCalls = 0;
+      client.request.mockImplementation(async (method: string) => {
+        if (method === "update.status") {
+          updateStatusCalls += 1;
+          return {
+            sentinel: updateComplete
+              ? {
+                  kind: "update",
+                  status: "ok",
+                  stats: {
+                    after: { version: "2.0.0" },
+                  },
+                }
+              : {
+                  kind: "update",
+                  status: "skipped",
+                  stats: {
+                    reason: "managed-service-handoff-started",
+                  },
+                },
+          };
+        }
+        return {};
+      });
+
+      client.emitHello({
+        type: "hello-ok",
+        protocol: 4,
+        server: { version: "2.0.0" },
+        auth: { role: "operator", scopes: [] },
+        snapshot: {},
+      });
+
+      await vi.advanceTimersByTimeAsync(10_500);
+
+      expect(updateStatusCalls).toBeGreaterThan(1);
+      expect(host.pendingUpdateHandoff).toBe(true);
+      expect(host.updateStatusBanner).toBeNull();
+
+      updateComplete = true;
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(host.pendingUpdateHandoff).toBe(false);
+      expect(host.updateStatusBanner).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows a hard error when the restarted version does not match the expected update", async () => {

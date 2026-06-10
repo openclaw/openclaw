@@ -180,6 +180,10 @@ type GatewayHostWithSideResults = GatewayHost & {
 const SESSIONS_CHANGED_RELOAD_DEBOUNCE_MS = 5_000;
 const DEFERRED_SESSION_MESSAGE_REPLAY_POLL_MS = 250;
 const DEFERRED_SESSION_MESSAGE_REPLAY_TIMEOUT_MS = 10_000;
+const UPDATE_RESTART_VERIFICATION_POLL_MS = 250;
+const UPDATE_RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
+const UPDATE_HANDOFF_POLL_MS = 1_000;
+const UPDATE_HANDOFF_TIMEOUT_MS = 35 * 60_000;
 const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 const UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
 const PENDING_UPDATE_HANDOFF_REASONS = new Set([
@@ -319,7 +323,10 @@ async function verifyPendingUpdateVersion(
   if (!expectedVersion && !pendingHandoff) {
     return;
   }
-  const deadline = Date.now() + 10_000;
+  const deadline =
+    Date.now() +
+    (pendingHandoff ? UPDATE_HANDOFF_TIMEOUT_MS : UPDATE_RESTART_VERIFICATION_TIMEOUT_MS);
+  const pollMs = pendingHandoff ? UPDATE_HANDOFF_POLL_MS : UPDATE_RESTART_VERIFICATION_POLL_MS;
   while (host.client === client && host.connected && Date.now() < deadline) {
     let response: UpdateRestartStatusResponse | null;
     try {
@@ -330,7 +337,7 @@ async function verifyPendingUpdateVersion(
     const sentinel = response?.sentinel;
     if (isPendingUpdateHandoffSentinel(sentinel)) {
       await new Promise<void>((resolve) => {
-        setTimeout(resolve, 250);
+        setTimeout(resolve, pollMs);
       });
       continue;
     }
@@ -363,7 +370,7 @@ async function verifyPendingUpdateVersion(
       return;
     }
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 250);
+      setTimeout(resolve, pollMs);
     });
   }
   if (host.client !== client || !host.connected) {
