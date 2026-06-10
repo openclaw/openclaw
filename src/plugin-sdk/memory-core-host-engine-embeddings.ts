@@ -36,6 +36,7 @@ export {
   withRemoteHttpResponse,
 } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 
+/** Provider batch status payload shared by memory embedding batch helpers. */
 export type EmbeddingBatchStatus = {
   id?: string;
   status?: string;

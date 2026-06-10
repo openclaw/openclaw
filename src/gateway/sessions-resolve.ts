@@ -42,8 +42,10 @@ function noSessionFoundResult(key: string): SessionsResolveResult {
 function validateSessionAgentExists(
   cfg: OpenClawConfig,
   key: string,
+  entry?: SessionEntry | null,
+  options?: { acpMetadataSessionKey?: string | null },
 ): SessionsResolveResult | null {
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, key);
+  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, key, entry, options);
   if (deletedAgentId === null) {
     return null;
   }
@@ -137,7 +139,12 @@ export async function resolveSessionKeyFromResolveParams(params: {
       ) {
         return noSessionFoundResult(key);
       }
-      const agentCheck = validateSessionAgentExists(cfg, target.canonicalKey);
+      const agentCheck = validateSessionAgentExists(
+        cfg,
+        target.canonicalKey,
+        store[target.canonicalKey],
+        { acpMetadataSessionKey: target.canonicalKey },
+      );
       if (agentCheck) {
         return agentCheck;
       }
@@ -153,18 +160,24 @@ export async function resolveSessionKeyFromResolveParams(params: {
         s[primaryKey] = s[legacyKey];
       }
     });
+    const migratedStore = loadSessionStore(target.storePath);
     if (
       !isResolvedSessionKeyVisible({
         cfg,
         p,
         storePath: target.storePath,
-        store: loadSessionStore(target.storePath),
+        store: migratedStore,
         key: target.canonicalKey,
       })
     ) {
       return noSessionFoundResult(key);
     }
-    const agentCheckLegacy = validateSessionAgentExists(cfg, target.canonicalKey);
+    const agentCheckLegacy = validateSessionAgentExists(
+      cfg,
+      target.canonicalKey,
+      migratedStore[target.canonicalKey],
+      { acpMetadataSessionKey: target.canonicalKey },
+    );
     if (agentCheckLegacy) {
       return agentCheckLegacy;
     }
@@ -193,7 +206,12 @@ export async function resolveSessionKeyFromResolveParams(params: {
         ),
       };
     }
-    const agentCheckSessionId = validateSessionAgentExists(cfg, selection.sessionKey);
+    const selectedEntry = matches.find(([matchKey]) => matchKey === selection.sessionKey)?.[1];
+    const agentCheckSessionId = validateSessionAgentExists(
+      cfg,
+      selection.sessionKey,
+      selectedEntry,
+    );
     if (agentCheckSessionId) {
       return agentCheckSessionId;
     }
@@ -242,7 +260,8 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const agentCheckLabel = validateSessionAgentExists(cfg, list.sessions[0].key);
+  const labelKey = list.sessions[0].key;
+  const agentCheckLabel = validateSessionAgentExists(cfg, labelKey, store[labelKey]);
   if (agentCheckLabel) {
     return agentCheckLabel;
   }

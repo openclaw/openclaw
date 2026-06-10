@@ -1,3 +1,4 @@
+// Memory Core tests cover manager.fts only reindex plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,8 @@ const createEmbeddingProviderMock = vi.hoisted(() =>
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: createEmbeddingProviderMock,
   resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
+  resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
+    providerId === "local" ? "local" : "remote",
   resolveEmbeddingProviderFallbackModel: () => "fts-only",
 }));
 

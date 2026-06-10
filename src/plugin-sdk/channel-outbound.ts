@@ -45,6 +45,8 @@ export {
 export type { FinalizableDraftStreamState } from "../channels/draft-stream-controls.js";
 export { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
 export type { DraftStreamLoop } from "../channels/draft-stream-loop.js";
+export { resolveChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
+export type { ChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forwarders.js";
 export { createChannelRunQueue } from "./channel-lifecycle.core.js";
 export type {

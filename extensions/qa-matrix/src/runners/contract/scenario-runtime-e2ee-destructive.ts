@@ -1,10 +1,17 @@
+// Qa Matrix plugin module implements scenario runtime e2ee destructive behavior.
 import { randomUUID } from "node:crypto";
-import { chmod, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createMatrixQaClient } from "../../substrate/client.js";
 import {
   createMatrixQaE2eeScenarioClient,
+  loadMatrixQaE2eeRuntime,
   type MatrixQaE2eeScenarioClient,
 } from "../../substrate/e2ee-client.js";
 import { requestMatrixJson } from "../../substrate/request.js";
@@ -32,7 +39,10 @@ import {
   isMatrixQaExactMarkerReply,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
-import { waitForMatrixSyncStoreWithCursor } from "./scenario-runtime-state-files.js";
+import {
+  deleteMatrixSyncStoreCursor,
+  waitForMatrixSyncStoreWithCursor,
+} from "./scenario-runtime-state-files.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
 type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
@@ -516,6 +526,28 @@ async function findMatrixQaCliAccountRoot(params: {
   throw new Error(`Matrix CLI account storage root was not created for ${params.userId}`);
 }
 
+function readMatrixQaCliRecoveryKeyState(options: OpenKeyedStoreOptions): unknown {
+  try {
+    return createPluginStateSyncKeyedStoreForTests<unknown>("matrix", options).lookup("current");
+  } finally {
+    resetPluginStateStoreForTests();
+  }
+}
+
+function writeMatrixQaCliRecoveryKeyState(params: {
+  options: OpenKeyedStoreOptions;
+  recoveryKeyState: unknown;
+}): void {
+  try {
+    createPluginStateSyncKeyedStoreForTests<unknown>("matrix", params.options).register(
+      "current",
+      params.recoveryKeyState,
+    );
+  } finally {
+    resetPluginStateStoreForTests();
+  }
+}
+
 async function mutateMatrixQaCliStateLoss(params: {
   deviceId: string;
   preserveRecoveryKey: boolean;
@@ -523,21 +555,21 @@ async function mutateMatrixQaCliStateLoss(params: {
   userId: string;
 }) {
   const accountRoot = await findMatrixQaCliAccountRoot(params);
-  const recoveryKeyPath = path.join(accountRoot, "recovery-key.json");
-  const preservedRecoveryKeyPath = path.join(
-    params.runtime.stateDir,
-    "preserved-recovery-key.json",
-  );
+  const matrixRuntime = await loadMatrixQaE2eeRuntime();
+  const recoveryKeyStoreOptions = matrixRuntime.openMatrixRecoveryKeyStoreOptions(accountRoot);
   let recoveryKeyPreserved = false;
+  let recoveryKeyState: unknown = null;
   if (params.preserveRecoveryKey) {
-    await copyFile(recoveryKeyPath, preservedRecoveryKeyPath);
-    await chmod(preservedRecoveryKeyPath, 0o600).catch(() => undefined);
+    recoveryKeyState = readMatrixQaCliRecoveryKeyState(recoveryKeyStoreOptions);
+    if (!recoveryKeyState) {
+      throw new Error("Matrix CLI recovery key state was not created");
+    }
     recoveryKeyPreserved = true;
   }
   await rm(accountRoot, { force: true, recursive: true });
-  if (params.preserveRecoveryKey) {
+  if (recoveryKeyState) {
     await mkdir(accountRoot, { recursive: true });
-    await copyFile(preservedRecoveryKeyPath, recoveryKeyPath);
+    writeMatrixQaCliRecoveryKeyState({ options: recoveryKeyStoreOptions, recoveryKeyState });
   }
   return {
     accountRoot,
@@ -551,10 +583,24 @@ async function corruptMatrixQaCliIdbSnapshot(params: {
   userId: string;
 }) {
   const accountRoot = await findMatrixQaCliAccountRoot(params);
-  const idbSnapshotPath = path.join(accountRoot, "crypto-idb-snapshot.json");
-  await stat(idbSnapshotPath);
-  await writeFile(idbSnapshotPath, "{ this is not valid indexeddb json\n", "utf8");
-  return idbSnapshotPath;
+  const matrixRuntime = await loadMatrixQaE2eeRuntime();
+  try {
+    createPluginStateSyncKeyedStoreForTests<unknown>(
+      "matrix",
+      matrixRuntime.openMatrixIdbSnapshotStoreOptions(accountRoot),
+    ).register("current:meta", {
+      kind: "meta",
+      version: 1,
+      generation: "corrupt",
+      chunkCount: 1,
+      digest: "corrupt",
+      databaseCount: 1,
+      persistedAt: new Date().toISOString(),
+    });
+  } finally {
+    resetPluginStateStoreForTests();
+  }
+  return "matrix/idb-snapshot/current:meta";
 }
 
 async function deleteMatrixQaServerRoomKeyBackup(params: {
@@ -1102,8 +1148,8 @@ export async function runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario(
         restoreTotal: repaired.payload.total,
       },
       details: [
-        "corrupted crypto-idb-snapshot.json was repaired by explicit backup restore",
-        `corrupted path: ${corruptedPath}`,
+        "corrupted Matrix IDB snapshot state was repaired by explicit backup restore",
+        `corrupted state: ${corruptedPath}`,
         `restore imported/total: ${repaired.payload.imported ?? 0}/${repaired.payload.total ?? 0}`,
       ].join("\n"),
     };
@@ -1416,7 +1462,7 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
     });
     await context.restartGatewayAfterStateMutation(
       async () => {
-        await rm(syncStore.pathname, { force: true });
+        await deleteMatrixSyncStoreCursor(syncStore);
       },
       {
         timeoutMs: context.timeoutMs,

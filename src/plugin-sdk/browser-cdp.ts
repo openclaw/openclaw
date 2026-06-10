@@ -15,6 +15,7 @@ function hasRawExplicitPort(raw: string): boolean {
   return /:\d+$/.test(hostPort);
 }
 
+/** Parsed browser/CDP endpoint details with display-safe normalized URL variants. */
 export type BrowserHttpUrlParseResult = {
   /** Parsed URL object retained for callers that need protocol, host, path, or credentials. */
   parsed: URL;

@@ -1,3 +1,4 @@
+// Limit Edge Case Live Proof tests cover limit edge case live proof script behavior.
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

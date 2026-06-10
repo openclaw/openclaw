@@ -1,8 +1,10 @@
+// Resolves the diff base for merge commits when first-parent comparison is requested.
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_GIT_OUTPUT_MAX_BUFFER = 16 * 1024 * 1024;
 
+/** Resolve the git base ref to use when diffing a merge head. */
 export function resolveMergeHeadDiffBase({
   base,
   head = "HEAD",
@@ -58,7 +60,15 @@ function resolveCommit({ ref, cwd, maxBuffer }) {
   }
 }
 
-function parseArgs(argv) {
+function readRefValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const args = {
     base: "",
     head: "HEAD",
@@ -67,12 +77,12 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--base") {
-      args.base = argv[index + 1] ?? "";
+      args.base = readRefValue(argv, index, "--base");
       index += 1;
       continue;
     }
     if (arg === "--head") {
-      args.head = argv[index + 1] ?? "HEAD";
+      args.head = readRefValue(argv, index, "--head");
       index += 1;
       continue;
     }
