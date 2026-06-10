@@ -744,8 +744,12 @@ describe("gateway sessions patch", () => {
   });
 
   test("rejects hub-delegated marker when spawnedBy drifts from owner", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const before = structuredClone(store);
+
     const result = await runPatch({
       storeKey: "agent:codex:acp:child",
+      store,
       patch: {
         key: "agent:codex:acp:child",
         hubDelegated: {
@@ -759,21 +763,25 @@ describe("gateway sessions patch", () => {
       result,
       "hubDelegated lineage mismatch: spawnedBy must match hubDelegated.ownerSessionKey",
     );
+    expect(store).toEqual(before);
   });
 
   test("rejects spawnedBy patch that drifts from existing hub-delegated owner", async () => {
-    const result = await runPatch({
-      storeKey: "agent:codex:acp:child",
-      store: {
-        "agent:codex:acp:child": {
-          sessionId: "sess-1",
-          updatedAt: 1,
-          hubDelegated: {
-            ownerSessionKey: "agent:main:main",
-            createdAt: 1,
-          },
+    const store: Record<string, SessionEntry> = {
+      "agent:codex:acp:child": {
+        sessionId: "sess-1",
+        updatedAt: 1,
+        hubDelegated: {
+          ownerSessionKey: "agent:main:main",
+          createdAt: 1,
         },
       },
+    };
+    const before = structuredClone(store);
+
+    const result = await runPatch({
+      storeKey: "agent:codex:acp:child",
+      store,
       patch: {
         key: "agent:codex:acp:child",
         spawnedBy: "agent:attacker:main",
@@ -783,6 +791,7 @@ describe("gateway sessions patch", () => {
       result,
       "hubDelegated lineage mismatch: spawnedBy must match hubDelegated.ownerSessionKey",
     );
+    expect(store).toEqual(before);
   });
 
   test("rejects hub-delegated labels found in another harness store", async () => {

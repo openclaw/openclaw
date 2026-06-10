@@ -742,12 +742,13 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
-  store[storeKey] = next;
   if (isHubDelegatedAcpSessionEntry(next)) {
     const lineageMismatch = resolveHubDelegatedLineageMismatch(next);
     if (lineageMismatch) {
       return invalid(lineageMismatch);
     }
   }
+
+  store[storeKey] = next;
   return { ok: true, entry: next };
 }

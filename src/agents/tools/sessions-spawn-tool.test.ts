@@ -1120,6 +1120,34 @@ describe("sessions_spawn tool", () => {
     expect(spawnContext.completionOwnerKey).toBe("agent:main:main");
   });
 
+  it("does not register subagent completion tracking for hub-delegated ACP delegate spawns", async () => {
+    registerAcpBackendForTest();
+    hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: "agent:codex:acp:delegate-1",
+      runId: "run-acp-delegate",
+      delegate: true,
+      label: "delegate-20260101-120000",
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-acp-delegate", {
+      runtime: "acp",
+      task: "investigate the failing CI run",
+      agentId: "codex",
+      delegate: true,
+    });
+
+    expectDetailFields(result.details, {
+      status: "accepted",
+      childSessionKey: "agent:codex:acp:delegate-1",
+      runId: "run-acp-delegate",
+    });
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
   it("uses completionOwnerKey for ACP registerSubagentRun requesterSessionKey", async () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({

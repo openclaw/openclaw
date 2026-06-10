@@ -431,7 +431,10 @@ export function createSessionsSpawnTool(
         const childSessionKey = result.childSessionKey?.trim();
         const childRunId = isSpawnAcpAcceptedResult(result) ? result.runId?.trim() : undefined;
         const shouldTrackViaRegistry =
-          result.status === "accepted" && Boolean(childSessionKey) && Boolean(childRunId);
+          result.status === "accepted" &&
+          Boolean(childSessionKey) &&
+          Boolean(childRunId) &&
+          !result.delegate;
         if (shouldTrackViaRegistry && childSessionKey && childRunId) {
           const cfg = getRuntimeConfig();
           const trackedSpawnMode = resolveTrackedSpawnMode({
