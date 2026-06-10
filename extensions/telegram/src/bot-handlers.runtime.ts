@@ -2743,13 +2743,127 @@ export const registerTelegramHandlers = ({
     } as Message;
   };
 
-  const recordEditedMessageForReplyChain = async (
-    ctxForDedupe: TelegramUpdateKeyContext,
-    msg: Message,
-  ) => {
-    if (shouldSkipUpdate(ctxForDedupe)) {
+  type TelegramInboundGate =
+    | { allowed: false }
+    | {
+        allowed: true;
+        context: TelegramEventAuthorizationContext;
+        effectiveDmAllow: NormalizedAllowFrom;
+      };
+
+  // Single authorization gate for every message-like update that can reach the
+  // reply-chain cache or dispatch: fresh messages, edits, channel posts. Must run
+  // before any cache/dedupe side effect so blocked content is never recorded.
+  // dmAccess "challenge" may send a pairing reply; "silent" only decides (edits
+  // must never reply).
+  const authorizeInboundMessage = async (params: {
+    msg: Message;
+    chatId: number;
+    isGroup: boolean;
+    isForum: boolean;
+    messageThreadId?: number;
+    senderId: string;
+    senderUsername: string;
+    requireConfiguredGroup: boolean;
+    dmAccess: "challenge" | "silent";
+  }): Promise<TelegramInboundGate> => {
+    const context = await resolveTelegramEventAuthorizationContext({
+      chatId: params.chatId,
+      isGroup: params.isGroup,
+      isForum: params.isForum,
+      senderId: params.senderId,
+      messageThreadId: params.messageThreadId,
+    });
+    const {
+      dmPolicy,
+      resolvedThreadId,
+      dmThreadId,
+      storeAllowFrom,
+      groupConfig,
+      topicConfig,
+      groupAllowOverride,
+      effectiveGroupAllow,
+      hasGroupAllowOverride,
+    } = context;
+    // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
+    const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+      cfg,
+      allowFrom: groupAllowOverride ?? allowFrom,
+      accountId,
+      senderId: params.senderId,
+    });
+    const effectiveDmAllow = normalizeDmAllowFromWithStore({
+      allowFrom: expandedDmAllowFrom,
+      storeAllowFrom,
+      dmPolicy,
+    });
+
+    if (params.requireConfiguredGroup && (!groupConfig || groupConfig.enabled === false)) {
+      logVerbose(`Blocked telegram channel ${params.chatId} (channel disabled)`);
+      return { allowed: false };
+    }
+
+    if (
+      shouldSkipGroupMessage({
+        isGroup: params.isGroup,
+        chatId: params.chatId,
+        chatTitle: params.msg.chat.title,
+        resolvedThreadId,
+        senderId: params.senderId,
+        senderUsername: params.senderUsername,
+        effectiveGroupAllow,
+        hasGroupAllowOverride,
+        groupConfig,
+        topicConfig,
+      })
+    ) {
+      return { allowed: false };
+    }
+
+    if (!params.isGroup) {
+      const requireTopic =
+        groupConfig && "requireTopic" in groupConfig ? groupConfig.requireTopic : undefined;
+      if (requireTopic === true && dmThreadId == null) {
+        logVerbose(`Blocked telegram DM ${params.chatId}: requireTopic=true but no topic present`);
+        return { allowed: false };
+      }
+      const dmAuthorized =
+        params.dmAccess === "challenge"
+          ? await enforceTelegramDmAccess({
+              isGroup: params.isGroup,
+              dmPolicy,
+              msg: params.msg,
+              chatId: params.chatId,
+              effectiveDmAllow,
+              accountId,
+              bot,
+              logger,
+              upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
+            })
+          : await isTelegramDmAccessAllowed({
+              dmPolicy,
+              msg: params.msg,
+              chatId: params.chatId,
+              effectiveDmAllow,
+              accountId,
+            });
+      if (!dmAuthorized) {
+        return { allowed: false };
+      }
+    }
+
+    return { allowed: true, context, effectiveDmAllow };
+  };
+
+  const recordEditedMessageForReplyChain = async (params: {
+    ctxForDedupe: TelegramUpdateKeyContext;
+    msg: Message;
+    requireConfiguredGroup: boolean;
+  }) => {
+    if (shouldSkipUpdate(params.ctxForDedupe)) {
       return;
     }
+    const msg = params.msg;
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const isForum = await resolveTelegramForumFlag({
       chatId: msg.chat.id,
@@ -2760,52 +2874,21 @@ export const registerTelegramHandlers = ({
       getChat,
     });
     const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
-    const resolvedThreadId = resolveTelegramForumThreadId({
+    const gate = await authorizeInboundMessage({
+      msg: normalizedMsg,
+      chatId: normalizedMsg.chat.id,
+      isGroup,
       isForum,
       messageThreadId: normalizedMsg.message_thread_id,
+      senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
+      senderUsername: normalizedMsg.from?.username ?? "",
+      requireConfiguredGroup: params.requireConfiguredGroup,
+      dmAccess: "silent",
     });
-    const dmThreadId = !isGroup ? normalizedMsg.message_thread_id : undefined;
-    if (!isGroup) {
-      const senderId = normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "";
-      const eventAuthContext = await resolveTelegramEventAuthorizationContext({
-        chatId: normalizedMsg.chat.id,
-        isGroup,
-        isForum,
-        senderId,
-        messageThreadId: normalizedMsg.message_thread_id,
-      });
-      const { dmPolicy, storeAllowFrom, groupConfig, groupAllowOverride } = eventAuthContext;
-      const requireTopic =
-        groupConfig && "requireTopic" in groupConfig ? groupConfig.requireTopic : undefined;
-      if (requireTopic === true && dmThreadId == null) {
-        logVerbose(
-          `Blocked telegram DM ${normalizedMsg.chat.id}: requireTopic=true but no topic present`,
-        );
-        return;
-      }
-      const dmAllowFrom = groupAllowOverride ?? allowFrom;
-      const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
-        cfg,
-        allowFrom: dmAllowFrom,
-        accountId,
-        senderId,
-      });
-      const effectiveDmAllow = normalizeDmAllowFromWithStore({
-        allowFrom: expandedDmAllowFrom,
-        storeAllowFrom,
-        dmPolicy,
-      });
-      const dmAuthorized = await isTelegramDmAccessAllowed({
-        dmPolicy,
-        msg: normalizedMsg,
-        chatId: normalizedMsg.chat.id,
-        effectiveDmAllow,
-        accountId,
-      });
-      if (!dmAuthorized) {
-        return;
-      }
+    if (!gate.allowed) {
+      return;
     }
+    const { resolvedThreadId, dmThreadId } = gate.context;
     await recordMessageForReplyChain(normalizedMsg, resolvedThreadId ?? dmThreadId);
   };
 
@@ -2815,13 +2898,21 @@ export const registerTelegramHandlers = ({
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
       }
-      const eventAuthContext = await resolveTelegramEventAuthorizationContext({
+      const gate = await authorizeInboundMessage({
+        msg: event.msg,
         chatId: event.chatId,
         isGroup: event.isGroup,
         isForum: event.isForum,
-        senderId: event.senderId,
         messageThreadId: event.messageThreadId,
+        senderId: event.senderId,
+        senderUsername: event.senderUsername,
+        requireConfiguredGroup: event.requireConfiguredGroup,
+        dmAccess: "challenge",
       });
+      if (!gate.allowed) {
+        return;
+      }
+      const { effectiveDmAllow } = gate;
       const {
         dmPolicy,
         resolvedThreadId,
@@ -2829,71 +2920,8 @@ export const registerTelegramHandlers = ({
         storeAllowFrom,
         groupConfig,
         topicConfig,
-        groupAllowOverride,
         effectiveGroupAllow,
-        hasGroupAllowOverride,
-      } = eventAuthContext;
-      // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
-      const dmAllowFrom = groupAllowOverride ?? allowFrom;
-      const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
-        cfg,
-        allowFrom: dmAllowFrom,
-        accountId,
-        senderId: event.senderId,
-      });
-      const effectiveDmAllow = normalizeDmAllowFromWithStore({
-        allowFrom: expandedDmAllowFrom,
-        storeAllowFrom,
-        dmPolicy,
-      });
-
-      if (event.requireConfiguredGroup && (!groupConfig || groupConfig.enabled === false)) {
-        logVerbose(`Blocked telegram channel ${event.chatId} (channel disabled)`);
-        return;
-      }
-
-      if (
-        shouldSkipGroupMessage({
-          isGroup: event.isGroup,
-          chatId: event.chatId,
-          chatTitle: event.msg.chat.title,
-          resolvedThreadId,
-          senderId: event.senderId,
-          senderUsername: event.senderUsername,
-          effectiveGroupAllow,
-          hasGroupAllowOverride,
-          groupConfig,
-          topicConfig,
-        })
-      ) {
-        return;
-      }
-
-      const requireTopic =
-        !event.isGroup && groupConfig && "requireTopic" in groupConfig
-          ? groupConfig.requireTopic
-          : undefined;
-      if (!event.isGroup && requireTopic === true && dmThreadId == null) {
-        logVerbose(`Blocked telegram DM ${event.chatId}: requireTopic=true but no topic present`);
-        return;
-      }
-
-      if (!event.isGroup) {
-        const dmAuthorized = await enforceTelegramDmAccess({
-          isGroup: event.isGroup,
-          dmPolicy,
-          msg: event.msg,
-          chatId: event.chatId,
-          effectiveDmAllow,
-          accountId,
-          bot,
-          logger,
-          upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
-        });
-        if (!dmAuthorized) {
-          return;
-        }
-      }
+      } = gate.context;
 
       const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(
         resolveTelegramSessionState({
@@ -2999,7 +3027,11 @@ export const registerTelegramHandlers = ({
     if (!msg) {
       return;
     }
-    await recordEditedMessageForReplyChain(ctx, msg);
+    await recordEditedMessageForReplyChain({
+      ctxForDedupe: ctx,
+      msg,
+      requireConfiguredGroup: false,
+    });
   });
 
   // Handle channel posts — enables bot-to-bot communication via Telegram channels.
@@ -3040,6 +3072,10 @@ export const registerTelegramHandlers = ({
     if (!post) {
       return;
     }
-    await recordEditedMessageForReplyChain(ctx, normalizeChannelPostMessage(post));
+    await recordEditedMessageForReplyChain({
+      ctxForDedupe: ctx,
+      msg: normalizeChannelPostMessage(post),
+      requireConfiguredGroup: true,
+    });
   });
 };
