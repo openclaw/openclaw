@@ -570,8 +570,8 @@ export class MsteamsProvider implements VoiceCallProvider {
         // Wire vision on outbound realtime too (parity with inbound) so look_at_screen works if the
         // callee shares video on the call-back.
         getLatestFrame: (source) => this.getLatestVideoFrame(providerCallId, source),
-        // Notify mode: once the model has delivered the result (its first finished turn), hang up after
-        // a short tail for audio playout instead of lingering in conversation.
+        // Notify mode: once the model has delivered the result (its first turn, after its audio has
+        // drained) hang up after a short grace, instead of lingering in conversation.
         onDeliveryComplete: notify
           ? () => {
               const timer = setTimeout(() => {
