@@ -37,8 +37,35 @@ The schema includes additive tables for vector/neural-style recall evolution:
 - `memory_embedding_slots` - provider-agnostic embedding/vector metadata and optional vector payload storage.
 - `memory_recall_hints` - LLM-readable explanations that make familiarity/relevance explicit for future models.
 - `memory_query_observations` - query/result feedback used to strengthen useful associations over time.
+- `memory_ann_model_embeddings` - pgvector-backed local model embeddings for source rows that can participate in approximate nearest-neighbor recall.
+- `memory_query_embedding_cache` - cached query vectors keyed by normalized query/provider/model, so ANN recall can reuse deterministic query embeddings.
 
 These objects are derived/additive. They may be rebuilt, but source memory rows must not be removed for performance.
+
+## Model-vector ANN recall
+
+The packaged schema includes pgvector ANN recall support for local model vectors. Fresh installs create `memory_ann_model_embeddings`, `memory_query_embedding_cache`, HNSW cosine indexes, `memory_provider_ann_recall(...)`, and the convenience wrapper `memory_ann_recall(...)`.
+
+The legacy local-hash ANN backfill functions remain as compatibility stubs that return `0` and point operators at the model-vector backfill path. They do not create fake vectors. Real vector rows must come from a model embedding job and remain derived data that can be rebuilt from preserved source rows.
+
+`memory_strengthen_ann_neighbor_edges(limit)` adds `ann_nearest_neighbor` semantic edges from recent vectors into `memory_semantic_edges`. This is additive relationship support only: it strengthens future recall by linking nearby records, but it does not delete, compact, rewrite, or rank-away original source memory.
+
+The install path requires PostgreSQL with the `vector` and `pg_trgm` extensions available. The HNSW indexes use cosine distance for 768-dimensional local embedding vectors.
+
+## DB-owned LLM scheduler
+
+Zorg MemoryDB can mirror externally-defined OpenClaw LLM cron jobs into database-owned scheduler tables without storing private live payload rows in the public package. The public schema provides:
+
+- `memory_llm_scheduled_jobs` - public-safe structure for imported schedule metadata and JSON payload snapshots on a live install.
+- `memory_llm_job_queue` - queue rows claimed by an external worker with `FOR UPDATE SKIP LOCKED` semantics.
+- `memory_llm_scheduler_notes` - operational notes about scheduler setup and repair.
+- `memory_llm_enqueue_job(job_key)` - enqueues one scheduled job and emits `pg_notify('memory_llm_job_queue', ...)`.
+- `memory_llm_claim_job(worker)` - claims the next due enabled queue row.
+- `memory_llm_finish_job(...)` - records bounded completion output or failure text.
+
+PostgreSQL owns the activation point through pg_cron jobs that call `memory_llm_enqueue_job(...)`. The language-model execution still happens outside PostgreSQL in the OpenClaw agent/runtime worker. Database functions only schedule, queue, claim, notify, and record bounded results; they do not execute arbitrary LLM instructions inside triggers or stored procedures.
+
+The public package ships schema only. Live job rows, private prompt text, chat transcripts, operator context, credentials, and execution output are private install data and must not be committed to the public repository.
 
 ## Fast recall surface
 

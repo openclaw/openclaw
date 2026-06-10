@@ -165,6 +165,17 @@ run_postgres_superuser_sql() {
   fi
 }
 
+run_postgres_superuser_target_sql() {
+  local sql="$1"
+  if is_root; then
+    su - postgres -c "psql -v ON_ERROR_STOP=1 -d \"$ZORG_DB_NAME\" -Atqc \"$sql\""
+  elif has_passwordless_sudo; then
+    sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d "$ZORG_DB_NAME" -Atqc "$sql"
+  else
+    return 127
+  fi
+}
+
 start_local_postgres() {
   if command -v pg_isready >/dev/null 2>&1 && pg_isready -h "$ZORG_DB_HOST" -p "$ZORG_DB_PORT" >/dev/null 2>&1; then
     return 0
@@ -179,6 +190,87 @@ start_local_postgres() {
       sudo_if_needed pg_ctlcluster $cluster start >/dev/null 2>&1 || true
     done < <(pg_lsclusters --no-header 2>/dev/null | awk '{print $1 " " $2}')
   fi
+}
+
+postgres_major_version() {
+  if command -v psql >/dev/null 2>&1; then
+    psql --version 2>/dev/null | awk '{print $3}' | cut -d. -f1
+  fi
+}
+
+ensure_postgres_extension_packages() {
+  case "$ZORG_DB_HOST" in
+    127.0.0.1|localhost|::1) ;;
+    *) return 0 ;;
+  esac
+  [[ "$ZORG_DB_PORT" == "5432" ]] || return 0
+
+  local pg_major
+  pg_major="$(postgres_major_version)"
+  [[ -n "$pg_major" ]] || pg_major="16"
+
+  if command -v apt-get >/dev/null 2>&1; then
+    install_packages "postgresql-$pg_major-pgvector" "postgresql-$pg_major-cron"
+  else
+    warn "Install PostgreSQL pgvector and pg_cron packages for PostgreSQL $pg_major, then rerun this script if schema apply reports missing extensions."
+  fi
+}
+
+restart_local_postgres_if_possible() {
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo_if_needed systemctl restart postgresql >/dev/null 2>&1 && return 0
+  fi
+  if command -v pg_ctlcluster >/dev/null 2>&1; then
+    local cluster
+    while read -r cluster; do
+      [[ -n "$cluster" ]] || continue
+      sudo_if_needed pg_ctlcluster $cluster restart >/dev/null 2>&1 || true
+    done < <(pg_lsclusters --no-header 2>/dev/null | awk '{print $1 " " $2}')
+    return 0
+  fi
+  return 1
+}
+
+ensure_pg_cron_configuration() {
+  case "$ZORG_DB_HOST" in
+    127.0.0.1|localhost|::1) ;;
+    *) return 0 ;;
+  esac
+  [[ "$ZORG_DB_PORT" == "5432" ]] || return 0
+  is_safe_pg_identifier "$ZORG_DB_NAME" || return 0
+
+  if ! run_postgres_superuser_sql "SELECT 1" >/dev/null 2>&1; then
+    warn "PostgreSQL superuser access is unavailable; configure pg_cron manually before using DB-owned scheduled jobs."
+    return 0
+  fi
+
+  local restart_needed=0
+  local libraries
+  libraries="$(run_postgres_superuser_sql "SELECT current_setting('shared_preload_libraries', true)" 2>/dev/null || true)"
+  if [[ ",$libraries," != *",pg_cron,"* ]]; then
+    if [[ -n "$libraries" ]]; then
+      libraries="$libraries, pg_cron"
+    else
+      libraries="pg_cron"
+    fi
+    run_postgres_superuser_sql "ALTER SYSTEM SET shared_preload_libraries = '$(sql_quote_literal "$libraries")'" >/dev/null || {
+      warn "Could not add pg_cron to shared_preload_libraries; configure it manually before DB-owned scheduled jobs can run."
+      return 0
+    }
+    restart_needed=1
+  fi
+
+  local cron_database
+  cron_database="$(run_postgres_superuser_sql "SELECT current_setting('cron.database_name', true)" 2>/dev/null || true)"
+  if [[ "$cron_database" != "$ZORG_DB_NAME" ]]; then
+    restart_needed=1
+  fi
+  run_postgres_superuser_sql "ALTER SYSTEM SET cron.database_name = '$(sql_quote_literal "$ZORG_DB_NAME")'" >/dev/null || true
+  run_postgres_superuser_sql "ALTER SYSTEM SET cron.timezone = 'America/Los_Angeles'" >/dev/null || true
+  if [[ "$restart_needed" == "1" ]]; then
+    restart_local_postgres_if_possible || warn "Restart PostgreSQL before creating or using pg_cron jobs."
+  fi
+  run_postgres_superuser_target_sql "CREATE EXTENSION IF NOT EXISTS pg_cron" >/dev/null || warn "pg_cron extension could not be created in $ZORG_DB_NAME; scheduled job tables will still install, but database-owned cron activation needs manual pg_cron setup."
 }
 
 ensure_local_postgres_role_database() {
@@ -223,6 +315,8 @@ ensure_postgres_database() {
   fi
   start_local_postgres
   ensure_local_postgres_role_database
+  ensure_postgres_extension_packages
+  ensure_pg_cron_configuration
   PGPASSWORD="$ZORG_DB_PASSWORD" psql -h "$ZORG_DB_HOST" -p "$ZORG_DB_PORT" -U "$ZORG_DB_USER" -d "$ZORG_DB_NAME" -v ON_ERROR_STOP=1 -f "$ZORG_WORKSPACE_DIR/db/schema.sql" || {
     warn "Schema apply failed. Create database/role or set ZORG_DB_* variables, then rerun this script."
     return 0

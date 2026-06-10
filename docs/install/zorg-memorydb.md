@@ -16,6 +16,21 @@ The database package keeps rule tables, markdown import tables, source chunk tab
 
 Root workspace markdown files are bootstrap pointers for backend DB repair, not the canonical long-form rule store. Current installs should keep durable rules in structured PostgreSQL recall and use [`../root-markdown-db-first.md`](../root-markdown-db-first.md) when reducing oversized root markdown.
 
+## PostgreSQL Add-ons
+
+Zorg MemoryDB uses PostgreSQL extensions for the current public schema:
+
+- `pgcrypto` for UUID generation.
+- `pg_trgm` for trigram recall indexes.
+- `vector` for model-vector ANN recall.
+- `pg_cron` for database-owned activation of scheduled LLM job queues.
+
+On local PostgreSQL installs where root or passwordless sudo is available, `zorg/install-zorg-memorydb.sh` attempts to install the PostgreSQL `pgvector` and `pg_cron` packages for the detected PostgreSQL major version, then configures pg_cron for the Zorg database by setting `shared_preload_libraries`, `cron.database_name`, and `cron.timezone`.
+
+`pg_cron` is special because it must be loaded by PostgreSQL before the extension can schedule jobs from the target database. If superuser access is unavailable, the installer copies the packaged files and warns instead of guessing. Configure pg_cron manually, restart PostgreSQL, and rerun the add-on script.
+
+The public schema creates scheduler tables and functions but does not seed live scheduled job rows. Operators import their own schedule metadata locally; private job payloads and execution output must stay out of the public repository.
+
 ## Coding And Install Rule Discipline
 
 Zorg MemoryDB install and package changes must be grounded in the product's own documentation, source patterns, package metadata, tests, runbooks, and existing implementation procedures before code is changed. Do not implement install, upgrade, plugin, or runtime behavior from generic coding memory or assumed API behavior.
@@ -33,6 +48,8 @@ curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/StefRush
 ```
 
 On an existing install, the bootstrap applies additive schema changes and preserves user data. Do not run `prepare_public_baseline.sql` against a live user install; that file exists only for building a public-safe package seed.
+
+Existing installs that already have PostgreSQL running may need a PostgreSQL restart when pg_cron is first enabled or when `cron.database_name` changes. That restart is for PostgreSQL extension loading only; it is not an OpenClaw reinstall and it does not modify private memory rows.
 
 ## Retired Markdown Memory Files
 
