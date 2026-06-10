@@ -1268,12 +1268,13 @@ describe("chat loading skeleton", () => {
   });
 
   it("keeps terminal status for the submitted run while its acknowledgement is pending", () => {
+    const occurredAt = Date.now();
     const container = renderChatView({
       runStatus: {
         phase: "done",
         runId: "run-main",
         sessionKey: "main",
-        occurredAt: 1_000,
+        occurredAt,
       },
       queue: [
         {
