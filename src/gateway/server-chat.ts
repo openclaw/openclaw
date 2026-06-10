@@ -1232,11 +1232,11 @@ export function createAgentEventHandler({
     if (lifecyclePhase === "error") {
       clearBufferedChatState(clientRunId);
       const skipChatErrorFinal = isChatSendRunActive(evt.runId) && !chatLink;
-      const isFinalFailure = evt.data?.finalFailure === true;
+      const isFallbackExhaustedFailure = evt.data?.fallbackExhaustedFailure === true;
       // Per-attempt provider errors keep the retry grace so fallback can reuse
       // the runId. Once the runner marks fallback as exhausted, clear chat state
       // immediately so webchat sessions do not stay in progress until the timer.
-      if (isAborted || isFinalFailure || lifecycleErrorRetryGraceMs <= 0) {
+      if (isAborted || isFallbackExhaustedFailure || lifecycleErrorRetryGraceMs <= 0) {
         finalizeLifecycleEvent(evt, { skipChatErrorFinal });
       } else {
         scheduleTerminalLifecycleError(evt, { skipChatErrorFinal });

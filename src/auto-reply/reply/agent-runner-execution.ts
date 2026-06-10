@@ -2940,7 +2940,7 @@ export async function runAgentTurnWithFallback(params: {
           phase: "error",
           error: message,
           endedAt: Date.now(),
-          finalFailure: true,
+          fallbackExhaustedFailure: true,
         },
       });
       params.replyOperation?.fail("run_failed", err);

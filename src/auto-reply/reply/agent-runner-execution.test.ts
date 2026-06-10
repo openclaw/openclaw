@@ -5243,7 +5243,7 @@ describe("runAgentTurnWithFallback", () => {
           (event as { runId?: unknown }).runId === "run-provider-failure" &&
           (event as { stream?: unknown }).stream === "lifecycle" &&
           data?.phase === "error" &&
-          data.finalFailure === true
+          data.fallbackExhaustedFailure === true
         );
       });
     expect(terminalFailureEvent).toBeDefined();

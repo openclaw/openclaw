@@ -2659,7 +2659,7 @@ describe("agent event handler", () => {
       data: {
         phase: "error",
         error: "LLM request failed: network connection error.",
-        finalFailure: true,
+        fallbackExhaustedFailure: true,
       },
     });
 
@@ -2676,8 +2676,8 @@ describe("agent event handler", () => {
     expect(
       persistGatewaySessionLifecycleEventMock.mock.calls.some(
         ([params]) =>
-          (params as { event?: { data?: { finalFailure?: boolean } } }).event?.data
-            ?.finalFailure === true,
+          (params as { event?: { data?: { fallbackExhaustedFailure?: boolean } } }).event?.data
+            ?.fallbackExhaustedFailure === true,
       ),
     ).toBe(true);
   });
