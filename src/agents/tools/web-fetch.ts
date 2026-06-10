@@ -409,7 +409,7 @@ async function maybeFetchProviderWebFetchPayload(
   const payload = normalizeProviderWebFetchPayload({
     providerId: providerFallback.provider.id,
     payload: rawPayload,
-    requestedUrl: params.url,
+    requestedUrl: params.urlToFetch,
     extractMode: params.extractMode,
     maxChars: params.maxChars,
     tookMs: params.tookMs,
