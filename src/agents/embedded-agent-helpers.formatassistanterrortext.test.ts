@@ -35,7 +35,6 @@ describe("formatAssistantErrorText", () => {
           model: "claude-sonnet-4-6",
           profileId: "anthropic:manual",
           trigger: "heartbeat",
-          sessionKey: "agent:main:telegram:group:g1",
         },
       ),
     ).toBe(" [anthropic/claude-sonnet-4-6, profile=active, trigger=heartbeat]");

@@ -91,7 +91,6 @@ export type TransientErrorContextOpts = {
   model?: string;
   profileId?: string;
   trigger?: string;
-  sessionKey?: string;
 };
 
 function stripTerminalOscSequences(value: string): string {

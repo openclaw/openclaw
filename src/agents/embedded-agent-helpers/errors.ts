@@ -1330,7 +1330,6 @@ export function formatAssistantErrorText(
     model: opts?.model ?? msg.model,
     profileId: opts?.profileId,
     trigger: opts?.trigger,
-    sessionKey: opts?.sessionKey,
   });
   if (transientCopy) {
     return transientCopy;
