@@ -1,3 +1,4 @@
+/** Tests plugin install command handling and config updates. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";

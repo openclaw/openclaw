@@ -1,3 +1,4 @@
+// Kimi Coding tests cover stream plugin behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
@@ -315,18 +316,6 @@ describe("kimi tool-call markup wrapper", () => {
           ],
         },
       ],
-      tools: [
-        {
-          name: "read",
-          input_schema: {
-            type: "object",
-            properties: {
-              cache_control: { type: "string" },
-            },
-          },
-          cache_control: { type: "ephemeral" },
-        },
-      ],
     });
 
     const wrapped = createKimiThinkingWrapper(baseStreamFn, "enabled");
@@ -363,17 +352,6 @@ describe("kimi tool-call markup wrapper", () => {
             },
             { type: "text", text: "bye" },
           ],
-        },
-      ],
-      tools: [
-        {
-          name: "read",
-          input_schema: {
-            type: "object",
-            properties: {
-              cache_control: { type: "string" },
-            },
-          },
         },
       ],
       thinking: { type: "enabled" },

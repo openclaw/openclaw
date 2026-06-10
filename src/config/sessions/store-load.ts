@@ -1,3 +1,4 @@
+// Session store loading normalizes persisted records, migrations, maintenance, and caches.
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -10,6 +11,7 @@ import {
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
+import { recoverBetaSqliteSessionStoreIfNeeded } from "./session-sqlite-downgrade-rescue.js";
 import { hydrateSessionStoreSkillPromptRefs } from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
@@ -119,6 +121,7 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
       return;
     }
     if (next === entry) {
+      // Copy-on-write keeps unchanged entries referentially stable for cache reuse.
       next = { ...entry };
     }
     if (value === undefined) {
@@ -182,6 +185,7 @@ function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
 
   let changed = false;
   const normalizedExtensions: Record<string, Record<string, PluginJsonValue>> = {};
+  // Plugin state is an external boundary; only JSON-safe keyed records are persisted back.
   for (const [rawPluginId, rawPluginState] of Object.entries(entry.pluginExtensions)) {
     const pluginId = normalizeRecordKey(rawPluginId);
     if (!pluginId || !isRecord(rawPluginState)) {
@@ -392,6 +396,14 @@ export function loadSessionStore(
   // Retry a few times on Windows because readers can briefly observe empty or
   // transiently invalid content while another process is swapping the file.
   let store: Record<string, SessionEntry> = {};
+  const rescue = recoverBetaSqliteSessionStoreIfNeeded(storePath);
+  if (rescue) {
+    log.info("recovered session metadata from beta SQLite store", {
+      storePath,
+      sqlitePath: rescue.sqlitePath,
+      entries: rescue.entries,
+    });
+  }
   const fileStat = getFileStatSnapshot(storePath);
   const mtimeMs = fileStat?.mtimeMs;
   let serializedFromDisk: string | undefined;
@@ -427,6 +439,7 @@ export function loadSessionStore(
   const migrated = applySessionStoreMigrations(store);
   const normalized = normalizeSessionStore(store);
   if (hydratedPromptRefs || migrated || normalized) {
+    // Any in-memory repair invalidates the original serialized bytes for future write projection.
     serializedFromDisk = undefined;
   }
   if (opts.runMaintenance) {

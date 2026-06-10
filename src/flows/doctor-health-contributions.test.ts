@@ -1,3 +1,4 @@
+// Doctor health contribution tests cover plugin-provided health checks.
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
@@ -27,11 +28,19 @@ const mocks = vi.hoisted(() => ({
     config: {},
     issues: [],
   }),
+  checkGatewayHealth: vi.fn(),
+  probeGatewayMemoryStatus: vi.fn(),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
+  isRecord: vi.fn(
+    (value: unknown): value is Record<string, unknown> =>
+      typeof value === "object" && value !== null && !Array.isArray(value),
+  ),
   shortenHomePath: vi.fn((p: string) => p),
   formatCliCommand: vi.fn((cmd: string) => cmd),
 }));
+
+const DOCTOR_GATEWAY_HEALTH_ID = "doctor:gateway-health";
 
 vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () => ({
   maybeRunConfiguredPluginInstallReleaseStep: mocks.maybeRunConfiguredPluginInstallReleaseStep,
@@ -73,7 +82,8 @@ vi.mock("../agents/model-selection.js", () => ({
   resolveHooksGmailModel: mocks.resolveHooksGmailModel,
 }));
 
-vi.mock("../version.js", () => ({
+vi.mock("../version.js", async () => ({
+  ...(await vi.importActual<typeof import("../version.js")>("../version.js")),
   VERSION: "2026.5.2-test",
 }));
 
@@ -81,6 +91,11 @@ vi.mock("../config/config.js", () => ({
   CONFIG_PATH: "/tmp/fake-openclaw.json",
   replaceConfigFile: mocks.replaceConfigFile,
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+}));
+
+vi.mock("../commands/doctor-gateway-health.js", () => ({
+  checkGatewayHealth: mocks.checkGatewayHealth,
+  probeGatewayMemoryStatus: mocks.probeGatewayMemoryStatus,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -92,6 +107,7 @@ vi.mock("../config/logging.js", () => ({
 }));
 
 vi.mock("../utils.js", () => ({
+  isRecord: mocks.isRecord,
   shortenHomePath: mocks.shortenHomePath,
 }));
 
@@ -176,6 +192,8 @@ describe("doctor health contributions", () => {
       config: {},
       issues: [],
     });
+    mocks.checkGatewayHealth.mockReset();
+    mocks.probeGatewayMemoryStatus.mockReset();
   });
 
   afterEach(() => {
@@ -191,6 +209,32 @@ describe("doctor health contributions", () => {
       ids.indexOf("doctor:plugin-registry"),
     );
     expect(ids.indexOf("doctor:plugin-registry")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("skips read-scope gateway probes when gateway health only proved reachability", async () => {
+    mocks.checkGatewayHealth.mockResolvedValue({
+      authenticated: false,
+      healthOk: true,
+    });
+    const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(ctx.healthOk).toBe(true);
+    expect(ctx.gatewayHealthAuthenticated).toBe(false);
+    expect(ctx.gatewayMemoryProbe).toEqual({ checked: false, ready: false, skipped: true });
+    expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
   });
 
   it("keeps release configured plugin installs repair-only", async () => {

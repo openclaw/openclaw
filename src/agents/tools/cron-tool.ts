@@ -1,3 +1,8 @@
+/**
+ * cron built-in tool.
+ *
+ * Manages scheduled jobs, wake/run actions, delivery context, and reminder-style payload normalization.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Type, type TSchema } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -34,8 +39,8 @@ import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
-// We spell out job/patch properties so that LLMs know what fields to send.
-// Nested unions are avoided; runtime validation happens in normalizeCronJob*.
+// Spell out job/patch properties for model-facing schema; runtime validation
+// still happens in normalizeCronJob* to avoid nested union schemas.
 
 const CRON_ACTIONS = [
   "status",
@@ -332,6 +337,18 @@ function stripExistingContext(text: string) {
     return text;
   }
   return text.slice(0, index).trim();
+}
+
+function assertNoCronCommandPayload(value: unknown): void {
+  if (!isRecord(value)) {
+    return;
+  }
+  const payload = isRecord(value.payload) ? value.payload : undefined;
+  if (payload?.kind === "command") {
+    throw new Error(
+      "cron command payloads cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
+    );
+  }
 }
 
 function truncateText(input: string, maxLen: number) {
@@ -652,6 +669,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             throw new Error("job required");
           }
           const canonicalJob = canonicalizeCronToolObject(params.job as Record<string, unknown>);
+          assertNoCronCommandPayload(canonicalJob);
           assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
           const job =
             normalizeCronJobCreate(canonicalJob, {
@@ -769,6 +787,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           const canonicalPatch = canonicalizeCronToolObject(
             params.patch as Record<string, unknown>,
           );
+          assertNoCronCommandPayload(canonicalPatch);
           assertCronDeliveryInputNonBlankFields(canonicalPatch.delivery);
           const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
           if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {

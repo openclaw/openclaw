@@ -1,3 +1,4 @@
+// Main update implementation for source checkouts, package installs, finalization, and restart handoff.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -560,6 +561,20 @@ function createGuidedPostUpdatePluginOutcome(outcome: PluginUpdateOutcome): {
   };
 }
 
+function collectPluginChannelFallbackMessages(outcomes: readonly PluginUpdateOutcome[]): string[] {
+  const seen = new Set<string>();
+  const messages: string[] = [];
+  for (const outcome of outcomes) {
+    const message = outcome.channelFallback?.message;
+    if (!message || seen.has(message)) {
+      continue;
+    }
+    seen.add(message);
+    messages.push(message);
+  }
+  return messages;
+}
+
 function isDisabledAfterFailureOutcome(outcome: PluginUpdateOutcome): boolean {
   return outcome.status === "skipped" && outcome.message.includes("after plugin update failure");
 }
@@ -813,12 +828,6 @@ function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
   return isGatewayAncestorPid(pid) ? formatGatewayAncestryBlockMessage(pid) : undefined;
 }
 
-function gatewayRuntimeAncestryBlockMessage(
-  runtime: { pid?: unknown } | null | undefined,
-): string | undefined {
-  return gatewayAncestryBlockMessage(runtime?.pid);
-}
-
 function serviceControlStdoutForMode(jsonMode: boolean): NodeJS.WritableStream {
   return jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout;
 }
@@ -885,7 +894,7 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
     };
   }
 
-  const blockMessage = gatewayRuntimeAncestryBlockMessage(serviceState.runtime);
+  const blockMessage = gatewayAncestryBlockMessage(serviceState.runtime?.pid);
   if (blockMessage) {
     return {
       stopped: false,
@@ -1855,6 +1864,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
       reason: "source-changed",
       workspaceDir: params.root,
       installRecords: nextInstallRecords,
+      invalidateRuntimeCache: false,
       logger: pluginLogger,
     });
   }
@@ -1921,6 +1931,10 @@ export async function updatePluginsAfterCoreUpdate(params: {
       parts.push(`${skipped} skipped`);
     }
     defaultRuntime.log(theme.muted(`npm plugins: ${parts.join(", ")}.`));
+  }
+
+  for (const message of collectPluginChannelFallbackMessages(pluginUpdateOutcomes)) {
+    defaultRuntime.log(theme.warn(message));
   }
 
   for (const outcome of pluginUpdateOutcomes) {

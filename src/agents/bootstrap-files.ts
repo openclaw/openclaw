@@ -1,3 +1,7 @@
+/**
+ * Resolves workspace bootstrap files for agent runs and converts them into
+ * bounded context files.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -54,6 +58,8 @@ const seenBootstrapWarnings = new Set<string>();
 const bootstrapWarningOrder: string[] = [];
 
 function rememberBootstrapWarning(key: string): boolean {
+  // Warning keys include workspace/session/message so repeated setup failures
+  // stay quiet without hiding distinct bootstrap problems.
   if (seenBootstrapWarnings.has(key)) {
     return false;
   }
@@ -68,11 +74,13 @@ function rememberBootstrapWarning(key: string): boolean {
   return true;
 }
 
+/** Clears the per-process bootstrap warning dedupe cache for isolated tests. */
 export function resetBootstrapWarningCacheForTest(): void {
   seenBootstrapWarnings.clear();
   bootstrapWarningOrder.length = 0;
 }
 
+/** Resolves the effective bootstrap injection mode for a session agent. */
 export function resolveContextInjectionMode(
   config?: OpenClawConfig,
   agentId?: string | null,
@@ -85,6 +93,7 @@ export function resolveContextInjectionMode(
   return config?.agents?.defaults?.contextInjection ?? "always";
 }
 
+/** Checks whether the session transcript still has a valid full-bootstrap marker. */
 export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<boolean> {
   try {
     const stat = await fs.lstat(sessionFile);
@@ -117,6 +126,8 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
       let compactedAfterLatestAssistant = false;
 
       for (let i = records.length - 1; i >= 0; i--) {
+        // Only the tail matters: compaction after the marker makes earlier
+        // bootstrap context unreliable for continuation prompts.
         const line = records[i];
         if (!line) {
           continue;
@@ -156,6 +167,7 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
   }
 }
 
+/** Builds a session-scoped warning sink that dedupes repeated bootstrap warnings. */
 export function makeBootstrapWarn(params: {
   sessionLabel: string;
   workspaceDir?: string;
@@ -310,6 +322,7 @@ async function isWorkspaceSetupCompletedForContext(workspaceDir: string): Promis
   }
 }
 
+/** Resolves hook-adjusted, session-filtered bootstrap files for a run. */
 export async function resolveBootstrapFilesForRun(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -359,6 +372,7 @@ export async function resolveBootstrapFilesForRun(params: {
   );
 }
 
+/** Resolves both raw bootstrap metadata and bounded context files for a run. */
 export async function resolveBootstrapContextForRun(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -377,6 +391,7 @@ export async function resolveBootstrapContextForRun(params: {
   return { bootstrapFiles, contextFiles };
 }
 
+/** Builds bounded context files from already-resolved bootstrap file metadata. */
 export function buildBootstrapContextForFiles(
   bootstrapFiles: WorkspaceBootstrapFile[],
   params: {

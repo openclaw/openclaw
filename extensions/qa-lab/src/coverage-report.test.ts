@@ -1,3 +1,4 @@
+// Qa Lab tests cover coverage report plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildQaCoverageInventory, renderQaCoverageMarkdownReport } from "./coverage-report.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";

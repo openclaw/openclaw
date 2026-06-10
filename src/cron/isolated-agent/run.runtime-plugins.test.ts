@@ -1,3 +1,4 @@
+// Runtime plugin tests cover plugin availability during isolated cron runs.
 import { describe, expect, it } from "vitest";
 import {
   makeIsolatedAgentTurnParams,

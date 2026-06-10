@@ -1,3 +1,8 @@
+/**
+ * Builds the effective OpenClaw agent tool surface.
+ * Assembles core, shell, channel, OpenClaw, plugin, and Tool Search tools, then
+ * applies sandbox, profile, provider, sender, group, and sub-agent policy.
+ */
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -72,6 +77,7 @@ import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js
 import { createOpenClawTools } from "./openclaw-tools.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
+import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import { createCodingTools, createReadTool } from "./sessions/index.js";
 import {
@@ -118,22 +124,34 @@ type GuardContainerMount = {
   hostRoot: string;
 };
 
-function readOnlyAgentWorkspaceMount(
+function readOnlySandboxReadMounts(
   sandbox: SandboxContext | null | undefined,
 ): GuardContainerMount[] | undefined {
-  if (
-    !sandbox ||
-    sandbox.workspaceAccess !== "ro" ||
-    sandbox.agentWorkspaceDir === sandbox.workspaceDir
-  ) {
+  if (!sandbox) {
     return undefined;
   }
-  return [
-    {
+  const mounts: GuardContainerMount[] = [];
+  if (sandbox.workspaceAccess === "ro" && sandbox.agentWorkspaceDir !== sandbox.workspaceDir) {
+    mounts.push({
       containerRoot: SANDBOX_AGENT_WORKSPACE_MOUNT,
       hostRoot: sandbox.agentWorkspaceDir,
-    },
-  ];
+    });
+  }
+  if (sandbox.workspaceAccess === "rw") {
+    mounts.push(
+      ...resolveReadOnlyWorkspaceSkillMounts({
+        workspaceDir: sandbox.workspaceDir,
+        agentWorkspaceDir: sandbox.agentWorkspaceDir,
+        skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
+        workdir: sandbox.containerWorkdir,
+        workspaceAccess: sandbox.workspaceAccess,
+      }).map((mount) => ({
+        containerRoot: mount.containerPath,
+        hostRoot: mount.hostPath,
+      })),
+    );
+  }
+  return mounts.length > 0 ? mounts : undefined;
 }
 
 function resolveSkillReadRoots(skillsSnapshot?: SkillSnapshot): string[] | undefined {
@@ -214,6 +232,7 @@ function createLazyProcessTool(defaults?: ProcessToolDefaults): AnyAgentTool {
   } as AnyAgentTool;
 }
 
+/** Resolve the process-tool isolation key for exec/process session state. */
 export function resolveProcessToolScopeKey(params: {
   scopeKey?: string;
   sessionKey?: string;
@@ -372,6 +391,7 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
 
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 
+/** Test-only access to internal tool assembly helpers. */
 export const testing = {
   cleanToolSchemaForGemini,
   getToolParamsRecord,
@@ -388,6 +408,7 @@ export type OpenClawCodingToolConstructionPlan = {
   includePluginTools: boolean;
 };
 
+/** Build the runtime tool list for one agent run. */
 export function createOpenClawCodingTools(options?: {
   agentId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
@@ -738,7 +759,7 @@ export function createOpenClawCodingTools(options?: {
           base.push(
             workspaceOnly
               ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
-                  additionalContainerMounts: readOnlyAgentWorkspaceMount(sandbox),
+                  additionalContainerMounts: readOnlySandboxReadMounts(sandbox),
                   containerWorkdir: sandbox.containerWorkdir,
                 })
               : sandboxed,

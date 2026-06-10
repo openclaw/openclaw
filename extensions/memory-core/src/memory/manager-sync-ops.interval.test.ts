@@ -1,3 +1,4 @@
+// Memory Core tests cover manager sync ops.interval plugin behavior.
 import type { DatabaseSync } from "node:sqlite";
 import type {
   OpenClawConfig,
@@ -80,6 +81,8 @@ class IntervalSyncHarness extends MemoryManagerSyncOps {
   protected pruneEmbeddingCacheIfNeeded(): void {}
 
   protected resetProviderInitializationForRetry(): void {}
+
+  protected assertRequiredProviderAvailable(): void {}
 
   protected async indexFile(
     _entry: MemoryIndexEntry,

@@ -1,3 +1,4 @@
+// Ios Version tests cover ios version script behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -14,7 +15,7 @@ import { installIosFixtureCleanup, writeIosFixture } from "./ios-version.test-su
 installIosFixtureCleanup();
 
 describe("resolveIosVersion", () => {
-  it("parses pinned CalVer versions and derives Apple marketing fields", () => {
+  it("parses pinned release versions and derives Apple marketing fields", () => {
     const rootDir = writeIosFixture({
       version: "2026.4.6",
       changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.6\n\nStable notes.\n",
@@ -37,7 +38,9 @@ describe("resolveIosVersion", () => {
       changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nNotes.\n",
     });
 
-    expect(() => resolveIosVersion(rootDir)).toThrow("Expected pinned CalVer like 2026.4.6");
+    expect(() => resolveIosVersion(rootDir)).toThrow(
+      "Expected pinned release version like 2026.6.5",
+    );
   });
 
   it("rejects prerelease suffixes in the pinned iOS version file", () => {
@@ -46,12 +49,14 @@ describe("resolveIosVersion", () => {
       changelog: "# OpenClaw iOS Changelog\n\n## Unreleased\n\nNotes.\n",
     });
 
-    expect(() => resolveIosVersion(rootDir)).toThrow("Expected pinned CalVer like 2026.4.6");
+    expect(() => resolveIosVersion(rootDir)).toThrow(
+      "Expected pinned release version like 2026.6.5",
+    );
   });
 });
 
 describe("gateway version normalization", () => {
-  it("keeps stable gateway CalVer values", () => {
+  it("keeps stable gateway release values", () => {
     expect(normalizeGatewayVersionToPinnedIosVersion("2026.4.6")).toBe("2026.4.6");
   });
 

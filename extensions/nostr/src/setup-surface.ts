@@ -1,4 +1,6 @@
+// Nostr plugin module implements setup surface behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+// Nostr plugin module implements setup surface behavior.
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,

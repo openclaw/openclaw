@@ -296,6 +296,7 @@ jobs:
 
       - name: Run QR package install smoke
         env:
+          OPENCLAW_DOCKER_E2E_CPUS: "4"
           OPENCLAW_QR_SMOKE_FORCE_INSTALL: "1"
         run: bash scripts/e2e/qr-import-docker.sh
 

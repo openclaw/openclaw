@@ -1,3 +1,4 @@
+// Event-loop health tests cover delay, CPU, and utilization degradation classification.
 import type { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -5,6 +6,9 @@ import {
   createGatewayEventLoopHealthMonitor,
 } from "./event-loop-health.js";
 
+/**
+ * Event-loop health regression tests for delay, CPU, and utilization signals.
+ */
 type CpuUsage = ReturnType<typeof process.cpuUsage>;
 type DelayMonitor = ReturnType<typeof monitorEventLoopDelay>;
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;

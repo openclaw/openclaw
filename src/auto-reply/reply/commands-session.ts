@@ -1,3 +1,4 @@
+// Implements session commands for list, show, fork, reset, and routing state.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -705,6 +706,10 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     let sentinelPath: string | null = null;
     scheduleGatewaySigusr1Restart({
       reason: "/restart",
+      // Sibling session-routing guard: /restart writes a session-scoped sentinel
+      // with continuation, so the scheduler must own the pending slot under the
+      // same key to avoid cross-session continuation overwrite (#86742).
+      sessionKey: sentinelPayload?.sessionKey,
       emitHooks: sentinelPayload
         ? {
             beforeEmit: async () => {

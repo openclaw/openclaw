@@ -939,7 +939,7 @@
   },
   {
     "deferLoading": true,
-    "description": "Gateway restart/config/update. Before config edits, use config.schema.lookup with targeted dot path. Prefer config.patch for partial merge; config.apply only full replace. Writes hot-reload or restart as needed. Always pass human `note` for post-restart delivery. If post-restart work must continue internally, pass one-shot `continuationMessage`; visible follow-up from that turn must use the message tool. Do not write restart sentinel files directly.",
+    "description": "Gateway restart/config/update. Before config edits, use config.schema.lookup with targeted dot path. Prefer config.patch for partial merge; config.apply only full replace. For config.patch that intentionally removes array entries, pass replacePaths with the exact affected array path. Writes hot-reload or restart as needed. Always pass human `note` for post-restart delivery. If post-restart work must continue internally, pass one-shot `continuationMessage`; visible follow-up from that turn must use the message tool. Do not write restart sentinel files directly.",
     "inputSchema": {
       "properties": {
         "action": {
@@ -980,6 +980,13 @@
         },
         "reason": {
           "type": "string"
+        },
+        "replacePaths": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "type": "array"
         },
         "restartDelayMs": {
           "minimum": 0,
