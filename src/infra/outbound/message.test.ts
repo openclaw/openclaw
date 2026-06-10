@@ -531,4 +531,65 @@ describe("sendMessage", () => {
       queuePolicy: "best_effort",
     });
   });
+
+  it("passes maxLinesPerMessage from channel config into delivery formatting", async () => {
+    await sendMessage({
+      cfg: { channels: { forum: { maxLinesPerMessage: 50 } } },
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+    });
+
+    expectDeliveryCallFields({
+      formatting: { maxLinesPerMessage: 50 },
+    });
+  });
+
+  it("resolves account-level maxLinesPerMessage over channel-level default", async () => {
+    await sendMessage({
+      cfg: {
+        channels: {
+          forum: {
+            maxLinesPerMessage: 50,
+            accounts: { bot1: { maxLinesPerMessage: 30 } },
+          },
+        },
+      },
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+      accountId: "bot1",
+    });
+
+    expectDeliveryCallFields({
+      formatting: { maxLinesPerMessage: 30 },
+    });
+  });
+
+  it("includes both parseMode and maxLinesPerMessage in formatting when both are set", async () => {
+    await sendMessage({
+      cfg: { channels: { forum: { maxLinesPerMessage: 25 } } },
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+      parseMode: "HTML",
+    });
+
+    expectDeliveryCallFields({
+      formatting: { parseMode: "HTML", maxLinesPerMessage: 25 },
+    });
+  });
+
+  it("omits formatting when no parseMode and no maxLinesPerMessage configured", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+    });
+
+    expectDeliveryCallFields({
+      formatting: undefined,
+    });
+  });
 });

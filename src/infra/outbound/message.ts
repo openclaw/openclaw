@@ -302,6 +302,7 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
 
 type ChannelMaxLinesConfig = {
   maxLinesPerMessage?: number;
+  defaultAccount?: string;
   accounts?: Record<string, { maxLinesPerMessage?: number }>;
 };
 
@@ -321,7 +322,8 @@ function resolveMaxLinesPerMessage(
   if (!channelSection) {
     return undefined;
   }
-  const normalizedAccountId = normalizeAccountId(accountId);
+  const effectiveAccountId = accountId ?? channelSection.defaultAccount;
+  const normalizedAccountId = normalizeAccountId(effectiveAccountId);
   const accounts = channelSection.accounts;
   if (accounts && typeof accounts === "object") {
     const direct = resolveAccountEntry(accounts, normalizedAccountId);
