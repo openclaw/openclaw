@@ -176,12 +176,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
 
   it("resolves ACP harness session keys even when harness id is not in agents.list", async () => {
     const acpKey = "agent:claude:acp:11111111-1111-4111-8111-111111111111";
-    hoisted.resolveGatewaySessionStoreTargetMock.mockReturnValue({
-      canonicalKey: acpKey,
-      storeKeys: [acpKey],
-      storePath,
-    });
-    hoisted.loadSessionStoreMock.mockReturnValue({
+    targetStore = {
       [acpKey]: {
         sessionId: "sess-acp",
         updatedAt: 1,
@@ -195,6 +190,12 @@ describe("resolveSessionKeyFromResolveParams", () => {
           lastActivityAt: 1,
         },
       },
+    };
+    hoisted.resolveGatewaySessionStoreTargetWithStoreMock.mockReturnValue({
+      canonicalKey: acpKey,
+      storeKeys: [acpKey],
+      storePath,
+      store: targetStore,
     });
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
 
