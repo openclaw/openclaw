@@ -343,6 +343,7 @@ const OPENCODE_GO_MODELS = (
             range: [256_001],
           },
         ],
+        tieredPricingBasis: "prompt",
       },
       contextWindow: 1_000_000,
       maxTokens: 65_536,

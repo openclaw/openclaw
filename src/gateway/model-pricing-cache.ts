@@ -272,6 +272,7 @@ function toCachedModelPricing(
     cacheRead,
     cacheWrite,
     ...(tieredPricing.length > 0 ? { tieredPricing } : {}),
+    ...(value.tieredPricingBasis === "prompt" ? { tieredPricingBasis: "prompt" as const } : {}),
   };
 }
 

@@ -199,6 +199,7 @@ export type ModelCatalogCost = {
   cacheRead?: number;
   cacheWrite?: number;
   tieredPricing?: ModelCatalogTieredCost[];
+  tieredPricingBasis?: "input" | "prompt";
 };
 
 /** Provider manifest model entry. */

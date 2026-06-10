@@ -699,6 +699,7 @@ describe("usage-format", () => {
       cacheRead: 0.04,
       cacheWrite: 0.5,
       tieredPricing: tiers,
+      tieredPricingBasis: "prompt" as const,
     };
 
     expect(
