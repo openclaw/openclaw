@@ -442,6 +442,24 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.deviceIdentity).toBeNull();
   });
 
+  it("prefers paired backend device auth over implicit local shared-token auth", async () => {
+    setLocalLoopbackGatewayConfig();
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "paired-device-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 123,
+    });
+
+    await callGateway({ method: "sessions.list" });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
   it("fails before opening a websocket when backend token auth has no shared or paired credential", async () => {
     getRuntimeConfig.mockReturnValue({
       gateway: { mode: "local", bind: "loopback", auth: { mode: "token" } },

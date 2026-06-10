@@ -82,17 +82,17 @@ async function seedCachedOperatorToken(scopes: string[]): Promise<void> {
 }
 
 describe("probeGateway auth integration", () => {
-  it("keeps direct local authenticated status RPCs device-bound", async () => {
+  it("does not grant direct local authenticated status RPCs without cached device auth", async () => {
     const token = requireGatewayToken();
 
-    const status = await callGateway({
-      url: `ws://127.0.0.1:${gatewayHarness.port}`,
-      token,
-      method: "status",
-      timeoutMs: 5_000,
-    });
-
-    expectRecord(status, "status response");
+    await expect(
+      callGateway({
+        url: `ws://127.0.0.1:${gatewayHarness.port}`,
+        token,
+        method: "status",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("missing scope: operator.read");
   });
 
   it("keeps first-time local authenticated probes non-mutating", async () => {

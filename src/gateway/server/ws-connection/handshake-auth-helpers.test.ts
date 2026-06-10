@@ -127,7 +127,7 @@ function skipBackendSelfPairing(overrides: Partial<BackendSelfPairingParams> = {
     locality: "direct_local",
     hasBrowserOriginHeader: false,
     sharedAuthOk: true,
-    authMethod: "token",
+    authMethod: "device-token",
     ...overrides,
   });
 }
@@ -376,13 +376,35 @@ describe("handshake auth helpers", () => {
     ).toBe("shared_secret_loopback_local");
   });
 
-  it("skips backend self-pairing only for direct-local backend clients", () => {
+  it("skips backend self-pairing only for dedicated local backend credentials", () => {
     expect(skipBackendSelfPairing()).toBe(true);
     expect(
       skipBackendSelfPairing({
         locality: "shared_secret_loopback_local",
       }),
     ).toBe(true);
+    expect(
+      skipBackendSelfPairing({
+        authMethod: "none",
+        sharedAuthOk: false,
+      }),
+    ).toBe(true);
+    expect(
+      skipBackendSelfPairing({
+        authMethod: "token",
+      }),
+    ).toBe(false);
+    expect(
+      skipBackendSelfPairing({
+        authMethod: "password",
+      }),
+    ).toBe(false);
+    expect(
+      skipBackendSelfPairing({
+        authMethod: "bootstrap-token",
+        sharedAuthOk: false,
+      }),
+    ).toBe(false);
     expect(
       skipBackendSelfPairing({
         locality: "remote",

@@ -417,11 +417,11 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
 }): boolean {
   const mode = params.opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
   const clientName = params.opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
-  const hasSharedAuth = Boolean(params.token || params.password);
+  const hasExplicitSharedAuth = Boolean(params.opts.token || params.opts.password);
   return (
     mode === GATEWAY_CLIENT_MODES.BACKEND &&
     clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
-    hasSharedAuth &&
+    hasExplicitSharedAuth &&
     isLoopbackGatewayUrl(params.url)
   );
 }
@@ -459,6 +459,29 @@ function hasStoredOperatorDeviceAuthToken(deviceIdentity: DeviceIdentity | null)
   } catch {
     return false;
   }
+}
+
+function shouldPreferStoredDeviceAuthForGatewayCall(params: {
+  opts: CallGatewayBaseOptions;
+  url: string;
+  token?: string;
+  password?: string;
+  deviceIdentity: DeviceIdentity | null;
+}): boolean {
+  const mode = params.opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
+  const clientName = params.opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
+  const hasExplicitSharedAuth = Boolean(params.opts.token || params.opts.password);
+  const envGatewayToken = trimToUndefined(process.env.OPENCLAW_GATEWAY_TOKEN);
+  const hasImplicitEnvGatewayToken =
+    Boolean(envGatewayToken) && params.token === envGatewayToken && !params.password;
+  return (
+    mode === GATEWAY_CLIENT_MODES.BACKEND &&
+    clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
+    !hasExplicitSharedAuth &&
+    hasImplicitEnvGatewayToken &&
+    isLoopbackGatewayUrl(params.url) &&
+    hasStoredOperatorDeviceAuthToken(params.deviceIdentity)
+  );
 }
 
 function resolveGatewayCallAuth(config: OpenClawConfig) {
@@ -1031,19 +1054,28 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     opts.deviceIdentity === undefined
       ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
       : opts.deviceIdentity;
+  const preferStoredDeviceAuth = shouldPreferStoredDeviceAuthForGatewayCall({
+    opts,
+    url,
+    token,
+    password,
+    deviceIdentity,
+  });
+  const clientToken = preferStoredDeviceAuth ? undefined : token;
+  const clientPassword = preferStoredDeviceAuth ? undefined : password;
   ensureGatewayCallCanAuthenticate({
     opts,
     context,
-    token,
-    password,
+    token: clientToken,
+    password: clientPassword,
     deviceIdentity,
   });
   return await executeGatewayRequestWithScopes<T>({
     opts,
     scopes,
     url,
-    token,
-    password,
+    token: clientToken,
+    password: clientPassword,
     tlsFingerprint,
     preauthHandshakeTimeoutMs: context.config.gateway?.handshakeTimeoutMs,
     timeoutMs,

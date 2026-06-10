@@ -277,9 +277,8 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   if (params.authMethod === "none") {
     return true;
   }
-  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   const usesDeviceTokenAuth = params.authMethod === "device-token";
-  return (params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth;
+  return usesDeviceTokenAuth;
 }
 
 function resolveSignatureToken(connectParams: ConnectParams): string | null {
