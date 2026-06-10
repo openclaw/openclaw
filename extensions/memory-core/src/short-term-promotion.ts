@@ -1168,6 +1168,26 @@ export async function recordGroundedShortTermCandidates(params: {
   });
 }
 
+export async function readDreamingPhaseSignals(params: {
+  workspaceDir: string;
+  nowMs?: number;
+}): Promise<Record<string, { lightHits: number; remHits: number; lastLightAt?: string }>> {
+  const nowIso = new Date(
+    Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now(),
+  ).toISOString();
+  const store = await readPhaseSignalStore(params.workspaceDir, nowIso);
+  return Object.fromEntries(
+    Object.entries(store.entries).map(([k, v]) => [
+      k,
+      {
+        lightHits: v.lightHits,
+        remHits: v.remHits,
+        ...(v.lastLightAt ? { lastLightAt: v.lastLightAt } : {}),
+      },
+    ]),
+  );
+}
+
 export async function recordDreamingPhaseSignals(params: {
   workspaceDir?: string;
   phase: "light" | "rem";

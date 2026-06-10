@@ -445,6 +445,69 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
+  it("does not re-stage light dreaming candidates processed on a prior calendar day", async () => {
+    // Regression test for the cross-night replication bug: entries that light
+    // dreaming staged on day N must NOT re-enter the candidate pool on day N+1.
+    const workspaceDir = await createDreamingWorkspace();
+    const DAY1_BASE = new Date("2026-04-05T03:00:00.000Z");
+    const DAY2_BASE = new Date("2026-04-06T03:00:00.000Z");
+    const nowMs1 = DAY1_BASE.getTime();
+    const nowMs2 = DAY2_BASE.getTime();
+
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "backup policy",
+      nowMs: nowMs1,
+      results: [
+        {
+          path: "memory/2026-04-04.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.92,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const { beforeAgentReply: day1Reply } = createLightDreamingHarness(workspaceDir);
+
+    // Day 1 run: entry has lightHits=0, must be staged.
+    await withDreamingTestClock(async () => {
+      vi.setSystemTime(DAY1_BASE);
+      await day1Reply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    });
+
+    const day1Content = await fs.readFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      "utf-8",
+    );
+    expect(day1Content).toContain("## Light Sleep");
+    expect(day1Content.match(/^- Candidate:/gm)).toHaveLength(1);
+
+    // Day 2 run: same entry, now lightHits=1 and lastLightAt is day 1 — must be skipped.
+    const day2MemoryPath = path.join(workspaceDir, "memory", "2026-04-06.md");
+    await fs.writeFile(day2MemoryPath, `# 2026-04-06\n`, "utf-8");
+
+    const { beforeAgentReply: day2Reply } = createLightDreamingHarness(workspaceDir);
+    await withDreamingTestClock(async () => {
+      vi.setSystemTime(DAY2_BASE);
+      await day2Reply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    });
+
+    const day2Content = await fs.readFile(day2MemoryPath, "utf-8");
+    // Day-2 light dreaming must not re-stage the same entry.
+    expect(day2Content).not.toMatch(/^- Candidate:/m);
+    // The block itself is still written (with "No notable updates.").
+    expect(day2Content).toContain("## Light Sleep");
+  });
+
   it("triggers light dreaming when the token is embedded in a reminder body", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await withDreamingTestClock(async () => {

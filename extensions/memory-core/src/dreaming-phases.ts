@@ -28,6 +28,7 @@ import {
 import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
 import {
   filterLiveShortTermRecallEntries,
+  readDreamingPhaseSignals,
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
   recordShortTermRecalls,
@@ -1624,13 +1625,34 @@ async function runLightDreaming(params: {
     nowMs,
     timezone: params.config.timezone,
   });
-  const recentEntries = await filterLiveShortTermRecallEntries({
-    workspaceDir: params.workspaceDir,
-    entries: filterRecallEntriesWithinLookback({
-      entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
-      nowMs,
-      lookbackDays: params.config.lookbackDays,
-    }),
+  const [rawEntries, seenSignals] = await Promise.all([
+    readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }).then((entries) =>
+      filterLiveShortTermRecallEntries({
+        workspaceDir: params.workspaceDir,
+        entries: filterRecallEntriesWithinLookback({ entries, nowMs, lookbackDays: params.config.lookbackDays }),
+      }),
+    ),
+    readDreamingPhaseSignals({ workspaceDir: params.workspaceDir, nowMs }),
+  ]);
+  // Mirror REM's !entry.promotedAt guard and add a cross-night stage-once gate:
+  // skip entries already processed by light dreaming on a prior calendar day.
+  // Same-day re-runs (lightHits>0 but lastLightAt===today) are still allowed for
+  // idempotency.  Without these filters every entry re-enters the candidate pool
+  // every night, causing 10-15× replication and false-fact amplification.
+  const todayDay = formatMemoryDreamingDay(nowMs, params.config.timezone);
+  const recentEntries = rawEntries.filter((entry) => {
+    if (entry.promotedAt) {
+      return false;
+    }
+    const sig = seenSignals[entry.key];
+    if (!sig || sig.lightHits === 0) {
+      return true;
+    }
+    // Already staged on a prior day — skip to prevent cross-night replication.
+    if (!sig.lastLightAt) {
+      return false;
+    }
+    return formatMemoryDreamingDay(Date.parse(sig.lastLightAt), params.config.timezone) === todayDay;
   });
   const entries = dedupeEntries(
     recentEntries
