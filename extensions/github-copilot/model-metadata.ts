@@ -36,6 +36,18 @@ const STATIC_MODEL_OVERRIDES = new Map<string, Partial<ModelDefinitionConfig>>([
     },
   ],
   [
+    "claude-opus-4.8",
+    {
+      name: "Claude Opus 4.8",
+      api: "anthropic-messages",
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+    },
+  ],
+  [
     "gpt-5.5",
     {
       name: "GPT-5.5",
