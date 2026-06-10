@@ -145,8 +145,6 @@ describe("browser server-context existing-session profile", () => {
     state.resolved.profiles["chrome-live"] = {
       ...state.resolved.profiles["chrome-live"],
       cdpUrl: "http://openclaw:relay-token@127.0.0.1:9222",
-      cdpHost: "127.0.0.1",
-      cdpIsLoopback: true,
     };
     const ctx = createBrowserRouteContext({ getState: () => state });
 
