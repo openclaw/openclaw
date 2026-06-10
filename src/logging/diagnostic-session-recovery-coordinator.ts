@@ -102,11 +102,22 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
     // Other non-mutating outcomes (e.g. skipped, already-in-flight) keep their
     // current state because the session may still be active.
     if (params.outcome.status === "failed") {
-      const ghostState = peekDiagnosticSessionState(params.request);
-      if (ghostState && ghostState.state !== "idle") {
-        ghostState.state = "idle";
-        ghostState.queueDepth = 0;
-        ghostState.lastActivity = Date.now();
+      // Only transition to idle when the diagnostic state hasn't been
+      // modified by a newer recovery since this request was created.
+      // A stale generation means another recovery already owns this entry.
+      if (
+        isDiagnosticSessionStateCurrent({
+          sessionId: params.request.sessionId,
+          sessionKey: params.request.sessionKey,
+          generation: params.request.stateGeneration,
+        })
+      ) {
+        const ghostState = peekDiagnosticSessionState(params.request);
+        if (ghostState && ghostState.state !== "idle") {
+          ghostState.state = "idle";
+          ghostState.queueDepth = 0;
+          ghostState.lastActivity = Date.now();
+        }
       }
     }
     return;
