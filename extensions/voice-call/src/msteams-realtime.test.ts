@@ -13,7 +13,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps } from "./core-bridge.js";
 import type { MsteamsSession } from "./msteams-media-stream.js";
-import { createMsteamsRealtimeCall, type MsteamsRealtimeDeps } from "./msteams-realtime.js";
+import {
+  createMsteamsRealtimeCall,
+  type MsteamsRealtimeDeps,
+  pcm16Rms,
+} from "./msteams-realtime.js";
 import { VisionBudget } from "./vision-budget.js";
 
 // Capture the transcript handed to the consult agent, while keeping the rest of
@@ -121,6 +125,33 @@ const CONSULT_TOOL: RealtimeVoiceTool = {
   parameters: { type: "object", properties: {} },
 };
 
+describe("pcm16Rms (echo-guard loudness)", () => {
+  function tone(amplitude: number, samples = 320): Buffer {
+    const buf = Buffer.alloc(samples * 2);
+    for (let i = 0; i < samples; i += 1) {
+      buf.writeInt16LE(i % 2 === 0 ? amplitude : -amplitude, i * 2);
+    }
+    return buf;
+  }
+
+  it("is 0 for silence and ~1 for a full-scale tone", () => {
+    expect(pcm16Rms(Buffer.alloc(640))).toBe(0);
+    expect(pcm16Rms(tone(32767))).toBeGreaterThan(0.9);
+  });
+
+  it("keeps quiet (echo-level) audio below the barge-in gate, loud speech above it", () => {
+    // Quiet echo-ish audio stays under the 0.04 barge-in threshold → suppressed during playback.
+    expect(pcm16Rms(tone(600))).toBeLessThan(0.04);
+    // Genuine speech is well above it → passes through as a barge-in.
+    expect(pcm16Rms(tone(6000))).toBeGreaterThan(0.04);
+  });
+
+  it("returns 0 for an empty or odd-length buffer", () => {
+    expect(pcm16Rms(Buffer.alloc(0))).toBe(0);
+    expect(pcm16Rms(Buffer.from([1]))).toBe(0);
+  });
+});
+
 describe("createMsteamsRealtimeCall", () => {
   it("forwards configured tools to the realtime bridge", () => {
     const { session } = createMockSession();
@@ -175,6 +206,36 @@ describe("createMsteamsRealtimeCall", () => {
     expect(mock.sendAudio).toHaveBeenCalledTimes(1);
     const forwarded = mock.sendAudio.mock.calls[0]?.[0] as Buffer;
     expect(forwarded.length).toBeGreaterThan(0);
+  });
+
+  it("suppresses echo-level caller audio during playback but passes a real barge-in", () => {
+    const ctx = createMockSession();
+    const mock = createMockProvider();
+    const call = createMsteamsRealtimeCall({
+      session: ctx.session,
+      deps: { provider: mock.provider, providerConfig: {} },
+    });
+    const req = mock.getRequest();
+
+    // The bot is speaking now (model audio) — this stamps the echo-suppression playout window.
+    req.onAudio(Buffer.alloc(960));
+    mock.sendAudio.mockClear();
+
+    const tone = (amplitude: number): Buffer => {
+      const buf = Buffer.alloc(640);
+      for (let i = 0; i < 320; i += 1) {
+        buf.writeInt16LE(i % 2 === 0 ? amplitude : -amplitude, i * 2);
+      }
+      return buf;
+    };
+
+    // Quiet, echo-level caller audio during playback is dropped (no self-answer).
+    call.pushAudio(tone(500));
+    expect(mock.sendAudio).not.toHaveBeenCalled();
+
+    // A loud utterance (genuine barge-in) still reaches the model.
+    call.pushAudio(tone(8000));
+    expect(mock.sendAudio).toHaveBeenCalledTimes(1);
   });
 
   it("answers a consult tool call with an unavailable result when no agent runtime is wired", () => {

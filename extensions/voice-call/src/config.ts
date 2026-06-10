@@ -419,9 +419,10 @@ const VoiceCallRealtimeConfigSchema = z
     /** Optional fast mode override for the regular agent behind realtime consults. */
     consultFastMode: z.boolean().optional(),
     /**
-     * Suppress caller-leg input while assistant audio is playing (self-echo guard).
-     * Off by default: the msteams bridge delivers remote-participant audio (not our
-     * own playback), and gating input would also defeat the model's barge-in.
+     * Half-duplex echo guard: while assistant audio is playing, drop caller-leg input to the realtime
+     * model UNLESS it is loud enough to be a genuine barge-in — so the bot does not answer its own
+     * voice echoing back off the caller's device, while the caller can still interrupt. Default ON;
+     * set false to disable.
      */
     suppressInputDuringPlayback: z.boolean().optional(),
     /** Tool definitions exposed to the realtime provider. */

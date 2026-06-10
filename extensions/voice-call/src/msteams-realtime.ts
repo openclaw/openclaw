@@ -61,6 +61,29 @@ const REALTIME_SAMPLE_RATE_HZ = 24_000;
 const MAX_TRANSCRIPT_ENTRIES = 40;
 
 /**
+ * Half-duplex echo guard window: while our own audio is (or was within this window) playing on the
+ * call, the caller leg can carry it back as acoustic echo. We drop that caller input to the realtime
+ * model so its server-VAD does not answer our own voice — unless it is loud enough to be a barge-in.
+ */
+const ECHO_SUPPRESSION_WINDOW_MS = 600;
+/** Normalized RMS above which caller input during our playback is treated as a real barge-in, not echo. */
+const ECHO_BARGE_IN_RMS = 0.04;
+
+/** RMS loudness of 16-bit little-endian mono PCM, normalized to roughly 0..1. */
+export function pcm16Rms(pcm: Buffer): number {
+  const samples = Math.floor(pcm.length / 2);
+  if (samples === 0) {
+    return 0;
+  }
+  let sum = 0;
+  for (let i = 0; i < samples; i += 1) {
+    const sample = pcm.readInt16LE(i * 2) / 32768;
+    sum += sample * sample;
+  }
+  return Math.sqrt(sum / samples);
+}
+
+/**
  * CVI Phase 4 — how often to push the latest inbound frame into the realtime session as ambient
  * visual context. Only fires when the frame changed and the vision budget allows, so a static screen
  * costs nothing; on a changing screen the budget (`maxVisionPerMinute`) is the real cap.
@@ -299,9 +322,10 @@ export interface MsteamsRealtimeDeps {
   getLatestFrame?: (source?: "camera" | "screenshare") => MsteamsVideoFrame | undefined;
 
   /**
-   * Suppress caller-leg input while assistant audio is playing (self-echo guard).
-   * OFF by default: Teams delivers remote-participant audio (not our own playback),
-   * and gating input would also defeat the model's barge-in detection.
+   * Half-duplex echo guard (default ON): while assistant audio is playing, drop caller-leg input to
+   * the realtime model unless it is loud enough to be a genuine barge-in — so the model does not
+   * answer our own voice echoing back off the caller's device, while the caller can still interrupt.
+   * Set false to disable.
    */
   suppressInputDuringPlayback?: boolean;
 
@@ -1032,9 +1056,15 @@ export function createMsteamsRealtimeCall(params: {
       if (recordingGateBlocks()) {
         return;
       }
-      // Optional self-echo guard: drop caller-leg audio that arrives within a short
-      // window of our own playback. OFF by default (would also suppress barge-in).
-      if (deps.suppressInputDuringPlayback && Date.now() - lastOutputAt < 200) {
+      // Half-duplex echo guard (on by default): while our own audio is playing on the call, the caller
+      // leg can carry it back (acoustic echo on the caller's device); feeding that to the model's
+      // server-VAD makes it answer itself. Drop input during the playout window unless it is loud
+      // enough to be a real barge-in, so the caller can still interrupt.
+      if (
+        deps.suppressInputDuringPlayback !== false &&
+        Date.now() - lastOutputAt < ECHO_SUPPRESSION_WINDOW_MS &&
+        pcm16Rms(pcm16k) < ECHO_BARGE_IN_RMS
+      ) {
         return;
       }
       const pcm24k = resamplePcm(pcm16k, MSTEAMS_SAMPLE_RATE_HZ, REALTIME_SAMPLE_RATE_HZ);
