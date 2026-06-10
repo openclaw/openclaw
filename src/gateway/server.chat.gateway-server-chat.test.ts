@@ -14,7 +14,6 @@ import {
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
   onceMessage,
-  readSessionStore,
   rpcReq,
   testState,
   trackConnectChallengeNonce,
@@ -266,7 +265,12 @@ describe("gateway server chat", () => {
       expect(res.ok).toBe(true);
       expect(res.payload?.runId).toBe("idem-sessions-send-orion");
 
-      const rawStore = readSessionStore(testState.sessionStorePath);
+      const rawStore = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
+        string,
+        {
+          sessionId?: string;
+        }
+      >;
       expect(rawStore["agent:orion:main"]?.sessionId).toBeTypeOf("string");
     } finally {
       testState.agentsConfig = undefined;
@@ -1617,7 +1621,12 @@ describe("gateway server chat", () => {
           if (!sessionStorePath) {
             throw new Error("session store path was not initialized");
           }
-          const stored = readSessionStore(sessionStorePath);
+          const raw = await fs.readFile(sessionStorePath, "utf-8");
+          const stored = JSON.parse(raw) as {
+            "agent:main:main"?: {
+              verboseLevel?: string;
+            };
+          };
           expect(stored["agent:main:main"]?.verboseLevel).toBeUndefined();
         } finally {
           scopedWs?.close();
@@ -1659,7 +1668,12 @@ describe("gateway server chat", () => {
           if (!sessionStorePath) {
             throw new Error("session store path was not initialized");
           }
-          const stored = readSessionStore(sessionStorePath);
+          const raw = await fs.readFile(sessionStorePath, "utf-8");
+          const stored = JSON.parse(raw) as {
+            "agent:main:main"?: {
+              sessionId?: string;
+            };
+          };
           expect(stored["agent:main:main"]?.sessionId).toBe("sess-main");
         } finally {
           scopedWs?.close();

@@ -16,12 +16,8 @@ vi.mock("../infra/outbound/message.js", () => ({
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  closeSqliteSessionStoreDatabase,
-  replaceSqliteSessionStore,
-} from "../config/sessions/store-sqlite.js";
+import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import {
   buildExecApprovalFollowupPrompt,
@@ -30,29 +26,20 @@ import {
 import { callGatewayTool } from "./tools/gateway.js";
 
 const tempStoreDirs: string[] = [];
-const tempStorePaths: string[] = [];
 
-// Seed the same SQLite-backed session store path the runtime reads; mocking this
+// Seed the same JSON session store path the runtime reads; mocking this
 // boundary would hide stale-session regressions in shared workers.
 function writeTempSessionStore(entries: Record<string, { sessionId: string }>): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-approval-followup-store-"));
   tempStoreDirs.push(dir);
   const storePath = path.join(dir, "sessions.json");
-  tempStorePaths.push(storePath);
-  replaceSqliteSessionStore(storePath, entries as Record<string, SessionEntry>);
-  clearSessionStoreCacheForTest();
+  writeSessionStoreForTest(storePath, entries);
   return storePath;
 }
 
 afterEach(() => {
   vi.resetAllMocks();
   clearSessionStoreCacheForTest();
-  while (tempStorePaths.length > 0) {
-    const storePath = tempStorePaths.pop();
-    if (storePath) {
-      closeSqliteSessionStoreDatabase(storePath);
-    }
-  }
   while (tempStoreDirs.length > 0) {
     const dir = tempStoreDirs.pop();
     if (dir) {

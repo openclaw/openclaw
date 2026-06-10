@@ -9,8 +9,6 @@ import {
   hydrateSessionStoreSkillPromptRefs,
   resolveSessionSkillPromptBlobPath,
 } from "../config/sessions/skill-prompt-blobs.js";
-import { loadSqliteSessionStore } from "../config/sessions/store-sqlite.js";
-import { saveSessionStore } from "../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -261,6 +259,7 @@ async function listSessionStorePaths(stateDir: string): Promise<string[]> {
   return agentEntries
     .filter((entry) => entry.isDirectory())
     .map((entry) => path.join(agentsDir, entry.name, "sessions", "sessions.json"))
+    .filter((storePath) => fs.existsSync(storePath))
     .toSorted((a, b) => a.localeCompare(b));
 }
 
@@ -273,11 +272,16 @@ function resolveSessionStorePaths(params: {
   }
   return resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env })
     .map((target) => target.storePath)
+    .filter((storePath) => fs.existsSync(storePath))
     .toSorted((a, b) => a.localeCompare(b));
 }
 
 function loadSessionStoreForSnapshotScan(storePath: string): Record<string, SessionEntry> {
-  const store = loadSqliteSessionStore(storePath);
+  const parsed = JSON.parse(fs.readFileSync(storePath, "utf-8")) as unknown;
+  if (!isRecord(parsed)) {
+    return {};
+  }
+  const store = parsed as Record<string, SessionEntry>;
   hydrateSessionStoreSkillPromptRefs({ storePath, store });
   return store;
 }
@@ -369,10 +373,8 @@ export async function noteSessionSnapshotHealth(params?: {
 
     for (const [storePath, findings] of findingsByStore) {
       try {
-        const sessions = loadSessionStoreForSnapshotScan(storePath) as Record<
-          string,
-          Record<string, unknown>
-        >;
+        const raw = fs.readFileSync(storePath, "utf-8");
+        const sessions = JSON.parse(raw) as Record<string, Record<string, unknown>>;
         let modified = false;
 
         let storeCount = 0;
@@ -512,9 +514,13 @@ export async function noteSessionSnapshotHealth(params?: {
         }
 
         if (modified && storeCount > 0) {
-          await saveSessionStore(storePath, sessions as Record<string, SessionEntry>, {
-            skipMaintenance: true,
-          });
+          // Create backup before writing
+          const backupPath = `${storePath}.bak.${Date.now()}`;
+          await writeTextAtomic(backupPath, raw, { mode: 0o600 });
+
+          // Atomic write — only modified fields changed, no hydration side effects
+          const fixed = JSON.stringify(sessions, null, 2);
+          await writeTextAtomic(storePath, fixed, { mode: 0o600 });
           totalReplacements += storeCount;
           repairedStores++;
 

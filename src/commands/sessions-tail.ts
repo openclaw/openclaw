@@ -18,10 +18,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveTrajectoryFilePath } from "../trajectory/paths.js";
 import { resolveTrajectoryRuntimeFile } from "../trajectory/runtime-file.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
-import {
-  ensureExplicitSessionStoreMigratedForCommand,
-  ensureSessionStateMigratedForCommand,
-} from "./session-state-migration.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import { shortenText } from "./text-format.js";
 
@@ -537,13 +533,6 @@ export async function sessionsTailCommand(
   });
   if (!targets) {
     return;
-  }
-
-  await ensureSessionStateMigratedForCommand(cfg);
-  for (const target of targets) {
-    await ensureExplicitSessionStoreMigratedForCommand(target.storePath, {
-      onWarning: (warning) => runtime.error?.(warning),
-    });
   }
 
   const selections: TailSelection[] = [];

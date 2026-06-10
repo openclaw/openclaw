@@ -1683,6 +1683,49 @@ function canStartExplicitHookPlugin(params: {
   return activationState.enabled && (activationState.explicitlyEnabled || hasHookPolicyIntent);
 }
 
+function canStartTrustedToolPolicyPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: NormalizedPluginsConfig;
+  activationSource: {
+    plugins: NormalizedPluginsConfig;
+    rootConfig?: OpenClawConfig;
+  };
+  platform?: NodeJS.Platform;
+}): boolean {
+  if ((params.manifest?.contracts?.trustedToolPolicies?.length ?? 0) === 0) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return (
+    activationState.enabled &&
+    (params.plugin.origin === "bundled" || activationState.explicitlyEnabled)
+  );
+}
+
 function canStartConfiguredChannelPlugin(params: {
   plugin: InstalledPluginIndexRecord;
   config: OpenClawConfig;
@@ -2023,6 +2066,19 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         pluginsConfig,
         activationSource,
         activationSourcePlugins,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartTrustedToolPolicyPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
         platform: params.platform,
       })
     ) {

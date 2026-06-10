@@ -780,16 +780,19 @@ rather than the pre-handshake defaults.
   - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure HTTP compatibility.
   - successful `gateway.auth.mode: "trusted-proxy"` operator Control UI auth.
   - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
-  - direct-loopback `gateway-client` backend RPCs authenticated with the shared
-    gateway token/password.
-- Omitting device identity has scope consequences. When a Control UI connection
-  lacks device identity, `shouldClearUnboundScopesForMissingDeviceIdentity`
-  clears self-declared scopes to an empty set for token, password, and
-  trusted-proxy auth. The connection is allowed on explicit trust paths, but
-  scope-gated methods fail. The exception is local Control UI token/password
-  sessions with `allowInsecureAuth`, which preserve scopes. For other cases,
-  set `gateway.controlUi.dangerouslyDisableDeviceAuth=true` only as a
-  break-glass scope-preservation path.
+  - direct-loopback `gateway-client` backend RPCs on the reserved internal
+    helper path.
+- Omitting device identity has scope consequences. When a device-less operator
+  connection is allowed through an explicit trust path, OpenClaw still clears
+  self-declared scopes to an empty set unless that path has a named
+  scope-preservation exception. Scope-gated methods then fail with
+  `missing scope`.
+- `gateway.controlUi.dangerouslyDisableDeviceAuth=true` is a Control UI
+  break-glass scope-preservation path. It does not grant scopes to arbitrary
+  custom backend or CLI-shaped WebSocket clients.
+- The reserved direct-loopback `gateway-client` backend helper path preserves
+  scopes only for internal local control-plane RPCs; custom backend IDs do not
+  receive this exception.
 - All connections must sign the server-provided `connect.challenge` nonce.
 
 ### Device auth migration diagnostics

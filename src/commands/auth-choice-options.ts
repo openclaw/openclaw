@@ -20,6 +20,7 @@ const FEATURED_AUTH_GROUP_ORDER = new Map<string, number>([
   ["anthropic", 1],
   ["xai", 2],
   ["google", 3],
+  ["openrouter", 4],
 ]);
 
 function compareAssistantOptions(a: AuthChoiceOption, b: AuthChoiceOption): number {

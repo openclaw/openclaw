@@ -7,7 +7,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   findUnsupportedSchemaKeywords,
@@ -72,7 +71,11 @@ async function writeSessionStore(
   agentId: string,
   entries: Record<string, unknown>,
 ) {
-  await writeSessionStoreForTestAsync(storeTemplate.replaceAll("{agentId}", agentId), entries);
+  await fs.writeFile(
+    storeTemplate.replaceAll("{agentId}", agentId),
+    JSON.stringify(entries, null, 2),
+    "utf-8",
+  );
 }
 
 function createToolsForStoredSession(storeTemplate: string, sessionKey: string) {
