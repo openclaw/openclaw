@@ -2922,6 +2922,56 @@ describe("update-cli", () => {
     expect(updateCall?.beforeGitMutation).toEqual(expect.any(Function));
   });
 
+  it("stops a managed gateway rooted at the package install when switching package installs to dev", async () => {
+    const packageRoot = await createTrackedTempDir("openclaw-update-package-service-root-");
+    const packageEntrypoint = path.join(packageRoot, "dist", "index.js");
+    const gitRoot = await createTrackedTempDir("openclaw-update-git-service-root-");
+    await fs.mkdir(path.join(gitRoot, ".git"), { recursive: true });
+    await fs.mkdir(path.dirname(packageEntrypoint), { recursive: true });
+    await fs.writeFile(
+      path.join(gitRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.20" }),
+      "utf-8",
+    );
+    await fs.writeFile(packageEntrypoint, "export {};\n", "utf-8");
+    mockPackageInstallStatus(packageRoot);
+    pathExists.mockImplementation(async (candidate: string) => candidate === gitRoot);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["node", packageEntrypoint, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    mockGitUpdateAfterMutation(
+      makeOkUpdateResult({
+        mode: "git",
+        root: gitRoot,
+      }),
+    );
+
+    await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, async () => {
+      await updateCommand({ channel: "dev", yes: true });
+    });
+
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
+    const updateCall = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
+    expect(updateCall?.cwd).toBe(gitRoot);
+    expect(updateCall?.beforeGitMutation).toEqual(expect.any(Function));
+  });
+
   it("does not stop or restart a managed gateway owned by another git checkout", async () => {
     const otherRoot = await createTrackedTempDir("openclaw-update-other-service-root-");
     const otherEntrypoint = path.join(otherRoot, "dist", "index.js");

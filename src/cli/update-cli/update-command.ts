@@ -3469,19 +3469,34 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   const preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
 
   let preManagedServiceStop: PreManagedServiceStop | undefined;
-  const gitMutationRoot =
-    updateInstallKind === "git" ? (switchToGit ? resolveGitInstallDir() : root) : null;
-  const stopManagedServiceBeforeMutableUpdate = async (mutationRoot: string = root) => {
+  const gitMutationRoots =
+    updateInstallKind === "git" ? (switchToGit ? [root, resolveGitInstallDir()] : [root]) : null;
+  const stopManagedServiceBeforeMutableUpdate = async (
+    mutationRoots: readonly string[] = [root],
+  ) => {
     if (updateInstallKind !== "package" && updateInstallKind !== "git") {
       return;
     }
     try {
-      preManagedServiceStop = await maybeStopManagedServiceBeforeMutableUpdate({
-        updateInstallKind,
-        root: mutationRoot,
-        shouldRestart,
-        jsonMode: Boolean(opts.json),
-      });
+      const uniqueMutationRoots = Array.from(new Set(mutationRoots));
+      for (const mutationRoot of uniqueMutationRoots) {
+        preManagedServiceStop = await maybeStopManagedServiceBeforeMutableUpdate({
+          updateInstallKind,
+          root: mutationRoot,
+          shouldRestart,
+          jsonMode: Boolean(opts.json),
+        });
+        if (
+          preManagedServiceStop.stopped ||
+          preManagedServiceStop.blockMessage ||
+          shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop }) ||
+          !preManagedServiceStop.inspected ||
+          !preManagedServiceStop.running ||
+          !shouldRestart
+        ) {
+          break;
+        }
+      }
     } catch (err) {
       stop();
       defaultRuntime.error(`Failed to stop managed gateway service before update: ${String(err)}`);
@@ -3555,7 +3570,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
             devTargetRef,
             beforeGitMutation:
               updateInstallKind === "git"
-                ? () => stopManagedServiceBeforeMutableUpdate(gitMutationRoot ?? root)
+                ? () => stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? [root])
                 : undefined,
           });
   } catch (err) {
