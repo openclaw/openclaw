@@ -78,6 +78,20 @@ function createConditionalModelSuppressionRegistry(): PluginManifestRegistry {
   };
 }
 
+function createInlineSparkModel(baseUrl: string) {
+  return {
+    id: "gpt-5.3-codex-spark",
+    name: "GPT-5.3 Codex Spark",
+    api: "openai-responses",
+    baseUrl,
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 64_000,
+  };
+}
+
 describe("config model reference validation", () => {
   it("rejects statically suppressed provider/model pairs during config validation", () => {
     const res = validateConfigObjectWithPlugins(
@@ -152,6 +166,48 @@ describe("config model reference validation", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("rejects conditionally suppressed openai/codex spark model refs for auth-profile API-key config", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        auth: {
+          profiles: {
+            "openai:api": {
+              provider: "openai",
+              mode: "api_key",
+            },
+          },
+          order: {
+            openai: ["openai:api"],
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.3-codex-spark",
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createConditionalModelSuppressionRegistry(),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues).toEqual([
+      {
+        path: "agents.defaults.model.primary",
+        message:
+          "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is not exposed by the OpenAI API catalog. Use the Codex harness route when your signed-in account exposes it.",
+      },
+    ]);
+  });
+
   it("rejects conditionally suppressed openai/codex spark model refs for direct API config", () => {
     const res = validateConfigObjectWithPlugins(
       {
@@ -160,6 +216,44 @@ describe("config model reference validation", () => {
             openai: {
               api: "openai-responses",
               models: [],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.3-codex-spark",
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createConditionalModelSuppressionRegistry(),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues).toEqual([
+      {
+        path: "agents.defaults.model.primary",
+        message:
+          "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is not exposed by the OpenAI API catalog. Use the Codex harness route when your signed-in account exposes it.",
+      },
+    ]);
+  });
+
+  it("rejects conditionally suppressed openai/codex spark inline native API rows", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        models: {
+          providers: {
+            openai: {
+              models: [createInlineSparkModel("https://api.openai.com/v1")],
             },
           },
         },
@@ -286,6 +380,34 @@ describe("config model reference validation", () => {
 
       expect(res.ok).toBe(true);
     }
+  });
+
+  it("accepts conditionally suppressed openai/codex spark inline custom proxy rows", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        models: {
+          providers: {
+            openai: {
+              models: [createInlineSparkModel("https://proxy.example.test/v1")],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.3-codex-spark",
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createConditionalModelSuppressionRegistry(),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
   });
 
   it("accepts conditionally suppressed openai/codex spark model refs for Codex harness config", () => {

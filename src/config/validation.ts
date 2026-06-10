@@ -1410,6 +1410,33 @@ function validateConfigObjectWithPluginsBase(
     return provider && model ? { provider, model } : null;
   };
 
+  const resolveInlineModelTransport = (params: {
+    provider: string;
+    model: string;
+  }): { api?: string | null; baseUrl?: string | null } | undefined => {
+    const providers = config.models?.providers;
+    if (!providers) {
+      return undefined;
+    }
+    const providerConfig = Object.entries(providers).find(
+      ([providerId]) => normalizeLowercaseStringOrEmpty(providerId) === params.provider,
+    )?.[1];
+    if (!providerConfig || !Array.isArray(providerConfig.models)) {
+      return undefined;
+    }
+    const modelConfig = providerConfig.models.find(
+      (entry) => normalizeLowercaseStringOrEmpty(entry?.id) === params.model,
+    );
+    if (!modelConfig) {
+      return undefined;
+    }
+    return {
+      api: typeof modelConfig.api === "string" ? modelConfig.api : providerConfig.api,
+      baseUrl:
+        typeof modelConfig.baseUrl === "string" ? modelConfig.baseUrl : providerConfig.baseUrl,
+    };
+  };
+
   const validateConfiguredModelRefs = () => {
     const configuredRefs = collectConfiguredModelRefs(config);
     if (configuredRefs.length === 0) {
@@ -1426,6 +1453,7 @@ function validateConfigObjectWithPluginsBase(
       if (!parsed) {
         continue;
       }
+      const inlineTransport = resolveInlineModelTransport(parsed);
       const suppression = suppressions.find(
         (entry) =>
           entry.provider === parsed.provider &&
@@ -1433,6 +1461,8 @@ function validateConfigObjectWithPluginsBase(
           manifestSuppressionMatchesConditions({
             suppression: entry,
             provider: parsed.provider,
+            api: inlineTransport?.api,
+            baseUrl: inlineTransport?.baseUrl,
             config,
           }),
       );

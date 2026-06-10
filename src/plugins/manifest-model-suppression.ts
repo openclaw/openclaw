@@ -81,12 +81,56 @@ function resolveConfiguredProviderValue(params: {
   return undefined;
 }
 
+function resolveConfiguredAuthProfileMode(params: {
+  provider: string;
+  config?: OpenClawConfig;
+}): string {
+  const auth = params.config?.auth;
+  const profiles = auth?.profiles;
+  if (!profiles) {
+    return "";
+  }
+  const orderedProfileIds = auth?.order?.[params.provider] ?? [];
+  for (const profileId of orderedProfileIds) {
+    const profile = profiles[profileId];
+    if (normalizeLowercaseStringOrEmpty(profile?.provider) !== params.provider) {
+      continue;
+    }
+    const mode = normalizeLowercaseStringOrEmpty(profile?.mode);
+    if (mode) {
+      return mode;
+    }
+  }
+  const providerModes = Object.values(profiles)
+    .filter((profile) => normalizeLowercaseStringOrEmpty(profile?.provider) === params.provider)
+    .map((profile) => normalizeLowercaseStringOrEmpty(profile?.mode));
+  if (providerModes.some((mode) => mode === "oauth" || mode === "token")) {
+    return "oauth";
+  }
+  if (providerModes.includes("api_key")) {
+    return "api_key";
+  }
+  if (providerModes.includes("aws-sdk")) {
+    return "aws-sdk";
+  }
+  return "";
+}
+
 function isOpenAINativeApiDefault(params: {
   provider: string;
+  api?: string | null;
   configuredProvider?: { api?: string; auth?: string; baseUrl?: string };
+  configuredAuthProfileMode?: string;
 }): boolean {
-  if (params.provider !== "openai" || !params.configuredProvider) {
+  if (params.provider !== "openai") {
     return false;
+  }
+  const explicitApi = normalizeLowercaseStringOrEmpty(params.api);
+  if (explicitApi === "openai-responses" || explicitApi === "openai-completions") {
+    return true;
+  }
+  if (!params.configuredProvider) {
+    return params.configuredAuthProfileMode === "api_key";
   }
   if (normalizeBaseUrlHost(params.configuredProvider.baseUrl)) {
     return false;
@@ -95,13 +139,22 @@ function isOpenAINativeApiDefault(params: {
   if (api === "openai-responses" || api === "openai-completions") {
     return true;
   }
+  if (!api && params.configuredAuthProfileMode === "api_key") {
+    return true;
+  }
   return !api && normalizeLowercaseStringOrEmpty(params.configuredProvider.auth) === "api-key";
 }
 
 function resolveEffectiveProviderApi(params: {
   provider: string;
+  api?: string | null;
   configuredProvider?: { api?: string; auth?: string; baseUrl?: string };
+  configuredAuthProfileMode?: string;
 }): string {
+  const explicitApi = normalizeLowercaseStringOrEmpty(params.api);
+  if (explicitApi) {
+    return explicitApi;
+  }
   const configuredApi = normalizeLowercaseStringOrEmpty(params.configuredProvider?.api);
   if (configuredApi) {
     return configuredApi;
@@ -115,8 +168,10 @@ function resolveEffectiveProviderApi(params: {
 
 function resolveEffectiveBaseUrl(params: {
   provider: string;
+  api?: string | null;
   baseUrl?: string | null;
   configuredProvider?: { api?: string; auth?: string; baseUrl?: string };
+  configuredAuthProfileMode?: string;
 }): string | null | undefined {
   const explicitBaseUrl = params.baseUrl ?? params.configuredProvider?.baseUrl;
   if (explicitBaseUrl) {
@@ -128,6 +183,7 @@ function resolveEffectiveBaseUrl(params: {
 export function manifestSuppressionMatchesConditions(params: {
   suppression: ManifestModelCatalogSuppressionEntry;
   provider: string;
+  api?: string | null;
   baseUrl?: string | null;
   config?: OpenClawConfig;
 }): boolean {
@@ -139,11 +195,17 @@ export function manifestSuppressionMatchesConditions(params: {
     provider: params.provider,
     config: params.config,
   });
+  const configuredAuthProfileMode = resolveConfiguredAuthProfileMode({
+    provider: params.provider,
+    config: params.config,
+  });
   if (when.providerConfigApiIn?.length) {
     const allowedApis = new Set(when.providerConfigApiIn.map(normalizeLowercaseStringOrEmpty));
     const effectiveApi = resolveEffectiveProviderApi({
       provider: params.provider,
+      api: params.api,
       configuredProvider,
+      configuredAuthProfileMode,
     });
     if (!effectiveApi || !allowedApis.has(effectiveApi)) {
       return false;
@@ -153,8 +215,10 @@ export function manifestSuppressionMatchesConditions(params: {
     const baseUrlHost = normalizeBaseUrlHost(
       resolveEffectiveBaseUrl({
         provider: params.provider,
+        api: params.api,
         baseUrl: params.baseUrl,
         configuredProvider,
+        configuredAuthProfileMode,
       }),
     );
     if (!baseUrlHost) {
@@ -182,6 +246,7 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
   return (input: {
     provider?: string | null;
     id?: string | null;
+    api?: string | null;
     baseUrl?: string | null;
     unconditionalOnly?: boolean;
   }) => {
@@ -198,6 +263,7 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
         manifestSuppressionMatchesConditions({
           suppression: entry,
           provider,
+          api: input.api,
           baseUrl: input.baseUrl,
           config: params.config,
         }),
@@ -230,6 +296,7 @@ export function resolveManifestBuiltInModelSuppression(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   baseUrl?: string | null;
+  api?: string | null;
   unconditionalOnly?: boolean;
 }) {
   const resolver = buildManifestBuiltInModelSuppressionResolver({
@@ -240,6 +307,7 @@ export function resolveManifestBuiltInModelSuppression(params: {
   return resolver({
     provider: params.provider,
     id: params.id,
+    api: params.api,
     baseUrl: params.baseUrl,
     unconditionalOnly: params.unconditionalOnly,
   });

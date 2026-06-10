@@ -78,6 +78,7 @@ function resolveCachedManifestSuppressionResolver(params: {
 function resolveBuiltInModelSuppressionFromManifest(params: {
   provider?: string | null;
   id?: string | null;
+  api?: string | null;
   baseUrl?: string | null;
   config?: OpenClawConfig;
   unconditionalOnly?: boolean;
@@ -95,6 +96,7 @@ function resolveBuiltInModelSuppressionFromManifest(params: {
   })({
     provider,
     id: modelId,
+    ...(params.api ? { api: params.api } : {}),
     ...(params.baseUrl ? { baseUrl: params.baseUrl } : {}),
     ...(params.unconditionalOnly !== undefined
       ? { unconditionalOnly: params.unconditionalOnly }
@@ -105,6 +107,7 @@ function resolveBuiltInModelSuppressionFromManifest(params: {
 function resolveBuiltInModelSuppression(params: {
   provider?: string | null;
   id?: string | null;
+  api?: string | null;
   baseUrl?: string | null;
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -135,6 +138,7 @@ export function shouldSuppressBuiltInModelFromManifest(params: {
 export function shouldSuppressBuiltInModel(params: {
   provider?: string | null;
   id?: string | null;
+  api?: string | null;
   baseUrl?: string | null;
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -163,6 +167,7 @@ export function shouldUnconditionallySuppress(params: {
 export function buildSuppressedBuiltInModelError(params: {
   provider?: string | null;
   id?: string | null;
+  api?: string | null;
   baseUrl?: string | null;
   config?: OpenClawConfig;
   workspaceDir?: string;

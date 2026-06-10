@@ -46,12 +46,20 @@ vi.mock("../model-suppression.js", () => {
     return providers?.openai;
   }
 
-  function shouldSuppressOpenAISpark(params: { baseUrl?: string; config?: unknown }): boolean {
+  function shouldSuppressOpenAISpark(params: {
+    api?: string;
+    baseUrl?: string;
+    config?: unknown;
+  }): boolean {
     const providerConfig = resolveOpenAIProviderConfig(params.config);
     const effectiveBaseUrl = params.baseUrl ?? providerConfig?.baseUrl;
     const host = normalizeHost(effectiveBaseUrl);
     if (host) {
       return host === "api.openai.com";
+    }
+    const inlineApi = params.api?.trim().toLowerCase();
+    if (inlineApi === "openai-responses" || inlineApi === "openai-completions") {
+      return true;
     }
     const api = providerConfig?.api?.trim().toLowerCase();
     const auth = providerConfig?.auth?.trim().toLowerCase();
@@ -67,11 +75,13 @@ vi.mock("../model-suppression.js", () => {
     shouldSuppressBuiltInModel: ({
       provider,
       id,
+      api,
       baseUrl,
       config,
     }: {
       provider?: string;
       id?: string;
+      api?: string;
       baseUrl?: string;
       config?: unknown;
     }) =>
@@ -79,7 +89,7 @@ vi.mock("../model-suppression.js", () => {
         id?.trim().toLowerCase() === "gpt-5.3-codex-spark") ||
       (provider === "openai" &&
         id?.trim().toLowerCase() === "gpt-5.3-codex-spark" &&
-        shouldSuppressOpenAISpark({ baseUrl, config })),
+        shouldSuppressOpenAISpark({ api, baseUrl, config })),
     buildSuppressedBuiltInModelError: ({ provider, id }: { provider?: string; id?: string }) => {
       if (
         (provider !== "openai" && provider !== "azure-openai-responses") ||
@@ -229,6 +239,52 @@ describe("resolveModel forward-compat errors and overrides", () => {
     expect(result.error).toBe(
       "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
     );
+  });
+
+  it("rejects inline native openai gpt-5.3-codex-spark rows", () => {
+    const result = resolveModelForTest("openai", "gpt-5.3-codex-spark", "/tmp/agent", {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                ...makeModel("gpt-5.3-codex-spark"),
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+    );
+  });
+
+  it("allows inline custom proxy openai gpt-5.3-codex-spark rows", () => {
+    const result = resolveModelForTest("openai", "gpt-5.3-codex-spark", "/tmp/agent", {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                ...makeModel("gpt-5.3-codex-spark"),
+                api: "openai-responses",
+                baseUrl: "https://proxy.example.test/v1",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.api).toBe("openai-responses");
+    expect(result.model?.baseUrl).toBe("https://proxy.example.test/v1");
+    expect(result.model?.id).toBe("gpt-5.3-codex-spark");
   });
 
   it("allows openai gpt-5.3-codex-spark when the Codex harness transport is selected", () => {
