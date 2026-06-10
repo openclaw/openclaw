@@ -208,6 +208,52 @@ describe("config model reference validation", () => {
     ]);
   });
 
+  it("normalizes auth order keys when validating auth-profile API-key spark configs", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        auth: {
+          profiles: {
+            "openai:api": {
+              provider: "openai",
+              mode: "api_key",
+            },
+            "openai:codex": {
+              provider: "openai",
+              mode: "oauth",
+            },
+          },
+          order: {
+            OpenAI: ["openai:api"],
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.3-codex-spark",
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createConditionalModelSuppressionRegistry(),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues).toEqual([
+      {
+        path: "agents.defaults.model.primary",
+        message:
+          "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is not exposed by the OpenAI API catalog. Use the Codex harness route when your signed-in account exposes it.",
+      },
+    ]);
+  });
+
   it("rejects conditionally suppressed openai/codex spark model refs for direct API config", () => {
     const res = validateConfigObjectWithPlugins(
       {

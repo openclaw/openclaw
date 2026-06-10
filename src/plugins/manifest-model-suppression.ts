@@ -1,5 +1,6 @@
 // Resolves model suppression metadata declared by plugin manifests.
 import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -90,7 +91,7 @@ function resolveConfiguredAuthProfileMode(params: {
   if (!profiles) {
     return "";
   }
-  const orderedProfileIds = auth?.order?.[params.provider] ?? [];
+  const orderedProfileIds = findNormalizedProviderValue(auth?.order, params.provider) ?? [];
   for (const profileId of orderedProfileIds) {
     const profile = profiles[profileId];
     if (normalizeLowercaseStringOrEmpty(profile?.provider) !== params.provider) {

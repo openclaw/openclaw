@@ -804,6 +804,28 @@ describe("buildOpenAIProvider", () => {
       authProfileId: "openai:work",
       authProfileMode: "oauth",
     } as never);
+    const mixedCaseApiKeyOrderModel = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelRegistry: { find: () => null },
+      config: {
+        auth: {
+          profiles: {
+            "openai:api": {
+              provider: "openai",
+              mode: "api_key",
+            },
+            "openai:codex": {
+              provider: "openai",
+              mode: "oauth",
+            },
+          },
+          order: {
+            OpenAI: ["openai:api"],
+          },
+        },
+      },
+    } as never);
 
     expectFields(openaiModel, {
       provider: "openai",
@@ -826,6 +848,14 @@ describe("buildOpenAIProvider", () => {
       id: "gpt-5.4",
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+    expectFields(mixedCaseApiKeyOrderModel, {
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
       contextWindow: 1_050_000,
       maxTokens: 128_000,
     });

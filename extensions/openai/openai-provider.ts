@@ -479,7 +479,7 @@ function resolveConfiguredAuthTransport(
 
   const auth = ctx.config?.auth;
   const profiles = auth?.profiles ?? {};
-  const orderedProfileIds = auth?.order?.[PROVIDER_ID] ?? [];
+  const orderedProfileIds = findAuthProfileOrder(auth?.order, PROVIDER_ID) ?? [];
   for (const profileId of orderedProfileIds) {
     const mode = profiles[profileId]?.mode;
     if (mode === "oauth" || mode === "token") {
@@ -498,6 +498,22 @@ function resolveConfiguredAuthTransport(
   }
   if (providerModes.includes("api_key")) {
     return "responses";
+  }
+  return undefined;
+}
+
+function findAuthProfileOrder(
+  order: Record<string, string[]> | undefined,
+  provider: string,
+): string[] | undefined {
+  if (!order) {
+    return undefined;
+  }
+  const normalizedProvider = normalizeProviderId(provider);
+  for (const [key, value] of Object.entries(order)) {
+    if (normalizeProviderId(key) === normalizedProvider) {
+      return value;
+    }
   }
   return undefined;
 }

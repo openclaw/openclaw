@@ -329,6 +329,24 @@ describe("manifest model suppression", () => {
         provider: "openai",
         id: "gpt-5.3-codex-spark",
         config: {
+          auth: {
+            profiles: {
+              "openai:api": { provider: "openai", mode: "api_key" },
+              "openai:codex": { provider: "openai", mode: "oauth" },
+            },
+            order: {
+              OpenAI: ["openai:api"],
+            },
+          },
+        },
+        env: process.env,
+      })?.suppress,
+    ).toBe(true);
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "openai",
+        id: "gpt-5.3-codex-spark",
+        config: {
           models: {
             providers: {
               openai: {
