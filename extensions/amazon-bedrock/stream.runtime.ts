@@ -738,25 +738,34 @@ function convertMessages(
               });
               break;
             case "thinking":
-              // Skip empty thinking blocks
-              if (c.thinking.trim().length === 0) {
+              const thinkingSignature = c.thinkingSignature;
+              const normalizedThinkingSignature = thinkingSignature?.trim();
+              const supportsSignature = supportsThinkingSignature(model);
+              const hasNativeThinkingSignature =
+                supportsSignature &&
+                Boolean(normalizedThinkingSignature) &&
+                normalizedThinkingSignature !== "reasoning_content";
+              if (c.thinking.trim().length === 0 && !hasNativeThinkingSignature) {
                 continue;
               }
               // Only Anthropic models support the signature field in reasoningText.
               // For other models, we omit the signature to avoid errors like:
               // "This model doesn't support the reasoningContent.reasoningText.signature field"
-              if (supportsThinkingSignature(model)) {
+              if (supportsSignature) {
+                if (normalizedThinkingSignature === "reasoning_content") {
+                  continue;
+                }
                 // Signatures arrive after thinking deltas. If a partial or externally
                 // persisted message lacks a signature, Bedrock rejects the replayed
                 // reasoning block. Fall back to plain text, matching Anthropic.
-                if (!c.thinkingSignature || c.thinkingSignature.trim().length === 0) {
+                if (!thinkingSignature || !normalizedThinkingSignature) {
                   contentBlocks.push({ text: sanitizeSurrogates(c.thinking) });
                 } else {
                   contentBlocks.push({
                     reasoningContent: {
                       reasoningText: {
                         text: c.thinking,
-                        signature: c.thinkingSignature,
+                        signature: thinkingSignature,
                       },
                     },
                   });

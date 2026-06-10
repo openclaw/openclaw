@@ -86,6 +86,69 @@ describe("Bedrock reasoning replay", () => {
 
     expect(messages[0]?.content).toEqual([{ text: "privatereasoning" }]);
   });
+
+  it("preserves signature-only Fable reasoning blocks", () => {
+    const modelId = "anthropic.claude-fable-5";
+    const messages = testing.convertMessages(
+      {
+        messages: [
+          {
+            role: "assistant",
+            api: "bedrock-converse-stream",
+            provider: "amazon-bedrock",
+            model: modelId,
+            content: [
+              {
+                type: "thinking",
+                thinking: "",
+                thinkingSignature: " sig-fable ",
+              },
+            ],
+          },
+        ],
+      } as never,
+      bedrockModel({ id: modelId, name: "Claude Fable 5" }),
+      "none",
+    );
+
+    expect(messages[0]?.content).toEqual([
+      {
+        reasoningContent: {
+          reasoningText: {
+            text: "",
+            signature: " sig-fable ",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("drops synthetic reasoning placeholders from Claude replay", () => {
+    const modelId = "anthropic.claude-fable-5";
+    const messages = testing.convertMessages(
+      {
+        messages: [
+          {
+            role: "assistant",
+            api: "bedrock-converse-stream",
+            provider: "amazon-bedrock",
+            model: modelId,
+            content: [
+              {
+                type: "thinking",
+                thinking: "hidden compatibility reasoning",
+                thinkingSignature: "reasoning_content",
+              },
+            ],
+          },
+        ],
+      } as never,
+      bedrockModel({ id: modelId, name: "Claude Fable 5" }),
+      "none",
+    );
+
+    expect(messages).toEqual([]);
+  });
 });
 
 describe("Bedrock profile endpoint resolution", () => {

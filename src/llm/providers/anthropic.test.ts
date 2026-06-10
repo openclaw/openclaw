@@ -487,6 +487,7 @@ describe("Anthropic provider", () => {
     for (const testCase of [
       { reasoning: "off", effort: "low" },
       { reasoning: "high", effort: "high" },
+      { reasoning: "xhigh", effort: "xhigh" },
     ] as const) {
       let capturedPayload: unknown;
       const stream = streamSimpleAnthropic(
